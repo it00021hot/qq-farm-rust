@@ -456,6 +456,62 @@ pub fn reload_for_test() -> GameConfig {
     gc
 }
 
+/// 加载所有种子（便捷函数）
+#[must_use]
+pub fn load_seeds_config() -> Vec<SeedInfo> {
+    let cfg = GameConfig::new();
+    let _ = cfg.load();
+    cfg.get_all_seeds()
+}
+
+/// 加载所有植物
+#[must_use]
+pub fn load_plants_config() -> Vec<Plant> {
+    let cfg = GameConfig::new();
+    let _ = cfg.load();
+    cfg.get_all_plants()
+}
+
+/// 加载所有物品
+#[must_use]
+pub fn load_items_config() -> Vec<Item> {
+    let cfg = GameConfig::new();
+    let _ = cfg.load();
+    cfg.get_all_items()
+}
+
+/// 按类型加载物品
+#[must_use]
+pub fn load_items_by_type_config(item_type: i64) -> Vec<Item> {
+    let cfg = GameConfig::new();
+    let _ = cfg.load();
+    cfg.get_items_by_type(item_type)
+}
+
+/// 加载所有物品类型（type → count）
+#[must_use]
+pub fn load_item_types_config() -> std::collections::HashMap<i64, i64> {
+    let cfg = GameConfig::new();
+    let _ = cfg.load();
+    let items = cfg.get_all_items();
+    let mut out = std::collections::HashMap::new();
+    for it in items {
+        *out.entry(it.item_type).or_insert(0) += 1;
+    }
+    out
+}
+
+/// 加载所有果实（PlantFruit）
+#[must_use]
+pub fn load_fruits_config() -> Vec<PlantFruit> {
+    let cfg = GameConfig::new();
+    let _ = cfg.load();
+    cfg.get_all_plants()
+        .into_iter()
+        .filter_map(|p| p.fruit)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

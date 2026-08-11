@@ -106,7 +106,7 @@ pub fn is_dead(land: &LandInfo) -> bool {
 }
 
 /// 统计各阶段土地数
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct LandSummary {
     pub plantable: usize,
     pub growing: usize,

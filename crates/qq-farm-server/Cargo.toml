@@ -18,6 +18,7 @@ tokio = { workspace = true }
 
 # 错误处理
 anyhow = { workspace = true }
+thiserror = { workspace = true }
 
 # 序列化
 serde = { workspace = true }
@@ -25,6 +26,9 @@ serde_json = { workspace = true }
 
 # 日志
 tracing = { workspace = true }
+
+# 时间
+chrono = { workspace = true }
 
 # HTTP / Web（阶段 1 才正式引入）
 axum = { workspace = true }

@@ -100,6 +100,8 @@ pub struct EngineWorkerInfo {
 pub struct RuntimeEngine {
     config: EngineConfig,
     workers: Arc<RwLock<HashMap<String, WorkerHandle>>>,
+    /// WorkerLoop 注册表（controller 用）
+    worker_loops: Arc<RwLock<HashMap<String, Arc<crate::runtime::worker_loop::WorkerLoop>>>>,
     events: broadcast::Sender<WorkerEvent>,
     /// Runtime 状态（log / account_log / configRevision / 事件总线）
     runtime_state: Arc<RuntimeState>,
@@ -141,6 +143,8 @@ impl RuntimeEngine {
         let (events, _) = broadcast::channel(256);
         let workers: Arc<RwLock<HashMap<String, WorkerHandle>>> =
             Arc::new(RwLock::new(HashMap::new()));
+        let worker_loops: Arc<RwLock<HashMap<String, Arc<crate::runtime::worker_loop::WorkerLoop>>>> =
+            Arc::new(RwLock::new(HashMap::new()));
         let relogin_reminder = relogin_reminder.unwrap_or_else(|| {
             // 没传就构造默认（无 worker controls 联动）
             let mp = Arc::new(MiniProgramLoginSession::new());
@@ -155,6 +159,7 @@ impl RuntimeEngine {
         Self {
             config,
             workers,
+            worker_loops,
             events,
             runtime_state,
             relogin_reminder,
@@ -216,6 +221,31 @@ impl RuntimeEngine {
                 }
             })
             .collect()
+    }
+
+    /// 获取某账号的 WorkerLoop（controller 用）
+    #[must_use]
+    pub fn worker_loop(&self, account_id: &str) -> Option<Arc<crate::runtime::worker_loop::WorkerLoop>> {
+        self.worker_loops.read().get(account_id).cloned()
+    }
+
+    /// 注册 WorkerLoop（worker.rs 在 spawn 完成后调用）
+    pub fn register_worker_loop(
+        &self,
+        account_id: &str,
+        worker_loop: Arc<crate::runtime::worker_loop::WorkerLoop>,
+    ) {
+        self.worker_loops.write().insert(account_id.to_string(), worker_loop);
+    }
+
+    /// 注销 WorkerLoop（worker 停止时调用）
+    pub fn unregister_worker_loop(&self, account_id: &str) {
+        self.worker_loops.write().remove(account_id);
+    }
+
+    /// 列出所有已注册的 WorkerLoop accountId
+    pub fn registered_worker_loop_ids(&self) -> Vec<String> {
+        self.worker_loops.read().keys().cloned().collect()
     }
 
     /// 启动一个 worker
@@ -282,6 +312,8 @@ impl RuntimeEngine {
             h.cancel();
             tracing::info!(account_id, "worker stop requested");
         }
+        // 注销 WorkerLoop
+        self.worker_loops.write().remove(account_id);
         // 同步 worker 状态
         {
             let mut state_workers = self.runtime_state.workers.lock();

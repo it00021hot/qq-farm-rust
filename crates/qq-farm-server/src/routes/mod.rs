@@ -1,15 +1,21 @@
-//! HTTP 路由层（占位）。
+//! 路由模块。
 //!
-//! 阶段 4 迁移原项目 `core/src/controllers/admin/*`：
-//! - `account.rs` — 账号管理 API
-//! - `farm.rs` — 农场 API
-//! - `friend.rs` — 好友 API
-//! - `admin.rs` — 后台管理 API
-//! - `auth.rs` — 认证 API
-//! - `activity_center.rs` — 活动中心 API
-//! - `commerce.rs` — 卡密 / 用户管理 API
-//! - `wx_login.rs` — 微信扫码登录
+//! 1:1 对应原 `controllers/admin/*-routes.ts`。
 //!
-//! 阶段 0：仅占位声明。
+//! ## 子模块
+//!
+//! - `farm` — 农场 / 自动化 / 化肥 / 土地 / 种子 / 背包 / 每日礼包 / config（35 路由）
 
+pub mod farm;
 pub mod placeholder;
+
+use std::sync::Arc;
+
+use axum::Router;
+
+use crate::context::AdminContext;
+
+/// 构造全部 admin 路由
+pub fn build() -> Router<Arc<AdminContext>> {
+    Router::new().merge(farm::router())
+}

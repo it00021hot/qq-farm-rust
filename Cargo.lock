@@ -2014,10 +2014,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "chrono",
  "dotenvy",
  "qq-farm-core",
  "serde",
  "serde_json",
+ "thiserror 2.0.20",
  "tokio",
  "tower",
  "tower-http",

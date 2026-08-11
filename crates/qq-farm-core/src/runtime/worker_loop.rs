@@ -49,6 +49,7 @@ use crate::services::farm::scheduler::FarmService;
 use crate::services::friend::scheduler::FriendService;
 use crate::services::mall::MallService;
 use crate::services::monthcard::MonthCardService;
+use crate::services::mystery_shop::MysteryShopService;
 use crate::services::qqvip::QQVipService;
 use crate::services::share::ShareService;
 use crate::services::status as status_svc;
@@ -86,13 +87,14 @@ pub struct WorkerLoop {
     /// farm / friend / status / automation / share / qq / monthcard / email / mall / task / activity_center / warehouse
     farm: Arc<FarmService>,
     friend: Arc<FriendService>,
-    email: EmailService,
-    share: ShareService,
-    monthcard: MonthCardService,
-    qqvip: QQVipService,
-    mall: MallService,
-    task: TaskService,
-    warehouse: WarehouseService,
+    email: Arc<EmailService>,
+    share: Arc<ShareService>,
+    monthcard: Arc<MonthCardService>,
+    qqvip: Arc<QQVipService>,
+    mall: Arc<MallService>,
+    task: Arc<TaskService>,
+    warehouse: Arc<WarehouseService>,
+    mystery_shop: Arc<MysteryShopService>,
     activity_center: Arc<ActivityCenterService>,
 
     // —— 内部状态 ——
@@ -161,13 +163,14 @@ impl WorkerLoop {
         event_tx: broadcast::Sender<WorkerEvent>,
         farm: Arc<FarmService>,
         friend: Arc<FriendService>,
-        email: EmailService,
-        share: ShareService,
-        monthcard: MonthCardService,
-        qqvip: QQVipService,
-        mall: MallService,
-        task: TaskService,
-        warehouse: WarehouseService,
+        email: Arc<EmailService>,
+        share: Arc<ShareService>,
+        monthcard: Arc<MonthCardService>,
+        qqvip: Arc<QQVipService>,
+        mall: Arc<MallService>,
+        task: Arc<TaskService>,
+        warehouse: Arc<WarehouseService>,
+        mystery_shop: Arc<MysteryShopService>,
         activity_center: Arc<ActivityCenterService>,
     ) -> Self {
         Self {
@@ -184,6 +187,7 @@ impl WorkerLoop {
             mall,
             task,
             warehouse,
+            mystery_shop,
             activity_center,
             login_ready: AtomicBool::new(false),
             shutdown_started: AtomicBool::new(false),
@@ -465,32 +469,36 @@ impl WorkerLoop {
         &self.activity_center
     }
     #[must_use]
-    pub fn email(&self) -> &EmailService {
+    pub fn email(&self) -> &Arc<EmailService> {
         &self.email
     }
     #[must_use]
-    pub fn share(&self) -> &ShareService {
+    pub fn share(&self) -> &Arc<ShareService> {
         &self.share
     }
     #[must_use]
-    pub fn monthcard(&self) -> &MonthCardService {
+    pub fn monthcard(&self) -> &Arc<MonthCardService> {
         &self.monthcard
     }
     #[must_use]
-    pub fn qqvip(&self) -> &QQVipService {
+    pub fn qqvip(&self) -> &Arc<QQVipService> {
         &self.qqvip
     }
     #[must_use]
-    pub fn mall(&self) -> &MallService {
+    pub fn mall(&self) -> &Arc<MallService> {
         &self.mall
     }
     #[must_use]
-    pub fn task(&self) -> &TaskService {
+    pub fn task(&self) -> &Arc<TaskService> {
         &self.task
     }
     #[must_use]
-    pub fn warehouse(&self) -> &WarehouseService {
+    pub fn warehouse(&self) -> &Arc<WarehouseService> {
         &self.warehouse
+    }
+    #[must_use]
+    pub fn mystery_shop(&self) -> &Arc<MysteryShopService> {
+        &self.mystery_shop
     }
     #[must_use]
     pub fn gateway(&self) -> &Arc<Gateway> {
@@ -606,13 +614,14 @@ mod tests {
         let gateway = make_gateway();
         let farm = Arc::new(FarmService::new(gateway.clone()));
         let friend = Arc::new(FriendService::new(gateway.clone(), 5));
-        let email = EmailService::new(gateway.clone());
-        let share = ShareService::new(gateway.clone());
-        let monthcard = MonthCardService::new(gateway.clone());
-        let qqvip = QQVipService::new(gateway.clone());
-        let mall = MallService::new(gateway.clone());
-        let task = TaskService::new(gateway.clone());
-        let warehouse = WarehouseService::new(gateway.clone());
+        let email = Arc::new(EmailService::new(gateway.clone()));
+        let share = Arc::new(ShareService::new(gateway.clone()));
+        let monthcard = Arc::new(MonthCardService::new(gateway.clone()));
+        let qqvip = Arc::new(QQVipService::new(gateway.clone()));
+        let mall = Arc::new(MallService::new(gateway.clone()));
+        let task = Arc::new(TaskService::new(gateway.clone()));
+        let warehouse = Arc::new(WarehouseService::new(gateway.clone()));
+        let mystery_shop = Arc::new(MysteryShopService::new(gateway.clone()));
         let activity_center = Arc::new(ActivityCenterService::new(gateway.clone()));
         let loop_ = WorkerLoop::new(
             account,
@@ -628,6 +637,7 @@ mod tests {
             mall,
             task,
             warehouse,
+            mystery_shop,
             activity_center,
         );
         (loop_, tx)
@@ -760,6 +770,7 @@ mod tests {
         let _ = loop_.mall();
         let _ = loop_.task();
         let _ = loop_.warehouse();
+        let _ = loop_.mystery_shop();
         let _ = loop_.gateway();
     }
 

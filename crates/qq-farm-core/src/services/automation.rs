@@ -58,6 +58,34 @@ pub fn clear_automation_flags() {
     *guard = None;
 }
 
+/// 获取当前所有已知 category 的开关（合并默认）
+#[must_use]
+pub fn current_automation_flags() -> std::collections::HashMap<String, bool> {
+    let guard = flags();
+    let known: Vec<&str> = vec![
+        category::TASK,
+        category::FARM,
+        category::FRIEND,
+        category::EMAIL,
+        category::SHARE,
+        category::INTERACT,
+        category::WAREHOUSE,
+        category::MALL,
+        category::MONTHCARD,
+        category::QQVIP,
+        category::GUIDE,
+    ];
+    let mut out = std::collections::HashMap::new();
+    for k in known {
+        let v = match guard.as_ref() {
+            Some(map) => map.get(k).copied().unwrap_or(DEFAULT_ENABLED),
+            None => DEFAULT_ENABLED,
+        };
+        out.insert(k.to_string(), v);
+    }
+    out
+}
+
 /// 当前已知 category 集合
 pub mod category {
     pub const TASK: &str = "task";

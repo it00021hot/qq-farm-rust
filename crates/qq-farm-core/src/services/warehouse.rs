@@ -473,14 +473,14 @@ impl WarehouseService {
 // 数据类型
 // =====================================================================
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct BagDetail {
     pub total_kinds: usize,
     pub items: Vec<BagItemView>,
     pub original_items: Vec<(i64, i64, i64)>, // (id, count, uid)
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct BagItemView {
     pub id: i64,
     pub count: i64,
@@ -496,7 +496,7 @@ pub struct BagItemView {
     pub hours_text: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct BagSeedInfo {
     pub seed_id: i64,
     pub name: String,
