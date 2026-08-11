@@ -20,6 +20,9 @@ tokio-tungstenite = { version = "0.24", default-features = false, features = ["c
 tungstenite = "0.24"
 tokio-stream = { version = "0.1", features = ["sync"] }
 
+# HTTP 客户端（仅 push service 使用）
+reqwest = { workspace = true }
+
 # 错误处理
 thiserror = { workspace = true }
 anyhow = { workspace = true }

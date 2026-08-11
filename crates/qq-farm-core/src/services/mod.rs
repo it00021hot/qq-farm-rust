@@ -11,13 +11,25 @@
 //! - [`share`] — 每日分享（1G-2）
 //! - [`interact`] — 访客互动记录（1G-2）
 //! - [`warehouse`] — 仓库 / 出售果实 / 化肥礼包（1G-2）
+//! - [`mystery_shop`] — 神秘商店 RPC 封装（1G-3）
+//! - [`pay`] — 支付 / 充值 RPC 封装（1G-3）
+//! - [`mall`] — 商城自动购买化肥 / 免费礼包（1G-3）
+//! - [`monthcard`] — 月卡每日礼包（1G-3）
+//! - [`commerce`] — 商城 + 神秘商店业务编排 + DTO（1G-3）
+//! - [`push`] — 推送服务 webhook 实现（1G-3）
 
 pub mod analytics;
+pub mod commerce;
 pub mod email;
 pub mod farm;
 pub mod friend;
 pub mod interact;
 pub mod json_db;
+pub mod mall;
+pub mod monthcard;
+pub mod mystery_shop;
+pub mod pay;
+pub mod push;
 pub mod rate_limiter;
 pub mod share;
 pub mod stats;
