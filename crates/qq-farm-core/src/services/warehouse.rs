@@ -111,6 +111,17 @@ impl WarehouseService {
         Ok(BagReply::decode(&body)?)
     }
 
+    /// 拉取背包（无 WarehouseService 实例时使用）
+    ///
+    /// 仅供其他 service 在不持 warehouse 引用时调用。
+    pub async fn get_bag_via(gateway: &Arc<Gateway>) -> Result<BagReply> {
+        let req = BagRequest {};
+        let body = gateway
+            .request("gamepb.itempb.ItemService", "Bag", &req.encode_to_vec(), 10_000)
+            .await?;
+        Ok(BagReply::decode(&body[..])?)
+    }
+
     /// 出售物品
     pub async fn sell_items(&self, items: &[(i64, i64, i64)]) -> Result<SellReply> {
         let payload: Vec<CoreItem> = items

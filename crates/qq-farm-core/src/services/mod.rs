@@ -20,8 +20,11 @@
 //! - [`qqvip`] — QQ 会员每日礼包（1G-4）
 //! - [`invite`] — 邀请码处理（ReportArkClick 模拟点击分享链接）（1G-4）
 //! - [`guide`] — 新手引导 / 节点奖励（1G-4）
+//! - [`task`] — 任务 / 活跃度 / 图鉴自动领取（1G-5）
+//! - [`automation`] — 自动化开关（category → bool 映射）
 
 pub mod analytics;
+pub mod automation;
 pub mod commerce;
 pub mod email;
 pub mod farm;
@@ -40,6 +43,7 @@ pub mod rate_limiter;
 pub mod share;
 pub mod stats;
 pub mod status;
+pub mod task;
 pub mod warehouse;
 
 pub use json_db::{
