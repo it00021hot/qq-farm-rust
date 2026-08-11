@@ -26,8 +26,8 @@ use crate::models::store::normalize::{
     normalize_quiet_hours, default_account_config as full_default,
 };
 use crate::models::types::{
-    AccountConfig, AutomationConfig, BagSeedFallbackStrategy, IntervalConfig,
-    PlantingStrategy, QuietHoursConfig,
+    AccountConfig, AccountConfigSnapshot, AutomationConfig, BagSeedFallbackStrategy,
+    IntervalConfig, PlantingStrategy, QuietHoursConfig,
 };
 
 // =====================================================================
@@ -101,6 +101,18 @@ pub fn get_account_config_snapshot(account_id: Option<&str>) -> AccountConfig {
         .get(&id)
         .cloned()
         .unwrap_or_else(|| state.account_fallback_config.clone())
+}
+
+/// 获取配置快照（`AccountConfig + ui`）。
+///
+/// 1:1 对应原 TS `getConfigSnapshot()` 的返回类型。
+/// runtime_state 中用 `obj.remove("ui")` 把 ui 字段剥掉，注入 `__revision`。
+#[must_use]
+pub fn get_config_snapshot(account_id: Option<&str>) -> AccountConfigSnapshot {
+    AccountConfigSnapshot {
+        config: get_account_config_snapshot(account_id),
+        ui: None,
+    }
 }
 
 /// 设置单账号配置（persist=true 时会触发 save 钩子，2A 注入）

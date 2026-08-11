@@ -17,3 +17,4 @@ pub mod user_store;
 pub use account::Account;
 pub use friend::Friend;
 pub use land::Land;
+pub use types::{AccountConfigSnapshot, UIConfig};

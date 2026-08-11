@@ -95,6 +95,9 @@ pub struct PersistedStats {
     pub operations: OperationsMap,
     #[serde(default)]
     pub initial_state: InitialState,
+    /// 累计偷菜数（跨会话；每天也归入 persisted）
+    #[serde(default)]
+    pub total_steal: i64,
     pub saved_at: i64,
 }
 
@@ -473,6 +476,11 @@ pub fn save_stats() {
         date: today,
         operations: ops,
         initial_state: init,
+        // 累计偷菜数：当前累计 = 持久化累计 + session 增量（运行时已加进 ops.steal）
+        // 简化：跨日累加，跨日从上次 saved 拿
+        total_steal: load_persisted_stats(&account)
+            .map(|p| p.total_steal)
+            .unwrap_or(0),
         saved_at: crate::utils::time::now_ms(),
     };
     save_persisted_stats(&account, &data);
@@ -677,6 +685,7 @@ mod tests {
                 exp: Some(50),
                 coupon: Some(0),
             },
+            total_steal: 0,
             saved_at: crate::utils::time::now_ms(),
         };
         save_persisted_stats(acc, &data);

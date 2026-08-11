@@ -420,6 +420,36 @@ impl Default for AccountConfig {
     }
 }
 
+/// UI 配置（用户层）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UIConfig {
+    /// 主题
+    pub theme: String,
+    /// 语言
+    pub language: String,
+}
+
+/// 配置快照（`AccountConfig + ui`）。
+///
+/// 1:1 对应原 TS `getConfigSnapshot()` 的返回类型。
+/// 序列化时 `ui` 字段默认不输出（如 runtime_state 中 `obj.remove("ui")`）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountConfigSnapshot {
+    #[serde(flatten)]
+    pub config: AccountConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui: Option<UIConfig>,
+}
+
+impl Default for AccountConfigSnapshot {
+    fn default() -> Self {
+        Self {
+            config: AccountConfig::default(),
+            ui: None,
+        }
+    }
+}
+
 // =====================================================================
 // 单元测试
 // =====================================================================

@@ -8,9 +8,11 @@
 //! - [`worker_message`] — 控制消息 [`WorkerMessage`]
 //! - [`scheduler`] — 任务调度 [`Scheduler`]
 //! - [`events`] — 生命周期事件 [`WorkerEvent`]
+//! - [`runtime_state`] — 全局日志 / 账号日志 / 配置版本号 / 事件总线
 
 pub mod engine;
 pub mod events;
+pub mod runtime_state;
 pub mod scheduler;
 pub mod worker;
 pub mod worker_handle;
