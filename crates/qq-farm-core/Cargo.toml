@@ -57,3 +57,6 @@ dotenvy = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }
+
+[dev-dependencies]
+serial_test = "3"
