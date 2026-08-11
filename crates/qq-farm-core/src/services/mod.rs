@@ -17,19 +17,25 @@
 //! - [`monthcard`] — 月卡每日礼包（1G-3）
 //! - [`commerce`] — 商城 + 神秘商店业务编排 + DTO（1G-3）
 //! - [`push`] — 推送服务 webhook 实现（1G-3）
+//! - [`qqvip`] — QQ 会员每日礼包（1G-4）
+//! - [`invite`] — 邀请码处理（ReportArkClick 模拟点击分享链接）（1G-4）
+//! - [`guide`] — 新手引导 / 节点奖励（1G-4）
 
 pub mod analytics;
 pub mod commerce;
 pub mod email;
 pub mod farm;
 pub mod friend;
+pub mod guide;
 pub mod interact;
+pub mod invite;
 pub mod json_db;
 pub mod mall;
 pub mod monthcard;
 pub mod mystery_shop;
 pub mod pay;
 pub mod push;
+pub mod qqvip;
 pub mod rate_limiter;
 pub mod share;
 pub mod stats;
