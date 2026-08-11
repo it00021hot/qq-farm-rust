@@ -104,6 +104,8 @@ struct Inner {
     encryptor: Arc<dyn Encryptor>,
     /// 收到的 Notify 事件订阅者
     notify_subscribers: RwLock<Vec<mpsc::Sender<NotifyEvent>>>,
+    /// WS 发送端（connect 时设置）
+    ws_sender: parking_lot::Mutex<Option<mpsc::Sender<Vec<u8>>>>,
 }
 
 impl Gateway {
@@ -119,6 +121,7 @@ impl Gateway {
                 requests: RequestManager::new(),
                 encryptor,
                 notify_subscribers: RwLock::new(Vec::new()),
+                ws_sender: parking_lot::Mutex::new(None),
             }),
         }
     }
@@ -145,6 +148,20 @@ impl Gateway {
             options.headers.insert(k.clone(), v.clone());
         }
         let (client, rx) = WsClient::connect(&url, options).await?;
+
+        // 创建 frame 发送 channel（业务调用 request() 通过这里发）
+        let (frame_tx, mut frame_rx) = mpsc::channel::<Vec<u8>>(64);
+        *self.inner.ws_sender.lock() = Some(frame_tx);
+
+        // 启动一个 task：从 channel 读 frame 通过 WsClient 发
+        let client_for_sender = client.clone();
+        tokio::spawn(async move {
+            while let Some(frame) = frame_rx.recv().await {
+                if client_for_sender.send(&frame).await.is_err() {
+                    break;
+                }
+            }
+        });
 
         // 更新阶段为 Login（待登录响应）
         *self.inner.phase.write() = ConnectionPhase::Login;
@@ -203,6 +220,76 @@ impl Gateway {
             .with_body(encrypted_body)
             .with_token(token);
         frame.encode().map_err(|e| NetworkError::Frame(format!("encode: {e}")))
+    }
+
+    /// 高阶 API：发请求 + 等响应（带超时）
+    ///
+    /// 业务层最常用：`let resp = gateway.request("gamepb.plantpb.PlantService", "AllLands", &body).await?;`
+    ///
+    /// 流程：
+    /// 1. 分配 client_seq
+    /// 2. encode frame（body 加密）
+    /// 3. 通过 WsClient 发送
+    /// 4. 等 receiver，timeout = `timeout_ms`
+    ///
+    /// # Errors
+    /// - 阶段错误（未在 Online）
+    /// - 帧编码失败
+    /// - 发送失败
+    /// - 超时
+    /// - 网关错误（error_code != 0）
+    pub async fn request(
+        &self,
+        service: &str,
+        method: &str,
+        body: &[u8],
+        timeout_ms: u64,
+    ) -> Result<Vec<u8>> {
+        // 1. 阶段检查
+        {
+            let phase = *self.inner.phase.read();
+            if phase != ConnectionPhase::Online {
+                return Err(NetworkError::Phase(format!(
+                    "request requires Online, current: {phase:?}"
+                )));
+            }
+        }
+
+        // 2. 分配 seq
+        let (seq, rx) = self.inner.requests.call(service, method);
+
+        // 3. 编码 frame
+        let frame_bytes = self.encode_request(service, method, body, seq, "")?;
+        let _ = body; // 抑制未使用警告
+
+        // 4. 发送（需要 WsClient handle —— 通过 channel 找到）
+        // —— 简化：直接通过 Gateway 内部保存的 ws_sender
+        let ws_tx = self
+            .inner
+            .ws_sender
+            .lock()
+            .as_ref()
+            .ok_or_else(|| NetworkError::Phase("ws not connected".into()))?
+            .clone();
+        ws_tx
+            .send(frame_bytes)
+            .await
+            .map_err(|_| NetworkError::WebSocket("ws sender closed".into()))?;
+
+        // 5. 等响应（带超时）
+        match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), rx).await {
+            Ok(Ok(resp)) => Ok(resp.body),
+            Ok(Err(_)) => Err(NetworkError::Phase("response channel cancelled".into())),
+            Err(_) => {
+                // 超时 —— 清理 pending
+                self.inner.requests.cancel(seq);
+                Err(NetworkError::Timeout {
+                    client_seq: seq,
+                    service_name: service.to_string(),
+                    method_name: method.to_string(),
+                })
+            }
+        }
     }
 
     /// 订阅 Notify 事件

@@ -19,9 +19,9 @@ pub enum Error {
     #[error("protobuf encode error: {0}")]
     ProtobufEncode(#[from] prost::EncodeError),
 
-    /// 网络错误（WebSocket / HTTP）
+    /// 网络层错误（来自 `network` 模块的 [`crate::network::error::NetworkError`]）
     #[error("network error: {0}")]
-    Network(String),
+    Network(#[from] crate::network::error::NetworkError),
 
     /// WASM 运行时错误
     #[error("wasm error: {0}")]
