@@ -1,0 +1,11 @@
+# Clippy 全局配置
+# 允许的最大圈复杂度
+cognitive-complexity-threshold = 25
+# 允许单函数最大行数（超出警告，但允许 #![allow]）
+too-many-lines-threshold = 120
+# 允许的最大参数个数
+too-many-arguments-threshold = 8
+# 类型复杂度上限
+type-complexity-threshold = 250
+# 禁止不安全用法（与 Cargo.toml 双重保护）
+avoid-unsafe-ext-foreign-fns = true

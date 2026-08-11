@@ -1,0 +1,115 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/qq-farm-core",
+    "crates/qq-farm-server",
+    "crates/qq-farm-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+authors = ["Milo"]
+repository = "https://github.com/XyhTender/qq-farm-bot-rust"
+description = "QQ 农场多账号挂机 — Rust 重写版"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+# 企业工程 lint：把更严格的检查默认打开
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+# 以下 pedantic 项暂时放过，避免误报过多
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+similar_names = "allow"
+struct_excessive_bools = "allow"
+too_many_lines = "allow"
+too_many_arguments = "allow"
+redundant_pub_crate = "allow"
+# 命名风格统一
+missing_const_for_fn = "warn"
+
+# ===== 共享依赖版本 =====
+[workspace.dependencies]
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+# 异步 traits
+async-trait = "0.1"
+futures = "0.3"
+
+# 错误处理
+thiserror = "2"
+anyhow = "1"
+
+# 日志
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rmp-serde = "1"
+toml = "0.8"
+
+# 时间
+chrono = { version = "0.4", features = ["serde"] }
+
+# 配置
+config = { version = "0.14", default-features = false, features = ["toml"] }
+
+# HTTP / Web
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+hyper = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip"] }
+
+# WebSocket（与 socket.io 兼容，本阶段不引入，留位）
+# socketioxide = "0.16"
+
+# Protobuf
+prost = "0.13"
+prost-types = "0.13"
+prost-build = "0.13"
+
+# WASM
+wasmtime = "33"
+
+# 工具
+hex = "0.4"
+base64 = "0.22"
+bytes = "1"
+once_cell = "1"
+parking_lot = "0.12"
+uuid = { version = "1", features = ["v4", "serde"] }
+rand = "0.8"
+url = "2"
+dotenvy = "0.15"
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# 进程内 crate
+qq-farm-core = { path = "crates/qq-farm-core" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+
+[profile.dev]
+opt-level = 0
+debug = 1
+incremental = true

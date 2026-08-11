@@ -1,0 +1,30 @@
+# Rust
+/target
+**/*.rs.bk
+*.pdb
+*.so
+*.dylib
+*.dll
+
+# IDE
+.idea/
+.vscode/
+*.iml
+.cursor/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 环境
+.env
+.env.local
+*.local
+
+# 运行时数据（与原项目一致）
+data/
+logs/
+*.log
+
+# WASM 临时文件
+*.wasm.tmp

@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package gamepb.dogpb;
+
+// ============ 狗狗信息 ============
+message DogInfo {
+    int64 id = 1;
+    string name = 2;
+    int64 price = 3;
+    int64 status = 4;       // 1=拥有
+    int64 level = 5;
+}
+
+// 狗狗装备/道具
+message DogItem {
+    int64 id = 1;
+    int64 duration = 2;
+    int64 status = 3;
+}
+
+// ============ 请求/回复 ============
+message GetDogInfoRequest {}
+
+message GetDogInfoReply {
+    repeated DogInfo dogs = 1;
+    // field 2,3 reserved
+    int64 protect_duration = 4;     // 护主时长(秒)
+    repeated DogItem items = 5;     // 狗狗道具
+}

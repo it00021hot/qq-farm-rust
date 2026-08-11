@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package gamepb.careerpb;
+
+// ============ 职业/生涯服务 ============
+
+message CareerInfo {
+    int64 career_id = 1;
+    string name = 2;
+    int32 level = 3;
+    int64 exp = 4;
+    int32 status = 5;
+}
+
+// --- 获取生涯信息 ---
+message CareerInfoGetRequest {}
+
+message CareerInfoGetReply {
+    repeated CareerInfo careers = 1;
+}

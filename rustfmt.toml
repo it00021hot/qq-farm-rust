@@ -1,0 +1,11 @@
+# Stable Rust 风格规约
+edition = "2021"
+max_width = 100
+tab_spaces = 4
+hard_tabs = false
+newline_style = "Unix"
+use_small_heuristics = "Max"
+imports_granularity = "Crate"
+group_imports = "StdExternalCrate"
+reorder_imports = true
+reorder_modules = true

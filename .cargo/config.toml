@@ -1,0 +1,8 @@
+# 编译配置
+[build]
+# 共享 target 目录
+target-dir = "target"
+
+# 编译时环境变量
+[env]
+RUST_BACKTRACE = "1"

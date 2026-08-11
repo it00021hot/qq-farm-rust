@@ -1,0 +1,35 @@
+[package]
+name = "qq-farm-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "QQ 农场 HTTP + WebSocket 服务（API 兼容层）"
+
+[lints]
+workspace = true
+
+[dependencies]
+qq-farm-core = { workspace = true }
+
+# 异步运行时
+tokio = { workspace = true }
+
+# 错误处理
+anyhow = { workspace = true }
+
+# 序列化
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# 日志
+tracing = { workspace = true }
+
+# HTTP / Web（阶段 1 才正式引入）
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+
+# 工具
+dotenvy = { workspace = true }

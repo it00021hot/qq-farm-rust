@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package corepb;
+
+// The purchase ItemNotify currently carries an empty display payload. Keeping
+// the message typed preserves the wire field and supports populated data later.
+message ItemShow {
+    Item sell_price = 4; // Currency and amount shown as the item's sale value.
+}
+
+message Item {
+    int64 id = 1;
+    int64 count = 2;
+    int64 expire_time = 3;
+    // Field 4 is reserved by the game protocol.
+    // google.protobuf.Any detail = 5;
+    int64 uid = 6;
+    bool is_new = 7;
+    repeated int64 mutant_types = 8;
+    ItemShow show = 100;
+}
+
+message ItemBag {
+    repeated Item items = 1;
+}
+
+message ItemChg {
+    Item item = 1;
+    int64 delta = 2;
+}
