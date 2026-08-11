@@ -94,6 +94,33 @@ pub enum FertilizerLandType {
     Normal,
 }
 
+impl FertilizerLandType {
+    /// 字符串表示
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Gold => "gold",
+            Self::Black => "black",
+            Self::Red => "red",
+            Self::PurpleGold => "purple-gold",
+        }
+    }
+
+    /// 从字符串解析
+    #[must_use]
+    pub fn from_str_opt(s: &str) -> Option<Self> {
+        match s {
+            "normal" => Some(Self::Normal),
+            "gold" => Some(Self::Gold),
+            "black" => Some(Self::Black),
+            "red" => Some(Self::Red),
+            "purple-gold" => Some(Self::PurpleGold),
+            _ => None,
+        }
+    }
+}
+
 // =====================================================================
 // 土地 / 农场（UI 形态，不是 proto 形态）
 // =====================================================================

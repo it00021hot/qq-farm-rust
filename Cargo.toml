@@ -96,6 +96,10 @@ rand = "0.8"
 url = "2"
 dotenvy = "0.15"
 
+# 加密 / 哈希
+sha2 = "0.10"
+hmac = "0.12"
+
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
 
