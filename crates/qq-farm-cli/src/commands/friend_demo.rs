@@ -19,8 +19,8 @@ use qq_farm_core::network::gateway::{Gateway, GatewayConfig};
 use qq_farm_core::proto::generated::gamepb::friendpb::{GameFriend, GetAllReply};
 use qq_farm_core::services::friend::scheduler::{FriendEvent, FriendService};
 use tokio::net::TcpListener;
-use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
 use tokio_tungstenite::accept_async;
+use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
@@ -72,16 +72,16 @@ async fn run_demo(args: Args) -> Result<()> {
     let friend_event_task = tokio::spawn(async move {
         while let Ok(ev) = friend_events.recv().await {
             match &ev {
-                FriendEvent::Checked { batch_size, helped, stolen } => {
+                FriendEvent::Checked { batch_size, helped, stolen, banned } => {
                     println!(
-                        "[friend] Checked: batch={batch_size} helped={helped} stolen={stolen}"
+                        "[friend] Checked: batch={batch_size} helped={helped} stolen={stolen} banned={banned}"
                     );
                 }
                 FriendEvent::GidsSynced { count } => {
                     println!("[friend] GidsSynced: count={count}");
                 }
-                FriendEvent::SyncFailed { message } => {
-                    println!("[friend] SyncFailed: {message}");
+                FriendEvent::FarmBanned { host_gid } => {
+                    println!("[friend] FarmBanned: host_gid={host_gid}");
                 }
                 FriendEvent::Error { message } => {
                     println!("[friend] Error: {message}");
@@ -93,9 +93,9 @@ async fn run_demo(args: Args) -> Result<()> {
     // 跑一次
     println!("[friend-demo] check_friends...");
     match friend.check_friends().await {
-        Ok((batch_size, helped, stolen)) => {
+        Ok((batch_size, helped, stolen, banned)) => {
             println!(
-                "[friend-demo] check_friends 完成: batch={batch_size} helped={helped} stolen={stolen}"
+                "[friend-demo] check_friends 完成: batch={batch_size} helped={helped} stolen={stolen} banned={banned}"
             );
         }
         Err(e) => println!("[friend-demo] check_friends 失败: {e}"),
@@ -160,7 +160,11 @@ async fn start_mock_ws_server() -> (u16, tokio::task::JoinHandle<()>) {
                     };
                     if let WsMessage::Binary(data) = msg {
                         if let Ok(req) = GateMessage::decode(&data[..]) {
-                            let method = req.meta.as_ref().map(|m| m.method_name.clone()).unwrap_or_default();
+                            let method = req
+                                .meta
+                                .as_ref()
+                                .map(|m| m.method_name.clone())
+                                .unwrap_or_default();
                             let client_seq = req.meta.as_ref().map(|m| m.client_seq).unwrap_or(0);
 
                             let body = if method == "GetAll" {
@@ -179,7 +183,11 @@ async fn start_mock_ws_server() -> (u16, tokio::task::JoinHandle<()>) {
                             };
 
                             let resp_meta = Meta {
-                                service_name: req.meta.as_ref().map(|m| m.service_name.clone()).unwrap_or_default(),
+                                service_name: req
+                                    .meta
+                                    .as_ref()
+                                    .map(|m| m.service_name.clone())
+                                    .unwrap_or_default(),
                                 method_name: method.clone(),
                                 message_type: 2, // Response
                                 client_seq,

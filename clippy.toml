@@ -7,5 +7,3 @@ too-many-lines-threshold = 120
 too-many-arguments-threshold = 8
 # 类型复杂度上限
 type-complexity-threshold = 250
-# 禁止不安全用法（与 Cargo.toml 双重保护）
-avoid-unsafe-ext-foreign-fns = true

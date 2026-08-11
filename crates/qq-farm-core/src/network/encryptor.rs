@@ -50,9 +50,7 @@ impl TsdkEncryptor {
     /// 包装一个已初始化的 [`TsdkRuntime`]
     #[must_use]
     pub fn new(runtime: TsdkRuntime) -> Self {
-        Self {
-            runtime: Arc::new(Mutex::new(runtime)),
-        }
+        Self { runtime: Arc::new(Mutex::new(runtime)) }
     }
 }
 
@@ -78,9 +76,13 @@ mod tests {
         static RUNTIME: OnceLock<Arc<TsdkEncryptor>> = OnceLock::new();
         RUNTIME
             .get_or_init(|| {
+                // 默认：仓库根 `assets/tsdk.wasm`（用 CARGO_MANIFEST_DIR 拼绝对路径，跨 CWD 都能跑）
+                let manifest_dir = env!("CARGO_MANIFEST_DIR");
+                let default_path =
+                    Path::new(manifest_dir).join("..").join("..").join("assets").join("tsdk.wasm");
                 let wasm_path = std::env::var("TSDK_WASM_PATH")
                     .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|_| Path::new("assets/tsdk.wasm").to_path_buf());
+                    .unwrap_or(default_path);
                 let rt = TsdkRuntime::load(&wasm_path, "./data/tsdk-encryptor-test")
                     .expect("load tsdk.wasm");
                 Arc::new(TsdkEncryptor::new(rt))
