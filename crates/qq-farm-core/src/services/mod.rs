@@ -2,13 +2,19 @@
 //!
 //! - [`json_db`] — 原子 JSON 文件读写
 //! - [`rate_limiter`] — 令牌桶 + 优先级队列 + 服务队列
-//! - [`farm`] — 农场服务（1C 阶段：1:1 翻译原 TS services/farm/）
-//! - [`friend`] — 好友服务（1D 阶段：1:1 翻译原 TS services/friend/）
+//! - [`farm`] — 农场服务（1C 阶段）
+//! - [`friend`] — 好友服务（1D 阶段）
+//! - [`analytics`] — 作物效率分析（1G-1）
+//! - [`stats`] — 每日操作统计（1G-1）
+//! - [`status`] — 终端状态栏（1G-1）
 
+pub mod analytics;
 pub mod farm;
 pub mod friend;
 pub mod json_db;
 pub mod rate_limiter;
+pub mod stats;
+pub mod status;
 
 pub use json_db::{
     ensure_parent_dir, file_exists, file_size, list_files_with_ext, read_json_or,

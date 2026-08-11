@@ -377,6 +377,33 @@ impl GameConfig {
         // 简化：植物的 fruit.count * 10（占位）
         self.get_plant_by_seed_id(seed_id).and_then(|p| p.fruit).map(|f| f.count * 10).unwrap_or(0)
     }
+
+    /// 果实出售价格（从 ItemInfo.json 的 sells 字段读取，简化：count * 8）
+    #[must_use]
+    pub fn get_fruit_price(&self, fruit_id: i64) -> i64 {
+        let item = self.get_item_by_id(fruit_id);
+        if let Some(ref i) = item {
+            if let Some(sells) = &i.sells {
+                if let Some(arr) = sells.as_array() {
+                    if let Some(v) = arr.first() {
+                        if let Some(obj) = v.as_object() {
+                            if let Some(c) = obj.get("count").and_then(|v| v.as_i64()) {
+                                return c;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // 兜底：默认售价 = 物品等级 * 8
+        item.and_then(|i| i.level).unwrap_or(1) * 8
+    }
+
+    /// 物品图标 URL（asset_name 字段）
+    #[must_use]
+    pub fn get_item_image_by_id(&self, item_id: i64) -> Option<String> {
+        self.get_item_by_id(item_id).and_then(|i| i.asset_name.clone())
+    }
 }
 
 // ===== 全局单例 =====

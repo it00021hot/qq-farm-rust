@@ -12,6 +12,7 @@ pub mod system_config;
 
 pub use app::AppConfig;
 pub use game_config::{GameConfig, SeedInfo};
+pub use game_config::global as global_game_config;
 pub use paths::{
     ensure_data_dir, get_app_root, get_data_dir, get_data_file, get_resource_path,
     get_resource_root, get_share_file_path, IS_PACKAGED,
