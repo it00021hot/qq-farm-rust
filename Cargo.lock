@@ -1576,6 +1576,7 @@ dependencies = [
  "clap",
  "futures",
  "hex",
+ "prost",
  "qq-farm-core",
  "tokio",
  "tokio-tungstenite",

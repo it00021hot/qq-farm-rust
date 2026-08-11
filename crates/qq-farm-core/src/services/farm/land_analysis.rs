@@ -162,6 +162,127 @@ pub fn land_ids_difference(a: &[i64], b: &[i64]) -> Vec<i64> {
     a.iter().copied().filter(|id| !b_set.contains(id)).collect()
 }
 
+// ===== 阶段 1C.2 扩展 =====
+
+/// 土地类型（按等级）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LandType {
+    /// 普通地（等级 1）
+    Normal,
+    /// 红土地
+    Red,
+    /// 黑土地
+    Black,
+    /// 金土地
+    Gold,
+}
+
+/// 按等级返回土地类型（与原 TS getLandTypeByLevel 对齐）
+#[must_use]
+pub fn land_type_by_level(level: i64) -> LandType {
+    match level {
+        1..=2 => LandType::Normal,
+        3..=4 => LandType::Red,
+        5..=6 => LandType::Black,
+        _ => LandType::Gold,
+    }
+}
+
+/// 全部施肥土地类型（用于"全选"判断）
+pub const ALL_FERTILIZER_LAND_TYPES: &[LandType] = &[LandType::Normal, LandType::Red, LandType::Black, LandType::Gold];
+
+/// 规范化施肥土地类型（去重 + 顺序）
+#[must_use]
+pub fn normalize_fertilizer_land_types(types: &[LandType]) -> Vec<LandType> {
+    let mut seen = HashSet::new();
+    types.iter().copied().filter(|t| seen.insert(*t)).collect()
+}
+
+/// 按类型过滤土地 id
+#[must_use]
+pub fn filter_land_ids_by_types(lands: &[LandInfo], types: &[LandType]) -> Vec<i64> {
+    if types.is_empty() {
+        return vec![];
+    }
+    let type_set: HashSet<LandType> = types.iter().copied().collect();
+    let is_all = type_set.len() == ALL_FERTILIZER_LAND_TYPES.len()
+        && ALL_FERTILIZER_LAND_TYPES.iter().all(|t| type_set.contains(t));
+    if is_all {
+        // "全选" → 所有解锁土地
+        return lands.iter().filter(|l| l.unlocked).map(|l| l.id).collect();
+    }
+    lands
+        .iter()
+        .filter(|l| l.unlocked && type_set.contains(&land_type_by_level(l.level)))
+        .map(|l| l.id)
+        .collect()
+}
+
+/// 获取有机肥目标土地（已收获 + 多季作物）
+#[must_use]
+pub fn get_organic_fertilizer_targets(lands: &[LandInfo], planted_ids: &[i64]) -> Vec<i64> {
+    let planted_set: HashSet<i64> = planted_ids.iter().copied().collect();
+    lands
+        .iter()
+        .filter(|l| {
+            // 已种植物的土地（除 Seed 阶段）作为多季补肥目标
+            if !l.unlocked {
+                return false;
+            }
+            if !planted_set.contains(&l.id) {
+                return false;
+            }
+            // 多季作物 = 植物最后阶段不是 Ripe
+            matches!(
+                current_phase(l),
+                PlantPhase::Sprout | PlantPhase::Growing
+            )
+        })
+        .map(|l| l.id)
+        .collect()
+}
+
+/// 获取即将成熟土地（用于"快速成熟"施肥）
+#[must_use]
+pub fn get_fast_mature_lands(lands: &[LandInfo], threshold_secs: i64) -> Vec<i64> {
+    // 阶段 1C.2 占位：返回所有 Growing 阶段（PlantInfo.grow_sec 可在 1C.3 引入）
+    let _ = threshold_secs;
+    lands
+        .iter()
+        .filter(|l| l.unlocked && current_phase(l) == PlantPhase::Growing)
+        .map(|l| l.id)
+        .collect()
+}
+
+/// 找出可铲除的"已收获且有多余"土地
+#[must_use]
+pub fn resolve_removable_harvested(lands: &[LandInfo], max_to_remove: usize) -> Vec<i64> {
+    let ripe: Vec<i64> = lands
+        .iter()
+        .filter(|l| l.unlocked && current_phase(l) == PlantPhase::Ripe)
+        .map(|l| l.id)
+        .collect();
+    ripe.into_iter().take(max_to_remove).collect()
+}
+
+/// 解析 Slave→Master 映射（多格作物的从地块指向主地块）
+#[must_use]
+pub fn build_slave_to_master_map(lands: &[LandInfo]) -> HashMap<i64, i64> {
+    let mut map = HashMap::new();
+    for land in lands {
+        if land.master_land_id != 0 && land.master_land_id != land.id {
+            map.insert(land.id, land.master_land_id);
+        }
+    }
+    map
+}
+
+/// 判断土地是否被占用（作为 slave 被 master 持有）
+#[must_use]
+pub fn is_occupied_slave_land(land: &LandInfo) -> bool {
+    land.master_land_id != 0 && land.master_land_id != land.id
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,5 +360,84 @@ mod tests {
         let a = vec![1, 2, 3, 4];
         let b = vec![2, 4];
         assert_eq!(land_ids_difference(&a, &b), vec![1, 3]);
+    }
+
+    // ===== 阶段 1C.2 扩展测试 =====
+
+    #[test]
+    fn land_type_by_level_works() {
+        assert_eq!(land_type_by_level(1), LandType::Normal);
+        assert_eq!(land_type_by_level(2), LandType::Normal);
+        assert_eq!(land_type_by_level(3), LandType::Red);
+        assert_eq!(land_type_by_level(4), LandType::Red);
+        assert_eq!(land_type_by_level(5), LandType::Black);
+        assert_eq!(land_type_by_level(6), LandType::Black);
+        assert_eq!(land_type_by_level(7), LandType::Gold);
+        assert_eq!(land_type_by_level(100), LandType::Gold);
+    }
+
+    #[test]
+    fn normalize_dedup_preserves_order() {
+        let types = vec![LandType::Red, LandType::Normal, LandType::Red, LandType::Gold];
+        let n = normalize_fertilizer_land_types(&types);
+        assert_eq!(n, vec![LandType::Red, LandType::Normal, LandType::Gold]);
+    }
+
+    #[test]
+    fn filter_by_all_returns_all_unlocked() {
+        let lands = vec![
+            make_land(1, true, None),
+            make_land(2, false, None),
+            make_land(3, true, None),
+        ];
+        let all = filter_land_ids_by_types(&lands, ALL_FERTILIZER_LAND_TYPES);
+        assert_eq!(all, vec![1, 3]);
+    }
+
+    #[test]
+    fn filter_by_type_subset() {
+        let mut lands = vec![];
+        for i in 1..=4 {
+            let mut land = make_land(i, true, None);
+            land.level = i;
+            lands.push(land);
+        }
+        // 只选 Red (level 3-4)
+        let red_ids = filter_land_ids_by_types(&lands, &[LandType::Red]);
+        assert_eq!(red_ids, vec![3, 4]);
+    }
+
+    #[test]
+    fn build_slave_to_master_basic() {
+        let mut master = make_land(1, true, None);
+        master.slave_land_ids = vec![2, 3];
+        let mut slave2 = make_land(2, true, None);
+        slave2.master_land_id = 1;
+        let mut slave3 = make_land(3, true, None);
+        slave3.master_land_id = 1;
+        let map = build_slave_to_master_map(&[master, slave2, slave3]);
+        assert_eq!(map.get(&2), Some(&1));
+        assert_eq!(map.get(&3), Some(&1));
+    }
+
+    #[test]
+    fn is_occupied_slave() {
+        let mut slave = make_land(2, true, None);
+        slave.master_land_id = 1;
+        assert!(is_occupied_slave_land(&slave));
+        assert!(!is_occupied_slave_land(&make_land(3, true, None)));
+    }
+
+    #[test]
+    fn organic_targets_growing_only() {
+        let lands = vec![
+            make_land(1, true, Some(PlantPhase::Seed)),
+            make_land(2, true, Some(PlantPhase::Growing)),
+            make_land(3, true, Some(PlantPhase::Ripe)),
+            make_land(4, true, Some(PlantPhase::Sprout)),
+        ];
+        let planted = vec![1, 2, 3, 4];
+        let targets = get_organic_fertilizer_targets(&lands, &planted);
+        assert_eq!(targets, vec![2, 4]);
     }
 }

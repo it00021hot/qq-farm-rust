@@ -33,3 +33,4 @@ clap = { workspace = true }
 # 工具
 hex = { workspace = true }
 futures = { workspace = true }
+prost = { workspace = true }

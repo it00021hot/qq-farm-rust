@@ -27,6 +27,9 @@ pub enum Command {
     /// 启动 1 个 worker 连上 mock server，端到端验证（阶段 1B 验证用）
     #[command(name = "worker-demo")]
     WorkerDemo(commands::worker_demo::Args),
+    /// 跑一次完整农场操作：连接 → 收获 → 种植 → 施肥（阶段 1C 验证用）
+    #[command(name = "farm-demo")]
+    FarmDemo(commands::farm_demo::Args),
 }
 
 impl Cli {
@@ -35,6 +38,7 @@ impl Cli {
         match self.command {
             Command::DemoCrypto(args) => commands::demo_crypto::execute(args),
             Command::WorkerDemo(args) => commands::worker_demo::execute(args),
+            Command::FarmDemo(args) => commands::farm_demo::execute(args),
         }
     }
 }
