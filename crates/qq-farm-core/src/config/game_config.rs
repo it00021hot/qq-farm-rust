@@ -404,6 +404,35 @@ impl GameConfig {
     pub fn get_item_image_by_id(&self, item_id: i64) -> Option<String> {
         self.get_item_by_id(item_id).and_then(|i| i.asset_name.clone())
     }
+
+    /// 种子图标 URL（优先 icon_res 字段，否则走 asset_name）
+    #[must_use]
+    pub fn get_seed_image_by_seed_id(&self, seed_id: i64) -> Option<String> {
+        self.get_item_by_id(seed_id).and_then(|i| {
+            i.icon_res.clone().or_else(|| i.asset_name.clone())
+        })
+    }
+
+    /// 解析 sells 字符串（如 "1:100;1002:50"）→ [(currency_id, price)]
+    #[must_use]
+    pub fn parse_sells(&self, sells: &str) -> Vec<(i64, i64)> {
+        if sells.is_empty() {
+            return vec![];
+        }
+        sells
+            .split(';')
+            .filter_map(|part| {
+                let mut iter = part.splitn(2, ':');
+                let cid = iter.next()?.parse::<i64>().unwrap_or(0);
+                let price = iter.next()?.parse::<i64>().unwrap_or(0);
+                if cid == 0 && price == 0 {
+                    None
+                } else {
+                    Some((cid, price))
+                }
+            })
+            .collect()
+    }
 }
 
 // ===== 全局单例 =====

@@ -7,14 +7,22 @@
 //! - [`analytics`] — 作物效率分析（1G-1）
 //! - [`stats`] — 每日操作统计（1G-1）
 //! - [`status`] — 终端状态栏（1G-1）
+//! - [`email`] — 邮箱领取（1G-2）
+//! - [`share`] — 每日分享（1G-2）
+//! - [`interact`] — 访客互动记录（1G-2）
+//! - [`warehouse`] — 仓库 / 出售果实 / 化肥礼包（1G-2）
 
 pub mod analytics;
+pub mod email;
 pub mod farm;
 pub mod friend;
+pub mod interact;
 pub mod json_db;
 pub mod rate_limiter;
+pub mod share;
 pub mod stats;
 pub mod status;
+pub mod warehouse;
 
 pub use json_db::{
     ensure_parent_dir, file_exists, file_size, list_files_with_ext, read_json_or,

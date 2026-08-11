@@ -58,9 +58,36 @@ impl Encryptor for TsdkEncryptor {
     fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>> {
         self.runtime.lock().encrypt(plaintext)
     }
-
     fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
         self.runtime.lock().decrypt(ciphertext)
+    }
+}
+
+/// 不加密的明文 Encryptor（用于测试和本地开发）
+pub struct NoopEncryptor;
+
+impl Encryptor for NoopEncryptor {
+    fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>> {
+        Ok(plaintext.to_vec())
+    }
+    fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
+        Ok(ciphertext.to_vec())
+    }
+}
+
+// 旧 impl 已被上面的 impl 替代
+#[cfg(test)]
+mod noop_tests {
+    use super::*;
+
+    #[test]
+    fn noop_roundtrip() {
+        let enc = NoopEncryptor;
+        let plain = b"hello noop";
+        let ct = enc.encrypt(plain).expect("encrypt");
+        assert_eq!(ct, plain);
+        let pt = enc.decrypt(&ct).expect("decrypt");
+        assert_eq!(pt, plain);
     }
 }
 
