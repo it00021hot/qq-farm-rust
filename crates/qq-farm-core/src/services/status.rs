@@ -19,7 +19,7 @@ use crate::config::game_config::global as global_game_config;
 // =====================================================================
 
 /// 状态数据
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct StatusData {
     pub platform: String,
     pub name: String,

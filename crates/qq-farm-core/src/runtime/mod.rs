@@ -18,4 +18,5 @@ pub mod runtime_state;
 pub mod scheduler;
 pub mod worker;
 pub mod worker_handle;
+pub mod worker_loop;
 pub mod worker_message;
