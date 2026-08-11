@@ -59,6 +59,10 @@ url = { workspace = true }
 dotenvy = { workspace = true }
 sha2 = { workspace = true }
 hmac = { workspace = true }
+aes = { workspace = true }
+aes-gcm = { workspace = true }
+lz4_flex = { workspace = true }
+p256 = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }

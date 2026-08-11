@@ -99,6 +99,13 @@ dotenvy = "0.15"
 # 加密 / 哈希
 sha2 = "0.10"
 hmac = "0.12"
+# AES-GCM
+aes = "0.8"
+aes-gcm = "0.10"
+# LZ4 压缩（wx-login 协议）
+lz4_flex = "0.11"
+# ECDH P-256（wx-login 协议）
+p256 = { version = "0.13", features = ["ecdh"] }
 
 # CLI
 clap = { version = "4", features = ["derive", "env"] }

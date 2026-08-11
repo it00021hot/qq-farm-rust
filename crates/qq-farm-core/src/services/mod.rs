@@ -27,6 +27,7 @@
 //! - [`qrlogin`] — QQ 小程序扫码登录（1G-7）
 //! - [`login_url_profile`] — 登录 URL hints 写入系统配置（1G-7）
 //! - [`randomdrop`] — 随机掉落活动（1G-7）
+//! - [`wx_login`] — 微信扫码登录（1G-8：协议层 + QR 流程）
 
 pub mod activity_center;
 pub mod analytics;
@@ -55,6 +56,7 @@ pub mod stats;
 pub mod status;
 pub mod task;
 pub mod warehouse;
+pub mod wx_login;
 
 pub use json_db::{
     ensure_parent_dir, file_exists, file_size, list_files_with_ext, read_json_or,
