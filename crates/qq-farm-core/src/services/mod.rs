@@ -23,6 +23,10 @@
 //! - [`task`] — 任务 / 活跃度 / 图鉴自动领取（1G-5）
 //! - [`automation`] — 自动化开关（category → bool 映射）
 //! - [`activity_center`] — 赛季 / 商店 / 星座 / 节气（1G-6，仅复刻生效活动）
+//! - [`security`] — 密码 / 限流 / 会话 token（1G-7）
+//! - [`qrlogin`] — QQ 小程序扫码登录（1G-7）
+//! - [`login_url_profile`] — 登录 URL hints 写入系统配置（1G-7）
+//! - [`randomdrop`] — 随机掉落活动（1G-7）
 
 pub mod activity_center;
 pub mod analytics;
@@ -35,13 +39,17 @@ pub mod guide;
 pub mod interact;
 pub mod invite;
 pub mod json_db;
+pub mod login_url_profile;
 pub mod mall;
 pub mod monthcard;
 pub mod mystery_shop;
 pub mod pay;
 pub mod push;
+pub mod qrlogin;
 pub mod qqvip;
+pub mod randomdrop;
 pub mod rate_limiter;
+pub mod security;
 pub mod share;
 pub mod stats;
 pub mod status;
