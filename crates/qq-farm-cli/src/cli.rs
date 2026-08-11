@@ -30,6 +30,9 @@ pub enum Command {
     /// 跑一次完整农场操作：连接 → 收获 → 种植 → 施肥（阶段 1C 验证用）
     #[command(name = "farm-demo")]
     FarmDemo(commands::farm_demo::Args),
+    /// 跑一次完整好友操作：同步 → 帮 → 偷（阶段 1D 验证用）
+    #[command(name = "friend-demo")]
+    FriendDemo(commands::friend_demo::Args),
 }
 
 impl Cli {
@@ -39,6 +42,7 @@ impl Cli {
             Command::DemoCrypto(args) => commands::demo_crypto::execute(args),
             Command::WorkerDemo(args) => commands::worker_demo::execute(args),
             Command::FarmDemo(args) => commands::farm_demo::execute(args),
+            Command::FriendDemo(args) => commands::friend_demo::execute(args),
         }
     }
 }
