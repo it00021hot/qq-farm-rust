@@ -9,9 +9,11 @@
 //! - [`scheduler`] — 任务调度 [`Scheduler`]
 //! - [`events`] — 生命周期事件 [`WorkerEvent`]
 //! - [`runtime_state`] — 全局日志 / 账号日志 / 配置版本号 / 事件总线
+//! - [`relogin_reminder`] — 离线提醒 + 重登录监听
 
 pub mod engine;
 pub mod events;
+pub mod relogin_reminder;
 pub mod runtime_state;
 pub mod scheduler;
 pub mod worker;
