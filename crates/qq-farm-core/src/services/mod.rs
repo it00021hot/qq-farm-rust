@@ -22,7 +22,9 @@
 //! - [`guide`] — 新手引导 / 节点奖励（1G-4）
 //! - [`task`] — 任务 / 活跃度 / 图鉴自动领取（1G-5）
 //! - [`automation`] — 自动化开关（category → bool 映射）
+//! - [`activity_center`] — 赛季 / 商店 / 星座 / 节气（1G-6，仅复刻生效活动）
 
+pub mod activity_center;
 pub mod analytics;
 pub mod automation;
 pub mod commerce;
