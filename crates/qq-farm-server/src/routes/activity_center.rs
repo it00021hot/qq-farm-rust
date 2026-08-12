@@ -22,7 +22,7 @@ pub fn router() -> Router<Arc<AdminContext>> {
         .route("/api/activity-center/pass/claim", post(claim_battle_pass))
         .route("/api/activity-center/constellation/light", post(light_constellation))
         .route("/api/activity-center/shop/exchange", post(exchange_star_sand))
-        .route("/api/activity-center/solar-terms/:term_id/claim", post(claim_solar_term))
+        .route("/api/activity-center/solar-terms/{term_id}/claim", post(claim_solar_term))
 }
 
 #[derive(Debug, Deserialize)]

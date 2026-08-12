@@ -68,6 +68,15 @@ async fn main() -> Result<()> {
 
     info!(%addr, "qq-farm-server 启动 (阶段 2A: farm routes)");
 
+    // 启动时加载全局状态（账号 / 登录尝试 / 卡密 / 配置等）
+    let _ = qq_farm_core::models::store::accounts::load_into_global();
+    let _ = qq_farm_core::models::user_store::auth::load_login_attempts();
+    let _ = qq_farm_core::models::user_store::auth::load_login_logs();
+    let _ = qq_farm_core::models::user_store::users::load_users();
+    let _ = qq_farm_core::models::user_store::users::load_cards();
+    let _ = qq_farm_core::models::store::global_config::load_global_config();
+    let _ = qq_farm_core::models::user_store::card_claim::load_card_claim_records();
+
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
 

@@ -65,8 +65,15 @@ pub fn get_app_root() -> PathBuf {
 }
 
 /// 获取数据目录
+///
+/// 优先 FARM_DATA_DIR 环境变量；否则 `<app_root>/data`
 #[must_use]
 pub fn get_data_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("FARM_DATA_DIR") {
+        if !dir.is_empty() {
+            return PathBuf::from(dir);
+        }
+    }
     get_app_root().join("data")
 }
 

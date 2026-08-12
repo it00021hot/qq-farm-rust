@@ -38,7 +38,7 @@ pub fn router() -> Router<Arc<AdminContext>> {
         // 卡密
         .route("/api/admin/cards", get(list_cards).post(create_card))
         .route("/api/admin/cards/batch-delete", post(batch_delete_cards))
-        .route("/api/admin/cards/:code", post(update_card).delete(delete_card))
+        .route("/api/admin/cards/{code}", post(update_card).delete(delete_card))
         // 卡密领取
         .route("/api/card-claim/status", get(get_card_claim_status))
         .route("/api/admin/card-claim/status", post(set_card_claim_status))
@@ -47,10 +47,10 @@ pub fn router() -> Router<Arc<AdminContext>> {
         // 用户
         .route("/api/admin/users", get(list_users))
         .route("/api/admin/users-with-password", get(list_users_with_password))
-        .route("/api/admin/users/:username", post(create_user))
-        .route("/api/admin/users/:username/edit", post(edit_user))
-        .route("/api/admin/users/:username", delete(delete_user))
-        .route("/api/admin/users/:username/renew", post(admin_renew_user))
+        .route("/api/admin/users/{username}", post(create_user))
+        .route("/api/admin/users/{username}/edit", post(edit_user))
+        .route("/api/admin/users/{username}", delete(delete_user))
+        .route("/api/admin/users/{username}/renew", post(admin_renew_user))
 }
 
 #[derive(Debug, Deserialize)]

@@ -28,7 +28,7 @@ pub fn router() -> Router<Arc<AdminContext>> {
         .route("/api/auth/validate", get(validate))
         .route("/api/scheduler", get(scheduler))
         .route("/api/admin/login-logs", get(get_login_logs).delete(delete_login_logs))
-        .route("/api/card/info/:code", get(card_info))
+        .route("/api/card/info/{code}", get(card_info))
 }
 
 #[derive(Debug, Deserialize)]

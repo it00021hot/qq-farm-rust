@@ -65,7 +65,7 @@ async fn run_demo(args: Args) -> Result<()> {
         headers: HashMap::new(),
     };
 
-    let engine = RuntimeEngine::new(EngineConfig {
+    let engine = RuntimeEngine::assemble(EngineConfig {
         max_workers: 4,
         status_interval: Duration::from_secs(1),
         tsdk_wasm_path: wasm_path,

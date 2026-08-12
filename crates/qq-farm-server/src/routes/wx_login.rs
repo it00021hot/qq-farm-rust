@@ -21,11 +21,11 @@ use crate::context::{ok, ok_empty, AdminContext, ApiError, ApiResult};
 pub fn router() -> Router<Arc<AdminContext>> {
     Router::new()
         .route("/api/wx-login/tasks", post(create_task))
-        .route("/api/wx-login/tasks/:task_id/qr", get(get_qr))
-        .route("/api/wx-login/tasks/:task_id", delete(delete_task))
-        .route("/api/wx-login/tasks/:task_id/status", get(get_status))
-        .route("/api/wx-login/tasks/:task_id/confirm", post(confirm_task))
-        .route("/api/wx-login/tasks/:task_id/code", post(consume_code))
+        .route("/api/wx-login/tasks/{task_id}/qr", get(get_qr))
+        .route("/api/wx-login/tasks/{task_id}", delete(delete_task))
+        .route("/api/wx-login/tasks/{task_id}/status", get(get_status))
+        .route("/api/wx-login/tasks/{task_id}/confirm", post(confirm_task))
+        .route("/api/wx-login/tasks/{task_id}/code", post(consume_code))
 }
 
 #[derive(Debug, Deserialize)]

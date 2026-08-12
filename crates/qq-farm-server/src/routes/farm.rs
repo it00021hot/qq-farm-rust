@@ -18,7 +18,7 @@
 //! GET    /api/lands                             土地详情
 //! GET    /api/plant-blacklist                   获取植物黑名单
 //! POST   /api/plant-blacklist                   添加植物黑名单
-//! DELETE /api/plant-blacklist/:seedId           删除单个
+//! DELETE /api/plant-blacklist/{           删除单个
 //! POST   /api/plant-blacklist/batch             批量添加
 //! DELETE /api/plant-blacklist                   清空
 //! GET    /api/seeds                             可用种子
@@ -27,8 +27,8 @@
 //! POST   /api/bag/sell                          卖物品
 //! GET    /api/bag/seeds                         背包种子
 //! GET    /api/daily-gifts                       每日礼包概览
-//! POST   /api/accounts/:id/start                启动账号
-//! POST   /api/accounts/:id/stop                 停止账号
+//! POST   /api/accounts/{/start                启动账号
+//! POST   /api/accounts/{/stop                 停止账号
 //! POST   /api/farm/operate                      单次农场操作
 //! GET    /api/analytics                         种植排行
 //! GET    /api/config/seeds                      配置：种子
@@ -64,7 +64,7 @@ pub fn router() -> Router<Arc<AdminContext>> {
         .route("/api/lands", get(get_lands))
         .route("/api/plant-blacklist", get(get_plant_blacklist).post(post_plant_blacklist).delete(delete_plant_blacklist))
         .route("/api/plant-blacklist/batch", post(post_plant_blacklist_batch))
-        .route("/api/plant-blacklist/:seed_id", delete(delete_plant_blacklist_seed))
+        .route("/api/plant-blacklist/seed_id", delete(delete_plant_blacklist_seed))
         .route("/api/seeds", get(get_seeds))
         .route("/api/bag", get(get_bag))
         .route("/api/bag/use", post(post_bag_use))
@@ -72,8 +72,8 @@ pub fn router() -> Router<Arc<AdminContext>> {
         .route("/api/bag/seeds", get(get_bag_seeds))
         .route("/api/daily-gifts", get(get_daily_gifts))
         .route("/api/daily-gift-overview", get(get_daily_gift_overview))
-        .route("/api/accounts/:id/start", post(post_account_start))
-        .route("/api/accounts/:id/stop", post(post_account_stop))
+        .route("/api/accounts/{id}/start", post(post_account_start))
+        .route("/api/accounts/{id}/stop", post(post_account_stop))
         .route("/api/farm/operate", post(post_farm_operate))
         .route("/api/analytics", get(get_analytics))
         .route("/api/config/seeds", get(get_config_seeds))
@@ -580,7 +580,7 @@ async fn post_account_start(
     let acc = qq_farm_core::models::store::accounts::get_accounts()
         .into_iter()
         .find(|a| a.id == id)
-        .ok_or_else(|| ApiError::NotFound(format!("account not found: {id}")))?;
+        .ok_or_else(|| ApiError::NotFound(format!("account not found: id")))?;
     let account = qq_farm_core::models::Account::new(acc.id.clone(), acc.code.clone(), acc.name.clone());
     ctx.engine.start_worker(account).map_err(|e| ApiError::Internal(e.to_string()))?;
     ok(json!({ "ok": true, "accountId": acc.id, "started": true }))

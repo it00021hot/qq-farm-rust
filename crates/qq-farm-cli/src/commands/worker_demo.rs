@@ -64,7 +64,7 @@ async fn run_demo(args: Args) -> Result<()> {
         },
     };
 
-    let engine = RuntimeEngine::new(config);
+    let engine = RuntimeEngine::assemble(config);
     let mut events = engine.subscribe_events();
 
     // 启动 worker

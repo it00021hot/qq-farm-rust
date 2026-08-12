@@ -19,7 +19,7 @@ pub fn router() -> Router<Arc<AdminContext>> {
     Router::new()
         .route("/api/accounts", get(list_accounts).post(create_account))
         .route("/api/account/remark", post(remark_account))
-        .route("/api/accounts/:id", delete(delete_account))
+        .route("/api/accounts/{id}", delete(delete_account))
         .route("/api/account-logs", get(get_account_logs))
         .route("/api/logs", get(get_logs).delete(delete_logs))
         .route("/api/settings", get(get_settings).post(save_settings))
