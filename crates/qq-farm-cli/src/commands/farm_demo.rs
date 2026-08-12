@@ -65,13 +65,13 @@ async fn run_demo(args: Args) -> Result<()> {
         headers: HashMap::new(),
     };
 
-    let engine = RuntimeEngine::assemble(EngineConfig {
+    let engine = Arc::new(RuntimeEngine::assemble(EngineConfig {
         max_workers: 4,
         status_interval: Duration::from_secs(1),
         tsdk_wasm_path: wasm_path,
         data_root,
         gateway_template,
-    });
+    }));
 
     let account = Account::new("acc-farm", "demo-openid", "DemoAccount");
     engine.start_worker(account.clone())?;

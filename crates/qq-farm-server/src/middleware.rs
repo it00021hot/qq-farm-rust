@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{Request, State},
+    extract::{Extension, Request, State},
     http::{header, HeaderMap, HeaderValue},
     middleware::Next,
     response::Response,
@@ -89,9 +89,18 @@ pub async fn auth_required(
     Ok(next.run(req).await)
 }
 
-/// 真实鉴权中间件（从 header 取 token → session 查 username）
+/// 真实鉴权中间件：x-admin-token → SessionStore 查 → 失败 401
 pub async fn auth_required_strict(
-    State(_ctx): State<Arc<AdminContext>>,
+    State(ctx): State<Arc<AdminContext>>,
+    req: Request,
+    next: Next,
+) -> Result<Response, crate::context::ApiError> {
+    auth_required_strict_ext(ctx, req, next).await
+}
+
+/// 真实鉴权中间件（用 Extension 拿 ctx，用于 from_fn 无 state middleware）
+pub async fn auth_required_strict_ext(
+    ctx: Arc<AdminContext>,
     req: Request,
     next: Next,
 ) -> Result<Response, crate::context::ApiError> {
@@ -101,18 +110,82 @@ pub async fn auth_required_strict(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     if token.is_empty() {
-        return Err(crate::context::ApiError::Unauthorized("missing token".to_string()));
+        return Err(crate::context::ApiError::Unauthorized(
+            "missing x-admin-token".to_string(),
+        ));
     }
-    Ok(next.run(req).await)
+    match ctx.sessions.get(token) {
+        Some(info) => {
+            ctx.sessions.touch(token);
+            let _ = info;
+            Ok(next.run(req).await)
+        }
+        None => Err(crate::context::ApiError::Unauthorized(
+            "invalid or expired token".to_string(),
+        )),
+    }
 }
 
-/// 校验账号访问（admin 角色才能访问任意账号；普通用户只能访问自己的）
+/// 给 from_fn_with_state 用的鉴权层（接受 ((), Request, Next)）
+pub async fn auth_required_strict_axum(
+    State(ctx): State<Arc<AdminContext>>,
+    req: Request,
+    next: Next,
+) -> Result<Response, crate::context::ApiError> {
+    auth_required_strict_ext(ctx, req, next).await
+}
+
+/// Admin-only 鉴权（要求 role=admin）
+pub async fn admin_required_strict(
+    State(ctx): State<Arc<AdminContext>>,
+    req: Request,
+    next: Next,
+) -> Result<Response, crate::context::ApiError> {
+    admin_required_strict_ext(ctx, req, next).await
+}
+
+/// Admin-only 鉴权（用 Extension 拿 ctx，用于 from_fn 无 state middleware）
+pub async fn admin_required_strict_ext(
+    ctx: Arc<AdminContext>,
+    req: Request,
+    next: Next,
+) -> Result<Response, crate::context::ApiError> {
+    let token = req
+        .headers()
+        .get("x-admin-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if token.is_empty() {
+        return Err(crate::context::ApiError::Unauthorized(
+            "missing x-admin-token".to_string(),
+        ));
+    }
+    match ctx.sessions.get(token) {
+        Some(info) if info.role == "admin" => {
+            ctx.sessions.touch(token);
+            Ok(next.run(req).await)
+        }
+        Some(_) => Err(crate::context::ApiError::Unauthorized(
+            "admin role required".to_string(),
+        )),
+        None => Err(crate::context::ApiError::Unauthorized(
+            "invalid or expired token".to_string(),
+        )),
+    }
+}
+
+/// 给 from_fn_with_state 用的 admin 鉴权层（接受 ((), Request, Next)）
+pub async fn admin_required_strict_axum(
+    State(ctx): State<Arc<AdminContext>>,
+    req: Request,
+    next: Next,
+) -> Result<Response, crate::context::ApiError> {
+    admin_required_strict_ext(ctx, req, next).await
+}
+
+/// 校验账号访问权限（admin 全放行；普通用户只能访问自己的）
 #[must_use]
-pub fn check_account_access(
-    _ctx: &AdminContext,
-    req: &Request,
-    account_id: &str,
-) -> bool {
+pub fn check_account_access(ctx: &AdminContext, req: &Request, account_id: &str) -> bool {
     let token = req
         .headers()
         .get("x-admin-token")
@@ -121,13 +194,24 @@ pub fn check_account_access(
     if token.is_empty() {
         return false;
     }
-    // 占位：阶段 2A-4 用 SessionStore 查 username
-    // admin token → 全部放行；其他 token → 必须 == account_id
-    if token == "admin" {
+    let Some(info) = ctx.sessions.get(token) else {
+        return false;
+    };
+    if info.role == "admin" {
         return true;
     }
-    // 简化：非 admin token 假设对应 username
-    token == account_id
+    // 普通用户：账号.username == session.username
+    accounts_username_lookup(account_id)
+        .map(|u| u == info.username)
+        .unwrap_or(false)
+}
+
+/// 查账号的 username 字段
+fn accounts_username_lookup(account_id: &str) -> Option<String> {
+    qq_farm_core::models::store::accounts::get_accounts()
+        .into_iter()
+        .find(|a| a.id == account_id)
+        .map(|a| a.username.clone())
 }
 
 /// 提取 client IP（按 X-Forwarded-For / CF-Connecting-IP）

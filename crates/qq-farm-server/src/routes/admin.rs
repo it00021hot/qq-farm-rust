@@ -24,12 +24,13 @@ use serde_json::json;
 
 use crate::context::{ok, ok_empty, AdminContext, ApiError, ApiResult};
 
-/// 构造 admin 路由
+/// 构造 admin 路由（带 admin 鉴权）
 pub fn router() -> Router<Arc<AdminContext>> {
     Router::new()
-        // 公告
+        // 公告（authRequired 任意用户）
         .route("/api/announcement", get(get_announcement))
         .route("/api/announcement/read", post(mark_announcement_read))
+        // 下面所有路由都要求 admin role
         .route("/api/admin/announcement", post(set_announcement))
         // 系统配置
         .route("/api/admin/device-presets", get(get_device_presets))
@@ -39,18 +40,21 @@ pub fn router() -> Router<Arc<AdminContext>> {
         .route("/api/admin/cards", get(list_cards).post(create_card))
         .route("/api/admin/cards/batch-delete", post(batch_delete_cards))
         .route("/api/admin/cards/{code}", post(update_card).delete(delete_card))
-        // 卡密领取
-        .route("/api/card-claim/status", get(get_card_claim_status))
+        // 卡密领取配置（admin）
         .route("/api/admin/card-claim/status", post(set_card_claim_status))
-        .route("/api/card-claim/claim", post(claim_card))
         .route("/api/admin/card-claim/records", get(get_card_claim_records))
-        // 用户
+        // 用户管理（admin）
         .route("/api/admin/users", get(list_users))
         .route("/api/admin/users-with-password", get(list_users_with_password))
         .route("/api/admin/users/{username}", post(create_user))
         .route("/api/admin/users/{username}/edit", post(edit_user))
         .route("/api/admin/users/{username}", delete(delete_user))
         .route("/api/admin/users/{username}/renew", post(admin_renew_user))
+        // 登录日志（admin）
+        .route(
+            "/api/admin/login-logs",
+            get(super::auth::admin_list_login_logs).delete(super::auth::admin_delete_login_logs),
+        )
 }
 
 #[derive(Debug, Deserialize)]

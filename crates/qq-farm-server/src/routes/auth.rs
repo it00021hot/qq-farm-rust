@@ -6,11 +6,14 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Path, Query, State},
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
 };
 use serde::Deserialize;
 use serde_json::json;
+use uuid::Uuid;
 
 use crate::context::{ok, ok_empty, AdminContext, ApiError, ApiResult};
 
@@ -27,7 +30,7 @@ pub fn router() -> Router<Arc<AdminContext>> {
         .route("/api/game-version", get(game_version))
         .route("/api/auth/validate", get(validate))
         .route("/api/scheduler", get(scheduler))
-        .route("/api/admin/login-logs", get(get_login_logs).delete(delete_login_logs))
+        // /api/admin/login-logs 已在 admin::router() 中通过 super::auth::admin_list_login_logs 暴露，这里不再加
         .route("/api/card/info/{code}", get(card_info))
 }
 
@@ -59,35 +62,158 @@ struct ChangePasswordBody {
 }
 
 #[derive(Debug, Deserialize)]
-struct LoginLogsQuery {
+pub struct LoginLogsQuery {
     #[serde(default)]
     limit: Option<usize>,
     #[serde(default)]
     offset: Option<usize>,
 }
 
-#[derive(Debug, Deserialize)]
-struct CardQuery {
-    code: String,
-}
-
+/// 登录（1:1 对应原 TS）：validate → banned/expired 二次校验 → bindSession → addLoginLog
 async fn login(
-    State(_ctx): State<Arc<AdminContext>>,
-    headers: axum::http::HeaderMap,
+    State(ctx): State<Arc<AdminContext>>,
+    headers: HeaderMap,
     Json(body): Json<LoginBody>,
-) -> ApiResult<serde_json::Value> {
-    let ip = crate::middleware::extract_client_ip(&headers);
-    let result = qq_farm_core::models::user_store::users::validate_user(
+) -> Response {
+    let client_ip = crate::middleware::extract_client_ip(&headers);
+    let user_agent = headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+
+    let validation = qq_farm_core::models::user_store::users::validate_user(
         &body.username,
         &body.password,
-        &ip,
+        &client_ip,
     );
-    let mut value = serde_json::to_value(&result).unwrap_or(serde_json::Value::Null);
-    if let Some(obj) = value.as_object_mut() {
-        let ok_flag = result.error.is_none();
-        obj.insert("ok".to_string(), serde_json::json!(ok_flag));
+
+    // 失败分支：error 字段 + 写失败日志
+    if let Some(err) = &validation.error {
+        let (status, payload) = match err.as_str() {
+            "rate_limit" => (
+                StatusCode::TOO_MANY_REQUESTS,
+                json!({
+                    "ok": false,
+                    "error": validation.message,
+                    "errorType": err,
+                    "remainingMs": validation.remaining_ms,
+                }),
+            ),
+            "locked" => (
+                StatusCode::LOCKED,
+                json!({
+                    "ok": false,
+                    "error": validation.message,
+                    "errorType": err,
+                    "remainingMs": validation.remaining_ms,
+                }),
+            ),
+            _ => (
+                StatusCode::UNAUTHORIZED,
+                json!({
+                    "ok": false,
+                    "error": validation.message.clone().unwrap_or_else(|| "用户名或密码错误".to_string()),
+                    "errorType": err,
+                }),
+            ),
+        };
+        qq_farm_core::models::user_store::auth::add_login_log(json!({
+            "event": "login_failed",
+            "username": body.username,
+            "errorType": err,
+            "ip": client_ip,
+            "userAgent": user_agent,
+        }));
+        return (status, Json(payload)).into_response();
     }
-    Ok(Json(value))
+
+    // validate_user 成功时：username/role/card 都在 validation 里
+    let username = validation.username.clone().unwrap_or(body.username.clone());
+    let role = validation.role.clone().unwrap_or_else(|| "user".to_string());
+
+    // banned 检查
+    if role != "admin" {
+        if let Some(card) = &validation.card {
+            if !card.enabled {
+                qq_farm_core::models::user_store::auth::add_login_log(json!({
+                    "event": "login_failed",
+                    "username": username,
+                    "errorType": "banned",
+                    "ip": client_ip,
+                    "userAgent": user_agent,
+                }));
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({
+                        "ok": false,
+                        "error": "账号已被封禁，请联系管理员",
+                    })),
+                )
+                    .into_response();
+            }
+            if let Some(expires_at) = card.expires_at {
+                if expires_at < now_ms() {
+                    qq_farm_core::models::user_store::auth::add_login_log(json!({
+                        "event": "login_failed",
+                        "username": username,
+                        "errorType": "expired",
+                        "ip": client_ip,
+                        "userAgent": user_agent,
+                    }));
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(json!({
+                            "ok": false,
+                            "error": "账号已过期，请续费后重新登录",
+                        })),
+                    )
+                        .into_response();
+                }
+            }
+        }
+    }
+
+    // 发 token + bindSession
+    let token = Uuid::new_v4().to_string();
+    ctx.sessions.create(token.clone(), username.clone(), role.clone());
+
+    qq_farm_core::models::user_store::auth::add_login_log(json!({
+        "event": "login_success",
+        "username": username,
+        "errorType": null,
+        "ip": client_ip,
+        "userAgent": user_agent,
+    }));
+
+    tracing::info!(username = %username, role = %role, ip = %client_ip, "登录成功");
+
+    let card_json = validation
+        .card
+        .as_ref()
+        .and_then(|_| serde_json::to_value(&validation.card).ok());
+    let account_limit = validation.account_limit.unwrap_or(0);
+    let user_obj = qq_farm_core::models::user_store::users::get_session_user(&username);
+    let user_json = user_obj
+        .as_ref()
+        .and_then(|u| serde_json::to_value(u).ok())
+        .unwrap_or(json!({ "username": username, "role": role }));
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "ok": true,
+            "data": {
+                "token": token,
+                "role": role,
+                "card": card_json,
+                "accountLimit": account_limit,
+                "user": user_json,
+                "username": username,
+            }
+        })),
+    )
+        .into_response()
 }
 
 async fn register(
@@ -106,35 +232,48 @@ async fn register(
 }
 
 async fn logout(
-    State(_ctx): State<Arc<AdminContext>>,
+    State(ctx): State<Arc<AdminContext>>,
+    headers: HeaderMap,
 ) -> ApiResult<serde_json::Value> {
+    // 优先从 body 解析 token；fallback 到 header
+    if let Some(t) = headers.get("x-admin-token").and_then(|v| v.to_str().ok()) {
+        ctx.sessions.delete(t);
+    }
     ok_empty()
 }
 
 async fn get_me(
-    State(_ctx): State<Arc<AdminContext>>,
-    headers: axum::http::HeaderMap,
+    State(ctx): State<Arc<AdminContext>>,
+    headers: HeaderMap,
 ) -> ApiResult<serde_json::Value> {
-    let username = headers
-        .get("x-username")
+    let token = headers
+        .get("x-admin-token")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    let user = qq_farm_core::models::user_store::users::get_session_user(username);
-    match user {
-        Some(u) => ok(json!({ "ok": true, "user": u })),
-        None => Ok(Json(json!({ "ok": false, "error": "Unauthorized" }))),
+    if let Some(info) = ctx.sessions.get(token) {
+        let user = qq_farm_core::models::user_store::users::get_session_user(&info.username);
+        let user_json = user
+            .as_ref()
+            .and_then(|u| serde_json::to_value(u).ok())
+            .unwrap_or(json!({ "username": info.username, "role": info.role }));
+        return ok(json!({ "ok": true, "user": user_json }));
     }
+    Err(ApiError::Unauthorized("missing or invalid token".to_string()))
 }
 
 async fn renew(
     State(_ctx): State<Arc<AdminContext>>,
-    headers: axum::http::HeaderMap,
+    headers: HeaderMap,
     Json(body): Json<RenewBody>,
 ) -> ApiResult<serde_json::Value> {
     let username = body
         .username
         .clone()
-        .or_else(|| headers.get("x-username").and_then(|v| v.to_str().ok().map(String::from)))
+        .or_else(|| {
+            headers
+                .get("x-username")
+                .and_then(|v| v.to_str().ok().map(String::from))
+        })
         .unwrap_or_default();
     if username.is_empty() {
         return Err(ApiError::BadRequest("missing username".to_string()));
@@ -147,7 +286,8 @@ async fn renew(
 }
 
 async fn change_password(
-    State(_ctx): State<Arc<AdminContext>>,
+    State(ctx): State<Arc<AdminContext>>,
+    headers: HeaderMap,
     Json(body): Json<ChangePasswordBody>,
 ) -> ApiResult<serde_json::Value> {
     let result = qq_farm_core::models::user_store::users::change_password(
@@ -155,34 +295,48 @@ async fn change_password(
         &body.old_password,
         &body.new_password,
     );
+    if result.is_ok() {
+        // 改密成功 → 让该用户所有 session 失效
+        ctx.sessions.invalidate_by_username(&body.username);
+    }
     match result {
         Ok(()) => ok_empty(),
         Err(e) => Ok(Json(json!({ "ok": false, "error": e }))),
     }
 }
 
-async fn ping(
-    State(_ctx): State<Arc<AdminContext>>,
-) -> ApiResult<serde_json::Value> {
+async fn ping(State(_ctx): State<Arc<AdminContext>>) -> ApiResult<serde_json::Value> {
     ok(json!({ "ok": true, "pong": true }))
 }
 
-async fn game_version(
-    State(_ctx): State<Arc<AdminContext>>,
-) -> ApiResult<serde_json::Value> {
+async fn game_version(State(_ctx): State<Arc<AdminContext>>) -> ApiResult<serde_json::Value> {
     // 阶段 2A 占位（实际从 game_config 读 latest）
     ok(json!({ "ok": true, "version": "1.0.0" }))
 }
 
+/// /api/auth/validate：真验证 token 是否存在 + 触碰更新 last_active
 async fn validate(
-    State(_ctx): State<Arc<AdminContext>>,
+    State(ctx): State<Arc<AdminContext>>,
+    headers: HeaderMap,
 ) -> ApiResult<serde_json::Value> {
-    ok(json!({ "ok": true }))
+    let token = headers
+        .get("x-admin-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    match ctx.sessions.get(token) {
+        Some(info) => {
+            ctx.sessions.touch(token);
+            ok(json!({
+                "ok": true,
+                "username": info.username,
+                "role": info.role,
+            }))
+        }
+        None => Err(ApiError::Unauthorized("invalid token".to_string())),
+    }
 }
 
-async fn scheduler(
-    State(ctx): State<Arc<AdminContext>>,
-) -> ApiResult<serde_json::Value> {
+async fn scheduler(State(ctx): State<Arc<AdminContext>>) -> ApiResult<serde_json::Value> {
     let state = ctx.engine.runtime_state();
     let workers: Vec<_> = state
         .workers
@@ -221,11 +375,33 @@ async fn card_info(
     State(_ctx): State<Arc<AdminContext>>,
     Path(code): Path<String>,
 ) -> ApiResult<serde_json::Value> {
-    let _q = CardQuery { code: code.clone() };
     let cards = qq_farm_core::models::user_store::users::get_all_cards();
     let card = cards.into_iter().find(|c| c.code == code);
     match card {
         Some(c) => ok(json!({ "ok": true, "card": c })),
         None => Ok(Json(json!({ "ok": false, "error": "card not found" }))),
     }
+}
+
+fn now_ms() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// admin 用的 login-logs GET（从 admin 路由引用）
+pub async fn admin_list_login_logs(
+    State(_ctx): State<Arc<AdminContext>>,
+    Query(q): Query<LoginLogsQuery>,
+) -> ApiResult<serde_json::Value> {
+    get_login_logs(State(_ctx), Query(q)).await
+}
+
+/// admin 用的 login-logs DELETE
+pub async fn admin_delete_login_logs(
+    State(_ctx): State<Arc<AdminContext>>,
+) -> ApiResult<serde_json::Value> {
+    delete_login_logs(State(_ctx)).await
 }

@@ -41,25 +41,25 @@ pub trait Encryptor: Send + Sync {
 
 /// 基于 [`TsdkRuntime`] 的加密器实现
 ///
-/// `TsdkRuntime` 内部不可跨线程共享，所以用 `Mutex` 包一层。
+/// `TsdkRuntime` 内部用 `parking_lot::Mutex` 保护，可跨线程共享。
 pub struct TsdkEncryptor {
-    runtime: Arc<Mutex<TsdkRuntime>>,
+    runtime: Arc<TsdkRuntime>,
 }
 
 impl TsdkEncryptor {
     /// 包装一个已初始化的 [`TsdkRuntime`]
     #[must_use]
-    pub fn new(runtime: TsdkRuntime) -> Self {
-        Self { runtime: Arc::new(Mutex::new(runtime)) }
+    pub fn new(runtime: Arc<TsdkRuntime>) -> Self {
+        Self { runtime }
     }
 }
 
 impl Encryptor for TsdkEncryptor {
     fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>> {
-        self.runtime.lock().encrypt(plaintext)
+        self.runtime.encrypt(plaintext)
     }
     fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
-        self.runtime.lock().decrypt(ciphertext)
+        self.runtime.decrypt(ciphertext)
     }
 }
 
@@ -112,7 +112,7 @@ mod tests {
                     .unwrap_or(default_path);
                 let rt = TsdkRuntime::load(&wasm_path, "./data/tsdk-encryptor-test")
                     .expect("load tsdk.wasm");
-                Arc::new(TsdkEncryptor::new(rt))
+                Arc::new(TsdkEncryptor::new(Arc::new(rt)))
             })
             .clone()
     }

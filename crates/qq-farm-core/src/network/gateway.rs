@@ -26,6 +26,7 @@ use crate::network::error::{NetworkError, Result};
 use crate::network::frame::{FrameBuilder, FrameParser};
 use crate::network::notify::NotifyEvent;
 use crate::network::request::RequestManager;
+use crate::proto::generated::gamepb::userpb::{DeviceInfo, HeartbeatReply, HeartbeatRequest, LoginReply, LoginRequest, ReportData};
 use crate::proto::generated::gatepb::MessageType;
 
 /// 连接阶段
@@ -302,6 +303,109 @@ impl Gateway {
     /// 标记登录完成（阶段 1A 外部调用；阶段 1B 由业务模块在收到登录响应后调用）
     pub fn mark_online(&self) {
         *self.inner.phase.write() = ConnectionPhase::Online;
+    }
+
+    /// 完整登录流程：发 LoginRequest → 等 LoginReply → bindUser → mark_online
+    ///
+    /// 1:1 对应原 `network.ts:sendLogin()`
+    ///
+    /// # Arguments
+    /// - `device_info`: 客户端版本 / 系统 / 屏幕等
+    /// - `report_data`: 上报数据（minigame_channel / minigame_platid）
+    /// - `tsdk`: TSDK runtime（用于 bindUser）
+    pub async fn login(
+        &self,
+        device_info: &DeviceInfo,
+        report_data: &ReportData,
+        tsdk: &Arc<crate::crypto::tsdk::TsdkRuntime>,
+    ) -> Result<LoginReply> {
+        // 1. 阶段检查：必须在 Login 阶段
+        {
+            let phase = *self.inner.phase.read();
+            if phase != ConnectionPhase::Login {
+                return Err(NetworkError::Phase(format!(
+                    "login requires Login phase, current: {phase:?}"
+                )));
+            }
+        }
+
+        // 2. 构造 LoginRequest
+        let req = LoginRequest {
+            sharer_id: 0,
+            sharer_open_id: String::new(),
+            device_info: Some(device_info.clone()),
+            share_cfg_id: 0,
+            scene_id: "1234567".to_string(),
+            report_data: Some(report_data.clone()),
+        };
+        let body = prost::Message::encode_to_vec(&req);
+
+        // 3. 发请求（阶段会自动从 Login → Online 在收到响应后）
+        let reply_bytes = self
+            .request("gamepb.userpb.UserService", "Login", &body, 15_000)
+            .await?;
+
+        // 4. 解码 LoginReply
+        let reply = LoginReply::decode(reply_bytes.as_slice())
+            .map_err(|e| NetworkError::Frame(format!("decode LoginReply: {e}")))?;
+
+        // 5. 校验 basic 字段
+        let Some(basic) = &reply.basic else {
+            return Err(NetworkError::Frame("LoginReply 缺少 basic".to_string()));
+        };
+
+        // 6. bindUser(open_id) —— 客户端安全数据
+        if !basic.open_id.is_empty() {
+            if let Err(e) = tsdk.bind_user(&basic.open_id) {
+                tracing::warn!(error = %e, "TSDK bindUser 失败");
+            }
+        }
+
+        // 7. mark_online
+        self.mark_online();
+
+        // 8. 同步服务器时间
+        if reply.time_now_millis > 0 {
+            crate::utils::time::sync_server_time(reply.time_now_millis);
+        }
+
+        // 9. 日志
+        let gid = basic.gid;
+        let name = if basic.name.is_empty() { "未知".to_string() } else { basic.name.clone() };
+        let level = basic.level;
+        let gold = basic.gold;
+        tracing::info!(
+            gid = gid,
+            name = %name,
+            level = level,
+            gold = gold,
+            "登录成功"
+        );
+
+        Ok(reply)
+    }
+
+    /// 发 Heartbeat 请求（同步服务器时间 + 维持连接）
+    pub async fn heartbeat(&self, gid: i64, client_version: &str) -> Result<HeartbeatReply> {
+        let req = HeartbeatRequest {
+            gid,
+            client_version: client_version.to_string(),
+        };
+        let body = prost::Message::encode_to_vec(&req);
+        let reply_bytes = self
+            .request("gamepb.userpb.UserService", "Heartbeat", &body, 5_000)
+            .await?;
+        let reply = HeartbeatReply::decode(reply_bytes.as_slice())
+            .map_err(|e| NetworkError::Frame(format!("decode HeartbeatReply: {e}")))?;
+        if reply.server_time > 0 {
+            crate::utils::time::sync_server_time(reply.server_time);
+        }
+        Ok(reply)
+    }
+
+    /// 拿服务器时间（防改时间作弊）
+    pub fn now_ms(&self) -> i64 {
+        crate::utils::time::now_ms()
     }
 }
 

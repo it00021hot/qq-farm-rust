@@ -29,6 +29,7 @@
 //! - [`randomdrop`] — 随机掉落活动（1G-7）
 //! - [`wx_login`] — 微信扫码登录（1G-8：协议层 + QR 流程）
 
+pub mod ace;
 pub mod activity_center;
 pub mod analytics;
 pub mod automation;

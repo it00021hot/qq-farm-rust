@@ -12,24 +12,50 @@ use std::sync::Arc;
 use axum::Json;
 use qq_farm_core::runtime::engine::RuntimeEngine;
 
+use crate::sessions::SessionStore;
+
 /// Admin 共享上下文
 #[derive(Clone)]
 pub struct AdminContext {
     /// Runtime 引擎
     pub engine: Arc<RuntimeEngine>,
+    /// Session 存储（token → user）
+    pub sessions: SessionStore,
 }
 
 impl AdminContext {
     /// 构造 context
     #[must_use]
     pub fn new(engine: Arc<RuntimeEngine>) -> Self {
-        Self { engine }
+        Self {
+            engine,
+            sessions: SessionStore::new(),
+        }
+    }
+
+    /// 构造 context（带 sessions）
+    #[must_use]
+    pub fn with_sessions(engine: Arc<RuntimeEngine>, sessions: SessionStore) -> Self {
+        Self { engine, sessions }
     }
 }
 
 impl std::fmt::Debug for AdminContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AdminContext").finish_non_exhaustive()
+    }
+}
+
+/// 占位 AdminContext（仅给 route_layer 中间件用）
+impl AdminContext {
+    /// 空 ctx（仅给 from_fn_with_state 用；实际请求用真实 ctx）
+    pub fn dummy() -> Arc<Self> {
+        Arc::new(Self {
+            engine: Arc::new(qq_farm_core::runtime::engine::RuntimeEngine::assemble(
+                qq_farm_core::runtime::engine::EngineConfig::default(),
+            )),
+            sessions: crate::sessions::SessionStore::new(),
+        })
     }
 }
 

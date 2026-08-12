@@ -56,7 +56,7 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/ws", get(socket::ws_handler))
-        .merge(routes::build())
+        .merge(routes::build(ctx.clone()))
         .with_state(ctx.clone())
         .layer(axum::middleware::from_fn(middleware::cors_layer));
 

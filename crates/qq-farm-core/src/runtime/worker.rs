@@ -15,6 +15,7 @@ use tokio_util::sync::CancellationToken;
 use crate::models::Account;
 use crate::network::gateway::{Gateway, GatewayConfig};
 use crate::network::encryptor::Encryptor;
+use crate::proto::generated::gamepb::userpb::{DeviceInfo, ReportData};
 use crate::runtime::events::WorkerEvent;
 use crate::runtime::scheduler::Scheduler;
 use crate::runtime::worker_handle::WorkerHandle;
@@ -78,13 +79,19 @@ impl Worker {
         self.msg_rx.take().expect("msg_rx already taken")
     }
 
-    /// 启动 worker（spawn 到当前 tokio runtime）
-    pub fn spawn(mut self) -> WorkerHandle {
+    /// 启动 worker（spawn 到当前 tokio runtime）。
+    ///
+    /// 如果传了 `engine`，会在 spawn 完成后构造 WorkerLoop 并注册到 engine，
+    /// controller 就能通过 `engine.worker_loop(account_id)` 拿到实例。
+    /// 退出时自动 `unregister_worker_loop`。
+    pub fn spawn_with_engine(
+        mut self,
+        engine: Option<Arc<crate::runtime::engine::RuntimeEngine>>,
+    ) -> WorkerHandle {
         let handle = self.handle();
         let event_tx = self.event_tx.clone();
         let account_id = self.account.id.clone();
         let account_name = self.account.display_name.clone();
-        let account_for_scheduler = self.account.id.clone();
         let cancel = self.cancel.clone();
         let config = self.config.clone();
         let scheduler = self.scheduler.clone();
@@ -104,8 +111,9 @@ impl Worker {
                 &config.tsdk_wasm_path,
                 tsdk_data_dir.to_string_lossy().to_string(),
             ) {
-                Ok(rt) => rt,
+                Ok(rt) => Arc::new(rt),
                 Err(e) => {
+                    tracing::error!(account_id = %account_id, "TSDK 加载失败: {e}");
                     let _ = event_tx.send(WorkerEvent::Error {
                         account_id: account_id.clone(),
                         message: format!("TSDK 加载失败: {e}"),
@@ -117,12 +125,110 @@ impl Worker {
                     return;
                 }
             };
-            let encryptor: Arc<dyn Encryptor> = Arc::new(crate::network::encryptor::TsdkEncryptor::new(tsdk));
+            let encryptor: Arc<dyn Encryptor> = Arc::new(crate::network::encryptor::TsdkEncryptor::new(tsdk.clone()));
 
             // 构造 Gateway
             let gateway = Arc::new(Gateway::new(config.gateway.clone(), encryptor));
 
-            let _ = account_for_scheduler; // 仅用于保留 namespace，不直接用
+            // 构造所有 service + WorkerLoop，注册到 engine
+            if let Some(eng) = &engine {
+                let farm = Arc::new(crate::services::farm::scheduler::FarmService::new(gateway.clone()));
+                let friend = Arc::new(crate::services::friend::scheduler::FriendService::new(
+                    gateway.clone(),
+                    5,
+                ));
+                let email = Arc::new(crate::services::email::EmailService::new(gateway.clone()));
+                let share = Arc::new(crate::services::share::ShareService::new(gateway.clone()));
+                let monthcard = Arc::new(crate::services::monthcard::MonthCardService::new(gateway.clone()));
+                let qqvip = Arc::new(crate::services::qqvip::QQVipService::new(gateway.clone()));
+                let mall = Arc::new(crate::services::mall::MallService::new(gateway.clone()));
+                let task = Arc::new(crate::services::task::TaskService::new(gateway.clone()));
+                let warehouse = Arc::new(crate::services::warehouse::WarehouseService::new(gateway.clone()));
+                let mystery_shop = Arc::new(
+                    crate::services::mystery_shop::MysteryShopService::new(gateway.clone()),
+                );
+                let activity_center = Arc::new(
+                    crate::services::activity_center::ActivityCenterService::new(gateway.clone()),
+                );
+
+                let worker_loop = Arc::new(crate::runtime::worker_loop::WorkerLoop::new(
+                    account.clone(),
+                    crate::runtime::worker_loop::WorkerLoopConfig::default(),
+                    gateway.clone(),
+                    event_tx.clone(),
+                    farm,
+                    friend,
+                    email,
+                    share,
+                    monthcard,
+                    qqvip,
+                    mall,
+                    task,
+                    warehouse,
+                    mystery_shop,
+                    activity_center,
+                ));
+                eng.register_worker_loop(&account_id, worker_loop.clone());
+                tracing::info!(account_id = %account_id, "WorkerLoop 已注册到 engine");
+
+                // 注册心跳超时回调（重连）
+                let eng_for_cb = eng.clone();
+                let acc_id_for_cb = account_id.clone();
+                worker_loop.on_heartbeat_timeout(move |_acc_id| {
+                    tracing::warn!(account_id = %acc_id_for_cb, "心跳超时，触发 worker 重启");
+                    // 通过 engine.stop_worker 触发重连
+                    eng_for_cb.stop_worker(&acc_id_for_cb);
+                });
+
+                // === 1. WS 连接 + 登录 ===
+                if let Err(e) = gateway.connect().await {
+                    tracing::error!(account_id = %account_id, "WS 连接失败: {e}");
+                    let _ = event_tx.send(WorkerEvent::Error {
+                        account_id: account_id.clone(),
+                        message: format!("WS 连接失败: {e}"),
+                    });
+                } else {
+                    tracing::info!(account_id = %account_id, "WS 已连接，开始登录");
+
+                    // 构造 LoginRequest 字段
+                    let device_info = DeviceInfo {
+                        client_version: config.gateway.client_version.clone(),
+                        sys_software: std::env::consts::OS.to_string(),
+                        ..Default::default()
+                    };
+                    let report_data = ReportData {
+                        minigame_channel: "other-qq".to_string(),
+                        minigame_platid: 2,
+                        ..Default::default()
+                    };
+
+                    match gateway.login(&device_info, &report_data, &tsdk).await {
+                        Ok(reply) => {
+                            if let Some(basic) = &reply.basic {
+                                worker_loop.set_gid(basic.gid);
+                            }
+                            let _ = event_tx.send(WorkerEvent::Started {
+                                account_id: account_id.clone(),
+                                account_name: account_name.clone(),
+                            });
+                        }
+                        Err(e) => {
+                            tracing::error!(account_id = %account_id, "登录失败: {e}");
+                            let _ = event_tx.send(WorkerEvent::Error {
+                                account_id: account_id.clone(),
+                                message: format!("登录失败: {e}"),
+                            });
+                        }
+                    }
+
+                    // === 2. 启动 ACE runtime（5 个定时任务） ===
+                    let ace = Arc::new(crate::services::ace::AceShared::new());
+                    let sender = Arc::new(crate::services::ace::GatewayAceSender {
+                        gateway: gateway.clone(),
+                    });
+                    ace.start(sender, tsdk.clone());
+                }
+            }
 
             // 跑 worker 主循环
             let exit = run_worker_loop(
@@ -136,6 +242,11 @@ impl Worker {
             )
             .await;
 
+            // 注销 WorkerLoop
+            if let Some(eng) = &engine {
+                eng.unregister_worker_loop(&account_id);
+            }
+
             // 退出事件
             let _ = event_tx.send(WorkerEvent::Stopped {
                 account_id,
@@ -144,6 +255,11 @@ impl Worker {
         });
 
         handle
+    }
+
+    /// 启动 worker（不注册到 engine）
+    pub fn spawn(self) -> WorkerHandle {
+        self.spawn_with_engine(None)
     }
 }
 

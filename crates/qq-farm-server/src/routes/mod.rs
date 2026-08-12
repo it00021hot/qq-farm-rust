@@ -1,10 +1,6 @@
 //! 路由模块。
 //!
 //! 1:1 对应原 `controllers/admin/*-routes.ts`。
-//!
-//! ## 子模块
-//!
-//! - `farm` — 农场 / 自动化 / 化肥 / 土地 / 种子 / 背包 / 每日礼包 / config（35 路由）
 
 pub mod account;
 pub mod activity_center;
@@ -18,19 +14,57 @@ pub mod wx_login;
 
 use std::sync::Arc;
 
-use axum::Router;
+use axum::{extract::Request, middleware, Router};
 
 use crate::context::AdminContext;
 
 /// 构造全部 admin 路由
-pub fn build() -> Router<Arc<AdminContext>> {
+pub fn build(ctx: Arc<AdminContext>) -> Router<Arc<AdminContext>> {
+    let ctx_for_inject = ctx.clone();
+    let ctx_for_admin = ctx.clone();
+    let ctx_for_auth = ctx.clone();
+
+    // 顶层注入 ctx 到 request extensions
+    let inject_layer = middleware::from_fn(move |mut req: Request, next: axum::middleware::Next| {
+        let ctx = ctx_for_inject.clone();
+        async move {
+            req.extensions_mut().insert(ctx);
+            next.run(req).await
+        }
+    });
+
+    // admin 鉴权
+    let admin_check = middleware::from_fn(move |req: Request, next: axum::middleware::Next| {
+        let ctx = ctx_for_admin.clone();
+        async move {
+            crate::middleware::admin_required_strict_ext(ctx, req, next).await
+        }
+    });
+
+    // 普通用户鉴权
+    let auth_check = middleware::from_fn(move |req: Request, next: axum::middleware::Next| {
+        let ctx = ctx_for_auth.clone();
+        async move {
+            crate::middleware::auth_required_strict_ext(ctx, req, next).await
+        }
+    });
+
+    // auth 路由不挂 auth_check（login/register 公开）
+    // admin 挂 admin_check
+    // account / friend 挂 auth_check
+    // 其余挂 inject（不需要登录）
+    let authed = Router::new()
+        .merge(account::router())
+        .merge(friend::router())
+        .route_layer(auth_check);
+
     Router::new()
         .merge(farm::router())
-        .merge(friend::router())
-        .merge(account::router())
         .merge(auth::router())
-        .merge(admin::router())
+        .merge(authed)
+        .merge(admin::router().route_layer(admin_check))
         .merge(activity_center::router())
         .merge(commerce::router())
         .merge(wx_login::router())
+        .route_layer(inject_layer)
 }

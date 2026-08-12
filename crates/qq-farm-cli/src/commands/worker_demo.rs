@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -64,7 +65,7 @@ async fn run_demo(args: Args) -> Result<()> {
         },
     };
 
-    let engine = RuntimeEngine::assemble(config);
+    let engine = Arc::new(RuntimeEngine::assemble(config));
     let mut events = engine.subscribe_events();
 
     // 启动 worker
@@ -120,8 +121,6 @@ async fn run_demo(args: Args) -> Result<()> {
 
     Ok(())
 }
-
-use std::sync::Arc;
 
 /// 启动 mock WS server：accept 一个连接，回显所有收到的 binary 帧（加 "DEMO:" 前缀）
 async fn start_mock_ws_server() -> (u16, tokio::task::JoinHandle<()>) {

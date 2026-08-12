@@ -618,7 +618,6 @@ pub fn delete_user(username: &str) -> bool {
 
 /// 修改密码
 pub fn change_password(username: &str, old_pw: &str, new_pw: &str) -> Result<(), String> {
-    load_users();
     let mut users = USERS.write();
     let Some(user) = users.iter_mut().find(|u| u.username == username) else {
         return Err("用户不存在".to_string());

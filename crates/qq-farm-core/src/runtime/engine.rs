@@ -249,7 +249,7 @@ impl RuntimeEngine {
     }
 
     /// 启动一个 worker
-    pub fn start_worker(&self, account: Account) -> Result<()> {
+    pub fn start_worker(self: &Arc<Self>, account: Account) -> Result<()> {
         let max = self.config.max_workers;
         {
             let workers = self.workers.read();
@@ -282,7 +282,7 @@ impl RuntimeEngine {
 
         let worker = Worker::new(account.clone(), worker_config, self.events.clone());
         let handle = worker.handle();
-        worker.spawn();
+        worker.spawn_with_engine(Some(self.clone()));
         self.workers.write().insert(handle.account_id.clone(), handle);
 
         // 同步 worker 状态到 runtime_state
@@ -324,13 +324,13 @@ impl RuntimeEngine {
     }
 
     /// 重启一个 worker
-    pub fn restart_worker(&self, account: Account) -> Result<()> {
+    pub fn restart_worker(self: &Arc<Self>, account: Account) -> Result<()> {
         self.stop_worker(&account.id);
         self.start_worker(account)
     }
 
     /// 启动所有账号（原 TS `startAllAccounts`）
-    pub fn start_all_accounts(&self) {
+    pub fn start_all_accounts(self: &Arc<Self>) {
         let accounts = accounts_store::get_accounts();
         if accounts.is_empty() {
             self.runtime_state

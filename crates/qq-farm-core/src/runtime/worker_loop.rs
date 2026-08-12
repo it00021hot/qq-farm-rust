@@ -65,6 +65,12 @@ pub struct WorkerLoopConfig {
     pub daily_routine_interval: Duration,
     /// 赛季进度刷新间隔
     pub season_progress_interval: Duration,
+    /// 心跳间隔（原 TS `CONFIG.heartbeatInterval`，默认 25s）
+    pub heartbeat_interval: Duration,
+    /// 心跳超时（30s 无响应则强制重连）
+    pub heartbeat_timeout: Duration,
+    /// 客户端版本（用于 HeartbeatRequest.client_version）
+    pub client_version: String,
 }
 
 impl Default for WorkerLoopConfig {
@@ -73,6 +79,9 @@ impl Default for WorkerLoopConfig {
             status_interval: Duration::from_secs(3),
             daily_routine_interval: Duration::from_secs(30),
             season_progress_interval: Duration::from_secs(300),
+            heartbeat_interval: Duration::from_secs(25),
+            heartbeat_timeout: Duration::from_secs(30),
+            client_version: "1.0.0".to_string(),
         }
     }
 }
@@ -110,7 +119,18 @@ pub struct WorkerLoop {
     last_daily_date: Arc<Mutex<String>>,
     /// 配置 revision（防重应用）
     applied_config_revision: AtomicU64,
+    /// 当前登录的 GID（0 = 未登录）
+    gid: Arc<Mutex<i64>>,
+    /// 上次 heartbeat 响应时间（ms）
+    last_heartbeat_response: Arc<Mutex<i64>>,
+    /// heartbeat miss 计数
+    heartbeat_miss_count: Arc<Mutex<u32>>,
+    /// 心跳超时回调
+    on_heartbeat_timeout: Arc<Mutex<Option<Box<dyn Fn(String) + Send + Sync>>>>,
 }
+
+/// 心跳 miss 阈值
+const MAX_HEARTBEAT_MISS: u32 = 1;
 
 /// AtomicBool/AtomicU64
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -195,6 +215,10 @@ impl WorkerLoop {
             next_runs: Arc::new(Mutex::new(NextRuns::default())),
             last_daily_date: Arc::new(Mutex::new(String::new())),
             applied_config_revision: AtomicU64::new(0),
+            gid: Arc::new(Mutex::new(0)),
+            last_heartbeat_response: Arc::new(Mutex::new(crate::utils::time::now_ms())),
+            heartbeat_miss_count: Arc::new(Mutex::new(0)),
+            on_heartbeat_timeout: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -220,6 +244,20 @@ impl WorkerLoop {
     #[must_use]
     pub fn shutdown_started(&self) -> bool {
         self.shutdown_started.load(Ordering::Acquire)
+    }
+
+    /// 设置登录完成后的 GID（启动 heartbeat 任务时使用）
+    pub fn set_gid(&self, gid: i64) {
+        *self.gid.lock() = gid;
+        *self.last_heartbeat_response.lock() = crate::utils::time::now_ms();
+    }
+
+    /// 注册心跳超时回调
+    pub fn on_heartbeat_timeout<F>(&self, cb: F)
+    where
+        F: Fn(String) + Send + Sync + 'static,
+    {
+        *self.on_heartbeat_timeout.lock() = Some(Box::new(cb));
     }
 
     /// 设置 login ready
@@ -278,6 +316,66 @@ impl WorkerLoop {
                     }
                     *guard = today.clone();
                     tracing::info!(account_id = %acc_id, date = %today, "daily routines due");
+                })
+            }),
+        );
+
+        // 心跳：每 25s 发 HeartbeatRequest，30s 无响应则触发重连回调
+        let gateway_for_hb = self.gateway.clone();
+        let acc_id_hb = self.account.id.clone();
+        let last_hb_resp = self.last_heartbeat_response.clone();
+        let hb_miss = self.heartbeat_miss_count.clone();
+        let hb_interval = self.config.heartbeat_interval;
+        let hb_timeout = self.config.heartbeat_timeout;
+        let on_hb_timeout = self.on_heartbeat_timeout.clone();
+        let client_version = self.config.client_version.clone();
+        let gid = self.gid.clone();
+        scheduler.set_interval_task(
+            "heartbeat_interval",
+            hb_interval,
+            Arc::new(move || {
+                let gateway = gateway_for_hb.clone();
+                let acc_id = acc_id_hb.clone();
+                let last_resp = last_hb_resp.clone();
+                let miss = hb_miss.clone();
+                let on_timeout = on_hb_timeout.clone();
+                let cv = client_version.clone();
+                let gid_lock = gid.clone();
+                Box::pin(async move {
+                    let now = crate::utils::time::now_ms();
+                    let last = *last_resp.lock();
+                    let elapsed = now - last;
+                    if elapsed > hb_timeout.as_millis() as i64 {
+                        let miss_n = {
+                            let mut g = miss.lock();
+                            *g += 1;
+                            *g
+                        };
+                        tracing::warn!(
+                            account_id = %acc_id,
+                            elapsed_ms = elapsed,
+                            "心跳超时 ({}s 无响应)",
+                            elapsed / 1000
+                        );
+                        if miss_n >= MAX_HEARTBEAT_MISS {
+                            tracing::error!(account_id = %acc_id, "心跳 miss 达到上限，触发重连");
+                            if let Some(cb) = on_timeout.lock().as_ref() {
+                                cb(acc_id.clone());
+                            }
+                            return;
+                        }
+                    }
+
+                    let current_gid = *gid_lock.lock();
+                    if current_gid == 0 {
+                        return;
+                    }
+                    let cv_for_req = cv.clone();
+                    let result = gateway.heartbeat(current_gid, &cv_for_req).await;
+                    if let Ok(_reply) = result {
+                        *last_resp.lock() = crate::utils::time::now_ms();
+                        *miss.lock() = 0;
+                    }
                 })
             }),
         );
