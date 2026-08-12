@@ -25,6 +25,8 @@ use tracing::info;
 mod context;
 mod middleware;
 mod routes;
+mod sessions;
+mod socket;
 
 use crate::context::AdminContext;
 
@@ -53,8 +55,9 @@ async fn main() -> Result<()> {
     // 路由
     let app = Router::new()
         .route("/health", get(health))
+        .route("/ws", get(socket::ws_handler))
         .merge(routes::build())
-        .with_state(ctx)
+        .with_state(ctx.clone())
         .layer(axum::middleware::from_fn(middleware::cors_layer));
 
     let port: u16 = std::env::var("ADMIN_PORT")

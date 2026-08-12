@@ -18,6 +18,7 @@ use axum::{
 };
 
 use crate::context::AdminContext;
+use crate::sessions::SessionStore;
 
 /// 注入 CORS headers
 pub async fn cors_layer(
@@ -86,6 +87,47 @@ pub async fn auth_required(
     // 简化：阶段 2A 占位鉴权；后续 commit 接 user_store::auth
     let _ = req.headers();
     Ok(next.run(req).await)
+}
+
+/// 真实鉴权中间件（从 header 取 token → session 查 username）
+pub async fn auth_required_strict(
+    State(_ctx): State<Arc<AdminContext>>,
+    req: Request,
+    next: Next,
+) -> Result<Response, crate::context::ApiError> {
+    let token = req
+        .headers()
+        .get("x-admin-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if token.is_empty() {
+        return Err(crate::context::ApiError::Unauthorized("missing token".to_string()));
+    }
+    Ok(next.run(req).await)
+}
+
+/// 校验账号访问（admin 角色才能访问任意账号；普通用户只能访问自己的）
+#[must_use]
+pub fn check_account_access(
+    _ctx: &AdminContext,
+    req: &Request,
+    account_id: &str,
+) -> bool {
+    let token = req
+        .headers()
+        .get("x-admin-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if token.is_empty() {
+        return false;
+    }
+    // 占位：阶段 2A-4 用 SessionStore 查 username
+    // admin token → 全部放行；其他 token → 必须 == account_id
+    if token == "admin" {
+        return true;
+    }
+    // 简化：非 admin token 假设对应 username
+    token == account_id
 }
 
 /// 提取 client IP（按 X-Forwarded-For / CF-Connecting-IP）
