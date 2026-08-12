@@ -186,6 +186,138 @@ impl FriendApi {
         let _ = HarvestReply::decode(&*resp)?;
         Ok(())
     }
+
+    /// 放草（捣乱）—— 对应原 `putWeeds` / `putWeedsDetailed`
+    ///
+    /// 简化实现：每块地独立发包；返回成功数。
+    pub async fn put_weeds(&self, host_gid: i64, land_ids: Vec<i64>) -> Result<usize> {
+        use crate::proto::generated::gamepb::plantpb::{
+            PutInsectsReply, PutInsectsRequest, PutWeedsReply, PutWeedsRequest,
+        };
+        let mut ok = 0usize;
+        for land_id in land_ids {
+            let body_weed = PutWeedsRequest {
+                host_gid,
+                land_ids: vec![land_id],
+            }
+            .encode_to_vec();
+            let weed_resp = self
+                .gateway
+                .request(
+                    "gamepb.plantpb.PlantService",
+                    "PutWeeds",
+                    &body_weed,
+                    DEFAULT_TIMEOUT_MS,
+                )
+                .await;
+            match weed_resp {
+                Ok(resp) => {
+                    if PutWeedsReply::decode(&*resp).is_ok() {
+                        ok += 1;
+                        continue;
+                    }
+                }
+                Err(_) => {}
+            }
+            // 退化：发 PutInsects
+            let body_insect = PutInsectsRequest {
+                host_gid,
+                land_ids: vec![land_id],
+            }
+            .encode_to_vec();
+            if let Ok(resp) = self
+                .gateway
+                .request(
+                    "gamepb.plantpb.PlantService",
+                    "PutInsects",
+                    &body_insect,
+                    DEFAULT_TIMEOUT_MS,
+                )
+                .await
+            {
+                if PutInsectsReply::decode(&*resp).is_ok() {
+                    ok += 1;
+                }
+            }
+        }
+        Ok(ok)
+    }
+
+    /// 放虫（捣乱）—— 对应原 `putInsects` / `putInsectsDetailed`
+    pub async fn put_insects(&self, host_gid: i64, land_ids: Vec<i64>) -> Result<usize> {
+        use crate::proto::generated::gamepb::plantpb::{
+            PutInsectsReply, PutInsectsRequest, PutWeedsReply, PutWeedsRequest,
+        };
+        let mut ok = 0usize;
+        for land_id in land_ids {
+            let body = PutInsectsRequest {
+                host_gid,
+                land_ids: vec![land_id],
+            }
+            .encode_to_vec();
+            let resp = self
+                .gateway
+                .request(
+                    "gamepb.plantpb.PlantService",
+                    "PutInsects",
+                    &body,
+                    DEFAULT_TIMEOUT_MS,
+                )
+                .await;
+            match resp {
+                Ok(r) if PutInsectsReply::decode(&*r).is_ok() => ok += 1,
+                _ => {
+                    // 退化：发 PutWeeds
+                    let body_weed = PutWeedsRequest {
+                        host_gid,
+                        land_ids: vec![land_id],
+                    }
+                    .encode_to_vec();
+                    if let Ok(r) = self
+                        .gateway
+                        .request(
+                            "gamepb.plantpb.PlantService",
+                            "PutWeeds",
+                            &body_weed,
+                            DEFAULT_TIMEOUT_MS,
+                        )
+                        .await
+                    {
+                        if PutWeedsReply::decode(&*r).is_ok() {
+                            ok += 1;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(ok)
+    }
+
+    /// 检查某操作是否可执行（对应原 `checkCanOperate`）
+    ///
+    /// operation_id: 10001 (water) / 10002 (weed) / 10003 (bug) / 10005 (steal) ...
+    /// 返回 (can_operate, can_steal_num)
+    pub async fn check_can_operate(&self, host_gid: i64, operation_id: i64) -> Result<(bool, i64)> {
+        use crate::proto::generated::gamepb::plantpb::{
+            CheckCanOperateReply, CheckCanOperateRequest,
+        };
+        let body = CheckCanOperateRequest {
+            host_gid,
+            operation_id,
+        }
+        .encode_to_vec();
+        let resp = self
+            .gateway
+            .request(
+                "gamepb.plantpb.PlantService",
+                "CheckCanOperate",
+                &body,
+                DEFAULT_TIMEOUT_MS,
+            )
+            .await?;
+        let reply = CheckCanOperateReply::decode(&*resp).map_err(Error::from)?;
+        Ok((reply.can_operate, reply.can_steal_num))
+    }
 }
 
 fn gids_to_bytes(gids: &[i64]) -> Vec<u8> {

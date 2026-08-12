@@ -28,6 +28,30 @@ pub struct Account {
     pub display_name: String,
     /// 当前状态
     pub status: AccountStatus,
+    /// 平台（qq / wx）
+    #[serde(default)]
+    pub platform: String,
+    /// 登录 code（一次性 auth code）
+    #[serde(default)]
+    pub code: String,
+    /// 账号 UIN（数字 QQ 号）
+    #[serde(default)]
+    pub uin: String,
+    /// 账号 QQ 字符串
+    #[serde(default)]
+    pub qq: String,
+    /// 头像 URL
+    #[serde(default)]
+    pub avatar: String,
+    /// 所属用户名（管理员/普通用户）
+    #[serde(default)]
+    pub username: String,
+    /// 创建时间（ms）
+    #[serde(default)]
+    pub created_at: i64,
+    /// 更新时间（ms）
+    #[serde(default)]
+    pub updated_at: i64,
 }
 
 impl Account {
@@ -39,6 +63,14 @@ impl Account {
             open_id: open_id.into(),
             display_name: display_name.into(),
             status: AccountStatus::Idle,
+            platform: String::new(),
+            code: String::new(),
+            uin: String::new(),
+            qq: String::new(),
+            avatar: String::new(),
+            username: String::new(),
+            created_at: 0,
+            updated_at: 0,
         }
     }
 }

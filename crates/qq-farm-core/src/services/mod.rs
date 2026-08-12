@@ -30,7 +30,9 @@
 //! - [`wx_login`] — 微信扫码登录（1G-8：协议层 + QR 流程）
 
 pub mod ace;
+pub mod account_resolver;
 pub mod activity_center;
+pub mod activity_center_state;
 pub mod analytics;
 pub mod automation;
 pub mod commerce;

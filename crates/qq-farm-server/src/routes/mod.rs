@@ -12,6 +12,55 @@ pub mod friend;
 pub mod placeholder;
 pub mod wx_login;
 
+use axum::http::HeaderMap;
+
+use qq_farm_core::services::account_resolver::normalize_account_ref;
+
+/// 共享 helper：解析 account_id（query > header > env fallback）
+///
+/// 各 routes 里的简化版统一收敛到这里，输出经 [`normalize_account_ref`] 归一化。
+pub fn resolve_account_id(
+    _ctx: &AdminContext,
+    headers: &HeaderMap,
+    query_id: Option<&str>,
+) -> String {
+    let raw = if let Some(id) = query_id {
+        if !id.is_empty() {
+            id.to_string()
+        } else {
+            String::new()
+        }
+    } else if let Some(v) = headers.get("x-account-id").and_then(|v| v.to_str().ok()) {
+        v.to_string()
+    } else {
+        String::new()
+    };
+    let normalized = normalize_account_ref(Some(&serde_json::Value::String(raw.clone())));
+    if !normalized.is_empty() {
+        return normalized;
+    }
+    // fallback：FARM_ACCOUNT_ID env
+    std::env::var("FARM_ACCOUNT_ID").unwrap_or_default()
+}
+
+/// 严格版：缺失时返回 `BadRequest`
+///
+/// 用于 friend / activity_center / commerce 等需要确保 account_id 存在的路由。
+pub fn resolve_account_id_required(
+    ctx: &AdminContext,
+    headers: &HeaderMap,
+    query_id: Option<&str>,
+) -> Result<String, crate::context::ApiError> {
+    let id = resolve_account_id(ctx, headers, query_id);
+    if id.is_empty() {
+        Err(crate::context::ApiError::BadRequest(
+            "missing x-account-id".to_string(),
+        ))
+    } else {
+        Ok(id)
+    }
+}
+
 use std::sync::Arc;
 
 use axum::{extract::Request, middleware, Router};

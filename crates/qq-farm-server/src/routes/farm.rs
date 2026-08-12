@@ -52,6 +52,7 @@ use qq_farm_core::services::analytics::SortBy;
 
 use crate::context::{ok, ok_empty, AdminContext, ApiError, ApiResult};
 use crate::middleware::extract_client_ip;
+use crate::routes::resolve_account_id;
 
 /// 构造 farm 路由
 pub fn router() -> Router<Arc<AdminContext>> {
@@ -169,26 +170,6 @@ struct AnalyticsQuery {
 }
 
 // ===== Handlers =====
-
-/// 解析 account_id（query > header > 全局 fallback）
-fn resolve_account_id(
-    ctx: &AdminContext,
-    headers: &axum::http::HeaderMap,
-    query_id: Option<&str>,
-) -> String {
-    if let Some(id) = query_id {
-        if !id.is_empty() {
-            return id.to_string();
-        }
-    }
-    if let Some(v) = headers.get("x-account-id").and_then(|v| v.to_str().ok()) {
-        if !v.is_empty() {
-            return v.to_string();
-        }
-    }
-    // fallback：FARM_ACCOUNT_ID env
-    std::env::var("FARM_ACCOUNT_ID").unwrap_or_default()
-}
 
 /// 获取某账号的 WorkerLoop（cloned Arc，handler 异步安全）
 fn get_loop(

@@ -62,23 +62,7 @@ fn resolve_account_id(
     headers: &axum::http::HeaderMap,
     query_id: Option<&str>,
 ) -> Result<String, ApiError> {
-    if let Some(id) = query_id {
-        if !id.is_empty() {
-            return Ok(id.to_string());
-        }
-    }
-    if let Some(v) = headers.get("x-account-id").and_then(|v| v.to_str().ok()) {
-        if !v.is_empty() {
-            return Ok(v.to_string());
-        }
-    }
-    if let Ok(v) = std::env::var("FARM_ACCOUNT_ID") {
-        if !v.is_empty() {
-            return Ok(v);
-        }
-    }
-    let _ = ctx;
-    Err(ApiError::BadRequest("missing x-account-id".to_string()))
+    crate::routes::resolve_account_id_required(ctx, headers, query_id)
 }
 
 async fn get_mall(

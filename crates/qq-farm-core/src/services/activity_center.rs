@@ -4,7 +4,7 @@
 //! 按用户决策只复刻生效的活动，不做 1:1 全搬）。被跳过的：
 //!
 //! - 复杂 `constellation-*.json` catalog 静态数据（运行时按需从 `reply.constellation` 拿）
-//! - 256 行 `activity-center-state.ts` JSON 状态合并（defer 到 runtime engine）
+//! - 256 行 `activity-center-state.ts` JSON 状态合并（见 `activity_center_state` 模块）
 //! - `serializeMutation` 复杂并发（defer，rate limiter 已在 1F-6 覆盖）
 //!
 //! ## 4 个生效活动

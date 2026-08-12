@@ -1,11 +1,16 @@
 //! Admin sessions — token → user 信息。
 //!
 //! 1:1 对应原 `controllers/admin/admin-sessions.ts`（123 行）的核心部分。
+//!
+//! 持久化：admin-sessions.json（启动时 `load_persisted_sessions` 恢复 token）
 
 use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 
 /// Admin session store
 #[derive(Default, Clone)]
@@ -19,6 +24,28 @@ pub struct SessionInfo {
     pub role: String,
     pub created_at: i64,
     pub last_active: i64,
+}
+
+impl SessionInfo {
+    /// 序列化为 JSON Value
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "username": self.username,
+            "role": self.role,
+            "created_at": self.created_at,
+            "last_active": self.last_active,
+        })
+    }
+
+    /// 从 JSON 反序列化
+    fn from_json(v: &serde_json::Value) -> Option<Self> {
+        Some(Self {
+            username: v.get("username")?.as_str()?.to_string(),
+            role: v.get("role")?.as_str()?.to_string(),
+            created_at: v.get("created_at")?.as_i64()?,
+            last_active: v.get("last_active")?.as_i64()?,
+        })
+    }
 }
 
 impl SessionStore {
@@ -35,6 +62,11 @@ impl SessionStore {
             token,
             SessionInfo { username, role, created_at: now, last_active: now },
         );
+    }
+
+    /// 用已有 info 创建 session（持久化恢复用）
+    pub fn create_with_info(&self, token: String, info: SessionInfo) {
+        self.inner.write().insert(token, info);
     }
 
     /// 获取完整 session
@@ -99,6 +131,58 @@ impl SessionStore {
         }
         n
     }
+
+    /// 列出所有 session（用于持久化）
+    #[must_use]
+    pub fn dump(&self) -> Vec<(String, SessionInfo)> {
+        self.inner
+            .read()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+}
+
+/// 持久化路径：`<dataDir>/sessions/admin-sessions.json`
+#[must_use]
+pub fn admin_sessions_path(data_dir: &Path) -> std::path::PathBuf {
+    data_dir.join("sessions").join("admin-sessions.json")
+}
+
+/// 加载持久化的 sessions（启动时调用）
+pub fn load_persisted_sessions(store: &SessionStore, data_dir: &Path) -> usize {
+    let path = admin_sessions_path(data_dir);
+    let Ok(content) = fs::read_to_string(&path) else {
+        return 0;
+    };
+    let parsed: HashMap<String, serde_json::Value> = match serde_json::from_str(&content) {
+        Ok(m) => m,
+        Err(_) => return 0,
+    };
+    let mut n = 0;
+    for (token, v) in parsed {
+        if let Some(info) = SessionInfo::from_json(&v) {
+            store.create_with_info(token, info);
+            n += 1;
+        }
+    }
+    n
+}
+
+/// 持久化 sessions（admin 增删后调用）
+pub fn persist_sessions(store: &SessionStore, data_dir: &Path) -> std::io::Result<()> {
+    let path = admin_sessions_path(data_dir);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let dump = store.dump();
+    let mut map = serde_json::Map::new();
+    for (k, v) in dump {
+        map.insert(k, v.to_json());
+    }
+    let content = serde_json::to_string_pretty(&serde_json::Value::Object(map))
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    fs::write(&path, content)
 }
 
 fn now_ms() -> i64 {
@@ -181,5 +265,70 @@ mod tests {
         assert_eq!(n, 2);
         assert_eq!(store.count(), 1);
         assert_eq!(store.get_username("b"), Some("u2".to_string()));
+    }
+
+    // ===== 阶段 2E：持久化测试 =====
+
+    #[test]
+    fn dump_and_persist_roundtrip() {
+        let tmp = std::env::temp_dir().join(format!(
+            "qq-farm-test-sessions-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let store = SessionStore::new();
+        store.create("tok-a".into(), "alice".into(), "admin".into());
+        store.create("tok-b".into(), "bob".into(), "user".into());
+
+        persist_sessions(&store, &tmp).expect("persist 成功");
+        assert!(admin_sessions_path(&tmp).exists());
+
+        // 重新加载
+        let store2 = SessionStore::new();
+        let n = load_persisted_sessions(&store2, &tmp);
+        assert_eq!(n, 2);
+        assert_eq!(store2.get_username("tok-a"), Some("alice".to_string()));
+        assert_eq!(store2.get_role("tok-a"), Some("admin".to_string()));
+        assert_eq!(store2.get_role("tok-b"), Some("user".to_string()));
+
+        // 清理
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn load_persisted_missing_file_returns_zero() {
+        let store = SessionStore::new();
+        let tmp = std::env::temp_dir().join("qq-farm-nonexistent-dir-xyz");
+        let n = load_persisted_sessions(&store, &tmp);
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn session_info_json_roundtrip() {
+        let info = SessionInfo {
+            username: "alice".into(),
+            role: "admin".into(),
+            created_at: 1000,
+            last_active: 2000,
+        };
+        let json = info.to_json();
+        let info2 = SessionInfo::from_json(&json).unwrap();
+        assert_eq!(info2.username, "alice");
+        assert_eq!(info2.role, "admin");
+        assert_eq!(info2.created_at, 1000);
+        assert_eq!(info2.last_active, 2000);
+    }
+
+    #[test]
+    fn dump_returns_all_sessions() {
+        let store = SessionStore::new();
+        store.create("a".into(), "u1".into(), "user".into());
+        store.create("b".into(), "u2".into(), "admin".into());
+        let dump = store.dump();
+        assert_eq!(dump.len(), 2);
     }
 }

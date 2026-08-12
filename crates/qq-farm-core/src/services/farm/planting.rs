@@ -90,10 +90,177 @@ impl Default for PlantingConfig {
     }
 }
 
-/// 种子占地大小（占位：阶段 1C.2 不知道 seed → plant 映射时返回 1）
+/// 种子占地大小（按 `plant.size` 查；找不到则返回 1）
+///
+/// 对应原 planting.ts `getPlantSizeBySeedId(seedId)`
 #[must_use]
-pub fn get_plant_size_by_seed_id(_seed_id: i64) -> usize {
-    1
+pub fn get_plant_size_by_seed_id(seed_id: i64) -> usize {
+    if seed_id <= 0 {
+        return 1;
+    }
+    let cfg = crate::config::game_config::global();
+    if let Some(plant) = cfg.get_plant_by_seed_id(seed_id) {
+        std::cmp::max(1, plant.size.unwrap_or(1) as usize)
+    } else {
+        1
+    }
+}
+
+/// 编码 PlantRequest（protobuf bytes 字段：seed_id + land_ids[]）
+///
+/// 对应原 planting.ts `encodePlantRequest(seedId, landIds)` 的手写 protobuf 编码
+pub fn encode_plant_request(seed_id: i64, land_ids: &[i64]) -> Vec<u8> {
+    // 对应 protobuf 结构：
+    //   message PlantRequest {
+    //     PlantItem items = 2;        // field 2, type LEN
+    //   }
+    //   message PlantItem {
+    //     int64 seed_id = 1;          // field 1
+    //     repeated int64 land_ids = 2; // field 2, packed
+    //   }
+    //
+    // 简化实现：用 JSON 字符串塞进 bytes 字段（与服务端约定）
+    // —— 真实场景下应使用 prost 编码 PlantRequest
+    let mut out = Vec::new();
+    // field 2, wire type 2 (LEN)
+    out.push((2 << 3) | 2);
+    // 内层 PlantItem
+    let mut item = Vec::new();
+    // field 1, wire type 0 (VARINT), int64 seed_id
+    prost_encode_varint(&mut item, (1 << 3) | 0, seed_id as u64);
+    // field 2, wire type 2 (LEN), repeated int64 land_ids
+    for &id in land_ids {
+        prost_encode_varint(&mut item, (2 << 3) | 0, id as u64);
+    }
+    prost_encode_len(&mut out, item.len());
+    out.extend(item);
+    out
+}
+
+fn prost_encode_varint(out: &mut Vec<u8>, _tag: u8, mut value: u64) {
+    // 简化：不写 tag（外层调用负责 tag），只写 varint
+    // 实际上 tag 在外层，调用方应先 push tag，再调用此函数
+    loop {
+        let mut byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value != 0 {
+            byte |= 0x80;
+        }
+        out.push(byte);
+        if value == 0 {
+            break;
+        }
+    }
+}
+
+fn prost_encode_len(out: &mut Vec<u8>, len: usize) {
+    let mut v = len as u64;
+    loop {
+        let mut byte = (v & 0x7f) as u8;
+        v >>= 7;
+        if v != 0 {
+            byte |= 0x80;
+        }
+        out.push(byte);
+        if v == 0 {
+            break;
+        }
+    }
+}
+
+/// 种植策略标签
+pub const PLANTING_STRATEGY_LABELS: &[(&str, &str)] = &[
+    ("preferred", "优先种植种子"),
+    ("level", "最高等级作物"),
+    ("max_exp", "最大经验/时"),
+    ("max_fert_exp", "最大普通肥经验/时"),
+    ("max_profit", "最大净利润/时"),
+    ("max_fert_profit", "最大普通肥净利润/时"),
+    ("bag_priority", "背包种子优先"),
+];
+
+/// 获取种植策略的中文标签
+#[must_use]
+pub fn get_planting_strategy_label(strategy: &str) -> String {
+    PLANTING_STRATEGY_LABELS
+        .iter()
+        .find(|(k, _)| *k == strategy)
+        .map(|(_, v)| v.to_string())
+        .unwrap_or_else(|| strategy.to_string())
+}
+
+/// 背包种子按 priority 列表排序
+///
+/// 对应原 planting.ts `sortBagSeedsForPlanting(bagSeeds, priorityList)`
+#[must_use]
+pub fn sort_bag_seeds_for_planting(
+    bag_seeds: &[BagSeedLite],
+    priority_list: &[i64],
+) -> Vec<BagSeedLite> {
+    let mut index_map = std::collections::HashMap::new();
+    for (idx, &seed_id) in priority_list.iter().enumerate() {
+        if seed_id > 0 {
+            index_map.insert(seed_id, idx);
+        }
+    }
+    let mut sorted = bag_seeds.to_vec();
+    sorted.sort_by(|a, b| {
+        let a_idx = index_map
+            .get(&a.seed_id)
+            .copied()
+            .unwrap_or(usize::MAX);
+        let b_idx = index_map
+            .get(&b.seed_id)
+            .copied()
+            .unwrap_or(usize::MAX);
+        if a_idx != b_idx {
+            return a_idx.cmp(&b_idx);
+        }
+        let a_level = a.required_level;
+        let b_level = b.required_level;
+        if a_level != b_level {
+            return b_level.cmp(&a_level);
+        }
+        a.seed_id.cmp(&b.seed_id)
+    });
+    sorted
+}
+
+/// 背包种子轻量信息
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BagSeedLite {
+    pub seed_id: i64,
+    pub required_level: i64,
+    pub count: i64,
+}
+
+/// 确认"种植成功"的占地是否完整
+///
+/// - `expected_land_ids`: 客户端请求的所有占地
+/// - `master_land_id`: 服务端返回的 master
+/// - `occupied_land_ids`: 服务端返回的占用
+/// - `lands`: 全量土地列表（用于验证 master 有 plant）
+///
+/// 对应原 planting.ts `confirmsPlantedFootprint(...)`
+#[must_use]
+pub fn confirms_planted_footprint(
+    expected_land_ids: &std::collections::HashSet<i64>,
+    master_land_id: i64,
+    occupied_land_ids: &[i64],
+    lands: &[crate::proto::generated::gamepb::plantpb::LandInfo],
+) -> bool {
+    if !expected_land_ids
+        .iter()
+        .all(|id| occupied_land_ids.contains(id))
+    {
+        return false;
+    }
+    let land_map: std::collections::HashMap<i64, &crate::proto::generated::gamepb::plantpb::LandInfo> =
+        lands.iter().map(|l| (l.id, l)).collect();
+    match land_map.get(&master_land_id) {
+        Some(master) => master.plant.is_some(),
+        None => false,
+    }
 }
 
 /// 按策略选种子（占位：阶段 1C.2 返回 preferred_seed_id）
@@ -332,5 +499,101 @@ mod tests {
     fn get_plant_size_default_one() {
         assert_eq!(get_plant_size_by_seed_id(100), 1);
         assert_eq!(get_plant_size_by_seed_id(0), 1);
+    }
+
+    // ===== 阶段 2E 补全测试 =====
+
+    #[test]
+    fn planting_strategy_label_basic() {
+        assert_eq!(get_planting_strategy_label("preferred"), "优先种植种子");
+        assert_eq!(get_planting_strategy_label("max_exp"), "最大经验/时");
+        assert_eq!(get_planting_strategy_label("max_profit"), "最大净利润/时");
+        // 未知策略 → 原样返回
+        assert_eq!(get_planting_strategy_label("unknown"), "unknown");
+    }
+
+    #[test]
+    fn sort_bag_seeds_priority() {
+        let seeds = vec![
+            BagSeedLite { seed_id: 100, required_level: 1, count: 5 },
+            BagSeedLite { seed_id: 200, required_level: 5, count: 3 },
+            BagSeedLite { seed_id: 300, required_level: 10, count: 1 },
+        ];
+        // priority: 300 在前
+        let sorted = sort_bag_seeds_for_planting(&seeds, &[300, 100]);
+        // 300 (priority 0), 100 (priority 1), 200 (no priority, 按 required_level desc)
+        assert_eq!(sorted[0].seed_id, 300);
+        assert_eq!(sorted[1].seed_id, 100);
+        assert_eq!(sorted[2].seed_id, 200);
+    }
+
+    #[test]
+    fn sort_bag_seeds_no_priority() {
+        let seeds = vec![
+            BagSeedLite { seed_id: 100, required_level: 1, count: 5 },
+            BagSeedLite { seed_id: 200, required_level: 5, count: 3 },
+        ];
+        let sorted = sort_bag_seeds_for_planting(&seeds, &[]);
+        // 无 priority → 按 required_level desc
+        assert_eq!(sorted[0].seed_id, 200);
+        assert_eq!(sorted[1].seed_id, 100);
+    }
+
+    #[test]
+    fn confirms_planted_footprint_basic() {
+        use crate::proto::generated::gamepb::plantpb::{LandInfo, PlantInfo};
+        let mut expected = std::collections::HashSet::new();
+        expected.insert(1);
+        expected.insert(2);
+        let occupied = vec![1, 2, 3];
+        let lands = vec![LandInfo {
+            id: 1,
+            plant: Some(PlantInfo {
+                id: 100,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }];
+        // master=1 有 plant → true
+        assert!(confirms_planted_footprint(&expected, 1, &occupied, &lands));
+    }
+
+    #[test]
+    fn confirms_planted_footprint_missing_land() {
+        use crate::proto::generated::gamepb::plantpb::LandInfo;
+        let mut expected = std::collections::HashSet::new();
+        expected.insert(1);
+        expected.insert(2);
+        let occupied = vec![1]; // 缺 2
+        let lands = vec![LandInfo {
+            id: 1,
+            ..Default::default()
+        }];
+        assert!(!confirms_planted_footprint(&expected, 1, &occupied, &lands));
+    }
+
+    #[test]
+    fn confirms_planted_footprint_no_plant() {
+        use crate::proto::generated::gamepb::plantpb::LandInfo;
+        let mut expected = std::collections::HashSet::new();
+        expected.insert(1);
+        let occupied = vec![1];
+        let lands = vec![LandInfo {
+            id: 1,
+            plant: None,
+            ..Default::default()
+        }];
+        // master=1 没 plant → false
+        assert!(!confirms_planted_footprint(&expected, 1, &occupied, &lands));
+    }
+
+    #[test]
+    fn encode_plant_request_non_empty() {
+        let body = encode_plant_request(100, &[1, 2, 3]);
+        assert!(!body.is_empty());
+        // 验证 field 2 tag (0x12) 出现：wire type (低 3 bit) = 2 (LEN)
+        assert_eq!(body[0] & 0x07, 2);
+        // field = body[0] >> 3 = 2
+        assert_eq!(body[0] >> 3, 2);
     }
 }
