@@ -12,6 +12,7 @@ use std::sync::Arc;
 use axum::Json;
 use qq_farm_core::runtime::engine::RuntimeEngine;
 
+use crate::routes::wx_login::WxLoginState;
 use crate::sessions::SessionStore;
 
 /// Admin 共享上下文
@@ -21,6 +22,8 @@ pub struct AdminContext {
     pub engine: Arc<RuntimeEngine>,
     /// Session 存储（token → user）
     pub sessions: SessionStore,
+    /// 微信扫码登录 state
+    pub wx: WxLoginState,
 }
 
 impl AdminContext {
@@ -30,13 +33,18 @@ impl AdminContext {
         Self {
             engine,
             sessions: SessionStore::new(),
+            wx: WxLoginState::new(),
         }
     }
 
     /// 构造 context（带 sessions）
     #[must_use]
     pub fn with_sessions(engine: Arc<RuntimeEngine>, sessions: SessionStore) -> Self {
-        Self { engine, sessions }
+        Self {
+            engine,
+            sessions,
+            wx: WxLoginState::new(),
+        }
     }
 }
 
@@ -55,6 +63,7 @@ impl AdminContext {
                 qq_farm_core::runtime::engine::EngineConfig::default(),
             )),
             sessions: crate::sessions::SessionStore::new(),
+            wx: WxLoginState::new(),
         })
     }
 }

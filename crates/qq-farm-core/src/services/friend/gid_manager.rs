@@ -100,6 +100,10 @@ impl GidManager {
     }
 
     /// 标记同步失败
+    pub fn clear_cache(&self) {
+        *self.cached.write() = Vec::new();
+    }
+
     pub fn mark_sync_failed(&self, message: String) {
         let _ = self.event_tx.send(GidEvent::SyncFailed { message });
     }

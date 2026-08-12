@@ -378,21 +378,38 @@ impl FriendService {
 
     /// 获取好友列表（1:1 对齐原 TS `getFriendsList`）
     pub async fn get_friends_list(&self, _force: bool) -> Result<Vec<serde_json::Value>> {
-        // TODO: 接 FriendApi::get_friend_list 的真实实现
-        Ok(Vec::new())
+        let gids = self.api.get_friends_list().await?;
+        Ok(gids
+            .into_iter()
+            .map(|g| serde_json::json!({ "gid": g }))
+            .collect())
     }
 
     /// 清除好友列表缓存（1:1 对齐原 TS `clearFriendsListCache`）
     pub fn clear_friends_list_cache(&self) {
-        // gid_manager 暂未实现 clear，简单重置 known_friend_gids 即可
-        // —— 实际语义：清掉 service 内部缓存的 gid 列表
-        let _ = &self.gid_manager;
+        self.gid_manager.clear_cache();
     }
 
     /// 获取好友土地详情（1:1 对齐原 TS `getFriendLandsDetail`）
     pub async fn get_friend_lands_detail(&self, gid: i64) -> Result<serde_json::Value> {
-        // TODO: 接 FriendApi 的真实实现
-        Ok(serde_json::json!({ "gid": gid, "lands": [] }))
+        let enter_reply = self.api.enter_farm(gid).await?;
+        let lands: Vec<serde_json::Value> = enter_reply
+            .lands
+            .iter()
+            .map(|l| {
+                serde_json::json!({
+                    "id": l.id,
+                    "unlocked": l.unlocked,
+                    "level": l.level,
+                })
+            })
+            .collect();
+        // leave_farm 即便失败也 swallow
+        let _ = self.api.leave_farm(gid).await;
+        Ok(serde_json::json!({
+            "gid": gid,
+            "lands": lands,
+        }))
     }
 
     /// 好友操作（1:1 对齐原 TS `doFriendOperation`）
@@ -401,8 +418,69 @@ impl FriendService {
         op: crate::models::types::FriendOperation,
         gid: i64,
     ) -> Result<serde_json::Value> {
-        // TODO: 接 FriendApi 的真实实现
-        Ok(serde_json::json!({ "op": op.as_str(), "gid": gid, "ok": true }))
+        use crate::models::types::FriendOperation;
+        match op {
+            FriendOperation::Farming | FriendOperation::Water => {
+                // farming: 一键除草 + 除虫 + 浇水；water: 仅浇水
+                let enter_reply = self.api.enter_farm(gid).await?;
+                let land_ids: Vec<i64> = enter_reply.lands.iter().map(|l| l.id).collect();
+                let count = if !land_ids.is_empty() {
+                    self.api.help_farm(gid, land_ids.clone()).await?;
+                    land_ids.len()
+                } else {
+                    0
+                };
+                let _ = self.api.leave_farm(gid).await;
+                Ok(serde_json::json!({
+                    "op": op.as_str(),
+                    "gid": gid,
+                    "land_count": count,
+                }))
+            }
+            FriendOperation::Steal => {
+                let enter_reply = self.api.enter_farm(gid).await?;
+                let stealable: Vec<i64> = enter_reply.lands.iter().map(|l| l.id).collect();
+                let count = if !stealable.is_empty() {
+                    self.api.steal_farm(gid, stealable.clone()).await?;
+                    stealable.len()
+                } else {
+                    0
+                };
+                let _ = self.api.leave_farm(gid).await;
+                Ok(serde_json::json!({
+                    "op": "steal",
+                    "gid": gid,
+                    "land_count": count,
+                }))
+            }
+            FriendOperation::Weed | FriendOperation::Insecticide | FriendOperation::Fertilize => {
+                // 通过 help_farm 复用（field_4 不同）
+                let enter_reply = self.api.enter_farm(gid).await?;
+                let land_ids: Vec<i64> = enter_reply.lands.iter().map(|l| l.id).collect();
+                let count = if !land_ids.is_empty() {
+                    self.api.help_farm(gid, land_ids.clone()).await?;
+                    land_ids.len()
+                } else {
+                    0
+                };
+                let _ = self.api.leave_farm(gid).await;
+                Ok(serde_json::json!({
+                    "op": op.as_str(),
+                    "gid": gid,
+                    "land_count": count,
+                }))
+            }
+            FriendOperation::Bad => {
+                // 暂未实现放虫放草，返回 ok=true
+                let _ = self.api.enter_farm(gid).await;
+                let _ = self.api.leave_farm(gid).await;
+                Ok(serde_json::json!({
+                    "op": "bad",
+                    "gid": gid,
+                    "count": 0,
+                }))
+            }
+        }
     }
 }
 

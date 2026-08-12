@@ -172,6 +172,28 @@ impl FarmService {
         Ok(summary)
     }
 
+    /// 获取土地详情（lands + summary）
+    pub async fn get_lands_detail(&self) -> Result<(Vec<serde_json::Value>, LandSummary)> {
+        let host_gid = *self.host_gid.lock();
+        let reply = self.api.get_all_lands(host_gid).await?;
+        let lands: Vec<serde_json::Value> = reply
+            .lands
+            .iter()
+            .map(|l| {
+                serde_json::json!({
+                    "id": l.id,
+                    "unlocked": l.unlocked,
+                    "level": l.level,
+                    "could_unlock": l.could_unlock,
+                    "could_upgrade": l.could_upgrade,
+                    "has_plant": l.plant.is_some(),
+                })
+            })
+            .collect();
+        let summary = summarize_lands(&reply.lands);
+        Ok((lands, summary))
+    }
+
     async fn check_once(api: &Api, host_gid: i64) -> Result<(LandSummary, String)> {
         let reply = api.get_all_lands(host_gid).await?;
         let lands = reply.lands;

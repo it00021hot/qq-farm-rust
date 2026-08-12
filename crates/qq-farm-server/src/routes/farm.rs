@@ -315,18 +315,20 @@ async fn post_fertilizer_check_and_buy(
 
 async fn get_lands(
     State(ctx): State<Arc<AdminContext>>,
+    headers: axum::http::HeaderMap,
     Query(q): Query<AccountQuery>,
 ) -> ApiResult<serde_json::Value> {
-    let id = q.account_id.clone().unwrap_or_default();
-    if id.is_empty() {
-        return Err(ApiError::BadRequest("missing accountId".to_string()));
+    let id = resolve_account_id(&ctx, &headers, q.account_id.as_deref());
+    let loop_ = get_loop(&ctx, &id)?;
+    let result = loop_.farm().get_lands_detail().await;
+    match result {
+        Ok((lands, summary)) => ok(json!({
+            "ok": true,
+            "lands": lands,
+            "summary": summary,
+        })),
+        Err(e) => Ok(Json(json!({ "ok": false, "error": e.to_string() }))),
     }
-    // 先 fake response（check_farm 真实调用在 2B 联调阶段补，避免 handler trait 问题）
-    let _ = ctx;
-    ok(json!({
-        "ok": true,
-        "summary": { "plantable": 0, "growing": 0, "ripe": 0, "dead": 0, "total": 0 }
-    }))
 }
 
 async fn get_plant_blacklist(
@@ -391,12 +393,27 @@ async fn get_seeds(
     headers: axum::http::HeaderMap,
     Query(q): Query<AccountQuery>,
 ) -> ApiResult<serde_json::Value> {
-    let id = resolve_account_id(&ctx, &headers, q.account_id.as_deref());
-    let loop_ = get_loop(&ctx, &id)?;
-    // available_seeds：当前没有专门方法，返回空（待 2B 联调阶段补）
-    let _ = id;
-    let _ = loop_;
-    ok(json!({ "ok": true, "seeds": [] }))
+    let _id = resolve_account_id(&ctx, &headers, q.account_id.as_deref());
+    // 全部 seed 列表（从 game_config 拿；运行时 available_seeds 走 worker）
+    let cfg = qq_farm_core::config::game_config::global();
+    let seeds: Vec<serde_json::Value> = cfg
+        .get_all_plants()
+        .into_iter()
+        .filter_map(|p| {
+            p.seed_id.map(|sid| {
+                serde_json::json!({
+                    "seed_id": sid,
+                    "name": p.name,
+                    "plant_id": p.id,
+                    "land_level_need": p.land_level_need,
+                    "seasons": p.seasons,
+                    "grow_phases": p.grow_phases,
+                })
+            })
+        })
+        .collect();
+    let _ = ctx;
+    ok(json!({ "ok": true, "seeds": seeds }))
 }
 
 async fn get_bag(

@@ -243,6 +243,10 @@ pub enum FriendOperation {
     Steal,
     /// 施肥
     Fertilize,
+    /// 一键务农（帮：除草 + 除虫 + 浇水）
+    Farming,
+    /// 捣乱（放虫 + 放草）
+    Bad,
 }
 
 impl FriendOperation {
@@ -255,6 +259,8 @@ impl FriendOperation {
             Self::Insecticide => "insecticide",
             Self::Steal => "steal",
             Self::Fertilize => "fertilize",
+            Self::Farming => "farming",
+            Self::Bad => "bad",
         }
     }
 
@@ -267,6 +273,8 @@ impl FriendOperation {
             "insecticide" => Some(Self::Insecticide),
             "steal" => Some(Self::Steal),
             "fertilize" => Some(Self::Fertilize),
+            "farming" => Some(Self::Farming),
+            "bad" => Some(Self::Bad),
             _ => None,
         }
     }
