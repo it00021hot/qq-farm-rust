@@ -162,7 +162,7 @@ impl DeviceInfo {
 // =====================================================================
 
 /// 设备预设（前端可选）
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DevicePreset {
     pub id: &'static str,
     pub name: &'static str,

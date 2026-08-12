@@ -37,7 +37,7 @@ pub struct UaClaimCheckResult {
 pub type ClaimResult = Result<ClaimSuccess, String>;
 
 /// 领取成功
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ClaimSuccess {
     pub card_code: String,
     pub days: i64,
@@ -58,6 +58,9 @@ struct CardClaimFile {
 
 static ENABLED: once_cell::sync::Lazy<parking_lot::RwLock<bool>> =
     once_cell::sync::Lazy::new(|| parking_lot::RwLock::new(false));
+
+static MESSAGE: once_cell::sync::Lazy<parking_lot::RwLock<String>> =
+    once_cell::sync::Lazy::new(|| parking_lot::RwLock::new(String::new()));
 
 static RECORDS: once_cell::sync::Lazy<parking_lot::RwLock<Vec<CardClaimRecord>>> =
     once_cell::sync::Lazy::new(|| parking_lot::RwLock::new(Vec::new()));
@@ -119,6 +122,34 @@ pub fn save_card_claim_records() {
 pub fn get_card_claim_status() -> bool {
     load_card_claim_records();
     *ENABLED.read()
+}
+
+/// 完整状态（含 message）
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CardClaimStatusDto {
+    pub enabled: bool,
+    pub message: String,
+}
+
+/// 获取完整状态
+#[must_use]
+pub fn get_status() -> CardClaimStatusDto {
+    load_card_claim_records();
+    CardClaimStatusDto {
+        enabled: *ENABLED.read(),
+        message: MESSAGE.read().clone(),
+    }
+}
+
+/// 设置卡密领取功能开关（带 message）
+pub fn set_status(enabled: bool, message: Option<String>) -> bool {
+    load_card_claim_records();
+    *ENABLED.write() = enabled;
+    if let Some(m) = message {
+        *MESSAGE.write() = m;
+    }
+    save_card_claim_records();
+    enabled
 }
 
 /// 设置卡密领取功能开关

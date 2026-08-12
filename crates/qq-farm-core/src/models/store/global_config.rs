@@ -258,6 +258,12 @@ pub fn get_system_config() -> Option<SystemConfig> {
 }
 
 /// 设置系统配置
+/// 重置系统配置（清空）
+pub fn reset_system_config() {
+    STATE.write().system_config = None;
+    let _ = save_global_config();
+}
+
 pub fn set_system_config(cfg: SystemConfig) {
     STATE.write().system_config = Some(cfg);
     let _ = save_global_config();

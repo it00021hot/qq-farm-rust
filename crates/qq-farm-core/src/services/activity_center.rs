@@ -317,6 +317,18 @@ impl ActivityCenterService {
     }
 
     /// 拉取赛季并归一化
+    /// 获取活动中心完整快照（聚合 season + star sand + solar terms）
+    pub async fn get_activity_center_snapshot(&self) -> Result<serde_json::Value> {
+        let season = self.get_current_season_event().await.ok();
+        let star_sand = self.get_current_star_sand_shop(None).await.ok();
+        let solar_terms = self.get_current_solar_terms().await.ok();
+        Ok(serde_json::json!({
+            "season": season,
+            "starSand": star_sand,
+            "solarTerms": solar_terms,
+        }))
+    }
+
     pub async fn get_current_season_event(&self) -> Result<SeasonDto> {
         let reply = self.query_season().await?;
         normalize_season(&reply).ok_or_else(|| ActivityError {

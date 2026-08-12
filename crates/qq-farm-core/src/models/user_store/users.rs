@@ -286,6 +286,32 @@ pub fn register_user(username: &str, password: &str, card_code: &str) -> Registe
         return Err("用户名已存在".to_string());
     }
 
+    create_user_internal(username, password, "user", card_code)
+}
+
+/// 管理员创建用户（指定 role）
+pub fn create_user_with_role(
+    username: &str,
+    password: &str,
+    role: &str,
+    card_code: &str,
+) -> RegisterResult {
+    load_users();
+    load_cards();
+
+    if USERS.read().iter().any(|u| u.username == username) {
+        return Err("用户名已存在".to_string());
+    }
+    create_user_internal(username, password, role, card_code)
+}
+
+fn create_user_internal(
+    username: &str,
+    password: &str,
+    role: &str,
+    card_code: &str,
+) -> RegisterResult {
+
     let pw = auth::validate_password_strength(password);
     if !pw.valid {
         return Err(pw.errors.join("；"));
@@ -484,6 +510,9 @@ pub struct EditUpdates {
     pub account_limit: Option<i64>,
     pub is_permanent: bool,
     pub expires_at: Option<Option<i64>>,
+    pub role: Option<String>,
+    pub enabled: Option<bool>,
+    pub card_code: Option<String>,
 }
 
 /// 编辑结果

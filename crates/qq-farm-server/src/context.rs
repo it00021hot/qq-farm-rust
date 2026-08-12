@@ -42,6 +42,8 @@ pub enum ApiError {
     BadRequest(String),
     #[error("unauthorized: {0}")]
     Unauthorized(String),
+    #[error("not implemented")]
+    NotImplemented,
     #[error("internal: {0}")]
     Internal(String),
 }
@@ -54,6 +56,7 @@ impl axum::response::IntoResponse for ApiError {
             Self::NotFound(m) => (StatusCode::NOT_FOUND, m.as_str()),
             Self::BadRequest(m) => (StatusCode::BAD_REQUEST, m.as_str()),
             Self::Unauthorized(m) => (StatusCode::UNAUTHORIZED, m.as_str()),
+            Self::NotImplemented => (StatusCode::NOT_IMPLEMENTED, "not implemented"),
             Self::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, m.as_str()),
         };
         (
