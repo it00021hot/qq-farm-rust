@@ -257,6 +257,19 @@ impl FriendOperation {
             Self::Fertilize => "fertilize",
         }
     }
+
+    /// 从字符串解析
+    #[must_use]
+    pub fn from_str_opt(s: &str) -> Option<Self> {
+        match s {
+            "water" => Some(Self::Water),
+            "weed" => Some(Self::Weed),
+            "insecticide" => Some(Self::Insecticide),
+            "steal" => Some(Self::Steal),
+            "fertilize" => Some(Self::Fertilize),
+            _ => None,
+        }
+    }
 }
 
 /// 好友限额（每日操作上限）

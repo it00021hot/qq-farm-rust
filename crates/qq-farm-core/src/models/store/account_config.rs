@@ -244,6 +244,45 @@ pub fn set_known_friend_gids(account_id: &str, list: Vec<i64>) -> Vec<i64> {
     normalized
 }
 
+/// 添加单个已知 GID
+pub fn add_known_friend_gid(account_id: &str, gid: i64) -> Vec<i64> {
+    if gid <= 0 {
+        return get_known_friend_gids(Some(account_id));
+    }
+    let current = get_known_friend_gids(Some(account_id));
+    if current.contains(&gid) {
+        return current;
+    }
+    let mut next = current;
+    next.push(gid);
+    set_known_friend_gids(account_id, next)
+}
+
+/// 移除单个已知 GID
+pub fn remove_known_friend_gid(account_id: &str, gid: i64) -> Vec<i64> {
+    let current = get_known_friend_gids(Some(account_id));
+    let next: Vec<i64> = current.into_iter().filter(|x| *x != gid).collect();
+    set_known_friend_gids(account_id, next)
+}
+
+/// 批量添加已知 GID
+pub fn add_known_friend_gids(account_id: &str, gids: &[i64]) -> Vec<i64> {
+    let mut current = get_known_friend_gids(Some(account_id));
+    for gid in gids {
+        if *gid > 0 && !current.contains(gid) {
+            current.push(*gid);
+        }
+    }
+    set_known_friend_gids(account_id, current)
+}
+
+/// 批量移除已知 GID
+pub fn remove_known_friend_gids(account_id: &str, gids: &[i64]) -> Vec<i64> {
+    let current = get_known_friend_gids(Some(account_id));
+    let next: Vec<i64> = current.into_iter().filter(|x| !gids.contains(x)).collect();
+    set_known_friend_gids(account_id, next)
+}
+
 /// 已知 GID 同步冷却
 #[must_use]
 pub fn get_known_friend_gid_sync_cooldown_sec(account_id: Option<&str>) -> i64 {
@@ -315,6 +354,22 @@ pub fn add_friend_to_blacklist(account_id: &str, gid: i64) -> bool {
     new_list.push(gid);
     set_friend_blacklist(account_id, new_list);
     true
+}
+
+/// 切换黑名单（在/不在）
+pub fn toggle_friend_blacklist(account_id: &str, gid: i64) -> Vec<i64> {
+    if gid <= 0 {
+        return get_friend_blacklist(Some(account_id));
+    }
+    let current = get_friend_blacklist(Some(account_id));
+    let next: Vec<i64> = if current.contains(&gid) {
+        current.into_iter().filter(|x| *x != gid).collect()
+    } else {
+        let mut v = current;
+        v.push(gid);
+        v
+    };
+    set_friend_blacklist(account_id, next)
 }
 
 /// 植物黑名单

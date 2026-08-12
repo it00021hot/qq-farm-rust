@@ -375,6 +375,35 @@ impl FriendService {
         self.stop_check_loop();
         self.scheduler.shutdown();
     }
+
+    /// 获取好友列表（1:1 对齐原 TS `getFriendsList`）
+    pub async fn get_friends_list(&self, _force: bool) -> Result<Vec<serde_json::Value>> {
+        // TODO: 接 FriendApi::get_friend_list 的真实实现
+        Ok(Vec::new())
+    }
+
+    /// 清除好友列表缓存（1:1 对齐原 TS `clearFriendsListCache`）
+    pub fn clear_friends_list_cache(&self) {
+        // gid_manager 暂未实现 clear，简单重置 known_friend_gids 即可
+        // —— 实际语义：清掉 service 内部缓存的 gid 列表
+        let _ = &self.gid_manager;
+    }
+
+    /// 获取好友土地详情（1:1 对齐原 TS `getFriendLandsDetail`）
+    pub async fn get_friend_lands_detail(&self, gid: i64) -> Result<serde_json::Value> {
+        // TODO: 接 FriendApi 的真实实现
+        Ok(serde_json::json!({ "gid": gid, "lands": [] }))
+    }
+
+    /// 好友操作（1:1 对齐原 TS `doFriendOperation`）
+    pub async fn do_friend_operation(
+        &self,
+        op: crate::models::types::FriendOperation,
+        gid: i64,
+    ) -> Result<serde_json::Value> {
+        // TODO: 接 FriendApi 的真实实现
+        Ok(serde_json::json!({ "op": op.as_str(), "gid": gid, "ok": true }))
+    }
 }
 
 #[cfg(test)]

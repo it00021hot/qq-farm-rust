@@ -6,7 +6,10 @@
 //!
 //! - `farm` — 农场 / 自动化 / 化肥 / 土地 / 种子 / 背包 / 每日礼包 / config（35 路由）
 
+pub mod account;
+pub mod auth;
 pub mod farm;
+pub mod friend;
 pub mod placeholder;
 
 use std::sync::Arc;
@@ -17,5 +20,9 @@ use crate::context::AdminContext;
 
 /// 构造全部 admin 路由
 pub fn build() -> Router<Arc<AdminContext>> {
-    Router::new().merge(farm::router())
+    Router::new()
+        .merge(farm::router())
+        .merge(friend::router())
+        .merge(account::router())
+        .merge(auth::router())
 }

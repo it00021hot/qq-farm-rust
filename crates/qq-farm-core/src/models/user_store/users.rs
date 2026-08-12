@@ -170,7 +170,7 @@ pub fn init_default_admin() {
 // =====================================================================
 
 /// 验证结果
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ValidationResult {
     pub username: Option<String>,
     pub role: Option<String>,
@@ -260,7 +260,7 @@ pub fn validate_user(username: &str, password: &str, ip: &str) -> ValidationResu
 }
 
 /// 用户摘要
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UserSummary {
     pub username: String,
     pub role: String,
@@ -342,11 +342,12 @@ pub fn register_user(username: &str, password: &str, card_code: &str) -> Registe
 }
 
 /// 续费结果
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RenewResult {
     pub card: Option<UserCard>,
     pub account_limit: Option<i64>,
     pub card_type: Option<String>,
+    pub added_sec: Option<i64>,
 }
 
 /// 续费
@@ -412,6 +413,7 @@ pub fn renew_user(username: &str, card_code: &str) -> Result<RenewResult, String
 
     let updated_card = user.card.clone();
     let updated_limit = user.account_limit;
+    let added_sec = card.days * 86_400; // days → sec
     drop(users);
     save_users();
     save_cards();
@@ -420,6 +422,7 @@ pub fn renew_user(username: &str, card_code: &str) -> Result<RenewResult, String
         card: updated_card,
         account_limit: Some(updated_limit),
         card_type: Some(card_type),
+        added_sec: Some(added_sec),
     })
 }
 

@@ -63,7 +63,7 @@ impl ActionType {
 }
 
 /// 归一化后的互动记录
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NormalizedRecord {
     pub key: String,
     pub server_time_sec: i64,
