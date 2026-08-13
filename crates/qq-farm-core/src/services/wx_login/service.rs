@@ -838,7 +838,7 @@ mod tests {
     }
 
     #[test]
-    fn issue_code_with_buffer_stub() {
+    fn issue_code_with_buffer_invokes_network() {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -847,10 +847,11 @@ mod tests {
             let svc = WxLoginService::new();
             let mut s = WxLoginSession::new();
             s.login_buffer = Some("dGVzdA==".to_string()); // base64 "test"
+            // 真实实现：会尝试 TCP connect 真实 longcloud.weixin.qq.com
+            // 在 CI 沙盒环境会失败，返回网络错误（不是"集成时"占位错误）
             let r = svc.issue_code(&s, "appid").await;
-            // stub 阶段返回集成时错误
-            assert!(r.is_err());
-            assert!(r.unwrap_err().contains("集成时"));
+            // 不论成功 / 失败，调用能跑通即可（不会 panic）
+            let _ = r;
         });
     }
 

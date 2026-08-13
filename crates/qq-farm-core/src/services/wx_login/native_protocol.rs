@@ -19,6 +19,7 @@
 //! - 真实 HTTPDNS 解析（`targets`）同理：返回 hardcoded fallback。
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes128Gcm, Aes256Gcm, Nonce};
@@ -870,24 +871,934 @@ pub struct Target {
 }
 
 // =====================================================================
-// 主入口（stub）
+// 派生 keys
+// =====================================================================
+
+/// 派生 handshake keys（ck / sk / ci / si 各 16/16/12/12 字节）
+#[must_use]
+pub fn derive_handshake_keys(secret: &[u8], label: &str, hash: &[u8], size: usize) -> HandshakeKeys {
+    let z = expand(secret, label, hash, size);
+    let (ck, sk) = z.split_at(16);
+    let (sk_ci, si) = sk.split_at(16);
+    let (ci, si) = si.split_at(12);
+    HandshakeKeys {
+        ck: ck.to_vec(),
+        sk: sk_ci.to_vec(),
+        ci: ci.to_vec(),
+        si: si.to_vec(),
+    }
+}
+
+/// 派生 handshake keys（固定 56 字节：ck16 + sk16 + ci12 + si12）
+#[must_use]
+pub fn handshake_keys(secret: &[u8], label: &str, hash: &[u8]) -> HandshakeKeys {
+    derive_handshake_keys(secret, label, hash, 56)
+}
+
+/// 派生 one-way keys（28 字节：key16 + iv12）
+#[must_use]
+pub fn one_way_keys(secret: &[u8], label: &str, hash: &[u8]) -> OneWayKeys {
+    let z = expand(secret, label, hash, 28);
+    let (key, iv) = z.split_at(16);
+    OneWayKeys {
+        key: key.to_vec(),
+        iv: iv.to_vec(),
+    }
+}
+
+/// Handshake keys
+#[derive(Debug, Clone)]
+pub struct HandshakeKeys {
+    pub ck: Vec<u8>,
+    pub sk: Vec<u8>,
+    pub ci: Vec<u8>,
+    pub si: Vec<u8>,
+}
+
+/// One-way keys（用于 0-RTT early data）
+#[derive(Debug, Clone)]
+pub struct OneWayKeys {
+    pub key: Vec<u8>,
+    pub iv: Vec<u8>,
+}
+
+// =====================================================================
+// ClientHello / PSK ClientHello
+// =====================================================================
+
+/// 构造标准 ClientHello（双 ECDH 密钥对 + key_share）
+#[must_use]
+pub fn client_hello(pub1: &[u8], pub2: &[u8]) -> Vec<u8> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let mut b = vec![0x03, 0xF1, 0x01, 0xC0, 0x2B];
+    b.extend(random_bytes(32));
+    b.extend((now as u32).to_be_bytes());
+    b.extend(0u32.to_be_bytes()); // legacy_session_id (4 bytes placeholder)
+    let _ = b.split_off(b.len() - 4); // 移除多余的 4 字节 placeholder
+
+    // 重新组装正确格式
+    let mut b = vec![0x03, 0xF1, 0x01, 0xC0, 0x2B];
+    b.extend(random_bytes(32));
+    b.extend((now as u32).to_be_bytes());
+    // legacy_session_id 长度 0
+    b.push(0);
+
+    let offers = [pub1, pub2];
+    for (i, p) in offers.iter().enumerate() {
+        let mut x = vec![0u8; 6];
+        x[0..4].copy_from_slice(&(if i == 0 { 1u32 } else { 2u32 }).to_be_bytes());
+        x[4..6].copy_from_slice(&(65u16).to_be_bytes());
+        let z = [x.as_slice(), *p].concat();
+        let n = (z.len() as u32).to_be_bytes();
+        b.extend(n);
+        b.extend(z);
+    }
+
+    // 简易 key_share extension（Magic + length + 内容）
+    let ks = b[6..].to_vec();
+    let mut ext = vec![1u8]; // magic
+    ext.extend((ks.len() as u32).to_be_bytes());
+    ext.extend(ks);
+
+    let mut n2 = vec![0u8; 4];
+    n2.copy_from_slice(&(ext.len() as u32).to_be_bytes());
+    b.extend(n2);
+    b.extend(ext);
+
+    hs(1, &b) // type=1 ClientHello
+}
+
+/// 构造 PSK ClientHello（用于 short link 0-RTT）
+#[must_use]
+pub fn psk_client_hello(ticket: &[u8], timestamp: u32) -> Vec<u8> {
+    let mut ticket_ext = vec![0x00, 0x0F, 0x01];
+    ticket_ext.extend((ticket.len() as u32).to_be_bytes());
+    ticket_ext.extend(ticket);
+
+    let mut ext = vec![0x01];
+    ext.extend((ticket_ext.len() as u32).to_be_bytes());
+    ext.extend(ticket_ext);
+
+    let mut body = vec![0x03, 0xF1, 0x01, 0x00, 0xA8];
+    body.extend(random_bytes(32));
+    body.extend(timestamp.to_be_bytes());
+    body.extend((ext.len() as u32).to_be_bytes());
+    body.extend(ext);
+
+    hs(0x01, &body)
+}
+
+// =====================================================================
+// js_plain (ManualAuthRequest payload)
+// =====================================================================
+
+/// 构造 js-login 客户端 ManualAuth 请求 payload
+#[must_use]
+pub fn js_plain(uin: u64, app_id: &str, host: &[u8]) -> Vec<u8> {
+    // mac = random 6 bytes, byte[0] = (mac[0] | 2) & 0xFE
+    let mac = random_bytes(6);
+    let mut mac_mut = mac.clone();
+    mac_mut[0] = (mac_mut[0] | 0x02) & 0xFE;
+    let dev_str = mac_mut
+        .iter()
+        .map(|b| format!("{:02X}", b))
+        .collect::<Vec<_>>()
+        .join("-");
+
+    let uin32 = uin & 0xFFFFFFFF;
+    let dev = dev_str.as_bytes().to_vec();
+
+    let info = |name: &str| -> Vec<u8> {
+        let mut v = pbl(1, b"sessionkey");
+        v.extend(pbv(2, uin32 as i64));
+        v.extend(pbl(3, &dev));
+        v.extend(pbv(4, 1661404927));
+        v.extend(pbl(5, name.as_bytes()));
+        v.extend(pbv(6, 0));
+        v
+    };
+
+    let mut req = pbl(1, &info("UnifiedPCWindows"));
+    req.extend(pbl(2, app_id.as_bytes()));
+    req.extend(pbv(4, 1));
+    req.extend(pbl(5, &[]));
+    req.extend(pbl(6, &[]));
+    req.extend(pbv(7, 1));
+
+    let mut outer = pbl(1, &info("Windows"));
+    outer.extend(pbl(2, b"/cgi-bin/mmbiz-bin/js-login"));
+    outer.extend(pbl(3, host));
+    outer.extend(pbv(4, 5));
+    outer.extend(pbl(5, &req));
+    outer.extend(pbl(6, app_id.as_bytes()));
+    outer.extend(pbv(7, 1029));
+    outer.extend(pbv(8, 1610627409));
+    outer.extend(pbl(9, b"WindowsxWebPlugin"));
+    outer.extend(pbv(10, 573651281));
+    outer
+}
+
+// =====================================================================
+// parse_manual
+// =====================================================================
+
+/// 解析 ShortLink 返回的 ManualAuthResponse
+#[must_use]
+pub fn parse_manual(body: &[u8], temp: &HybridTemp) -> Option<ParsedManualResponse> {
+    // 找到 HybridEcdhResponse 标记
+    let marker = [0x08u8, 0x9F, 0x03, 0x12, 0x41, 0x04];
+    let mut offset = 0;
+
+    // 尝试通过 read_wpkg 找到边界
+    if let Ok(off) = read_wpkg(body) {
+        if off < body.len() && body[off] == 0x0A {
+            offset = off;
+        }
+    }
+    if offset == 0 {
+        if let Some(pos) = body.windows(marker.len()).position(|w| w == marker) {
+            if pos >= 2 {
+                offset = pos - 2;
+            } else {
+                return None;
+            }
+        } else {
+            return None;
+        }
+    }
+
+    let hybrid_response = pbf(&body[offset..]);
+    let key_fields_bytes = match required_field(&hybrid_response, 1, "HybridEcdhResponse field 1") {
+        Ok(b) => b.to_vec(),
+        Err(_) => return None,
+    };
+    let key_fields = pbf(&key_fields_bytes);
+    let peer = match required_field(&key_fields, 2, "HybridEcdhResponse server public key") {
+        Ok(b) => b.to_vec(),
+        Err(_) => return None,
+    };
+    let ct = match required_field(&hybrid_response, 3, "HybridEcdhResponse ciphertext") {
+        Ok(b) => b.to_vec(),
+        Err(_) => return None,
+    };
+    let cred = hybrid_response
+        .get(&2)
+        .and_then(|v| v.as_varint())
+        .unwrap_or(1);
+
+    // compute shared secret from peer pub
+    let peer_pk = match p256::PublicKey::from_sec1_bytes(&peer) {
+        Ok(pk) => pk,
+        Err(_) => return None,
+    };
+    let shared = p256::ecdh::diffie_hellman(temp.key_pair.secret_key.to_nonzero_scalar(), peer_pk.as_affine());
+    let secret = sha256(shared.raw_secret_bytes().as_ref());
+
+    // aad = sha256(okm[24..] ++ comp ++ b'415' ++ peer ++ b'' + cred)
+    let mut aad_input = Vec::new();
+    aad_input.extend(&temp.okm[24..]);
+    aad_input.extend(&temp.comp);
+    aad_input.extend_from_slice(b"415");
+    aad_input.extend(&peer);
+    aad_input.push(cred as u8);
+    let aad = sha256(&aad_input);
+
+    let plain = match lz4(&unlayout(&secret[..24], &ct, &aad)) {
+        Ok(p) => p,
+        Err(_) => return None,
+    };
+    let manual = pbf(&plain);
+    let body_fields_bytes = match required_field(&manual, 3, "ManualAuthResponse field 3") {
+        Ok(b) => b.to_vec(),
+        Err(_) => return None,
+    };
+    let body_fields = pbf(&body_fields_bytes);
+    if body_fields.get(&2).and_then(|v| v.as_bytes()).is_none() {
+        return None;
+    }
+    let session = body_fields.get(&2).and_then(|v| v.as_bytes()).map(|b| pbf(b));
+    let identity = body_fields.get(&3).and_then(|v| v.as_bytes()).map(|b| pbf(b));
+    let send_key = session
+        .as_ref()
+        .and_then(|s| s.get(&1).and_then(|v| v.as_bytes()).map(<[u8]>::to_vec));
+    let recv_key = session
+        .as_ref()
+        .and_then(|s| s.get(&2).and_then(|v| v.as_bytes()).map(<[u8]>::to_vec));
+    let f9 = session
+        .as_ref()
+        .and_then(|s| s.get(&9).and_then(|v| v.as_bytes()).map(<[u8]>::to_vec))
+        .unwrap_or_default();
+    let uin = identity
+        .as_ref()
+        .and_then(|s| s.get(&1).and_then(|v| v.as_varint()))
+        .unwrap_or(0);
+    Some(ParsedManualResponse {
+        send_key: send_key?,
+        recv_key: recv_key?,
+        f9,
+        uin,
+    })
+}
+
+/// ManualAuthResponse 解析结果
+#[derive(Debug, Clone)]
+pub struct ParsedManualResponse {
+    pub send_key: Vec<u8>,
+    pub recv_key: Vec<u8>,
+    pub f9: Vec<u8>,
+    pub uin: u64,
+}
+
+// =====================================================================
+// 异步 TCP socket
+// =====================================================================
+
+/// 异步 TCP 连接到 longcloud/shortcloud
+///
+/// 1:1 对齐原 TS `socket(host, port, timeout)`：
+/// - 读：累积 chunk，按 record 协议 (type 1B + REC 2B + len 2B + body)
+/// - 写：tokio write_all
+pub async fn connect_socket(
+    ip: &str,
+    port: u16,
+    timeout_ms: u64,
+) -> Result<MmtlsSocket, String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+    use tokio::time::{timeout, Duration};
+
+    let stream = timeout(Duration::from_millis(timeout_ms), TcpStream::connect((ip, port)))
+        .await
+        .map_err(|_| format!("socket connect timeout: {ip}:{port}"))?
+        .map_err(|e| format!("socket connect {ip}:{port}: {e}"))?;
+    stream
+        .set_nodelay(true)
+        .map_err(|e| format!("set_nodelay: {e}"))?;
+
+    let (read_half, mut write_half) = stream.into_split();
+    let reader = tokio::io::BufReader::new(read_half);
+
+    Ok(MmtlsSocket {
+        reader: Arc::new(tokio::sync::Mutex::new(reader)),
+        writer: Arc::new(tokio::sync::Mutex::new(write_half)),
+        buffer: Arc::new(parking_lot::Mutex::new(Vec::new())),
+        timeout_ms,
+    })
+}
+
+/// MMTLS TCP socket 抽象
+#[derive(Clone)]
+pub struct MmtlsSocket {
+    reader: Arc<tokio::sync::Mutex<tokio::io::BufReader<tokio::net::tcp::OwnedReadHalf>>>,
+    writer: Arc<tokio::sync::Mutex<tokio::net::tcp::OwnedWriteHalf>>,
+    buffer: Arc<parking_lot::Mutex<Vec<u8>>>,
+    timeout_ms: u64,
+}
+
+impl MmtlsSocket {
+    /// 发送
+    pub async fn send(&self, data: &[u8]) -> Result<(), String> {
+        use tokio::io::AsyncWriteExt;
+        let mut w = self.writer.lock().await;
+        w.write_all(data)
+            .await
+            .map_err(|e| format!("socket write: {e}"))?;
+        w.flush().await.map_err(|e| format!("socket flush: {e}"))?;
+        Ok(())
+    }
+
+    /// 读取下一个 record（type 1B + REC 2B + len 2B + body）
+    pub async fn take(&self) -> Result<RecordFrame, String> {
+        use tokio::io::AsyncReadExt;
+        use tokio::time::{timeout, Duration};
+        loop {
+            // 先看 buffer 里有没有完整 record
+            {
+                let buf = self.buffer.lock();
+                if buf.len() >= 5 {
+                    let len = u16::from_be_bytes([buf[3], buf[4]]) as usize;
+                    if buf.len() >= 5 + len {
+                        let mut buf = buf.clone();
+                        drop(buf);
+                        let mut buf = self.buffer.lock();
+                        let out = RecordFrame {
+                            rec_type: buf[0],
+                            body: buf[5..5 + len].to_vec(),
+                        };
+                        buf.drain(..5 + len);
+                        return Ok(out);
+                    }
+                }
+            }
+            // 否则读
+            let mut tmp = [0u8; 4096];
+            let n = {
+                let mut reader = self.reader.lock().await;
+                timeout(
+                    Duration::from_millis(self.timeout_ms),
+                    reader.read(&mut tmp),
+                )
+                .await
+                .map_err(|_| "socket read timeout".to_string())?
+                .map_err(|e| format!("socket read: {e}"))?
+            };
+            if n == 0 {
+                return Err("socket closed".to_string());
+            }
+            self.buffer.lock().extend_from_slice(&tmp[..n]);
+        }
+    }
+
+    /// 一次性读所有数据（用于 ShortLink HTTP 响应）
+    pub async fn read_all(&self, max_bytes: usize) -> Result<Vec<u8>, String> {
+        use tokio::io::AsyncReadExt;
+        use tokio::time::{timeout, Duration};
+        let mut out = Vec::new();
+        let mut tmp = [0u8; 4096];
+        let _ = max_bytes;
+        loop {
+            let n = {
+                let mut reader = self.reader.lock().await;
+                match timeout(
+                    Duration::from_millis(self.timeout_ms),
+                    reader.read(&mut tmp),
+                )
+                .await
+                {
+                    Ok(Ok(0)) => break,
+                    Ok(Ok(n)) => n,
+                    Ok(Err(e)) => return Err(format!("socket read_all: {e}")),
+                    Err(_) => break,
+                }
+            };
+            out.extend_from_slice(&tmp[..n]);
+        }
+        Ok(out)
+    }
+}
+
+// =====================================================================
+// 主入口（真实实现）
 // =====================================================================
 
 /// 真实微信登录拿 code（TCP + MMTLS 完整握手 + ShortLink）
 ///
-/// 真实实现需要：
-/// 1. `targets("long")` 拿 long IP，6 次重试
+/// 完整流程：
+/// 1. HTTPDNS 拿 long IP（6 次重试）
 /// 2. ECDH 握手 + ServerHello + 加密 Finished 消息
 /// 3. `manual_request` + `hybrid` 构造 auth 包
-/// 4. `targets("short")` 拿 short IP，构造 early data + envelope
+/// 4. HTTPDNS 拿 short IP，构造 early data + envelope
 /// 5. 解析 ShortLink HTTP 响应，解密 AppData 拿 code
 ///
-/// **本阶段只完成协议层（编码原语），真实 TCP 收发留到集成时**。
-///
 /// # Errors
-/// - 当前实现返回 `unimplemented!()` 占位错误
-pub async fn get_native_wx_login_code(_login_buffer: &str, _app_id: &str) -> Result<String, String> {
-    Err("get_native_wx_login_code 真实网络收发留到集成时（仅协议层已 1:1 翻译）".to_string())
+/// - 网络 / 握手 / 解密失败
+pub async fn get_native_wx_login_code(login_buffer: &str, app_id: &str) -> Result<String, String> {
+    // 1. 构造 manual request + device + host
+    let app_bytes = random_bytes(32);
+    let manual = manual_request(login_buffer, &app_bytes)?;
+    let device = manual.device.clone();
+    let host = manual.host.clone();
+
+    // 2. 尝试 6 次 long link
+    let long_targets = fetch_long_targets().await;
+    let long_targets = if long_targets.is_empty() {
+        targets("long")
+    } else {
+        long_targets
+    };
+
+    let mut session: Option<Session> = None;
+    let mut failures: Vec<String> = Vec::new();
+
+    for t in long_targets.iter().take(6) {
+        match long_link_handshake(&manual.req, &device, &host).await {
+            Ok(s) => {
+                session = Some(s);
+                break;
+            }
+            Err(e) => failures.push(format!("{}:{} {}", t.ip, t.port, e)),
+        }
+    }
+    let session = session.ok_or_else(|| {
+        format!(
+            "Unable to establish WeChat protocol session: {}",
+            failures.join("; ")
+        )
+    })?;
+
+    // 3. 构造 envelope + 走 short link
+    let env = envelope(&session, &js_plain(session.uin, app_id, &session.host_app_id));
+
+    // 4. 尝试 short targets
+    let short_targets = fetch_short_targets().await;
+    let short_targets = if short_targets.is_empty() {
+        targets("short")
+    } else {
+        short_targets
+    };
+
+    for t in short_targets.iter() {
+        match short_link_post(t, &env, &session).await {
+            Ok(code) if !code.is_empty() => return Ok(code),
+            Ok(_) => continue,
+            Err(_) => continue,
+        }
+    }
+    Err("ShortLink 全部失败".to_string())
+}
+
+/// Long link 完整握手 + ManualAuth + Session 建立
+async fn long_link_handshake(
+    req: &[u8],
+    device: &[u8],
+    host: &[u8],
+) -> Result<Session, String> {
+    // a, b = ECDH keypairs
+    let a = EcdhKeyPair::generate().map_err(|e| format!("ecdh a: {e}"))?;
+    let b = EcdhKeyPair::generate().map_err(|e| format!("ecdh b: {e}"))?;
+    let hello = client_hello(&a.public_bytes, &b.public_bytes);
+
+    let target = targets("long")
+        .into_iter()
+        .next()
+        .ok_or_else(|| "no long target".to_string())?;
+    let sock = connect_socket(&target.ip, target.port, 30_000).await?;
+    sock.send(&rec(0x16, &hello)).await?;
+
+    // 读 ServerHello
+    let sh = sock.take().await?;
+    let server_hello = split_hs(&sh.body)?;
+    let body = server_hello.body;
+    if body.len() < 40 {
+        return Err("ServerHello body too short".to_string());
+    }
+    let ext_length = u32::from_be_bytes([body[36], body[37], body[38], body[39]]) as usize;
+    if body.len() < 40 + ext_length {
+        return Err("ServerHello ext truncated".to_string());
+    }
+    let ext = &body[40..40 + ext_length];
+    if ext.is_empty() || ext[0] != 0x01 {
+        return Err("invalid ServerHello key-share extension".to_string());
+    }
+    // peer key 在 ext[13..78] (65 bytes)
+    if ext.len() < 78 {
+        return Err("ServerHello ext too short for key".to_string());
+    }
+    let shared_a = a.shared_secret(&ext[13..78])?;
+    let secret = sha256(&shared_a);
+
+    // transcript = hello ++ server_hello
+    let mut transcript1 = Vec::new();
+    transcript1.extend(&hello);
+    transcript1.extend(&sh.body);
+    let hs_keys = handshake_keys(&secret, "handshake key expansion", &sha256(&transcript1));
+
+    let mut cert_hash: Option<Vec<u8>> = None;
+    let mut ticket_entries: Vec<Vec<u8>> = Vec::new();
+    let mut rx_seq: u64 = 1; // ServerHello 收下，sequence 1
+    let mut transcript = transcript1.clone();
+    let mut found_finished = false;
+
+    for _ in 0..32 {
+        let r = sock.take().await?;
+        let plain = gcm(&hs_keys.sk, &hs_keys.si, rx_seq, r.rec_type, &r.body, true);
+        rx_seq += 1;
+        let x = split_hs(&plain)?;
+        if x.hs_type != 0x14 {
+            transcript.extend(&plain);
+        }
+        if x.hs_type == 0x0F {
+            cert_hash = Some(sha256(&transcript).to_vec());
+        }
+        if x.hs_type == 0x04 {
+            // NewSessionTicket: count (1B) + (len 4B + entry) *
+            let mut o = 1;
+            if x.body.is_empty() {
+                continue;
+            }
+            let n = x.body[0] as usize;
+            o = 1;
+            for _ in 0..n {
+                if o + 4 > x.body.len() {
+                    break;
+                }
+                let len = u32::from_be_bytes([x.body[o], x.body[o + 1], x.body[o + 2], x.body[o + 3]])
+                    as usize;
+                o += 4;
+                if o + len > x.body.len() {
+                    break;
+                }
+                ticket_entries.push(x.body[o..o + len].to_vec());
+                o += len;
+            }
+        }
+        if x.hs_type == 0x14 {
+            // Finished
+            let hash = sha256(&transcript);
+            let verify = hmac_sha256(
+                &expand(&secret, "server finished", &[], 32),
+                &hash,
+            );
+            if x.body.len() < 2 + verify.len() {
+                return Err("ServerFinished too short".to_string());
+            }
+            if x.body[2..2 + verify.len()] != verify.to_vec() {
+                return Err("MMTLS server verification failed".to_string());
+            }
+            // appKeys
+            let app_keys = handshake_keys(
+                &expand(&secret, "expanded secret", &hash, 32),
+                "application data key expansion",
+                &hash,
+            );
+            // 发送 client Finished
+            let finish = hs(
+                0x14,
+                &[
+                    vec![0, 32],
+                    hmac_sha256(
+                        &expand(&secret, "client finished", &[], 32),
+                        &hash,
+                    )
+                    .to_vec(),
+                ]
+                .concat(),
+            );
+            sock.send(&rec(
+                0x16,
+                &gcm(&hs_keys.ck, &hs_keys.ci, 1, 0x16, &finish, false),
+            ))
+            .await?;
+
+            // 构造 hybrid auth
+            let h = hybrid(req)?;
+            let mut header = wpkg_ints(&[
+                (1, 1),
+                (2, 0),
+                (3, 0),
+                (4, 0),
+                (5, 524545),
+                (6, 11),
+                (7, 0),
+                (8, 0),
+                (9, 0),
+                (10, 1),
+                (11, 0),
+                (12, 0),
+                (13, 0),
+                (17, 0),
+                (18, 1),
+                (20, 1504),
+                (21, 0),
+                (22, 0),
+                (23, 0),
+                (25, 17),
+                (26, 4),
+                (28, 1),
+                (29, 1),
+                (30, 0),
+            ]);
+            header.extend(wpkg_bytes(&[(14, &[]), (24, device), (27, &[])]));
+            let body = [header, h.wire].concat();
+            sock.send(&rec(
+                0x17,
+                &gcm(
+                    &app_keys.ck,
+                    &app_keys.ci,
+                    2,
+                    0x17,
+                    &short(0x0D7D, 0, &body),
+                    false,
+                ),
+            ))
+            .await?;
+
+            // 读 AppData
+            let ar = sock.take().await?;
+            let auth = gcm(&app_keys.sk, &app_keys.si, rx_seq, ar.rec_type, &ar.body, true);
+            rx_seq += 1;
+            let (_, auth_body) = parse_short(&auth)?;
+            let s = parse_manual(&auth_body, &h.temp).ok_or_else(|| "parse_manual failed".to_string())?;
+
+            // 取第一个 type=1 的 ticket
+            let tickets: Vec<(Vec<u8>, Vec<u8>)> = if let Some(ch) = &cert_hash {
+                ticket_entries
+                    .iter()
+                    .filter(|t| t.first().copied() == Some(1u8))
+                    .map(|t| (expand(&secret, "PSK_ACCESS", ch, 32), t.clone()))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            if s.send_key.is_empty()
+                || s.recv_key.is_empty()
+                || s.uin == 0
+                || tickets.is_empty()
+            {
+                return Err("ManualAuth did not return a usable session".to_string());
+            }
+            let (psk, ticket) = tickets.into_iter().next().unwrap();
+            found_finished = true;
+            return Ok(Session {
+                send_key: s.send_key,
+                recv_key: s.recv_key,
+                f9: s.f9,
+                uin: s.uin,
+                device_id: device.to_vec(),
+                host_app_id: host.to_vec(),
+                psk,
+                ticket,
+            });
+        }
+    }
+    if !found_finished {
+        return Err("MMTLS handshake not finished".to_string());
+    }
+    Err("unreachable".to_string())
+}
+
+/// ShortLink 早期数据 POST（HTTP/1.0 + Upgrade: mmtls + 0-RTT）
+async fn short_link_post(
+    target: &Target,
+    env: &[u8],
+    session: &Session,
+) -> Result<String, String> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let ts_hex = format!("{:08X}", ts);
+    let ticket = &session.ticket;
+    let ts_u32 = ts as u32;
+    let hello = psk_client_hello(ticket, ts_u32);
+    let ek = one_way_keys(
+        &session.psk,
+        "early data key expansion",
+        &sha256(&hello),
+    );
+
+    // type8 = 22 bytes (含 ts)
+    let mut type8 = vec![0u8; 22];
+    type8[0..4].copy_from_slice(&0u32.to_be_bytes());
+    type8[4..8].copy_from_slice(&16u32.to_be_bytes());
+    type8[8] = 8;
+    type8[9..13].copy_from_slice(&0u32.to_be_bytes());
+    type8[13] = 11;
+    type8[14..18].copy_from_slice(&1u32.to_be_bytes());
+    type8[18..22].copy_from_slice(&0u32.to_be_bytes());
+    type8[16..20].copy_from_slice(&ts.to_be_bytes()); // ts 覆盖占位
+
+    let body = [
+        rec(0x19, &hello),
+        rec(0x19, &gcm(&ek.key, &ek.iv, 1, 0x19, &type8, false)),
+        rec(0x17, &gcm(&ek.key, &ek.iv, 2, 0x17, env, false)),
+        rec(0x15, &gcm(&ek.key, &ek.iv, 3, 0x15, &[0, 0, 0, 3, 0, 1, 1], false)),
+    ]
+    .concat();
+
+    let request_head = format!(
+        "POST /mmtls/{ts_hex} HTTP/1.0\r\n\
+         Accept: */*\r\n\
+         Cache-Control: no-cache\r\n\
+         Connection: close\r\n\
+         Content-Length: {len}\r\n\
+         Content-Type: application/octet-stream\r\n\
+         Host: shortcloud.weixin.com\r\n\
+         Upgrade: mmtls\r\n\
+         User-Agent: MicroMessenger Client\r\n\
+         X-Online-Host: shortcloud.weixin.com\r\n\r\n",
+        ts_hex = ts_hex,
+        len = body.len(),
+    );
+
+    let sock = connect_socket(&target.ip, target.port, 8_000).await?;
+    sock.send(&[request_head.as_bytes(), &body].concat()).await?;
+    let raw = sock.read_all(65536).await?;
+
+    // 解析 HTTP 响应
+    let header_end = raw
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .ok_or_else(|| "ShortLink returned an invalid HTTP response".to_string())?;
+    let payload = &raw[header_end + 4..];
+    let recs = records(payload);
+
+    let server_hello = recs
+        .iter()
+        .find(|r| r.rec_type == 0x16)
+        .ok_or_else(|| "missing ServerHello".to_string())?
+        .body
+        .clone();
+    let app_data = recs
+        .iter()
+        .find(|r| r.rec_type == 0x17)
+        .ok_or_else(|| "missing AppData".to_string())?
+        .body
+        .clone();
+
+    let transcripts = [
+        [hello.as_slice(), server_hello.as_slice()].concat(),
+        [hello.as_slice(), type8.as_slice(), server_hello.as_slice()].concat(),
+        [hello.as_slice(), server_hello.as_slice(), type8.as_slice()].concat(),
+    ];
+
+    for t in &transcripts {
+        let hk = one_way_keys(
+            &session.psk,
+            "handshake key expansion",
+            &sha256(t),
+        );
+        for seq in [2u64, 1, 3] {
+            let decrypted = gcm(&hk.key, &hk.iv, seq, 0x17, &app_data, true);
+            if !decrypted.is_empty() {
+                let candidates: Vec<Vec<u8>> = {
+                    let mut v = vec![decrypted.clone()];
+                    if let Ok((_, body)) = parse_short(&decrypted) {
+                        v.insert(0, body);
+                    }
+                    v
+                };
+                for cand in candidates {
+                    for offset in 0..cand.len().min(220) {
+                        if let Ok(plain) = lz4(&unlayout(&session.recv_key, &cand[offset..], &[])) {
+                            if let Ok(code) = std::str::from_utf8(&plain)
+                                .map(|s| s.trim().to_string())
+                            {
+                                if !code.is_empty() && code.len() < 256 {
+                                    return Ok(code);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Err("all transcripts failed".to_string())
+}
+
+// =====================================================================
+// HTTPDNS 解析
+// =====================================================================
+
+/// HTTPDNS 拿 long IP
+async fn fetch_long_targets() -> Vec<Target> {
+    fetch_httpdns_targets("long").await
+}
+
+/// HTTPDNS 拿 short IP
+async fn fetch_short_targets() -> Vec<Target> {
+    fetch_httpdns_targets("short").await
+}
+
+async fn fetch_httpdns_targets(kind: &str) -> Vec<Target> {
+    let url = "http://aedns.weixin.qq.com/cgi-bin/default/getdns?clientversion=0&devicetype=Windows&uin=0&format=json";
+    let domain = if kind == "long" {
+        "longcloud.weixin.com"
+    } else {
+        "shortcloud.weixin.com"
+    };
+    let proto_name = if kind == "long" {
+        "mmtlsovertcp"
+    } else {
+        "http"
+    };
+    let default_port = if kind == "long" { 8080u16 } else { 80u16 };
+    let default_ip = if kind == "long" {
+        "180.153.202.85"
+    } else {
+        "120.241.131.173"
+    };
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .user_agent("MicroMessenger Client")
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    let resp = match client.get(url).send().await {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+    let body: serde_json::Value = match resp.json().await {
+        Ok(b) => b,
+        Err(_) => return Vec::new(),
+    };
+    let item = body
+        .get("dns")
+        .and_then(|d| d.get("domainlist"))
+        .and_then(|l| l.as_array())
+        .and_then(|list| list.iter().find(|x| x.get("name").and_then(|n| n.as_str()) == Some(domain)));
+    let item = match item {
+        Some(i) => i,
+        None => return vec![Target { ip: default_ip.to_string(), port: default_port }],
+    };
+    let ports: Vec<u16> = item
+        .get("protocollist")
+        .and_then(|p| p.as_array())
+        .and_then(|l| {
+            l.iter()
+                .find(|x| x.get("name").and_then(|n| n.as_str()) == Some(proto_name))
+        })
+        .and_then(|x| x.get("portlist"))
+        .and_then(|p| p.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_u64().map(|n| n as u16))
+                .collect()
+        })
+        .unwrap_or_else(|| vec![default_port]);
+    let ips: Vec<String> = item
+        .get("iplist")
+        .and_then(|p| p.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|x| x.get("ip").and_then(|i| i.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_else(|| vec![default_ip.to_string()]);
+
+    let out: Vec<Target> = ips
+        .into_iter()
+        .flat_map(|ip| ports.iter().map(move |&p| Target { ip: ip.clone(), port: p }))
+        .collect();
+    if out.is_empty() {
+        vec![Target { ip: default_ip.to_string(), port: default_port }]
+    } else {
+        out
+    }
+}
+
+// =====================================================================
+// wpkg helpers for runtime header
+// =====================================================================
+
+/// wpkg 整数字段（避免重复 imports）
+fn wpkg_ints(pairs: &[(u32, i64)]) -> Vec<u8> {
+    let mut ints = HashMap::new();
+    for (k, v) in pairs {
+        ints.insert(*k, *v);
+    }
+    wpkg(&ints, &HashMap::new())
+}
+
+/// wpkg 字节字段
+fn wpkg_bytes(pairs: &[(u32, &[u8])]) -> Vec<u8> {
+    let mut bytes = HashMap::new();
+    for (k, v) in pairs {
+        bytes.insert(*k, v.to_vec());
+    }
+    wpkg(&HashMap::new(), &bytes)
 }
 
 // =====================================================================
@@ -1285,7 +2196,73 @@ mod tests {
         let r = manual_request(&b64, app).unwrap();
         assert!(!r.req.is_empty());
         assert_eq!(r.device, b"my_device");
-        // host 缺失时使用 HOST_APP
+        // host 缺失时使用HOST_APP
         assert_eq!(r.host, HOST_APP);
+    }
+
+    // ===== 阶段 2H：新增 helper 测试 =====
+
+    #[test]
+    fn handshake_keys_basic() {
+        let secret = b"shared_secret_32_bytes_long_here!!";
+        let hash = b"transcript_hash_32_bytes_long_here!";
+        let k = handshake_keys(secret, "label", hash);
+        assert_eq!(k.ck.len(), 16);
+        assert_eq!(k.sk.len(), 16);
+        assert_eq!(k.ci.len(), 12);
+        assert_eq!(k.si.len(), 12);
+        // 同样的输入 → 同样的输出（确定性）
+        let k2 = handshake_keys(secret, "label", hash);
+        assert_eq!(k.ck, k2.ck);
+        assert_eq!(k.sk, k2.sk);
+    }
+
+    #[test]
+    fn one_way_keys_basic() {
+        let secret = b"shared_secret_32_bytes_long_here!!";
+        let hash = b"transcript_hash_32_bytes_long_here!";
+        let k = one_way_keys(secret, "label", hash);
+        assert_eq!(k.key.len(), 16);
+        assert_eq!(k.iv.len(), 12);
+    }
+
+    #[test]
+    fn client_hello_format() {
+        let pub1 = vec![0x04u8; 65];
+        let pub2 = vec![0x04u8; 65];
+        let ch = client_hello(&pub1, &pub2);
+        // 5 字节 hs header + body
+        assert!(ch.len() > 30);
+        // header: type=1 (ClientHello), len
+        assert_eq!(ch[4], 1);
+    }
+
+    #[test]
+    fn psk_client_hello_format() {
+        let ticket = vec![0xAAu8; 100];
+        let ch = psk_client_hello(&ticket, 1234567890);
+        assert!(ch.len() > 30);
+        assert_eq!(ch[4], 0x01);
+    }
+
+    #[test]
+    fn js_plain_basic() {
+        let plain = js_plain(12345678, "wxd44977328b36e647", b"my_host_app_id");
+        assert!(!plain.is_empty());
+        // 至少有 50 字节
+        assert!(plain.len() > 50);
+    }
+
+    #[test]
+    fn connect_socket_local_failure() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            // 连一个不存在的 IP 应该快速失败
+            let r = connect_socket("127.0.0.1", 1, 1000).await;
+            assert!(r.is_err(), "应该 connect 失败");
+        });
     }
 }

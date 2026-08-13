@@ -227,7 +227,7 @@ async fn confirm_task(
 async fn consume_code(
     State(ctx): State<Arc<AdminContext>>,
     Path(task_id): Path<String>,
-) -> ApiResult<serde_json::Value> {
+) -> Result<axum::Json<serde_json::Value>, ApiError> {
     let wx = wx_state_from_ctx(&ctx)?;
     let task = wx
         .tasks
