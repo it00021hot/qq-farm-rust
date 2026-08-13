@@ -44,11 +44,13 @@ struct LoginBody {
 struct RegisterBody {
     username: String,
     password: String,
+    #[serde(alias = "cardCode", alias = "card_code")]
     card_code: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct RenewBody {
+    #[serde(alias = "cardCode", alias = "card_code")]
     card_code: String,
     #[serde(default)]
     username: Option<String>,
@@ -56,8 +58,12 @@ struct RenewBody {
 
 #[derive(Debug, Deserialize)]
 struct ChangePasswordBody {
-    username: String,
+    /// 可选：admin 修改他人密码时填；普通用户改自己密码不填，从 token 推断
+    #[serde(default)]
+    username: Option<String>,
+    #[serde(alias = "oldPassword", alias = "old_password")]
     old_password: String,
+    #[serde(alias = "newPassword", alias = "new_password")]
     new_password: String,
 }
 
@@ -290,14 +296,36 @@ async fn change_password(
     headers: HeaderMap,
     Json(body): Json<ChangePasswordBody>,
 ) -> ApiResult<serde_json::Value> {
+    // 解析 target username：body.username 优先；否则从 x-admin-token 取
+    let target_username = if let Some(u) = body.username.clone() {
+        if !u.is_empty() {
+            u
+        } else {
+            // fallback to token
+            headers
+                .get("x-admin-token")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|t| ctx.sessions.get_username(t))
+                .unwrap_or_default()
+        }
+    } else {
+        headers
+            .get("x-admin-token")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|t| ctx.sessions.get_username(t))
+            .unwrap_or_default()
+    };
+    if target_username.is_empty() {
+        return Ok(Json(json!({ "ok": false, "error": "未登录或 username 缺失" })));
+    }
     let result = qq_farm_core::models::user_store::users::change_password(
-        &body.username,
+        &target_username,
         &body.old_password,
         &body.new_password,
     );
     if result.is_ok() {
         // 改密成功 → 让该用户所有 session 失效
-        ctx.sessions.invalidate_by_username(&body.username);
+        ctx.sessions.invalidate_by_username(&target_username);
     }
     match result {
         Ok(()) => ok_empty(),

@@ -400,8 +400,17 @@ impl FarmService {
         }
         let _ = event_tx.send(FarmEvent::Harvested { count: n_harvested });
 
-        // 3. 铲除已收获（占位：阶段 1C.2 简单全铲）
-        let _ = collect_dead(&lands);
+        // 3. 铲除已收获的植物（用 `is_dead` 阶段 4 判断）
+        let dead_ids = collect_dead(&lands);
+        let n_removed = dead_ids.len();
+        if !dead_ids.is_empty() {
+            if let Err(e) = api.remove_plant(dead_ids.clone()).await {
+                tracing::warn!(error = %e, "remove_plant failed");
+            } else {
+                tracing::info!(count = n_removed, "removed");
+            }
+        }
+        let _ = event_tx.send(FarmEvent::Removed { count: n_removed });
 
         // 4. 重新拉取
         let reply2 = api.get_all_lands(host_gid).await?;

@@ -7,6 +7,14 @@ license.workspace = true
 authors.workspace = true
 description = "QQ 农场 HTTP + WebSocket 服务（API 兼容层）"
 
+[lib]
+name = "qq_farm_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "qq-farm-server"
+path = "src/main.rs"
+
 [lints]
 workspace = true
 
@@ -40,3 +48,4 @@ dotenvy = { workspace = true }
 parking_lot = { workspace = true }
 futures = { workspace = true }
 uuid = { workspace = true }
+serial_test = "3"

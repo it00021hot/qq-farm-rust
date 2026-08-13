@@ -25,7 +25,6 @@ use axum::{
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
-use tokio::sync::broadcast;
 
 use qq_farm_core::runtime::runtime_state::{LogEntry, RuntimeEvent};
 use crate::context::AdminContext;
@@ -102,7 +101,6 @@ async fn handle_socket(socket: WebSocket, ctx: Arc<AdminContext>) {
 
     forward_task.abort();
     event_task.abort();
-    let _ = broadcast::error::RecvError::Lagged(0);
 }
 
 /// 推送 status 变更（外部调用）

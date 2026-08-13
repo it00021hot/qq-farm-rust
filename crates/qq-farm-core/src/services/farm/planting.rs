@@ -263,9 +263,39 @@ pub fn confirms_planted_footprint(
     }
 }
 
-/// 按策略选种子（占位：阶段 1C.2 返回 preferred_seed_id）
+/// 按策略选种子
+///
+/// 对应原 planting.ts `findBestSeed` 顶层逻辑（无网络版）：
+/// - `Preferred`：返回 config.preferred_seed_id
+/// - `BagPriority`：返回 0（调用方需扫描背包）
+/// - 其他（MaxExp / MaxProfit / MaxFertExp / MaxFertProfit / Level）：
+///   1. 从 GameConfig 拉所有种子
+///   2. 按 strategy 排序（调用 analytics.get_plant_rankings）
+///   3. 返回排序后的第一个
 #[must_use]
 pub fn select_seed_for_strategy(config: &PlantingConfig) -> i64 {
+    use crate::services::analytics::{get_plant_rankings, SortBy};
+    if config.strategy == PlantingStrategy::Preferred {
+        return config.preferred_seed_id;
+    }
+    if config.strategy == PlantingStrategy::BagPriority {
+        // 调用方应走背包扫描；返回 0 表示"待选"
+        return 0;
+    }
+    let sort_by = match config.strategy {
+        PlantingStrategy::MaxExp => SortBy::Exp,
+        PlantingStrategy::MaxFertExp => SortBy::Fert,
+        PlantingStrategy::MaxProfit => SortBy::Profit,
+        PlantingStrategy::MaxFertProfit => SortBy::FertProfit,
+        PlantingStrategy::Level => SortBy::Level,
+        _ => SortBy::Exp,
+    };
+    let rankings = get_plant_rankings(sort_by);
+    for r in rankings {
+        if r.seed_id > 0 {
+            return r.seed_id;
+        }
+    }
     config.preferred_seed_id
 }
 

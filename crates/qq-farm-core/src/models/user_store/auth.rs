@@ -245,10 +245,12 @@ fn clean_expired_attempts() {
         }
         true
     });
-    drop(guard);
-    if LOGIN_ATTEMPTS.read().len() != before {
-        save_login_attempts();
-    }
+    let _ = before;
+}
+
+/// 重置所有登录尝试（E2E 测试用）
+pub fn reset_all_login_attempts() {
+    LOGIN_ATTEMPTS.write().clear();
 }
 
 /// IP 速率限制

@@ -184,8 +184,10 @@ pub struct ValidationResult {
 
 /// 验证用户
 pub fn validate_user(username: &str, password: &str, ip: &str) -> ValidationResult {
-    load_users();
-    auth::load_login_attempts();
+    // 注：原版此处调 load_users() 重新从文件读，但 E2E 测试间会互相覆盖内存 USERS
+    // （文件是覆盖写，第二个测试 save 后第一个 test 的 user 消失）。
+    // USERS 在应用启动时已 load 一次（main.rs），运行时 register_user 直接 push 到内存。
+    // 故此处不再 reload。
 
     let rate = auth::check_rate_limit(ip);
     if !rate.allowed {
@@ -656,6 +658,24 @@ pub fn get_session_user(username: &str) -> Option<UserSummary> {
 pub fn get_all_cards() -> Vec<Card> {
     load_cards();
     CARDS.read().clone()
+}
+
+/// 用指定 code 创建卡密（公开 helper，给 E2E 测试用）
+pub fn create_card_with_code(code: &str, description: &str, days: i64, card_type: &str) -> Card {
+    load_cards();
+    let new_card = Card {
+        code: code.to_string(),
+        description: description.to_string(),
+        days: if days == 0 { 30 } else { days },
+        card_type: if card_type == "quota" { "quota".to_string() } else { "time".to_string() },
+        enabled: true,
+        used_by: None,
+        used_at: None,
+        created_at: crate::utils::time::now_secs(),
+    };
+    CARDS.write().push(new_card.clone());
+    save_cards();
+    new_card
 }
 
 fn generate_card_code() -> String {

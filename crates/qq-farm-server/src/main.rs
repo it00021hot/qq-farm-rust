@@ -1,10 +1,5 @@
 //! `qq-farm-server` —— HTTP + WebSocket 服务入口。
 //!
-//! ## 阶段
-//!
-//! - 0：占位启动 + 健康检查
-//! - 2A：集成 `controllers/admin/farm-routes.ts` 全部 35 端点
-//!
 //! ## 启动流程
 //!
 //! 1. 加载配置（system_config）
@@ -19,16 +14,9 @@ use std::sync::Arc;
 use anyhow::Result;
 use axum::{routing::get, Json, Router};
 use qq_farm_core::runtime::engine::{EngineConfig, GatewayConfigTemplate, RuntimeEngine};
-use serde_json::json;
 use tracing::info;
 
-mod context;
-mod middleware;
-mod routes;
-mod sessions;
-mod socket;
-
-use crate::context::AdminContext;
+use qq_farm_server::{context::AdminContext, middleware, routes, socket};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -54,7 +42,7 @@ async fn main() -> Result<()> {
 
     // 路由
     let app = Router::new()
-        .route("/health", get(health))
+        .route("/health", get(qq_farm_server::health))
         .route("/ws", get(socket::ws_handler))
         .merge(routes::build(ctx.clone()))
         .with_state(ctx.clone())
@@ -66,7 +54,7 @@ async fn main() -> Result<()> {
         .unwrap_or(3007);
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
-    info!(%addr, "qq-farm-server 启动 (阶段 2A: farm routes)");
+    info!(%addr, "qq-farm-server 启动");
 
     // 启动时加载全局状态（账号 / 登录尝试 / 卡密 / 配置等）
     let _ = qq_farm_core::models::store::accounts::load_into_global();
@@ -81,14 +69,4 @@ async fn main() -> Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
-}
-
-/// 健康检查
-async fn health() -> Json<serde_json::Value> {
-    Json(json!({
-        "status": "ok",
-        "service": "qq-farm-server",
-        "stage": "2A",
-        "routes": "farm"
-    }))
 }

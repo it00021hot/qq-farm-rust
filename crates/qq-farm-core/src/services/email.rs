@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use crate::network::gateway::Gateway;
@@ -213,7 +214,7 @@ impl EmailService {
             by_box.entry(box_type).or_default().push(m.item.id.clone());
         }
 
-        let mut rewards: Vec<EmailItem> = vec![];
+        let mut rewards: Vec<RewardItem> = vec![];
         let mut claimed: usize = 0;
 
         // 先按 box 批量
@@ -307,48 +308,50 @@ fn normalize_box_type(v: i32) -> i32 {
     }
 }
 
-fn claim_reply_items(reply: &BatchClaimEmailReply) -> Vec<EmailItem> {
+fn claim_reply_items(reply: &BatchClaimEmailReply) -> Vec<RewardItem> {
     reply
         .items
         .iter()
-        .map(|i| EmailItem {
-            id: String::new(),
-            mail_type: 0,
-            title: String::new(),
-            claimed: false,
-            has_reward: false,
-            subtitle: String::new(),
-            ..Default::default()
-        })
+        .map(|i| RewardItem { id: i.id, count: i.count })
+        .filter(|r| r.count > 0)
         .collect()
 }
 
-fn claim_reply_items_from_single(reply: &ClaimEmailReply) -> Vec<EmailItem> {
+fn claim_reply_items_from_single(reply: &ClaimEmailReply) -> Vec<RewardItem> {
     reply
         .items
         .iter()
-        .map(|i| EmailItem {
-            id: String::new(),
-            mail_type: 0,
-            title: String::new(),
-            claimed: false,
-            has_reward: false,
-            subtitle: String::new(),
-            ..Default::default()
+        .map(|i| RewardItem {
+            id: i.id,
+            count: i.count,
         })
+        .filter(|r| r.count > 0)
         .collect()
+}
+
+/// 单个奖励项（id + count），由调用方从 mail config / reward proto 提取
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct RewardItem {
+    pub id: i64,
+    pub count: i64,
 }
 
 /// 汇总奖励为可读字符串
-pub fn get_reward_summary(items: &[EmailItem]) -> String {
+///
+/// 对应原 email.ts `getRewardSummary`：
+/// - id=1 / 1001 → 金币
+/// - id=2 / 1101 → 经验
+/// - id=1002 → 点券
+/// - 其它 → 物品#{id}x{count}
+#[must_use]
+pub fn get_reward_summary(items: &[RewardItem]) -> String {
     let mut parts: Vec<String> = Vec::new();
     for it in items {
-        // 简化：EmailItem 没有 id/count 字段（只有 mail_type/title），从 mail_type 推断
-        let id = it.mail_type as i64;
-        let count = 1; // 占位：实际应从 items 关联数据读取
-        if count <= 0 {
+        if it.count <= 0 {
             continue;
         }
+        let id = it.id;
+        let count = it.count;
         if id == 1 || id == 1001 {
             parts.push(format!("金币{count}"));
         } else if id == 2 || id == 1101 {
@@ -409,20 +412,12 @@ mod tests {
     #[test]
     fn reward_summary_with_items() {
         let items = vec![
-            EmailItem {
-                id: String::new(),
-                mail_type: 1,
-                title: "金币奖励".into(),
-                ..Default::default()
-            },
-            EmailItem {
-                id: String::new(),
-                mail_type: 1002,
-                title: "点券奖励".into(),
-                ..Default::default()
-            },
+            RewardItem { id: 1, count: 100 },       // 金币
+            RewardItem { id: 1002, count: 50 },     // 点券
+            RewardItem { id: 2, count: 200 },       // 经验
+            RewardItem { id: 9999, count: 3 },      // 物品
+            RewardItem { id: 1, count: 0 },         // 跳过
         ];
-        // 至少函数能跑（具体字符串依赖 count 占位）
-        let _ = get_reward_summary(&items);
+        assert_eq!(get_reward_summary(&items), "金币100/点券50/经验200/物品#9999x3");
     }
 }

@@ -243,15 +243,35 @@ pub fn get_organic_fertilizer_targets(lands: &[LandInfo], planted_ids: &[i64]) -
 }
 
 /// 获取即将成熟土地（用于"快速成熟"施肥）
+///
+/// 算法：取最后一个 phase 的 `begin_time`（Unix 秒），如果 `begin_time - now < threshold_secs` 则认为即将成熟。
 #[must_use]
 pub fn get_fast_mature_lands(lands: &[LandInfo], threshold_secs: i64) -> Vec<i64> {
-    // 阶段 1C.2 占位：返回所有 Growing 阶段（PlantInfo.grow_sec 可在 1C.3 引入）
-    let _ = threshold_secs;
-    lands
-        .iter()
-        .filter(|l| l.unlocked && current_phase(l) == PlantPhase::Growing)
-        .map(|l| l.id)
-        .collect()
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now_sec = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let mut out = Vec::new();
+    for land in lands {
+        if !land.unlocked {
+            continue;
+        }
+        if current_phase(land) != PlantPhase::Growing {
+            continue;
+        }
+        let plant = match land.plant.as_ref() {
+            Some(p) => p,
+            None => continue,
+        };
+        if let Some(last_phase) = plant.phases.last() {
+            let begin_sec = last_phase.begin_time; // proto int64 Unix seconds
+            if begin_sec > 0 && (begin_sec - now_sec) <= threshold_secs {
+                out.push(land.id);
+            }
+        }
+    }
+    out
 }
 
 /// 找出可铲除的"已收获且有多余"土地

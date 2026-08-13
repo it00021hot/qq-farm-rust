@@ -31,8 +31,9 @@ use crate::runtime::scheduler::Scheduler;
 use crate::services::friend::api::FriendApi;
 use crate::services::friend::gid_manager::{GidEvent, GidManager};
 use crate::services::friend::visit_strategy::{
-    is_enter_farm_banned_error, is_transient_network_error, now_ms, parse_rpc_error_code,
-    HelpState, LandSnapshot, RecentHelpCache, HELP_RESULT_TTL_MS,
+    analyze_friend_lands, is_enter_farm_banned_error, is_transient_network_error, now_ms,
+    parse_rpc_error_code, steal_lands_with_reward_log, HelpState, LandSnapshot, RecentHelpCache,
+    FriendSummary, HELP_RESULT_TTL_MS,
 };
 
 /// 巡访类型
@@ -356,10 +357,41 @@ impl FriendService {
                 }
             }
 
-            // 3e. 偷（占位：阶段 1D.2 写真实偷菜流程）
-            // —— 阶段 1D 只 mark visited，不实际调 steal_farm
+            // 3e. 偷菜：分析哪些可偷 → 真调 steal_farm
+            let land_snapshots: Vec<LandSnapshot> = enter_reply
+                .lands
+                .iter()
+                .map(LandSnapshot::from_land)
+                .collect();
+            let status = analyze_friend_lands(
+                &enter_reply.lands,
+                host_gid,
+                &[],
+                false,
+            );
+            if !status.stealable.is_empty() {
+                let summary = FriendSummary {
+                    gid: friend_gid,
+                    name: format!("GID:{friend_gid}"),
+                    avatar_url: String::new(),
+                    level: 0,
+                    gold: 0,
+                    plant: None,
+                };
+                let _ = summary; // 当前用于将来的 log / event
+                let result = steal_lands_with_reward_log(
+                    api,
+                    strategy.recent_help(),
+                    friend_gid,
+                    &status.stealable,
+                    &status.stealable_info,
+                    None,
+                )
+                .await;
+                stolen += result.ok;
+            }
+            let _ = land_snapshots; // 保持 move
             strategy.mark_visited(VisitKind::Steal, friend_gid);
-            stolen += 1;
 
             // 3f. leave（即使失败也 swallow）
             if let Err(e) = api.leave_farm(friend_gid).await {
