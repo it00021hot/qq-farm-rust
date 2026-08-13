@@ -465,6 +465,318 @@ pub fn select_seed(config: &PlantingConfig) -> i64 {
     config.preferred_seed_id
 }
 
+// =====================================================================
+// 阶段 2E：背包种植 / 商店选种 / 自动种空地 核心算法 1:1 翻译
+// （完整执行版需 run_one_cycle 上下文，以下是 1:1 算法骨架）
+// =====================================================================
+
+/// 背包种子（含玩家等级适配）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BagSeedWithLevel {
+    pub seed_id: i64,
+    pub name: String,
+    pub count: i64,
+    pub required_level: i64,
+    pub plant_size: usize,
+    pub state_level: i64,
+}
+
+/// 过滤背包种子：剔除 count=0 / plant_size<1，记录等级锁定
+///
+/// 对应原 planting.ts `plantFromBagSeeds` 内的过滤逻辑
+#[must_use]
+pub fn filter_bag_seeds(
+    seeds: &[BagSeedWithLevel],
+) -> (Vec<BagSeedWithLevel>, Vec<BagSeedWithLevel>, Vec<(i64, String, &'static str)>) {
+    let mut skipped: Vec<(i64, String, &'static str)> = Vec::new();
+    let mut level_locked: Vec<BagSeedWithLevel> = Vec::new();
+    let usable: Vec<BagSeedWithLevel> = seeds
+        .iter()
+        .filter(|s| {
+            if s.count <= 0 {
+                skipped.push((s.seed_id, s.name.clone(), "count_zero"));
+                return false;
+            }
+            if s.plant_size < 1 {
+                skipped.push((s.seed_id, s.name.clone(), "invalid_size"));
+                return false;
+            }
+            if s.required_level > s.state_level {
+                level_locked.push((*s).clone());
+            }
+            true
+        })
+        .cloned()
+        .collect();
+    (usable, level_locked, skipped)
+}
+
+/// 把 `BagSeedWithLevel` 转 `BagSeedLite`（用于 sort_bag_seeds_for_planting）
+fn to_bag_seed_lite(seeds: &[BagSeedWithLevel]) -> Vec<BagSeedLite> {
+    seeds
+        .iter()
+        .map(|s| BagSeedLite {
+            seed_id: s.seed_id,
+            required_level: s.required_level,
+            count: s.count,
+        })
+        .collect()
+}
+
+/// 排序后的背包种植顺序（含 priority + level desc + id 排序）
+///
+/// 对应原 planting.ts `plantFromBagSeeds` 主循环前的排序
+#[must_use]
+pub fn plan_bag_planting_order(
+    seeds: &[BagSeedWithLevel],
+    priority: &[i64],
+) -> Vec<BagSeedWithLevel> {
+    let lites = to_bag_seed_lite(seeds);
+    let sorted = sort_bag_seeds_for_planting(&lites, priority);
+    // 把 BagSeedLite 顺序映回 BagSeedWithLevel
+    let mut out = Vec::with_capacity(sorted.len());
+    for lite in sorted {
+        if let Some(orig) = seeds.iter().find(|s| s.seed_id == lite.seed_id) {
+            out.push(orig.clone());
+        }
+    }
+    out
+}
+
+/// 商店可买种子（含等级 / 限购 / 售价过滤）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ShopSeedCandidate {
+    pub goods_id: i64,
+    pub seed_id: i64,
+    pub name: String,
+    pub price: i64,
+    pub required_level: i64,
+    pub unit_item_count: i64,
+    pub max_purchase_count: i64, // -1 表示无限
+    pub bought_num: i64,
+    pub limit_count: i64,
+}
+
+/// 商店种子（输入：来自 api.get_shop_info 的原始商品）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ShopSeedInput {
+    pub goods_id: i64,
+    pub seed_id: i64,
+    pub name: String,
+    pub price: i64,
+    pub required_level: i64,
+    pub limit_count: i64,
+    pub bought_num: i64,
+    pub item_count: i64,
+    pub unlocked: bool,
+    pub cond_type: i64,    // 1=等级条件
+    pub cond_param: i64,   // cond_type=1 时是等级阈值
+}
+
+/// 过滤商店种子
+///
+/// 对应原 planting.ts `findBestSeed` 的过滤部分
+#[must_use]
+pub fn filter_shop_seeds(
+    inputs: &[ShopSeedInput],
+    state_level: i64,
+) -> Vec<ShopSeedCandidate> {
+    let mut out = Vec::new();
+    for g in inputs {
+        if !g.unlocked {
+            continue;
+        }
+        if g.cond_type == 1 && state_level < g.cond_param {
+            continue;
+        }
+        let required_level = if g.cond_type == 1 {
+            g.cond_param
+        } else {
+            g.required_level
+        };
+        if g.limit_count > 0 && g.bought_num >= g.limit_count {
+            continue;
+        }
+        if g.price <= 0 {
+            continue;
+        }
+        out.push(ShopSeedCandidate {
+            goods_id: g.goods_id,
+            seed_id: g.seed_id,
+            name: g.name.clone(),
+            price: g.price,
+            required_level,
+            unit_item_count: std::cmp::max(1, g.item_count),
+            max_purchase_count: if g.limit_count > 0 {
+                std::cmp::max(0, g.limit_count - g.bought_num)
+            } else {
+                -1
+            },
+            bought_num: g.bought_num,
+            limit_count: g.limit_count,
+        });
+    }
+    out
+}
+
+/// 按策略排序商店种子
+///
+/// - `level` / 默认：required_level desc + seed_id asc
+/// - `preferred`：preferred 提到最前
+/// - `max_exp` / `max_profit` / `max_fert_exp` / `max_fert_profit`：用 ranking 注入顺序
+#[must_use]
+pub fn sort_shop_seeds_by_strategy(
+    candidates: Vec<ShopSeedCandidate>,
+    strategy: &str,
+    ranking_seed_ids: &[i64],
+    preferred_seed_id: i64,
+) -> Vec<ShopSeedCandidate> {
+    let mut c = candidates;
+    if matches!(strategy, "max_exp" | "max_profit" | "max_fert_exp" | "max_fert_profit") {
+        let ranking: std::collections::HashMap<i64, usize> = ranking_seed_ids
+            .iter()
+            .enumerate()
+            .map(|(i, &id)| (id, i))
+            .collect();
+        c.sort_by(|a, b| {
+            let ra = ranking.get(&a.seed_id).copied().unwrap_or(usize::MAX);
+            let rb = ranking.get(&b.seed_id).copied().unwrap_or(usize::MAX);
+            ra.cmp(&rb).then_with(|| {
+                b.required_level
+                    .cmp(&a.required_level)
+                    .then(a.seed_id.cmp(&b.seed_id))
+            })
+        });
+    } else {
+        // 默认 level desc
+        c.sort_by(|a, b| {
+            b.required_level
+                .cmp(&a.required_level)
+                .then(a.seed_id.cmp(&b.seed_id))
+        });
+    }
+    if strategy == "preferred" && preferred_seed_id > 0 {
+        if let Some(idx) = c.iter().position(|s| s.seed_id == preferred_seed_id) {
+            let preferred = c.remove(idx);
+            c.insert(0, preferred);
+        }
+    }
+    c
+}
+
+/// 自动种植空地的执行计划
+///
+/// - `dead_land_ids`：已收获 / 死亡土地（不需要种）
+/// - `empty_land_ids`：空地（需要种）
+/// - `bag_usable`：背包可用种子
+/// - `shop_candidates`：商店候选（背包用完后回退）
+///
+/// 返回按顺序执行的计划
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PlantingPlan {
+    /// 背包种子阶段：每个种子用多少个 anchor
+    pub bag_phase: Vec<BagPhaseEntry>,
+    /// 商店阶段
+    pub shop_phase: Vec<ShopPhaseEntry>,
+    /// 最终剩余未种的土地 id
+    pub remaining_land_ids: Vec<i64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BagPhaseEntry {
+    pub seed_id: i64,
+    pub name: String,
+    pub plant_size: usize,
+    pub anchor_count: usize,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ShopPhaseEntry {
+    pub goods_id: i64,
+    pub seed_id: i64,
+    pub name: String,
+    pub price: i64,
+    pub max_purchase_count: i64,
+    pub anchor_count: usize,
+}
+
+/// 用背包种子生成种植计划
+///
+/// 简化版：每种背包种子按 count 个 anchor 计划（不展开 layout 选位）
+#[must_use]
+pub fn plan_auto_plant_with_bag(
+    empty_land_ids: &[i64],
+    bag_usable: &[BagSeedWithLevel],
+    priority: &[i64],
+) -> PlantingPlan {
+    let mut remaining = empty_land_ids.to_vec();
+    let mut plan = PlantingPlan::default();
+    let ordered = plan_bag_planting_order(bag_usable, priority);
+    for seed in ordered {
+        if remaining.is_empty() {
+            break;
+        }
+        let anchor_count = std::cmp::min(seed.count as usize, remaining.len());
+        if anchor_count == 0 {
+            continue;
+        }
+        plan.bag_phase.push(BagPhaseEntry {
+            seed_id: seed.seed_id,
+            name: seed.name.clone(),
+            plant_size: seed.plant_size,
+            anchor_count,
+        });
+        // 消耗前 anchor_count 个 land id
+        remaining = remaining.split_off(anchor_count);
+    }
+    plan.remaining_land_ids = remaining;
+    plan
+}
+
+/// 用商店种子生成补种计划
+#[must_use]
+pub fn plan_shop_planting(
+    remaining_land_ids: &[i64],
+    shop_candidates: &[ShopSeedCandidate],
+    strategy: &str,
+    ranking_seed_ids: &[i64],
+    preferred_seed_id: i64,
+) -> PlantingPlan {
+    let sorted = sort_shop_seeds_by_strategy(
+        shop_candidates.to_vec(),
+        strategy,
+        ranking_seed_ids,
+        preferred_seed_id,
+    );
+    let mut remaining = remaining_land_ids.to_vec();
+    let mut plan = PlantingPlan::default();
+    for c in &sorted {
+        if remaining.is_empty() {
+            break;
+        }
+        let max = if c.max_purchase_count < 0 {
+            remaining.len() as i64
+        } else {
+            c.max_purchase_count
+        };
+        let anchor_count = std::cmp::min(max as usize, remaining.len());
+        if anchor_count == 0 {
+            continue;
+        }
+        plan.shop_phase.push(ShopPhaseEntry {
+            goods_id: c.goods_id,
+            seed_id: c.seed_id,
+            name: c.name.clone(),
+            price: c.price,
+            max_purchase_count: max,
+            anchor_count,
+        });
+        remaining = remaining.split_off(anchor_count);
+    }
+    plan.remaining_land_ids = remaining;
+    plan
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -595,5 +907,186 @@ mod tests {
         assert_eq!(body[0] & 0x07, 2);
         // field = body[0] >> 3 = 2
         assert_eq!(body[0] >> 3, 2);
+    }
+
+    // ===== 阶段 2E：背包/商店种植算法 =====
+
+    fn bag_seed(seed_id: i64, count: i64, required_level: i64, state_level: i64) -> BagSeedWithLevel {
+        BagSeedWithLevel {
+            seed_id,
+            name: format!("seed-{seed_id}"),
+            count,
+            required_level,
+            plant_size: 1,
+            state_level,
+        }
+    }
+
+    #[test]
+    fn filter_bag_seeds_skips_zero_count() {
+        let seeds = vec![bag_seed(1, 0, 1, 5), bag_seed(2, 3, 1, 5)];
+        let (usable, _level, skipped) = filter_bag_seeds(&seeds);
+        assert_eq!(usable.len(), 1);
+        assert_eq!(usable[0].seed_id, 2);
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0].2, "count_zero");
+    }
+
+    #[test]
+    fn filter_bag_seeds_records_level_locked() {
+        let seeds = vec![bag_seed(1, 3, 10, 5)];
+        let (usable, level, _skipped) = filter_bag_seeds(&seeds);
+        assert_eq!(usable.len(), 1);
+        assert_eq!(level.len(), 1);
+        assert_eq!(level[0].seed_id, 1);
+    }
+
+    #[test]
+    fn filter_bag_seeds_skips_invalid_size() {
+        let mut s = bag_seed(1, 3, 1, 5);
+        s.plant_size = 0;
+        let (usable, _, skipped) = filter_bag_seeds(&[s]);
+        assert_eq!(usable.len(), 0);
+        assert_eq!(skipped[0].2, "invalid_size");
+    }
+
+    #[test]
+    fn plan_bag_planting_order_priority() {
+        let seeds = vec![
+            bag_seed(100, 5, 1, 10),
+            bag_seed(200, 5, 1, 10),
+            bag_seed(300, 5, 1, 10),
+        ];
+        // priority: 300 在前
+        let plan = plan_bag_planting_order(&seeds, &[300, 100]);
+        assert_eq!(plan[0].seed_id, 300);
+        assert_eq!(plan[1].seed_id, 100);
+    }
+
+    #[test]
+    fn plan_auto_plant_with_bag_uses_count() {
+        let empty = vec![1, 2, 3, 4, 5];
+        let bag = vec![bag_seed(100, 3, 1, 10)];
+        let plan = plan_auto_plant_with_bag(&empty, &bag, &[]);
+        assert_eq!(plan.bag_phase.len(), 1);
+        assert_eq!(plan.bag_phase[0].seed_id, 100);
+        assert_eq!(plan.bag_phase[0].anchor_count, 3);
+        assert_eq!(plan.remaining_land_ids, vec![4, 5]);
+    }
+
+    #[test]
+    fn plan_auto_plant_with_bag_stops_when_empty() {
+        let empty = vec![1, 2];
+        let bag = vec![bag_seed(100, 5, 1, 10)];
+        let plan = plan_auto_plant_with_bag(&empty, &bag, &[]);
+        assert_eq!(plan.bag_phase[0].anchor_count, 2);
+        assert!(plan.remaining_land_ids.is_empty());
+    }
+
+    #[test]
+    fn filter_shop_seeds_basic() {
+        let inputs = vec![
+            ShopSeedInput {
+                goods_id: 1, seed_id: 100, name: "萝卜".into(), price: 100,
+                required_level: 0, limit_count: 0, bought_num: 0, item_count: 1,
+                unlocked: true, cond_type: 1, cond_param: 1,
+            },
+            ShopSeedInput {
+                goods_id: 2, seed_id: 200, name: "白菜".into(), price: 0,  // price=0 应过滤
+                required_level: 0, limit_count: 0, bought_num: 0, item_count: 1,
+                unlocked: true, cond_type: 0, cond_param: 0,
+            },
+            ShopSeedInput {
+                goods_id: 3, seed_id: 300, name: "玉米".into(), price: 200,
+                required_level: 0, limit_count: 5, bought_num: 5, item_count: 1, // 已限购
+                unlocked: true, cond_type: 0, cond_param: 0,
+            },
+            ShopSeedInput {
+                goods_id: 4, seed_id: 400, name: "南瓜".into(), price: 500,
+                required_level: 0, limit_count: 0, bought_num: 0, item_count: 1,
+                unlocked: false, cond_type: 0, cond_param: 0, // 未解锁
+            },
+            ShopSeedInput {
+                goods_id: 5, seed_id: 500, name: "高等级".into(), price: 1000,
+                required_level: 0, limit_count: 0, bought_num: 0, item_count: 1,
+                unlocked: true, cond_type: 1, cond_param: 10, // 等级锁
+            },
+        ];
+        let cands = filter_shop_seeds(&inputs, 5); // state_level=5
+        // 应该只有 goods_id=1（萝卜）
+        assert_eq!(cands.len(), 1);
+        assert_eq!(cands[0].seed_id, 100);
+        assert_eq!(cands[0].required_level, 1);
+        assert_eq!(cands[0].max_purchase_count, -1);
+    }
+
+    #[test]
+    fn filter_shop_seeds_limit_count() {
+        let inputs = vec![ShopSeedInput {
+            goods_id: 1, seed_id: 100, name: "x".into(), price: 100,
+            required_level: 0, limit_count: 10, bought_num: 3, item_count: 1,
+            unlocked: true, cond_type: 0, cond_param: 0,
+        }];
+        let cands = filter_shop_seeds(&inputs, 1);
+        assert_eq!(cands.len(), 1);
+        assert_eq!(cands[0].max_purchase_count, 7);
+    }
+
+    #[test]
+    fn sort_shop_seeds_by_strategy_default_level() {
+        let cands = vec![
+            ShopSeedCandidate { goods_id: 1, seed_id: 100, name: "A".into(), price: 100, required_level: 1, unit_item_count: 1, max_purchase_count: -1, bought_num: 0, limit_count: 0 },
+            ShopSeedCandidate { goods_id: 2, seed_id: 200, name: "B".into(), price: 200, required_level: 5, unit_item_count: 1, max_purchase_count: -1, bought_num: 0, limit_count: 0 },
+            ShopSeedCandidate { goods_id: 3, seed_id: 150, name: "C".into(), price: 150, required_level: 3, unit_item_count: 1, max_purchase_count: -1, bought_num: 0, limit_count: 0 },
+        ];
+        let sorted = sort_shop_seeds_by_strategy(cands, "level", &[], 0);
+        // 按 required_level desc: 5, 3, 1
+        assert_eq!(sorted[0].seed_id, 200);
+        assert_eq!(sorted[1].seed_id, 150);
+        assert_eq!(sorted[2].seed_id, 100);
+    }
+
+    #[test]
+    fn sort_shop_seeds_by_strategy_preferred() {
+        let cands = vec![
+            ShopSeedCandidate { goods_id: 1, seed_id: 100, name: "A".into(), price: 100, required_level: 1, unit_item_count: 1, max_purchase_count: -1, bought_num: 0, limit_count: 0 },
+            ShopSeedCandidate { goods_id: 2, seed_id: 200, name: "B".into(), price: 200, required_level: 5, unit_item_count: 1, max_purchase_count: -1, bought_num: 0, limit_count: 0 },
+        ];
+        let sorted = sort_shop_seeds_by_strategy(cands, "preferred", &[], 200);
+        assert_eq!(sorted[0].seed_id, 200);
+    }
+
+    #[test]
+    fn sort_shop_seeds_by_strategy_ranking() {
+        let cands = vec![
+            ShopSeedCandidate { goods_id: 1, seed_id: 100, name: "A".into(), price: 100, required_level: 5, unit_item_count: 1, max_purchase_count: -1, bought_num: 0, limit_count: 0 },
+            ShopSeedCandidate { goods_id: 2, seed_id: 200, name: "B".into(), price: 200, required_level: 3, unit_item_count: 1, max_purchase_count: -1, bought_num: 0, limit_count: 0 },
+        ];
+        // ranking: 200 在前
+        let sorted = sort_shop_seeds_by_strategy(cands, "max_exp", &[200, 100], 0);
+        assert_eq!(sorted[0].seed_id, 200);
+    }
+
+    #[test]
+    fn plan_shop_planting_uses_max_purchase() {
+        let remaining = vec![1, 2, 3, 4, 5];
+        let cands = vec![
+            ShopSeedCandidate { goods_id: 1, seed_id: 100, name: "A".into(), price: 100, required_level: 1, unit_item_count: 1, max_purchase_count: 2, bought_num: 0, limit_count: 5 },
+        ];
+        let plan = plan_shop_planting(&remaining, &cands, "level", &[], 0);
+        assert_eq!(plan.shop_phase.len(), 1);
+        assert_eq!(plan.shop_phase[0].anchor_count, 2);
+        assert_eq!(plan.remaining_land_ids, vec![3, 4, 5]);
+    }
+
+    #[test]
+    fn plan_shop_planting_unlimited() {
+        let remaining = vec![1, 2, 3];
+        let cands = vec![
+            ShopSeedCandidate { goods_id: 1, seed_id: 100, name: "A".into(), price: 100, required_level: 1, unit_item_count: 1, max_purchase_count: -1, bought_num: 0, limit_count: 0 },
+        ];
+        let plan = plan_shop_planting(&remaining, &cands, "level", &[], 0);
+        assert_eq!(plan.shop_phase[0].anchor_count, 3);
+        assert!(plan.remaining_land_ids.is_empty());
     }
 }

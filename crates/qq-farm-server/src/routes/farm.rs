@@ -599,10 +599,56 @@ async fn post_farm_operate(
 ) -> ApiResult<serde_json::Value> {
     let id = resolve_account_id(&ctx, &headers, body.account_id.as_deref());
     let loop_ = get_loop(&ctx, &id)?;
-    let result = loop_.farm().run_farm_operation().await;
+    let farm = loop_.farm();
+    let op = body.op.to_lowercase();
+    let result: Result<serde_json::Value, qq_farm_core::error::Error> = match op.as_str() {
+        "harvest" => farm
+            .op_harvest()
+            .await
+            .map(|n| json!({ "ok": true, "op": "harvest", "count": n })),
+        "water" => farm
+            .op_water()
+            .await
+            .map(|n| json!({ "ok": true, "op": "water", "count": n })),
+        "weed" => farm
+            .op_weed()
+            .await
+            .map(|n| json!({ "ok": true, "op": "weed", "count": n })),
+        "insecticide" | "bug" => farm
+            .op_insecticide()
+            .await
+            .map(|n| json!({ "ok": true, "op": "insecticide", "count": n })),
+        "fertilize" => farm
+            .op_fertilize()
+            .await
+            .map(|r| json!({ "ok": true, "op": "fertilize", "normal": r.normal, "organic": r.organic })),
+        "plant" => farm
+            .op_plant()
+            .await
+            .map(|n| json!({ "ok": true, "op": "plant", "count": n })),
+        "remove" => farm
+            .op_remove()
+            .await
+            .map(|n| json!({ "ok": true, "op": "remove", "count": n })),
+        "upgrade" => farm
+            .op_upgrade()
+            .await
+            .map(|id| json!({ "ok": true, "op": "upgrade", "land_id": id })),
+        "unlock" => farm
+            .op_unlock(false)
+            .await
+            .map(|id| json!({ "ok": true, "op": "unlock", "land_id": id })),
+        "cycle" | "all" => farm
+            .run_farm_operation()
+            .await
+            .map(|()| json!({ "ok": true, "op": "cycle" })),
+        other => Err(qq_farm_core::error::Error::Protocol(format!(
+            "unknown op: {other}"
+        ))),
+    };
     match result {
-        Ok(_) => ok(json!({ "ok": true, "op": body.op })),
-        Err(e) => Ok(Json(json!({ "ok": false, "error": e.to_string() }))),
+        Ok(v) => Ok(Json(v)),
+        Err(e) => Ok(Json(json!({ "ok": false, "op": op, "error": e.to_string() }))),
     }
 }
 
