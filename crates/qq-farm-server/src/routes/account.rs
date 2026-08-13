@@ -111,14 +111,14 @@ async fn list_accounts(
 }
 
 async fn create_account(
-    State(_ctx): State<Arc<AdminContext>>,
+    State(ctx): State<Arc<AdminContext>>,
     Json(body): Json<CreateAccountBody>,
 ) -> ApiResult<serde_json::Value> {
     let platform = body.platform.unwrap_or_else(|| "qq".to_string());
     let acc = qq_farm_core::models::store::accounts::Account {
         id: String::new(),
-        name: body.name,
-        code: body.code,
+        name: body.name.clone(),
+        code: body.code.clone(),
         platform,
         qq: body.qq.unwrap_or_default(),
         uin: body.uin.unwrap_or_default(),
@@ -128,6 +128,19 @@ async fn create_account(
         updated_at: 0,
     };
     let saved = qq_farm_core::models::store::accounts::add_or_update_account(acc);
+
+    // 全链路打通：有 code + 平台 = wx 时，自动启动 worker
+    if !body.code.is_empty() {
+        let models_acc = qq_farm_core::models::Account::new(
+            saved.id.clone(),
+            body.code.clone(),
+            body.name.clone(),
+        );
+        if let Err(e) = ctx.engine.start_worker(models_acc) {
+            tracing::warn!(account_id = %saved.id, "自动启动 worker 失败: {e}");
+        }
+    }
+
     ok(json!({ "ok": true, "account": saved }))
 }
 

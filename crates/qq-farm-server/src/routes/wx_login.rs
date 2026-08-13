@@ -243,10 +243,79 @@ async fn consume_code(
         .await
         .map_err(ApiError::Internal)?;
     *task.auth_code.lock().await = Some(code.clone());
+
+    // === 全链路打通：auth_code → 创建 store Account → 启动 worker ===
+    let account_id = persist_and_start(&ctx, &code, &app_id, &task_id);
+
     Ok(Json(json!({
         "ok": true,
         "code": code,
+        "account_id": account_id,
     })))
+}
+
+/// 把 auth_code 落到 store Account + 启动 worker
+fn persist_and_start(
+    ctx: &AdminContext,
+    auth_code: &str,
+    app_id: &str,
+    task_id: &str,
+) -> String {
+    use qq_farm_core::models::Account;
+    use qq_farm_core::models::store::accounts as accounts_store;
+
+    // 1. 构造 store Account（code 字段就是 auth_code）
+    let display_name = format!(
+        "wx-{}",
+        &app_id.chars().take(8).collect::<String>()
+    );
+    let mut store_acc = accounts_store::Account {
+        id: String::new(), // 让 add_or_update_account 自动生成
+        name: display_name.clone(),
+        code: auth_code.to_string(),
+        platform: "wx".to_string(),
+        qq: String::new(),
+        uin: String::new(),
+        avatar: String::new(),
+        username: String::new(),
+        created_at: 0,
+        updated_at: 0,
+    };
+    let saved = accounts_store::add_or_update_account(store_acc.clone());
+    let account_id = saved.id.clone();
+    store_acc.id = account_id.clone();
+
+    // 2. 转 models::Account + start_worker
+    let models_acc = Account::new(
+        account_id.clone(),
+        auth_code.to_string(), // open_id 字段实际存 auth_code
+        display_name.clone(),
+    );
+    let eng = ctx.engine.clone();
+    match eng.start_worker(models_acc) {
+        Ok(()) => {
+            tracing::info!(
+                account_id = %account_id,
+                task_id = %task_id,
+                "微信扫码全链路打通：worker 已启动"
+            );
+            // 写日志
+            ctx.engine
+                .runtime_state()
+                .add_account_log("wx-login", "扫码登录成功，worker 已启动", Some(&account_id), Some(&display_name), None);
+        }
+        Err(e) => {
+            tracing::warn!(account_id = %account_id, "启动 worker 失败: {e}");
+            ctx.engine.runtime_state().add_account_log(
+                "wx-login",
+                &format!("worker 启动失败: {e}"),
+                Some(&account_id),
+                Some(&display_name),
+                None,
+            );
+        }
+    }
+    account_id
 }
 
 fn status_name(s: ScanStatus) -> &'static str {
