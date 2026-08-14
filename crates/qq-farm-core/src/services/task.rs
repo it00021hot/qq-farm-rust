@@ -78,6 +78,7 @@ pub struct RewardItemDto {
 
 /// 成长任务状态（带明细）
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GrowthTaskItem {
     pub id: i64,
     pub desc: String,
@@ -90,6 +91,7 @@ pub struct GrowthTaskItem {
 
 /// 每日任务状态（用于 app 展示）
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TaskDailyStateLikeApp {
     pub key: &'static str,
     pub done_today: bool,
@@ -102,11 +104,14 @@ pub struct TaskDailyStateLikeApp {
 
 /// 成长任务状态（用于 app 展示）
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GrowthTaskStateLikeApp {
     pub key: &'static str,
     pub done_today: bool,
     pub completed_count: i32,
     pub total_count: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_task: Option<GrowthTaskItem>,
     pub tasks: Vec<GrowthTaskItem>,
 }
 
@@ -342,6 +347,10 @@ impl TaskService {
                 *self.task_claim_last_at.lock() = now_ms();
                 record_operation_for(&self.account_id.lock(), "taskClaim", 1);
                 tokio::time::sleep(Duration::from_millis(300)).await;
+                if task.category == "growth" {
+                    // 服务端一次只暴露一条成长链任务；领取后再拉一次才能立刻看到下一条。
+                    let _ = self.get_task_info().await;
+                }
                 true
             }
             Err(_) => false,
@@ -545,7 +554,7 @@ impl TaskService {
         }
     }
 
-    /// App 风格成长任务状态
+    /// App 风格成长任务状态（对齐 bot `getGrowthTaskStateLikeApp`）
     ///
     /// # Errors
     /// - 网络 / 网关错误
@@ -560,6 +569,7 @@ impl TaskService {
                             done_today: false,
                             completed_count: 0,
                             total_count: 0,
+                            current_task: None,
                             tasks: vec![],
                         };
                     }
@@ -586,13 +596,24 @@ impl TaskService {
                         }
                     })
                     .collect();
-                let total_count = tasks.len() as i32;
-                let completed_count = tasks.iter().filter(|t| t.is_completed).count() as i32;
+                let current_task = tasks
+                    .iter()
+                    .find(|t| t.is_unlocked && !t.is_claimed)
+                    .cloned()
+                    .or_else(|| tasks.first().cloned());
                 GrowthTaskStateLikeApp {
                     key: "growth_task",
-                    done_today: total_count > 0 && completed_count >= total_count,
-                    completed_count,
-                    total_count,
+                    // 成长任务是链，不是每日清单；空列表表示链已完成。
+                    done_today: false,
+                    completed_count: current_task
+                        .as_ref()
+                        .map(|t| t.progress.min(t.total_progress) as i32)
+                        .unwrap_or(0),
+                    total_count: current_task
+                        .as_ref()
+                        .map(|t| t.total_progress as i32)
+                        .unwrap_or(0),
+                    current_task,
                     tasks,
                 }
             }
@@ -601,6 +622,7 @@ impl TaskService {
                 done_today: false,
                 completed_count: 0,
                 total_count: 0,
+                current_task: None,
                 tasks: vec![],
             },
         }

@@ -166,6 +166,8 @@ struct Inner {
     ws_sender: parking_lot::Mutex<Option<mpsc::Sender<Vec<u8>>>>,
     /// 当前会话是否已结束（dispatch 退出 / 主动断开）
     session_end: watch::Sender<bool>,
+    /// 会话结束原因（心跳超时 / kickout / ws_close 等），供 worker 日志对齐 TS source
+    disconnect_reason: parking_lot::Mutex<Option<String>>,
 }
 
 impl Gateway {
@@ -184,6 +186,7 @@ impl Gateway {
                 notify_subscribers: RwLock::new(Vec::new()),
                 ws_sender: parking_lot::Mutex::new(None),
                 session_end,
+                disconnect_reason: parking_lot::Mutex::new(None),
             }),
         }
     }
@@ -211,6 +214,7 @@ impl Gateway {
         }
 
         let _ = self.inner.session_end.send(false);
+        *self.inner.disconnect_reason.lock() = None;
 
         let url = self.inner.config.build_ws_url();
         let mut options = ConnectOptions::default();
@@ -264,7 +268,27 @@ impl Gateway {
 
     /// 被动/超时断开：结束会话，worker 主循环据此退出，不再用旧 Code 重连
     pub fn force_disconnect(&self) {
+        self.force_disconnect_with_reason("ws_close");
+    }
+
+    /// 带原因断开（对齐 TS `finalizeConnection({ source })`）
+    pub fn force_disconnect_with_reason(&self, reason: &str) {
+        {
+            let mut guard = self.inner.disconnect_reason.lock();
+            if guard.is_none() {
+                *guard = Some(reason.to_string());
+            }
+        }
         self.mark_session_ended();
+    }
+
+    /// 取出并清空断开原因；无显式原因时视为远端 `ws_close`
+    pub fn take_disconnect_reason(&self) -> String {
+        self.inner
+            .disconnect_reason
+            .lock()
+            .take()
+            .unwrap_or_else(|| "ws_close".to_string())
     }
 
     /// 当前会话结束后返回（dispatch 退出或 `force_disconnect`）
@@ -412,6 +436,12 @@ impl Gateway {
         }
     }
 
+    /// 当前 pending RPC 数（心跳告警对齐 bot `pendingCallbacks.size`）
+    #[must_use]
+    pub fn pending_count(&self) -> usize {
+        self.inner.requests.pending_count()
+    }
+
     /// 订阅 Notify 事件
     pub fn subscribe_notify(&self) -> mpsc::Receiver<NotifyEvent> {
         let (tx, rx) = mpsc::channel(32);
@@ -527,8 +557,9 @@ impl Gateway {
             client_version: client_version.to_string(),
         };
         let body = prost::Message::encode_to_vec(&req);
+        // 对齐 network.ts：Heartbeat 走 sendMsgAsync 默认 20s，不能用 5s（忙时易误超时→掉线）
         let reply_bytes = self
-            .request("gamepb.userpb.UserService", "Heartbeat", &body, 5_000)
+            .request("gamepb.userpb.UserService", "Heartbeat", &body, 20_000)
             .await?;
         let reply = HeartbeatReply::decode(reply_bytes.as_slice())
             .map_err(|e| NetworkError::Frame(format!("decode HeartbeatReply: {e}")))?;
@@ -593,6 +624,12 @@ async fn dispatch_loop(mut rx: mpsc::Receiver<crate::network::client::ReceivedFr
                     "received non-response/notify message"
                 );
             }
+        }
+    }
+    {
+        let mut guard = inner.disconnect_reason.lock();
+        if guard.is_none() {
+            *guard = Some("ws_close".to_string());
         }
     }
     *inner.phase.write() = ConnectionPhase::Disconnected;

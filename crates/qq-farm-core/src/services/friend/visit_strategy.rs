@@ -633,15 +633,68 @@ pub fn get_current_phase(land: &LandInfo) -> Option<PlantPhase> {
     })
 }
 
-/// 是否"被占领的从地块"（共享主地块的从地）
+/// 是否"被占领的从地块"（对齐 TS `isOccupiedSlaveLand`：master 有植物才跳过）
 #[must_use]
-pub fn is_occupied_slave_land(land: &LandInfo) -> bool {
-    land.master_land_id > 0 && land.master_land_id != land.id
+pub fn is_occupied_slave_land(land: &LandInfo, lands_map: &crate::services::farm::land_analysis::LandMap) -> bool {
+    crate::services::farm::land_analysis::is_occupied_slave_land_with_map(land, lands_map)
+}
+
+/// 解析 `PlantInfo.steal_num`（bytes varint）→ 每人最大可偷次数，默认 2
+#[must_use]
+pub fn parse_max_steal_per_player(steal_num: &[u8]) -> i64 {
+    if steal_num.is_empty() {
+        return 2;
+    }
+    let mut v: i64 = 0;
+    let mut shift = 0;
+    for (i, b) in steal_num.iter().enumerate().take(10) {
+        v |= i64::from(b & 0x7f) << shift;
+        if b & 0x80 == 0 {
+            break;
+        }
+        shift += 7;
+        if i == 9 {
+            break;
+        }
+    }
+    if v > 0 {
+        v
+    } else {
+        2
+    }
+}
+
+/// 解析 `PlantInfo.stealers` 中「我」已偷次数（对齐 TS visitFriendForSteal 手工解码）
+#[must_use]
+pub fn my_steal_count_from_plant(plant: &crate::proto::generated::gamepb::plantpb::PlantInfo, my_gid: i64) -> i64 {
+    use crate::proto::generated::gamepb::plantpb::StealPlayer;
+    use prost::Message;
+    let stealers: &[u8] = plant.stealers.as_ref();
+    if stealers.is_empty() || stealers[0] != 0x08 {
+        return 0;
+    }
+    match StealPlayer::decode(stealers) {
+        Ok(sp) if sp.gid == my_gid => sp.num,
+        _ => 0,
+    }
+}
+
+/// 这块成熟地对我是否仍可偷（stealable + 未达每人上限）
+#[must_use]
+pub fn can_i_still_steal_plant(
+    plant: &crate::proto::generated::gamepb::plantpb::PlantInfo,
+    my_gid: i64,
+) -> bool {
+    if !plant.stealable {
+        return false;
+    }
+    my_steal_count_from_plant(plant, my_gid) < parse_max_steal_per_player(plant.steal_num.as_ref())
 }
 
 /// 分析好友土地
 ///
-/// 与原 TS `analyzeFriendLands(lands, myGid, friendName, options)` 一致
+/// 与原 TS `analyzeFriendLands(lands, myGid, friendName, options)` 一致；
+/// 可偷判定额外对齐 visitFriendForSteal 的 stealers/steal_num 过滤（避免「列表有可偷但我已偷满」空转）。
 #[must_use]
 pub fn analyze_friend_lands(
     lands: &[LandInfo],
@@ -650,9 +703,10 @@ pub fn analyze_friend_lands(
     steal_activity_only: bool,
 ) -> AnalyzeResult {
     let mut result = AnalyzeResult::default();
+    let lands_map = crate::services::farm::land_analysis::build_land_map(lands);
     let land_ids: HashSet<i64> = lands.iter().map(|l| l.id).collect();
     for land in lands {
-        if is_occupied_slave_land(land) {
+        if is_occupied_slave_land(land, &lands_map) {
             continue;
         }
         let plant = match land.plant.as_ref() {
@@ -669,7 +723,7 @@ pub fn analyze_friend_lands(
         let id = land.id;
 
         if phase == PlantPhase::Ripe {
-            if plant.stealable {
+            if can_i_still_steal_plant(plant, my_gid) {
                 let plant_id = plant.id;
                 // 蔬菜黑名单按 seed_id 过滤（1:1 对齐 TS `visit-strategy.ts`）
                 let seed_id = crate::config::game_config::global()
@@ -1157,19 +1211,37 @@ pub async fn visit_friend(
         }
     }
 
-    // 3. 捣乱（放草 + 放虫）
+    // 3. 捣乱（放草 + 放虫）—— 按剩余次数切片，对齐 bot visitFriend
     if is_automation_on("friend_bad")
+        && api.remaining_bad_times() > 0
         && (!status.can_put_weed.is_empty() || !status.can_put_bug.is_empty())
     {
-        if !status.can_put_weed.is_empty() {
-            let n = api.put_weeds(friend_gid, status.can_put_weed.clone()).await.unwrap_or(0);
+        if api.remaining_bad_times() > 0 && !status.can_put_weed.is_empty() {
+            let remaining = api.remaining_bad_times() as usize;
+            let to_process: Vec<i64> = status
+                .can_put_weed
+                .iter()
+                .copied()
+                .take(remaining)
+                .collect();
+            let n = api.put_weeds(friend_gid, to_process).await.unwrap_or(0);
             if n > 0 {
                 actions.push(format!("放草{n}"));
                 total_actions.put_weed += n;
             }
+            if api.remaining_bad_times() > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
         }
-        if !status.can_put_bug.is_empty() {
-            let n = api.put_insects(friend_gid, status.can_put_bug.clone()).await.unwrap_or(0);
+        if api.remaining_bad_times() > 0 && !status.can_put_bug.is_empty() {
+            let remaining = api.remaining_bad_times() as usize;
+            let to_process: Vec<i64> = status
+                .can_put_bug
+                .iter()
+                .copied()
+                .take(remaining)
+                .collect();
+            let n = api.put_insects(friend_gid, to_process).await.unwrap_or(0);
             if n > 0 {
                 actions.push(format!("放虫{n}"));
                 total_actions.put_bug += n;
@@ -1228,6 +1300,18 @@ pub async fn visit_friend_for_steal(
                     entered: false,
                 });
             }
+            crate::services::panel_log::log_warn(
+                account_id,
+                "好友",
+                format!("进入 {friend_name} 农场失败: {msg}"),
+                Some(serde_json::json!({
+                    "module": "friend",
+                    "event": "进入农场",
+                    "result": "error",
+                    "friendName": friend_name,
+                    "friendGid": friend_gid,
+                })),
+            );
             return Some(VisitResult {
                 acted: false,
                 entered: false,
@@ -1246,18 +1330,18 @@ pub async fn visit_friend_for_steal(
 
     let plant_blacklist =
         crate::models::store::account_config::get_plant_blacklist(Some(account_id));
+    let lands_map = crate::services::farm::land_analysis::build_land_map(&lands);
+    // 对齐 TS visitFriendForSteal：成熟 + stealable + stealers/steal_num（我未达上限）
     let has_stealable_before_filter = lands.iter().any(|land| {
-        if is_occupied_slave_land(land) {
+        if is_occupied_slave_land(land, &lands_map) {
             return false;
         }
         let plant = match land.plant.as_ref() {
-            Some(p) if !p.phases.is_empty() && p.stealable => p,
+            Some(p) if !p.phases.is_empty() => p,
             _ => return false,
         };
-        matches!(get_current_phase(land), Some(PlantPhase::Ripe)) && {
-            let _ = plant;
-            true
-        }
+        matches!(get_current_phase(land), Some(PlantPhase::Ripe))
+            && can_i_still_steal_plant(plant, my_gid)
     });
     let status = analyze_friend_lands(&lands, my_gid, &plant_blacklist, false);
 
@@ -1661,21 +1745,34 @@ pub async fn do_bad_op(
     friend_gid: i64,
     lands: &[LandInfo],
 ) -> serde_json::Value {
+    if api.remaining_bad_times() <= 0 {
+        return serde_json::json!({"ok": true, "opType": "bad", "count": 0, "bugCount": 0, "weedCount": 0, "message": "今日捣乱次数已达上限", "limitReached": true});
+    }
     let status = analyze_friend_lands(lands, 0, &[], false);
     if status.can_put_bug.is_empty() && status.can_put_weed.is_empty() {
         return serde_json::json!({"ok": true, "opType": "bad", "count": 0, "bugCount": 0, "weedCount": 0, "message": "没有可捣乱土地"});
     }
-    let weed_count = if !status.can_put_weed.is_empty() {
-        api.put_weeds(friend_gid, status.can_put_weed.clone())
-            .await
-            .unwrap_or(0)
+    let weed_count = if api.remaining_bad_times() > 0 && !status.can_put_weed.is_empty() {
+        let remaining = api.remaining_bad_times() as usize;
+        let to_process: Vec<i64> = status
+            .can_put_weed
+            .iter()
+            .copied()
+            .take(remaining)
+            .collect();
+        api.put_weeds(friend_gid, to_process).await.unwrap_or(0)
     } else {
         0
     };
-    let bug_count = if !status.can_put_bug.is_empty() {
-        api.put_insects(friend_gid, status.can_put_bug.clone())
-            .await
-            .unwrap_or(0)
+    let bug_count = if api.remaining_bad_times() > 0 && !status.can_put_bug.is_empty() {
+        let remaining = api.remaining_bad_times() as usize;
+        let to_process: Vec<i64> = status
+            .can_put_bug
+            .iter()
+            .copied()
+            .take(remaining)
+            .collect();
+        api.put_insects(friend_gid, to_process).await.unwrap_or(0)
     } else {
         0
     };
@@ -1686,6 +1783,7 @@ pub async fn do_bad_op(
         "bugCount": bug_count,
         "weedCount": weed_count,
         "message": format!("捣乱完成 虫{}/草{}", bug_count, weed_count),
+        "limitReached": api.remaining_bad_times() <= 0,
     })
 }
 
@@ -2114,5 +2212,29 @@ mod tests {
         assert_eq!(PlantPhase::from_i32(7), PlantPhase::Dead);
         assert_eq!(PlantPhase::from_i32(3), PlantPhase::Growing);
         assert_eq!(PlantPhase::from_i32(1), PlantPhase::Seed);
+    }
+
+    #[test]
+    fn parse_max_steal_per_player_varint_and_default() {
+        assert_eq!(parse_max_steal_per_player(&[]), 2);
+        assert_eq!(parse_max_steal_per_player(&[2]), 2);
+        assert_eq!(parse_max_steal_per_player(&[3]), 3);
+    }
+
+    #[test]
+    fn can_i_still_steal_respects_stealers_and_cap() {
+        use crate::proto::generated::gamepb::plantpb::{PlantInfo, StealPlayer};
+        use prost::Message;
+        let mut plant = PlantInfo {
+            stealable: true,
+            steal_num: vec![2].into(),
+            ..Default::default()
+        };
+        assert!(can_i_still_steal_plant(&plant, 100));
+
+        let encoded = StealPlayer { gid: 100, num: 2 }.encode_to_vec();
+        plant.stealers = encoded.into();
+        assert!(!can_i_still_steal_plant(&plant, 100));
+        assert!(can_i_still_steal_plant(&plant, 200));
     }
 }

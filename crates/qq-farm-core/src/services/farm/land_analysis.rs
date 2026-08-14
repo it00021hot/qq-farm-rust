@@ -386,24 +386,17 @@ pub fn build_slave_to_master_map(lands: &[LandInfo]) -> HashMap<i64, i64> {
     map
 }
 
-/// 判断土地是否被占用（作为 slave 被 master 持有）
+/// 判断土地是否被占用（作为 slave 被 master 持有；粗判，不含「master 是否有植物」）
 #[must_use]
 pub fn is_occupied_slave_land(land: &LandInfo) -> bool {
     land.master_land_id != 0 && land.master_land_id != land.id
 }
 
-/// 判断土地是否被占用（带 map，对齐 TS `isOccupiedSlaveLand`）
+/// 对齐 TS `isOccupiedSlaveLand(land, landsMap)`：
+/// 仅当关联 master 存在且 master 有植物数据时，才把从地视为被占用而跳过。
 #[must_use]
 pub fn is_occupied_slave_land_with_map(land: &LandInfo, lands_map: &LandMap) -> bool {
-    if land.master_land_id != 0 && land.master_land_id != land.id {
-        return true;
-    }
-    for other in lands_map.values() {
-        if other.id != land.id && other.slave_land_ids.contains(&land.id) {
-            return true;
-        }
-    }
-    false
+    display_land_context(land, lands_map).1
 }
 
 /// 从土地取从属地块 id
@@ -1286,6 +1279,21 @@ mod tests {
         slave.master_land_id = 1;
         assert!(is_occupied_slave_land(&slave));
         assert!(!is_occupied_slave_land(&make_land(3, true, None)));
+    }
+
+    #[test]
+    fn occupied_slave_with_map_requires_master_plant() {
+        let mut master_empty = make_land(1, true, None);
+        master_empty.slave_land_ids = vec![2];
+        let mut slave = make_land(2, true, Some(PlantPhase::Ripe));
+        slave.master_land_id = 1;
+        let map_empty = build_land_map(&[master_empty, slave.clone()]);
+        assert!(!is_occupied_slave_land_with_map(&slave, &map_empty));
+
+        let mut master_planted = make_land(1, true, Some(PlantPhase::Growing));
+        master_planted.slave_land_ids = vec![2];
+        let map_planted = build_land_map(&[master_planted, slave.clone()]);
+        assert!(is_occupied_slave_land_with_map(&slave, &map_planted));
     }
 
     #[test]

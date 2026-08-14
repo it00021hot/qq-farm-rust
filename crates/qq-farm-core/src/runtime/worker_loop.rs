@@ -132,6 +132,8 @@ pub struct WorkerLoop {
     steal_tick_running: AtomicBool,
     /// 对齐 TS `runUnifiedTick`：farm/help/steal 串行，避免并发打满网关
     unified_tick_running: AtomicBool,
+    /// 对齐 TS `unifiedSchedulerRunning`
+    unified_scheduler_running: AtomicBool,
     /// 对齐 TS `lastPushTime`（土地推送 500ms 去抖）
     last_lands_push_at: AtomicI64,
     harvest_sell_running: Arc<AtomicBool>,
@@ -221,6 +223,22 @@ impl WorkerLoop {
             let friend = friend.clone();
             move |limits| friend.update_operation_limits(&limits)
         }));
+        friend.api().set_bad_gate(
+            Arc::new({
+                let friend = friend.clone();
+                move || friend.is_bad_operation_limit_reached()
+            }),
+            Arc::new({
+                let friend = friend.clone();
+                move || friend.get_remaining_bad_operation_times()
+            }),
+            Arc::new({
+                let friend = friend.clone();
+                move |method| {
+                    let _ = friend.mark_bad_operation_limit_reached(method);
+                }
+            }),
+        );
         Self {
             account,
             config,
@@ -251,6 +269,7 @@ impl WorkerLoop {
             help_tick_running: AtomicBool::new(false),
             steal_tick_running: AtomicBool::new(false),
             unified_tick_running: AtomicBool::new(false),
+            unified_scheduler_running: AtomicBool::new(false),
             last_lands_push_at: AtomicI64::new(0),
             harvest_sell_running: Arc::new(AtomicBool::new(false)),
             harvest_sell_pending: Arc::new(AtomicBool::new(false)),
@@ -328,7 +347,7 @@ impl WorkerLoop {
     }
 
     /// 对齐 TS `applyRuntimeConfig`：revision + 重置统一调度（external 模式下不启内部 check_loop）
-    pub fn apply_runtime_config(self: &Arc<Self>, rev: u64) {
+    pub fn apply_runtime_config(self: &Arc<Self>, rev: u64, scheduler: &Scheduler) {
         self.apply_config_revision(rev);
         if self.login_ready() {
             self.reset_unified_schedule();
@@ -337,6 +356,9 @@ impl WorkerLoop {
             self.farm.set_check_interval(Duration::from_secs(
                 intervals.farm.max(1) as u64,
             ));
+            if self.unified_scheduler_running.load(Ordering::Acquire) {
+                self.schedule_unified_next_tick(scheduler);
+            }
         }
         self.sync_status();
     }
@@ -597,6 +619,7 @@ impl WorkerLoop {
         let hb_timeout = self.config.heartbeat_timeout;
         let on_hb_timeout = self.on_heartbeat_timeout.clone();
         let gid = self.gid.clone();
+        let client_version = self.config.client_version.clone();
         scheduler.set_interval_task(
             "heartbeat_interval",
             hb_interval,
@@ -607,7 +630,12 @@ impl WorkerLoop {
                 let miss = hb_miss.clone();
                 let on_timeout = on_hb_timeout.clone();
                 let gid_lock = gid.clone();
+                let cv_for_req = client_version.clone();
                 Box::pin(async move {
+                    // 对齐 network.ts：phase !== 'online' || !gid 则跳过
+                    if gateway.phase() != crate::network::gateway::ConnectionPhase::Online {
+                        return;
+                    }
                     let now = crate::utils::time::now_ms();
                     let last = *last_resp.lock();
                     let elapsed = now - last;
@@ -617,14 +645,40 @@ impl WorkerLoop {
                             *g += 1;
                             *g
                         };
+                        let pending = gateway.pending_count();
                         tracing::warn!(
                             account_id = %acc_id,
                             elapsed_ms = elapsed,
+                            pending,
                             "心跳超时 ({}s 无响应)",
                             elapsed / 1000
                         );
+                        crate::services::panel_log::log(
+                            &acc_id,
+                            "心跳",
+                            format!(
+                                "连接可能已断开 ({}s 无响应, pending={pending})",
+                                elapsed / 1000
+                            ),
+                            Some(serde_json::json!({
+                                "module": "heartbeat",
+                                "isWarn": true,
+                                "elapsedMs": elapsed,
+                                "pending": pending,
+                            })),
+                        );
                         if miss_n >= MAX_HEARTBEAT_MISS {
                             tracing::error!(account_id = %acc_id, "心跳 miss 达到上限，触发重连");
+                            crate::services::panel_log::log(
+                                &acc_id,
+                                "心跳",
+                                "心跳超时，账号将停止运行...",
+                                Some(serde_json::json!({
+                                    "module": "heartbeat",
+                                    "isWarn": true,
+                                    "event": "heartbeat_timeout",
+                                })),
+                            );
                             if let Some(cb) = on_timeout.lock().as_ref() {
                                 cb(acc_id.clone());
                             }
@@ -636,12 +690,37 @@ impl WorkerLoop {
                     if current_gid == 0 {
                         return;
                     }
-                    let cv_for_req = crate::config::get_runtime_config().client_version;
-                    let result = gateway.heartbeat(current_gid, &cv_for_req).await;
-                    if let Ok(_reply) = result {
-                        *last_resp.lock() = crate::utils::time::now_ms();
-                        *miss.lock() = 0;
-                    }
+                    // 对齐 network.ts：sendMsgAsync(...).then(...).catch(() => {}) —— 发完即返回，不阻塞 interval
+                    let gateway = gateway.clone();
+                    let last_resp = last_resp.clone();
+                    let miss = miss.clone();
+                    let acc_id = acc_id.clone();
+                    let cv_for_req = cv_for_req.clone();
+                    tokio::spawn(async move {
+                        match gateway.heartbeat(current_gid, &cv_for_req).await {
+                            Ok(_reply) => {
+                                *last_resp.lock() = crate::utils::time::now_ms();
+                                *miss.lock() = 0;
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    account_id = %acc_id,
+                                    error = %e,
+                                    "Heartbeat 请求失败"
+                                );
+                                crate::services::panel_log::log(
+                                    &acc_id,
+                                    "心跳",
+                                    format!("Heartbeat 失败: {e}"),
+                                    Some(serde_json::json!({
+                                        "module": "heartbeat",
+                                        "isWarn": true,
+                                        "error": e.to_string(),
+                                    })),
+                                );
+                            }
+                        }
+                    });
                 })
             }),
         );
@@ -659,17 +738,54 @@ impl WorkerLoop {
         next.steal_at = now + random_interval_ms(steal_min, steal_max) as i64;
     }
 
-    /// 启动统一 farm / help / steal tick（对齐 TS `startUnifiedScheduler`）
+    /// 启动统一 farm / help / steal（对齐 TS `startUnifiedScheduler` + `scheduleUnifiedNextTick`）
     pub fn start_farm_ticks(self: &Arc<Self>, scheduler: &Scheduler) {
+        if self.unified_scheduler_running.swap(true, Ordering::AcqRel) {
+            return;
+        }
         self.reset_unified_schedule();
+        self.schedule_unified_next_tick(scheduler);
+    }
+
+    /// 停止统一调度（对齐 TS `stopUnifiedScheduler`）
+    pub fn stop_farm_ticks(&self, scheduler: &Scheduler) {
+        self.unified_scheduler_running.store(false, Ordering::Release);
+        self.farm_tick_running.store(false, Ordering::Release);
+        self.help_tick_running.store(false, Ordering::Release);
+        self.steal_tick_running.store(false, Ordering::Release);
+        self.unified_tick_running.store(false, Ordering::Release);
+        scheduler.clear("unified_next_tick");
+    }
+
+    /// 对齐 TS `scheduleUnifiedNextTick`：按下次到期时间 setTimeout，最低 1s
+    fn schedule_unified_next_tick(self: &Arc<Self>, scheduler: &Scheduler) {
+        if !self.unified_scheduler_running.load(Ordering::Acquire) {
+            return;
+        }
+        if !self.login_ready() {
+            return;
+        }
+        scheduler.clear("unified_next_tick");
+        let now = now_ms();
+        let next_at = {
+            let g = self.next_runs.lock();
+            let farm = if g.farm_at > 0 { g.farm_at } else { now + 1000 };
+            let help = if g.help_at > 0 { g.help_at } else { now + 1000 };
+            let steal = if g.steal_at > 0 { g.steal_at } else { now + 1000 };
+            farm.min(help).min(steal)
+        };
+        let delay_ms = (next_at - now).max(1000) as u64;
         let this = Arc::clone(self);
-        scheduler.set_interval_task(
-            "unified_tick",
-            Duration::from_millis(500),
+        let sched = scheduler.clone();
+        scheduler.set_timeout_task(
+            "unified_next_tick",
+            Duration::from_millis(delay_ms),
             Arc::new(move || {
                 let this = this.clone();
+                let sched = sched.clone();
                 Box::pin(async move {
                     this.run_unified_tick().await;
+                    this.schedule_unified_next_tick(&sched);
                 })
             }),
         );
@@ -1394,9 +1510,10 @@ mod tests {
             // 至少 status_sync 任务注册了
             let snap = scheduler.snapshot();
             assert!(snap.tasks.iter().any(|t| t.name == "status_sync"));
+            loop_.mark_login_ready();
             loop_.start_farm_ticks(&scheduler);
             let snap = scheduler.snapshot();
-            assert!(snap.tasks.iter().any(|t| t.name == "unified_tick"));
+            assert!(snap.tasks.iter().any(|t| t.name == "unified_next_tick"));
             let next = loop_.next_runs.lock().clone();
             let now = now_ms();
             assert!(next.farm_at > now, "first farm tick must be delayed like TS resetUnifiedSchedule");

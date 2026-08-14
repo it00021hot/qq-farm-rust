@@ -219,7 +219,7 @@ impl Worker {
                 // 心跳超时 = 终端断开，不再用旧 Code 重连
                 let gw_for_hb = gateway.clone();
                 worker_loop.on_heartbeat_timeout(move |_acc_id| {
-                    gw_for_hb.force_disconnect();
+                    gw_for_hb.force_disconnect_with_reason("heartbeat_timeout");
                 });
 
                 // === 1. WS 连接 + 登录；失败即退出（对齐 handleTerminalDisconnect） ===
@@ -271,7 +271,7 @@ impl Worker {
                                     });
                                     wl.on_kickout(&why);
                                     emit_terminal_stop(&tx, &acc_id, &acc_name, &why, "kickout");
-                                    gw.force_disconnect();
+                                    gw.force_disconnect_with_reason("kickout");
                                     break;
                                 }
                                 crate::network::notify::NotifyEvent::ItemChanged { items, .. } => {
@@ -462,13 +462,17 @@ async fn run_worker_loop(
                 }
             } => {
                 scheduler.shutdown();
+                let source = session_gw.take_disconnect_reason();
+                let phase = "online";
                 emit_disconnect_log(
                     &event_tx,
                     &account.id,
                     &account.display_name,
-                    "source=ws_close, phase=online",
+                    &format!("source={source}, phase={phase}"),
                 );
-                return WorkerExit { reason: "disconnect:ws_close".to_string() };
+                return WorkerExit {
+                    reason: format!("disconnect:{source}"),
+                };
             }
             msg = msg_rx.recv() => {
                 match msg {
@@ -483,7 +487,7 @@ async fn run_worker_loop(
                         if let Some(eng) = &engine {
                             if let Some(wl) = eng.worker_loop(&account.id) {
                                 let rev = eng.runtime_state().config_revision();
-                                wl.apply_runtime_config(rev);
+                                wl.apply_runtime_config(rev, &scheduler);
                             }
                         }
                     }

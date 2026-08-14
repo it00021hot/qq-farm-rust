@@ -2,6 +2,8 @@
 
 QQ 农场多账号挂机的 Rust 重写。协议、调度和 HTTP/Socket.IO 合约对齐原 [qq-farm-bot](https://github.com/it00021hot/qq-farm-bot)（TypeScript + Vue），管理面板继续用原项目的 Vue，不改前端去迁就后端。
 
+与原 `core` 的**业务同步状态、缺口与更新记录**见 [docs/SYNC.md](docs/SYNC.md)（对齐以业务目标一致为准；每次业务对齐请追加更新记录）。
+
 ## 仓库结构
 
 ```
@@ -21,6 +23,7 @@ qq-farm-rust/
 ## 环境
 
 - Rust 1.75+（建议用当前 stable）
+- `protoc`（protobuf compiler，生成协议代码；Windows 可装到 `%USERPROFILE%\tools\protoc\bin` 并加入 PATH / 设置 `PROTOC`）
 - macOS / Linux
 - 管理面板：原项目 `qq-farm-bot/web`（Vite 5173，把 `/api` 和 `/socket.io` 代理到 3007）
 
@@ -78,7 +81,7 @@ pnpm dev
 登录成功后，worker 按账号配置串行跑农场 / 帮助 / 偷菜：
 
 - **农场**：除草除虫浇水 → 收获 → 铲除枯株 → 种植 → 施肥 / 解锁升级
-- **偷菜**：按好友列表 `steal_plant_num` 筛选并排序，只去有菜可偷的好友
+- **偷菜**：按好友列表 `steal_plant_num` 筛选并排序；进场后再用 `stealers`/`steal_num` 判断「我还能偷」；进场无可偷则跳过同指标空转（不再刷「开始批量偷菜」）
 - **出售**：收获或偷菜成功后，按「果实 + 可出售」自动卖出（需打开 `sell`）
 - **面板**：`status:update` 推送效率（`sessionExpGained` / `uptime`），`log:new` 推送运行日志
 
@@ -95,8 +98,14 @@ cargo run -p qq-farm-cli -- wx-code --help
 ## 测试
 
 ```bash
+# 需本机已安装 protoc（protobuf 编译器），并在 PATH / PROTOC 中可见
 cargo test --workspace
+
+# 面板 API 冒烟（独立进程，默认会起临时端口）
+cargo test -p qq-farm-server --test e2e_integration -- --test-threads=1
 ```
+
+鉴权请求头为 `x-admin-token: <token>`（登录接口返回的 `data.token`），不是 `Authorization: Bearer`。
 
 ## 许可
 

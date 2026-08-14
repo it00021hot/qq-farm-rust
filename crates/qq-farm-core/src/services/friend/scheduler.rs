@@ -140,6 +140,8 @@ pub struct FriendService {
     bad_ran_on_startup: AtomicBool,
     operation_limits: Arc<Mutex<HashMap<i64, OpLimitEntry>>>,
     bad_operation_limit_reached: AtomicBool,
+    /// 对齐 TS `lastResetDate`
+    last_reset_date: Mutex<String>,
     /// 对齐 TS `helpAutoDisabledByLimit`
     help_auto_disabled: AtomicBool,
     /// 对齐 TS `isCheckingFriends`
@@ -148,6 +150,10 @@ pub struct FriendService {
     external_scheduler: AtomicBool,
     /// 对齐 TS `friendsListCache`（仅面板 HTTP，巡查不走这份缓存）
     friends_list_cache: Mutex<Option<(u64, Vec<serde_json::Value>)>>,
+    /// 偷菜空访标记：gid → 当时 GetAll 的 steal_plant_num。
+    /// 列表仍报「有可偷」但我进场无可偷时，避免每个 steal tick 空转重入。
+    /// steal_plant_num 变化（新成熟/他人偷完）后自动解除。
+    steal_noop_markers: Mutex<HashMap<i64, i64>>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -207,10 +213,12 @@ impl FriendService {
             bad_ran_on_startup: AtomicBool::new(false),
             operation_limits: Arc::new(Mutex::new(HashMap::new())),
             bad_operation_limit_reached: AtomicBool::new(false),
+            last_reset_date: Mutex::new(String::new()),
             help_auto_disabled: AtomicBool::new(false),
             is_checking: AtomicBool::new(false),
             external_scheduler: AtomicBool::new(false),
             friends_list_cache: Mutex::new(None),
+            steal_noop_markers: Mutex::new(HashMap::new()),
         }
     }
 
@@ -239,6 +247,95 @@ impl FriendService {
     pub fn set_account_id(&self, account_id: &str) {
         *self.account_id.lock() = account_id.to_string();
         self.api.set_account_id(account_id);
+        self.check_daily_reset();
+    }
+
+    /// 对齐 TS `checkDailyReset`
+    pub fn check_daily_reset(&self) {
+        let today = beijing_date_key();
+        let mut last = self.last_reset_date.lock();
+        if *last == today {
+            return;
+        }
+        if !last.is_empty() {
+            tracing::info!("跨日重置，清空操作限制缓存");
+        }
+        self.operation_limits.lock().clear();
+        if self.help_auto_disabled.swap(false, Ordering::AcqRel) {
+            let acc = self.account_id.lock().clone();
+            crate::services::panel_log::log(
+                &acc,
+                "好友",
+                "新的一天已开始，自动恢复帮忙操作功能",
+                Some(serde_json::json!({
+                    "module": "friend",
+                    "event": "好友巡查循环",
+                    "result": "ok",
+                })),
+            );
+        }
+        let stopped = load_bad_daily_stop(&self.account_id.lock(), &today);
+        self.bad_operation_limit_reached
+            .store(stopped, Ordering::Release);
+        *last = today;
+    }
+
+    /// 对齐 TS `isBadOperationLimitReached`
+    #[must_use]
+    pub fn is_bad_operation_limit_reached(&self) -> bool {
+        self.check_daily_reset();
+        self.bad_operation_limit_reached.load(Ordering::Acquire)
+    }
+
+    /// 对齐 TS `getRemainingBadOperationTimes`
+    #[must_use]
+    pub fn get_remaining_bad_operation_times(&self) -> i64 {
+        self.check_daily_reset();
+        if self.bad_operation_limit_reached.load(Ordering::Acquire) {
+            return 0;
+        }
+        let map = self.operation_limits.lock();
+        let Some(limit) = map.get(&BAD_SHARED_LIMIT_ID) else {
+            return 999;
+        };
+        if limit.day_times_limit <= 0 {
+            return 999;
+        }
+        (limit.day_times_limit - limit.day_times).max(0)
+    }
+
+    /// 对齐 TS `markBadOperationLimitReached`
+    pub fn mark_bad_operation_limit_reached(&self, method: &str) -> bool {
+        self.check_daily_reset();
+        if self
+            .bad_operation_limit_reached
+            .swap(true, Ordering::AcqRel)
+        {
+            return false;
+        }
+        let today = self.last_reset_date.lock().clone();
+        let today = if today.is_empty() {
+            beijing_date_key()
+        } else {
+            today
+        };
+        if let Err(e) = persist_bad_daily_stop(&self.account_id.lock(), &today) {
+            tracing::warn!("保存当日捣乱停用状态失败: {e}");
+        }
+        let acc = self.account_id.lock().clone();
+        crate::services::panel_log::log(
+            &acc,
+            "好友",
+            "今日放虫/放草次数已达上限，停止两类操作",
+            Some(serde_json::json!({
+                "module": "friend",
+                "event": "放虫放草次数上限",
+                "result": "limit",
+                "code": 1001046,
+                "method": method,
+            })),
+        );
+        true
     }
 
     /// 好友操作限额（对齐 TS `getOperationLimits`）
@@ -289,8 +386,7 @@ impl FriendService {
                 && data.day_times_limit > 0
                 && data.day_times >= data.day_times_limit
             {
-                self.bad_operation_limit_reached
-                    .store(true, Ordering::Release);
+                self.mark_bad_operation_limit_reached("operation_limit");
             }
         }
     }
@@ -498,7 +594,16 @@ impl FriendService {
                 .map(|p| p.dry_num + p.weed_num + p.insect_num)
                 .unwrap_or(0);
             if kind == VisitKind::Steal && steal_num > 0 {
-                steal_friends.push(summary);
+                // 上次进场无可偷且 steal_plant_num 未变 → 跳过，避免空转刷日志
+                let skip_noop = self
+                    .steal_noop_markers
+                    .lock()
+                    .get(&summary.gid)
+                    .copied()
+                    .is_some_and(|prev| prev == steal_num);
+                if !skip_noop {
+                    steal_friends.push(summary);
+                }
             } else if kind == VisitKind::Help && help_need > 0 {
                 help_friends.push((summary, help_need));
             }
@@ -515,18 +620,10 @@ impl FriendService {
         let recent = self.strategy.recent_help();
 
         if kind == VisitKind::Steal && !steal_friends.is_empty() {
-            crate::services::panel_log::log(
-                account_id,
-                "好友",
-                format!("开始批量偷菜，共 {} 个好友有可偷", steal_friends.len()),
-                Some(serde_json::json!({
-                    "module": "friend",
-                    "event": "visit_friend",
-                    "count": steal_friends.len(),
-                })),
-            );
+            // bot 侧该日志已注释；保留 debug 级噪音会让人以为卡死在「开始批量偷菜」
             for friend in &steal_friends {
-                let _ = crate::services::friend::visit_strategy::visit_friend_for_steal(
+                let list_steal_num = friend.plant.as_ref().map(|p| p.steal_num).unwrap_or(0);
+                let visit = crate::services::friend::visit_strategy::visit_friend_for_steal(
                     &self.api,
                     recent,
                     friend,
@@ -535,6 +632,23 @@ impl FriendService {
                     account_id,
                 )
                 .await;
+                match visit {
+                    Some(r) if r.acted => {
+                        self.steal_noop_markers.lock().remove(&friend.gid);
+                    }
+                    // 已进场但无可偷 / 偷失败，或黑名单滤光（None）：记下当前列表指标，避免每 tick 重入
+                    Some(r) if r.entered && !r.acted => {
+                        self.steal_noop_markers
+                            .lock()
+                            .insert(friend.gid, list_steal_num);
+                    }
+                    None => {
+                        self.steal_noop_markers
+                            .lock()
+                            .insert(friend.gid, list_steal_num);
+                    }
+                    _ => {}
+                }
                 crate::utils::random::random_delay(500, 800).await;
             }
         }
@@ -643,6 +757,9 @@ impl FriendService {
         if !crate::services::automation::is_automation_on_for(account_id, "friend_bad") {
             return Ok(0);
         }
+        if self.is_bad_operation_limit_reached() {
+            return Ok(0);
+        }
         let my_gid = *self.host_gid.lock();
         if my_gid == 0 {
             return Ok(0);
@@ -650,6 +767,13 @@ impl FriendService {
         let friends = self.api.get_friends_list().await.unwrap_or_default();
         let mut acted = 0usize;
         for &fg in friends.iter().take(20) {
+            if self.is_bad_operation_limit_reached() {
+                break;
+            }
+            if self.get_remaining_bad_operation_times() <= 0 {
+                self.mark_bad_operation_limit_reached("operation_limit");
+                break;
+            }
             if fg == my_gid || self.strategy.is_blacklisted(fg) {
                 continue;
             }
@@ -981,6 +1105,7 @@ impl FriendService {
         self.gid_manager.clear_cache();
         self.api.invalidate_list_cache();
         *self.friends_list_cache.lock() = None;
+        self.steal_noop_markers.lock().clear();
         crate::services::friend::visit_strategy::clear_friends_list_cache();
     }
 
@@ -1026,9 +1151,68 @@ impl FriendService {
     }
 }
 
+const BAD_DAILY_STATE_VERSION: i64 = 1;
+
+fn beijing_date_key() -> String {
+    use chrono::{Datelike, FixedOffset, Utc};
+    let offset = FixedOffset::east_opt(8 * 3600).expect("bj offset");
+    let now = Utc::now().with_timezone(&offset);
+    format!(
+        "{}-{:02}-{:02}",
+        now.year(),
+        now.month(),
+        now.day()
+    )
+}
+
+fn bad_daily_state_path(account_id: &str) -> std::path::PathBuf {
+    use sha2::{Digest, Sha256};
+    let token = hex::encode(Sha256::digest(account_id.as_bytes()));
+    crate::config::paths::get_data_file(&format!("friend-bad-state-{token}.json"))
+}
+
+fn load_bad_daily_stop(account_id: &str, today: &str) -> bool {
+    let path = bad_daily_state_path(if account_id.is_empty() {
+        "default"
+    } else {
+        account_id
+    });
+    let state: serde_json::Value =
+        crate::services::json_db::read_json_with_default(&path, || serde_json::json!({}));
+    state.get("version").and_then(|v| v.as_i64()) == Some(BAD_DAILY_STATE_VERSION)
+        && state.get("date").and_then(|v| v.as_str()) == Some(today)
+        && state.get("stopped").and_then(|v| v.as_bool()) == Some(true)
+}
+
+fn persist_bad_daily_stop(account_id: &str, today: &str) -> std::io::Result<()> {
+    let path = bad_daily_state_path(if account_id.is_empty() {
+        "default"
+    } else {
+        account_id
+    });
+    crate::services::json_db::write_json_file_atomic(
+        &path,
+        &serde_json::json!({
+            "version": BAD_DAILY_STATE_VERSION,
+            "date": today,
+            "stopped": true,
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bad_daily_state_roundtrip() {
+        let acc = format!("test-bad-{}", std::process::id());
+        let today = beijing_date_key();
+        assert!(!load_bad_daily_stop(&acc, &today));
+        persist_bad_daily_stop(&acc, &today).expect("persist");
+        assert!(load_bad_daily_stop(&acc, &today));
+        let _ = std::fs::remove_file(bad_daily_state_path(&acc));
+    }
 
     #[test]
     fn strategy_blacklist() {

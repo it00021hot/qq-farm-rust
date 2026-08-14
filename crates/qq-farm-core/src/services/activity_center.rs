@@ -450,10 +450,27 @@ impl ActivityCenterService {
 
     pub fn set_account_id(&self, account_id: &str) {
         *self.account_id.lock() = account_id.to_string();
+        // 重启 worker 后从落盘恢复「今日已领」，避免按钮仍可点、再点报 1034014
+        if let Some(date) = load_qingmei_seed_claimed_date(account_id) {
+            *self.qingmei_seed_claimed_date.lock() = date;
+        }
     }
 
     pub fn set_warehouse(&self, warehouse: Arc<WarehouseService>) {
         *self.warehouse.lock() = Some(warehouse);
+    }
+
+    fn mark_qingmei_seed_claimed_today(&self) {
+        let today = beijing_date_key();
+        *self.qingmei_seed_claimed_date.lock() = today.clone();
+        let account_id = self.account_id.lock().clone();
+        if !account_id.is_empty() {
+            let _ = persist_qingmei_seed_claimed_date(&account_id, &today);
+        }
+    }
+
+    fn qingmei_seed_claimed_today(&self) -> bool {
+        *self.qingmei_seed_claimed_date.lock() == beijing_date_key()
     }
 
     // ----- 赛季 -----
@@ -1130,8 +1147,12 @@ impl ActivityCenterService {
             .await
         {
             Ok(bytes) => Ok((ActivityOperateReply::decode(&bytes[..])?, false)),
-            Err(crate::network::error::NetworkError::Gateway { code, .. })
-                if expected_error_codes.contains(&code) =>
+            Err(crate::network::error::NetworkError::Gateway {
+                code,
+                error_message,
+                ..
+            }) if expected_error_codes.contains(&code)
+                || is_qingmei_already_claimed_message(&error_message) =>
             {
                 Ok((ActivityOperateReply::default(), true))
             }
@@ -1214,7 +1235,7 @@ impl ActivityCenterService {
         let current_round = brew.current_round;
         let started = brew.base_gold > 0;
         let max_rounds = brew.max_rounds.max(1);
-        let claimed_today = *self.qingmei_seed_claimed_date.lock() == beijing_date_key()
+        let claimed_today = self.qingmei_seed_claimed_today()
             || daily_seed.map(|d| d.claimed).unwrap_or(false);
         let balance: i64 = ingredients
             .unwrap_or(&[])
@@ -1292,21 +1313,49 @@ impl ActivityCenterService {
 
     /// 领取青梅每日种子
     pub async fn claim_qingmei_daily_seed(&self) -> Result<serde_json::Value> {
-        let _guard = self.mutation_lock.lock().await;
-        let req = ClaimQingMeiDailySeedRequest {
-            activity_id: QINGMEI_DAILY_ACTIVITY_ID,
-            operate_type: CLAIM_QINGMEI_SEED_OPERATE_TYPE,
-            params: Some(
-                crate::proto::generated::gamepb::activitypb::claim_qing_mei_daily_seed_request::Params {
-                    grant_id: QINGMEI_DAILY_GRANT_ID,
-                },
-            ),
+        // 本地已记今日已领：直接幂等成功，避免再打 RPC 报错而按钮仍可点
+        if self.qingmei_seed_claimed_today() {
+            let mut snapshot = self.snapshot_with_shop(None).await.ok();
+            force_qingmei_seed_claimed_in_snapshot(&mut snapshot);
+            return Ok(serde_json::json!({
+                "rewards": [],
+                "message": "今日青梅种子已经领取，无需重复领取",
+                "snapshot": snapshot,
+            }));
+        }
+
+        let (reply, already) = {
+            let _guard = self.mutation_lock.lock().await;
+            if self.qingmei_seed_claimed_today() {
+                (ActivityOperateReply::default(), true)
+            } else {
+                let req = ClaimQingMeiDailySeedRequest {
+                    activity_id: QINGMEI_DAILY_ACTIVITY_ID,
+                    operate_type: CLAIM_QINGMEI_SEED_OPERATE_TYPE,
+                    params: Some(
+                        crate::proto::generated::gamepb::activitypb::claim_qing_mei_daily_seed_request::Params {
+                            grant_id: QINGMEI_DAILY_GRANT_ID,
+                        },
+                    ),
+                };
+                match self
+                    .operate_qingmei(req.encode_to_vec(), &[QINGMEI_DAILY_ALREADY_CLAIMED_CODE])
+                    .await
+                {
+                    Ok(v) => v,
+                    Err(e) if is_qingmei_already_claimed_message(&e.to_string()) => {
+                        (ActivityOperateReply::default(), true)
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
         };
-        let (reply, already) = self
-            .operate_qingmei(req.encode_to_vec(), &[QINGMEI_DAILY_ALREADY_CLAIMED_CODE])
-            .await?;
-        *self.qingmei_seed_claimed_date.lock() = beijing_date_key();
+        // 无论新领还是 1034014，都标记今日已领（对齐 bot 写 qingMeiSeedClaimedDateKey）
+        self.mark_qingmei_seed_claimed_today();
         let rewards: Vec<ItemDto> = reply.rewards.iter().map(item_dto).collect();
+        // 释放 mutation_lock 后再拉快照，避免长查询占锁；并强制 dailySeed.claimed=true
+        let mut snapshot = self.snapshot_with_shop(None).await.ok();
+        force_qingmei_seed_claimed_in_snapshot(&mut snapshot);
         Ok(serde_json::json!({
             "rewards": rewards,
             "message": if already {
@@ -1314,7 +1363,7 @@ impl ActivityCenterService {
             } else {
                 "青梅种子领取成功"
             },
-            "snapshot": self.snapshot_with_shop(None).await.ok(),
+            "snapshot": snapshot,
         }))
     }
 
@@ -2353,6 +2402,73 @@ fn beijing_date_key() -> String {
     format!("{:04}-{:02}-{:02}", dt.year(), dt.month(), dt.day())
 }
 
+fn is_qingmei_already_claimed_message(msg: &str) -> bool {
+    let lower = msg.to_ascii_lowercase();
+    lower.contains("1034014")
+        || msg.contains("已经领取")
+        || msg.contains("无需重复领取")
+        || msg.contains("已领取")
+}
+
+fn qingmei_seed_claimed_path(account_id: &str) -> std::path::PathBuf {
+    use sha2::{Digest, Sha256};
+    let token = hex::encode(Sha256::digest(account_id.as_bytes()));
+    crate::config::paths::get_data_file(&format!("qingmei-seed-claimed-{token}.json"))
+}
+
+fn load_qingmei_seed_claimed_date(account_id: &str) -> Option<String> {
+    if account_id.is_empty() {
+        return None;
+    }
+    let path = qingmei_seed_claimed_path(account_id);
+    let state: serde_json::Value =
+        crate::services::json_db::read_json_with_default(&path, || serde_json::json!({}));
+    let date = state.get("date").and_then(|v| v.as_str())?;
+    if date == beijing_date_key() {
+        Some(date.to_string())
+    } else {
+        None
+    }
+}
+
+fn persist_qingmei_seed_claimed_date(account_id: &str, today: &str) -> std::io::Result<()> {
+    let path = qingmei_seed_claimed_path(account_id);
+    crate::services::json_db::write_json_file_atomic(
+        &path,
+        &serde_json::json!({
+            "date": today,
+            "claimed": true,
+        }),
+    )
+}
+
+fn force_qingmei_seed_claimed_in_snapshot(snapshot: &mut Option<serde_json::Value>) {
+    let Some(snap) = snapshot.as_mut() else {
+        return;
+    };
+    let Some(qm) = snap.get_mut("qingMei").and_then(|v| v.as_object_mut()) else {
+        return;
+    };
+    if let Some(seed) = qm.get_mut("dailySeed").and_then(|v| v.as_object_mut()) {
+        seed.insert("claimed".into(), serde_json::json!(true));
+    } else {
+        qm.insert(
+            "dailySeed".into(),
+            serde_json::json!({
+                "claimed": true,
+                "grantId": QINGMEI_DAILY_GRANT_ID.to_string(),
+                "reward": null,
+            }),
+        );
+    }
+    if let Some(actions) = qm.get_mut("actions").and_then(|v| v.as_object_mut()) {
+        actions.insert(
+            "claimSeed".into(),
+            serde_json::json!({ "enabled": false, "available": false }),
+        );
+    }
+}
+
 fn constellation_catalog_json() -> serde_json::Value {
     static RAW: &str = include_str!("../../../../assets/activity-data/constellation-2026072701.json");
     serde_json::from_str(RAW).unwrap_or(serde_json::Value::Null)
@@ -2838,6 +2954,41 @@ mod tests {
         assert_eq!(QINGMEI_DAILY_ACTIVITY_ID, 2026081201);
         assert_eq!(QINGMEI_BREW_ACTIVITY_ID, 2026081202);
         assert_eq!(QINGMEI_ITEM_ID, 41221);
+    }
+
+    #[test]
+    fn qingmei_already_claimed_message_detects_code_and_text() {
+        assert!(is_qingmei_already_claimed_message(
+            "gateway error: x.y code=1034014 already"
+        ));
+        assert!(is_qingmei_already_claimed_message(
+            "今日青梅种子已经领取，无需重复领取"
+        ));
+        assert!(!is_qingmei_already_claimed_message("timeout"));
+    }
+
+    #[test]
+    fn force_qingmei_seed_claimed_patches_snapshot() {
+        let mut snap = Some(serde_json::json!({
+            "qingMei": {
+                "dailySeed": { "claimed": false, "grantId": "3" },
+                "actions": { "claimSeed": { "enabled": true, "available": true } }
+            }
+        }));
+        force_qingmei_seed_claimed_in_snapshot(&mut snap);
+        let qm = &snap.unwrap()["qingMei"];
+        assert_eq!(qm["dailySeed"]["claimed"], true);
+        assert_eq!(qm["actions"]["claimSeed"]["enabled"], false);
+    }
+
+    #[test]
+    fn qingmei_seed_claimed_persist_roundtrip() {
+        let acc = format!("test-qm-{}", std::process::id());
+        let today = beijing_date_key();
+        assert!(load_qingmei_seed_claimed_date(&acc).is_none());
+        persist_qingmei_seed_claimed_date(&acc, &today).expect("persist");
+        assert_eq!(load_qingmei_seed_claimed_date(&acc).as_deref(), Some(today.as_str()));
+        let _ = std::fs::remove_file(qingmei_seed_claimed_path(&acc));
     }
 
     #[test]

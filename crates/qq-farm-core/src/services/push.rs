@@ -1,26 +1,49 @@
 //! 推送服务 — 通知 / 告警推送。
 //!
-//! 1:1 翻译原 `core/src/services/push.ts`（62 行）。
+//! 对齐原 `core/src/services/push.ts`（经 pushoo）与面板 `Settings.vue` `channelOptions`。
 //!
-//! ## 渠道
+//! ## 支持渠道（与面板一致）
 //!
-//! - `webhook` / `serverchan` / `pushplus` / `bark` / `telegram` / `dingtalk` / `wecom`
+//! `webhook` / `qmsg` / `serverchan` / `pushplus` / `pushplushxtrip` / `dingtalk` /
+//! `wecom` / `bark` / `gocqhttp` / `onebot` / `atri` / `pushdeer` / `igot` /
+//! `telegram` / `feishu` / `ifttt` / `wecombot` / `discord` / `wxpusher`
 //!
-//! ## 与原 TS 的差异
-//!
-//! - 原 TS 依赖 `pushoo` npm 包；这里用 reqwest 直接调各渠道 HTTP API
-//! - 返回结构与原 TS 一致：`{ ok, code, msg, raw }`
+//! 原 TS 依赖 `pushoo`；这里用 reqwest 直接调各渠道 HTTP API。
+//! 返回结构与原 TS 一致：`{ ok, code, msg, raw }`
 
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+/// 面板列出的全部渠道（顺序与 Settings.vue 一致）
+pub const SUPPORTED_CHANNELS: &[&str] = &[
+    "webhook",
+    "qmsg",
+    "serverchan",
+    "pushplus",
+    "pushplushxtrip",
+    "dingtalk",
+    "wecom",
+    "bark",
+    "gocqhttp",
+    "onebot",
+    "atri",
+    "pushdeer",
+    "igot",
+    "telegram",
+    "feishu",
+    "ifttt",
+    "wecombot",
+    "discord",
+    "wxpusher",
+];
+
 /// 推送 payload
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PushPayload {
-    /// 推送渠道（`webhook` / `serverchan` / `pushplus` / ...）
+    /// 推送渠道
     pub channel: String,
-    /// webhook 接口地址（`channel=webhook` 时必填）
+    /// webhook / 机器人接口地址（部分渠道必填）
     pub endpoint: String,
     /// 推送 token（`channel=webhook` 时可选）
     pub token: String,
@@ -99,6 +122,15 @@ impl PushService {
 
         match channel {
             "webhook" => self.send_webhook(endpoint, token, title, content).await,
+            "qmsg" => {
+                let url = if endpoint.is_empty() {
+                    format!("https://qmsg.zendee.cn/send/{token}")
+                } else {
+                    endpoint.to_string()
+                };
+                self.send_form_or_json(&url, serde_json::json!({ "msg": format!("{title}\n{content}") }))
+                    .await
+            }
             "serverchan" => {
                 let url = if endpoint.is_empty() {
                     format!("https://sctapi.ftqq.com/{token}.send")
@@ -114,6 +146,18 @@ impl PushService {
             "pushplus" => {
                 let url = if endpoint.is_empty() {
                     "https://www.pushplus.plus/send".to_string()
+                } else {
+                    endpoint.to_string()
+                };
+                self.send_form_or_json(
+                    &url,
+                    serde_json::json!({ "token": token, "title": title, "content": content }),
+                )
+                .await
+            }
+            "pushplushxtrip" => {
+                let url = if endpoint.is_empty() {
+                    "https://pushplus.hxtrip.com/send".to_string()
                 } else {
                     endpoint.to_string()
                 };
@@ -141,6 +185,46 @@ impl PushService {
                 };
                 self.send_get(&url).await
             }
+            "gocqhttp" | "onebot" | "atri" => {
+                if endpoint.is_empty() {
+                    return missing_endpoint(channel);
+                }
+                self.send_form_or_json(
+                    endpoint,
+                    serde_json::json!({
+                        "message": format!("{title}\n{content}"),
+                    }),
+                )
+                .await
+            }
+            "pushdeer" => {
+                let url = if endpoint.is_empty() {
+                    "https://api2.pushdeer.com/message/push".to_string()
+                } else {
+                    endpoint.to_string()
+                };
+                self.send_form_or_json(
+                    &url,
+                    serde_json::json!({
+                        "pushkey": token,
+                        "text": title,
+                        "desp": content,
+                    }),
+                )
+                .await
+            }
+            "igot" => {
+                let url = if endpoint.is_empty() {
+                    format!("https://push.hellyw.com/{token}")
+                } else {
+                    endpoint.to_string()
+                };
+                self.send_form_or_json(
+                    &url,
+                    serde_json::json!({ "title": title, "content": content }),
+                )
+                .await
+            }
             "telegram" => {
                 let url = if endpoint.contains("api.telegram.org") {
                     endpoint.to_string()
@@ -166,20 +250,63 @@ impl PushService {
                 )
                 .await
             }
-            "dingtalk" | "wecom" => {
+            "dingtalk" | "wecom" | "wecombot" | "feishu" => {
                 if endpoint.is_empty() {
-                    return PushResult {
-                        ok: false,
-                        code: "missing_endpoint".to_string(),
-                        msg: "该渠道需要 endpoint".to_string(),
-                        raw: serde_json::Value::Null,
-                    };
+                    return missing_endpoint(channel);
+                }
+                let body = if channel == "feishu" {
+                    serde_json::json!({
+                        "msg_type": "text",
+                        "content": { "text": format!("{title}\n{content}") },
+                    })
+                } else {
+                    serde_json::json!({
+                        "msgtype": "text",
+                        "text": { "content": format!("{title}\n{content}") },
+                    })
+                };
+                self.send_form_or_json(endpoint, body).await
+            }
+            "ifttt" => {
+                let url = if endpoint.is_empty() {
+                    format!("https://maker.ifttt.com/trigger/{title}/with/key/{token}")
+                } else {
+                    endpoint.to_string()
+                };
+                self.send_form_or_json(
+                    &url,
+                    serde_json::json!({
+                        "value1": title,
+                        "value2": content,
+                    }),
+                )
+                .await
+            }
+            "discord" => {
+                if endpoint.is_empty() {
+                    return missing_endpoint(channel);
                 }
                 self.send_form_or_json(
                     endpoint,
                     serde_json::json!({
-                        "msgtype": "text",
-                        "text": { "content": format!("{title}\n{content}") },
+                        "content": format!("**{title}**\n{content}"),
+                    }),
+                )
+                .await
+            }
+            "wxpusher" => {
+                let url = if endpoint.is_empty() {
+                    "https://wxpusher.zjiecode.com/api/send/message".to_string()
+                } else {
+                    endpoint.to_string()
+                };
+                self.send_form_or_json(
+                    &url,
+                    serde_json::json!({
+                        "appToken": token,
+                        "content": format!("{title}\n{content}"),
+                        "summary": title,
+                        "contentType": 1,
                     }),
                 )
                 .await
@@ -331,6 +458,15 @@ impl PushService {
     }
 }
 
+fn missing_endpoint(channel: &str) -> PushResult {
+    PushResult {
+        ok: false,
+        code: "missing_endpoint".to_string(),
+        msg: format!("渠道 {channel} 需要 endpoint"),
+        raw: serde_json::Value::Null,
+    }
+}
+
 fn urlencoding(s: &str) -> String {
     let mut out = String::new();
     for b in s.as_bytes() {
@@ -419,6 +555,26 @@ mod tests {
         let r = svc.send(&p).await;
         assert!(!r.ok);
         assert_eq!(r.code, "unsupported_channel");
+    }
+
+    #[tokio::test]
+    async fn panel_channels_are_all_routed() {
+        let svc = PushService::new();
+        assert_eq!(SUPPORTED_CHANNELS.len(), 19);
+        for ch in SUPPORTED_CHANNELS {
+            let p = PushPayload {
+                channel: (*ch).to_string(),
+                title: "t".to_string(),
+                content: "c".to_string(),
+                endpoint: "http://127.0.0.1:1/push".to_string(),
+                token: "tok".to_string(),
+            };
+            let r = svc.send(&p).await;
+            assert_ne!(
+                r.code, "unsupported_channel",
+                "panel channel {ch} must be implemented"
+            );
+        }
     }
 
     #[tokio::test]

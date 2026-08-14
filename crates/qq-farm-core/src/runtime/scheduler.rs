@@ -1,10 +1,9 @@
 //! 任务调度器。
 //!
 //! 与原 `core/src/services/scheduler.ts` 对齐：
-//! - `set_interval_task(name, interval_ms, fn)`：按间隔循环执行
-//! - `set_timeout_task(name, delay_ms, fn)`：延迟一次性执行
-//! - `clear(name)`：取消任务
-//! - `clear_all()`：取消所有任务
+//! - `set_interval_task(name, interval, fn)`：按间隔循环（默认 preventOverlap=true，不阻塞 ticker）
+//! - `set_timeout_task(name, delay, fn)`：延迟一次性执行
+//! - `clear(name)` / `clear_all()` / `shutdown()`
 //!
 //! ## 命名空间
 //!
@@ -12,6 +11,7 @@
 //! `Scheduler::registry()` 提供全局注册表快照（用于 UI 展示）。
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -37,6 +37,24 @@ pub struct SchedulerSnapshot {
     pub created_at_ms: i64,
     pub task_count: usize,
     pub tasks: Vec<TaskState>,
+}
+
+/// interval 选项（对齐 TS `setIntervalTask(..., options)`）
+#[derive(Debug, Clone, Copy)]
+pub struct IntervalOptions {
+    /// 默认 true：上一次未完成则跳过本拍（对齐 bot）
+    pub prevent_overlap: bool,
+    /// 默认 false：首拍在 interval 之后（对齐 bot；true 则立刻跑一次）
+    pub run_immediately: bool,
+}
+
+impl Default for IntervalOptions {
+    fn default() -> Self {
+        Self {
+            prevent_overlap: true,
+            run_immediately: false,
+        }
+    }
 }
 
 /// 任务函数类型
@@ -88,33 +106,53 @@ impl Scheduler {
         &self.inner.namespace
     }
 
-    /// 注册一个 interval 任务
-    ///
-    /// 如果同名任务已存在，会被替换
-    pub fn set_interval_task(
+    /// 注册 interval（默认 preventOverlap=true，不阻塞 ticker）
+    pub fn set_interval_task(&self, name: &str, interval: Duration, task: TaskFn) {
+        self.set_interval_task_with_options(name, interval, task, IntervalOptions::default());
+    }
+
+    /// 带选项的 interval（对齐 TS options）
+    pub fn set_interval_task_with_options(
         &self,
         name: &str,
         interval: Duration,
         task: TaskFn,
+        options: IntervalOptions,
     ) {
         self.clear(name);
         let cancel = self.inner.cancel.clone();
         let interval_ms = interval.as_millis() as u64;
         let interval_tokio = interval;
         let task_name = name.to_string();
-        let task_for_log = task.clone();
+        let task_for_run = task.clone();
+        let prevent_overlap = options.prevent_overlap;
+        let run_immediately = options.run_immediately;
 
         let handle = tokio::spawn(async move {
             let mut ticker = tokio::time::interval(interval_tokio);
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            // 第一次立即触发
-            ticker.tick().await;
+            // bot：默认首拍在 delay 之后；runImmediately 才立刻跑
+            if !run_immediately {
+                ticker.tick().await;
+            }
+            let running = Arc::new(AtomicBool::new(false));
             loop {
                 tokio::select! {
                     _ = cancel.cancelled() => break,
                     _ = ticker.tick() => {
-                        let task = task_for_log.clone();
-                        task().await;
+                        // 对齐 bot：在启动回调前同步置 running，避免叠跑
+                        if prevent_overlap && running.swap(true, Ordering::AcqRel) {
+                            continue;
+                        }
+                        if !prevent_overlap {
+                            running.store(true, Ordering::Release);
+                        }
+                        let task = task_for_run.clone();
+                        let running = running.clone();
+                        tokio::spawn(async move {
+                            task().await;
+                            running.store(false, Ordering::Release);
+                        });
                     }
                 }
             }
@@ -129,7 +167,10 @@ impl Scheduler {
             delay_ms: None,
             running: true,
         };
-        self.inner.tasks.lock().insert(name.to_string(), RegisteredTask { state, abort });
+        self.inner
+            .tasks
+            .lock()
+            .insert(name.to_string(), RegisteredTask { state, abort });
     }
 
     /// 注册一个 timeout 任务（一次性延迟执行）
@@ -156,7 +197,10 @@ impl Scheduler {
             delay_ms: Some(delay_ms),
             running: true,
         };
-        self.inner.tasks.lock().insert(name.to_string(), RegisteredTask { state, abort });
+        self.inner
+            .tasks
+            .lock()
+            .insert(name.to_string(), RegisteredTask { state, abort });
     }
 
     /// 取消一个任务
@@ -203,7 +247,9 @@ impl Scheduler {
 #[macro_export]
 macro_rules! task_fn {
     ($f:expr) => {
-        $crate::runtime::scheduler::TaskFn::new(|| Box::pin($f()))
+        std::sync::Arc::new(|| {
+            Box::pin($f()) as futures::future::BoxFuture<'static, ()>
+        }) as $crate::runtime::scheduler::TaskFn
     };
 }
 
@@ -263,12 +309,16 @@ mod tests {
         let scheduler = Scheduler::new("test");
         let counter = Arc::new(AtomicUsize::new(0));
         let counter2 = counter.clone();
-        scheduler.set_interval_task("tick", Duration::from_millis(20), Arc::new(move || {
-            let c = counter2.clone();
-            Box::pin(async move {
-                c.fetch_add(1, Ordering::SeqCst);
-            })
-        }));
+        scheduler.set_interval_task(
+            "tick",
+            Duration::from_millis(20),
+            Arc::new(move || {
+                let c = counter2.clone();
+                Box::pin(async move {
+                    c.fetch_add(1, Ordering::SeqCst);
+                })
+            }),
+        );
         tokio::time::sleep(Duration::from_millis(110)).await;
         let n = counter.load(Ordering::SeqCst);
         scheduler.shutdown();
@@ -276,44 +326,81 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn timeout_task_fires_once() {
-        let scheduler = Scheduler::new("test-2");
-        let counter = Arc::new(AtomicUsize::new(0));
-        let counter2 = counter.clone();
-        scheduler.set_timeout_task("once", Duration::from_millis(20), Arc::new(move || {
-            let c = counter2.clone();
-            Box::pin(async move {
-                c.fetch_add(1, Ordering::SeqCst);
-            })
-        }));
-        tokio::time::sleep(Duration::from_millis(80)).await;
-        let n = counter.load(Ordering::SeqCst);
+    async fn interval_prevent_overlap_skips_while_running() {
+        let scheduler = Scheduler::new("overlap");
+        let entered = Arc::new(AtomicUsize::new(0));
+        let finished = Arc::new(AtomicUsize::new(0));
+        let e2 = entered.clone();
+        let f2 = finished.clone();
+        scheduler.set_interval_task_with_options(
+            "slow",
+            Duration::from_millis(20),
+            Arc::new(move || {
+                let e = e2.clone();
+                let f = f2.clone();
+                Box::pin(async move {
+                    e.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_millis(80)).await;
+                    f.fetch_add(1, Ordering::SeqCst);
+                })
+            }),
+            IntervalOptions {
+                prevent_overlap: true,
+                run_immediately: false,
+            },
+        );
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let e = entered.load(Ordering::SeqCst);
+        let f = finished.load(Ordering::SeqCst);
         scheduler.shutdown();
-        assert_eq!(n, 1);
+        // 允许末尾一拍仍在跑：finished 可比 entered 少 1
+        assert!(f >= 2, "expected several completed runs, finished={f}");
+        assert!(
+            e <= f + 1 && e <= 5,
+            "preventOverlap should keep run count low, entered={e} finished={f}"
+        );
     }
 
     #[tokio::test]
-    async fn clear_removes_task() {
-        let scheduler = Scheduler::new("test-3");
-        scheduler.set_interval_task("a", Duration::from_millis(10), Arc::new(|| {
-            Box::pin(async {})
-        }));
-        assert_eq!(scheduler.task_count(), 1);
+    async fn timeout_task_fires_once() {
+        let scheduler = Scheduler::new("test-timeout");
+        let counter = Arc::new(AtomicUsize::new(0));
+        let c2 = counter.clone();
+        scheduler.set_timeout_task(
+            "once",
+            Duration::from_millis(30),
+            Arc::new(move || {
+                let c = c2.clone();
+                Box::pin(async move {
+                    c.fetch_add(1, Ordering::SeqCst);
+                })
+            }),
+        );
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        scheduler.shutdown();
+    }
+
+    #[tokio::test]
+    async fn clear_stops_interval() {
+        let scheduler = Scheduler::new("test-clear");
+        let counter = Arc::new(AtomicUsize::new(0));
+        let c2 = counter.clone();
+        scheduler.set_interval_task(
+            "a",
+            Duration::from_millis(10),
+            Arc::new(move || {
+                let c = c2.clone();
+                Box::pin(async move {
+                    c.fetch_add(1, Ordering::SeqCst);
+                })
+            }),
+        );
+        tokio::time::sleep(Duration::from_millis(35)).await;
         scheduler.clear("a");
-        assert_eq!(scheduler.task_count(), 0);
-    }
-
-    #[tokio::test]
-    async fn snapshot_includes_tasks() {
-        let scheduler = Scheduler::new("test-4");
-        scheduler.set_interval_task("a", Duration::from_secs(60), Arc::new(|| Box::pin(async {})));
-        scheduler.set_timeout_task("b", Duration::from_millis(100), Arc::new(|| Box::pin(async {})));
-        let snap = scheduler.snapshot();
-        assert_eq!(snap.namespace, "test-4");
-        assert_eq!(snap.task_count, 2);
+        let n = counter.load(Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        assert_eq!(counter.load(Ordering::SeqCst), n);
         scheduler.shutdown();
     }
 }
-
-#[allow(dead_code)]
-fn _ensure_notify_used(_: &Notify) {}

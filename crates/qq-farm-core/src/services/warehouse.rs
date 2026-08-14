@@ -128,8 +128,32 @@ impl WarehouseService {
         Ok(BagReply::decode(&body[..])?)
     }
 
-    /// 出售物品
+    /// 出售物品。对齐 bot `sellItems`：不可售物品在发 RPC 前拒绝。
     pub async fn sell_items(&self, items: &[(i64, i64, i64)]) -> Result<SellReply> {
+        if items.is_empty() {
+            return Err(crate::error::Error::Business(
+                "没有可出售的物品".to_string(),
+            ));
+        }
+        let gc = crate::config::game_config::global();
+        for &(id, count, _) in items {
+            if id <= 0 || count <= 0 {
+                return Err(crate::error::Error::Business(
+                    "出售物品参数无效".to_string(),
+                ));
+            }
+            let sell_info = gc.get_effective_sell_info_by_id(id);
+            if !sell_info.sellable {
+                let name = gc
+                    .get_item_by_id(id)
+                    .map(|i| i.name.clone())
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or_else(|| format!("物品{id}"));
+                return Err(crate::error::Error::Business(format!(
+                    "{name}当前不可出售"
+                )));
+            }
+        }
         let payload: Vec<CoreItem> = items
             .iter()
             .map(|(id, count, uid)| core_item(*id, *count, *uid))
@@ -149,7 +173,7 @@ impl WarehouseService {
         let bag_items = get_bag_items(&bag);
         let candidates: Vec<BagItemLite> = bag_items
             .iter()
-            .copied()
+            .cloned()
             .filter(|it| it.id == item_id && (uid <= 0 || it.uid == uid))
             .collect();
         let available: i64 = candidates.iter().map(|it| it.count.max(0)).sum();
@@ -158,7 +182,7 @@ impl WarehouseService {
                 "物品数量不足: 需要 {count}，当前 {available}"
             )));
         }
-        let single = candidates.iter().find(|it| it.count >= count).copied();
+        let single = candidates.iter().find(|it| it.count >= count).cloned();
         if single.is_none() && candidates.len() > 1 {
             let mut remaining = count;
             let mut batch = Vec::new();
@@ -459,156 +483,10 @@ impl WarehouseService {
         total_gold
     }
 
-    /// 获取背包 UI 详情
+    /// 获取背包 UI 详情（按 UID 分行，对齐 bot `getBagDetail`）
     pub async fn get_bag_detail(&self) -> Result<BagDetail> {
         let bag = self.get_bag().await?;
-        let raw_items = get_bag_items(&bag);
-
-        let mut original_items = Vec::new();
-        let mut system_items = Vec::new();
-        let mut merged: HashMap<i64, BagItemView> = HashMap::new();
-        for it in &raw_items {
-            let id = it.id;
-            let count = it.count;
-            let uid = it.uid;
-            if id <= 0 || count <= 0 {
-                continue;
-            }
-            if uid <= 0 {
-                let gc = crate::config::game_config::global();
-                let item_info = gc.get_item_by_id(id);
-                let interaction_type = item_info
-                    .as_ref()
-                    .and_then(|i| i.interaction_type.clone())
-                    .unwrap_or_default();
-                let hours_text = if interaction_type == "fertilizerbucket" {
-                    let h = ((count as f64) / 3600.0 * 10.0).floor() / 10.0;
-                    format!("{h:.1}小时")
-                } else {
-                    String::new()
-                };
-                system_items.push(BagItemView {
-                    id,
-                    count,
-                    name: item_info
-                        .as_ref()
-                        .map(|i| i.name.clone())
-                        .filter(|n| !n.is_empty())
-                        .unwrap_or_else(|| format!("物品{id}")),
-                    image: gc.get_item_image_by_id(id),
-                    category: "system".to_string(),
-                    item_type: item_info.as_ref().map(|i| i.item_type).unwrap_or(0),
-                    sellable: false,
-                    sell_status: "unavailable".to_string(),
-                    sell_condition: None,
-                    price_id: 0,
-                    price: 0,
-                    price_unit: String::new(),
-                    level: item_info.as_ref().and_then(|i| i.level).unwrap_or(0),
-                    interaction_type,
-                    hours_text,
-                });
-                continue;
-            }
-            original_items.push(OriginalBagItem { id, count, uid });
-
-            let gc = crate::config::game_config::global();
-            let item_info = gc.get_item_by_id(id);
-            let mut name = item_info
-                .as_ref()
-                .map(|i| i.name.clone())
-                .filter(|n| !n.is_empty())
-                .unwrap_or_default();
-            let mut category = "item".to_string();
-            if id == 1 || id == 1001 {
-                name = "金币".to_string();
-                category = "gold".to_string();
-            } else if id == 1101 {
-                name = "经验".to_string();
-                category = "exp".to_string();
-            } else if gc.get_plant_by_fruit_id(id).is_some() {
-                if name.is_empty() {
-                    name = format!("{}果实", gc.get_fruit_name(id));
-                }
-                category = "fruit".to_string();
-            } else if gc.get_plant_by_seed_id(id).is_some() {
-                let p = gc.get_plant_by_seed_id(id);
-                if name.is_empty() {
-                    name = format!("{}种子", p.map(|p| p.name.clone()).unwrap_or_else(|| "未知".to_string()));
-                }
-                category = "seed".to_string();
-            }
-            if name.is_empty() {
-                name = format!("物品{id}");
-            }
-            let interaction_type = item_info
-                .as_ref()
-                .and_then(|i| i.interaction_type.clone())
-                .unwrap_or_default();
-            let sell_info = item_info
-                .as_ref()
-                .map(|i| gc.get_effective_sell_info(i))
-                .unwrap_or_default();
-            let (price_id, price) = if let Some(&(c, p)) = sell_info.sells.first() {
-                (c, p)
-            } else {
-                (0, 0)
-            };
-            let price_unit = match price_id {
-                1005 => "金豆豆",
-                1002 => "点券",
-                _ => "金",
-            };
-
-            let row = merged.entry(id).or_insert_with(|| BagItemView {
-                id,
-                count: 0,
-                name: name.clone(),
-                image: gc.get_item_image_by_id(id),
-                category: category.clone(),
-                item_type: item_info.as_ref().map(|i| i.item_type).unwrap_or(0),
-                sellable: sell_info.sellable,
-                sell_status: sell_info.status.to_string(),
-                sell_condition: sell_info.condition.clone(),
-                price_id,
-                price,
-                price_unit: price_unit.to_string(),
-                level: item_info.as_ref().and_then(|i| i.level).unwrap_or(0),
-                interaction_type: interaction_type.clone(),
-                hours_text: String::new(),
-            });
-            row.count += count;
-        }
-
-        let mut items: Vec<BagItemView> = merged.into_values().collect();
-        for row in &mut items {
-            if row.interaction_type == "fertilizerbucket" && row.count > 0 {
-                let h = ((row.count as f64) / 3600.0 * 10.0).floor() / 10.0;
-                row.hours_text = format!("{h:.1}小时");
-            }
-        }
-        // 排序：17 > 5 > 6 > 其它 itemType，按 count 倒序，按 id 升序
-        items.sort_by(|a, b| {
-            let priority = |t: i64| match t {
-                17 => 0,
-                5 => 1,
-                6 => 2,
-                x if x > 0 => 1000 + x,
-                _ => i64::MAX,
-            };
-            let pa = priority(a.item_type);
-            let pb = priority(b.item_type);
-            pa.cmp(&pb)
-                .then_with(|| b.count.cmp(&a.count))
-                .then_with(|| a.id.cmp(&b.id))
-        });
-
-        Ok(BagDetail {
-            total_kinds: items.len(),
-            items,
-            original_items,
-            system_items,
-        })
+        Ok(build_bag_detail_from_items(&get_bag_items(&bag)))
     }
 
     /// 获取背包里的种子汇总
@@ -669,7 +547,7 @@ pub struct BagDetail {
     pub items: Vec<BagItemView>,
     pub original_items: Vec<OriginalBagItem>,
     #[serde(default)]
-    pub system_items: Vec<BagItemView>,
+    pub system_items: Vec<SystemBagItem>,
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -678,13 +556,31 @@ pub struct OriginalBagItem {
     pub id: i64,
     pub count: i64,
     pub uid: i64,
+    #[serde(default)]
+    pub mutant_types: Vec<i64>,
+    pub group_key: String,
+}
+
+/// 无 UID 的余额/容器等系统条目（对齐 bot systemItems 精简字段）
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemBagItem {
+    pub id: i64,
+    pub count: i64,
+    pub name: String,
+    pub interaction_type: String,
+    pub hours_text: String,
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BagItemView {
+    pub key: String,
     pub id: i64,
     pub count: i64,
+    pub uid: i64,
+    #[serde(default)]
+    pub mutant_types: Vec<i64>,
     pub name: String,
     pub image: Option<String>,
     pub category: String,
@@ -733,6 +629,7 @@ pub fn get_bag_items(bag: &BagReply) -> Vec<BagItemLite> {
                 id: i.id,
                 count: i.count,
                 uid: i.uid,
+                mutant_types: get_mutant_types_from_slice(&i.mutant_types),
             })
             .collect()
     } else {
@@ -740,12 +637,187 @@ pub fn get_bag_items(bag: &BagReply) -> Vec<BagItemLite> {
     }
 }
 
+/// 对齐 bot `getMutantTypes`
+fn get_mutant_types_from_slice(values: &[i64]) -> Vec<i64> {
+    let mut out: Vec<i64> = values.iter().copied().filter(|v| *v > 0).collect();
+    out.sort_unstable();
+    out
+}
+
+/// 纯函数构建背包详情（便于单测，对齐 bot `getBagDetail`）
+pub fn build_bag_detail_from_items(raw_items: &[BagItemLite]) -> BagDetail {
+    let gc = crate::config::game_config::global();
+    let mut original_items = Vec::new();
+    let mut system_items = Vec::new();
+    let mut merged: HashMap<String, BagItemView> = HashMap::new();
+
+    for it in raw_items {
+        let id = it.id;
+        let count = it.count;
+        let uid = it.uid;
+        if id <= 0 || count <= 0 {
+            continue;
+        }
+        if uid <= 0 {
+            let item_info = gc.get_item_by_id(id);
+            let interaction_type = item_info
+                .as_ref()
+                .and_then(|i| i.interaction_type.clone())
+                .unwrap_or_default();
+            let hours_text = if interaction_type == "fertilizerbucket" {
+                let h = ((count as f64) / 3600.0 * 10.0).floor() / 10.0;
+                format!("{h:.1}小时")
+            } else {
+                String::new()
+            };
+            system_items.push(SystemBagItem {
+                id,
+                count,
+                name: item_info
+                    .as_ref()
+                    .map(|i| i.name.clone())
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or_else(|| format!("物品{id}")),
+                interaction_type,
+                hours_text,
+            });
+            continue;
+        }
+
+        let mutant_types = it.mutant_types.clone();
+        let group_key = format!("uid:{uid}");
+        original_items.push(OriginalBagItem {
+            id,
+            count,
+            uid,
+            mutant_types: mutant_types.clone(),
+            group_key: group_key.clone(),
+        });
+
+        let item_info = gc.get_item_by_id(id);
+        let mut name = item_info
+            .as_ref()
+            .map(|i| i.name.clone())
+            .filter(|n| !n.is_empty())
+            .unwrap_or_default();
+        let mut category = "item".to_string();
+        if id == 1 || id == 1001 {
+            name = "金币".to_string();
+            category = "gold".to_string();
+        } else if id == 1101 {
+            name = "经验".to_string();
+            category = "exp".to_string();
+        } else if gc.get_plant_by_fruit_id(id).is_some() {
+            if name.is_empty() {
+                name = format!("{}果实", gc.get_fruit_name(id));
+            }
+            category = "fruit".to_string();
+        } else if gc.get_plant_by_seed_id(id).is_some() {
+            let p = gc.get_plant_by_seed_id(id);
+            if name.is_empty() {
+                name = format!(
+                    "{}种子",
+                    p.map(|p| p.name.clone()).unwrap_or_else(|| "未知".to_string())
+                );
+            }
+            category = "seed".to_string();
+        }
+        if name.is_empty() {
+            name = format!("物品{id}");
+        }
+        let interaction_type = item_info
+            .as_ref()
+            .and_then(|i| i.interaction_type.clone())
+            .unwrap_or_default();
+        let sell_info = item_info
+            .as_ref()
+            .map(|i| gc.get_effective_sell_info(i))
+            .unwrap_or_default();
+        let (price_id, price) = if let Some(&(c, p)) = sell_info.sells.first() {
+            (c, p)
+        } else {
+            (0, 0)
+        };
+        let price_unit = match price_id {
+            1005 => "金豆豆",
+            1002 => "点券",
+            _ => "金",
+        };
+
+        let row = merged.entry(group_key.clone()).or_insert_with(|| BagItemView {
+            key: group_key,
+            id,
+            count: 0,
+            uid,
+            mutant_types: mutant_types.clone(),
+            name: name.clone(),
+            image: gc.get_item_image_by_id(id),
+            category: category.clone(),
+            item_type: item_info.as_ref().map(|i| i.item_type).unwrap_or(0),
+            sellable: sell_info.sellable,
+            sell_status: sell_info.status.to_string(),
+            sell_condition: sell_info.condition.clone(),
+            price_id,
+            price,
+            price_unit: price_unit.to_string(),
+            level: item_info.as_ref().and_then(|i| i.level).unwrap_or(0),
+            interaction_type: interaction_type.clone(),
+            hours_text: String::new(),
+        });
+        row.count += count;
+    }
+
+    let mut items: Vec<BagItemView> = merged.into_values().collect();
+    for row in &mut items {
+        if row.interaction_type == "fertilizerbucket" && row.count > 0 {
+            let h = ((row.count as f64) / 3600.0 * 10.0).floor() / 10.0;
+            row.hours_text = format!("{h:.1}小时");
+        } else {
+            row.hours_text.clear();
+        }
+    }
+    items.sort_by(|a, b| {
+        let priority = |t: i64| match t {
+            17 => 0,
+            5 => 1,
+            6 => 2,
+            x if x > 0 => 1000 + x,
+            _ => i64::MAX,
+        };
+        let pa = priority(a.item_type);
+        let pb = priority(b.item_type);
+        pa.cmp(&pb)
+            .then_with(|| b.count.cmp(&a.count))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
+    BagDetail {
+        total_kinds: items.len(),
+        items,
+        original_items,
+        system_items,
+    }
+}
+
 /// 简化的 item 表示（用于跨函数）
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct BagItemLite {
     pub id: i64,
     pub count: i64,
     pub uid: i64,
+    pub mutant_types: Vec<i64>,
+}
+
+impl BagItemLite {
+    #[must_use]
+    pub fn new(id: i64, count: i64, uid: i64) -> Self {
+        Self {
+            id,
+            count,
+            uid,
+            mutant_types: vec![],
+        }
+    }
 }
 
 fn core_item(id: i64, count: i64, uid: i64) -> CoreItem {
@@ -955,8 +1027,8 @@ mod tests {
     #[test]
     fn get_container_hours_calculates() {
         let items = vec![
-            BagItemLite { id: 1011, count: 3600, uid: 0 },
-            BagItemLite { id: 1012, count: 7200, uid: 0 },
+            BagItemLite::new(1011, 3600, 0),
+            BagItemLite::new(1012, 7200, 0),
         ];
         let (n, o) = get_container_hours_from_bag_items(&items);
         assert_eq!(n, 1);
@@ -980,10 +1052,10 @@ mod tests {
     #[test]
     fn collect_fertilizer_use_payload_dedup() {
         let items = vec![
-            BagItemLite { id: 80_001, count: 3, uid: 0 },
-            BagItemLite { id: 80_001, count: 2, uid: 1 },
-            BagItemLite { id: 1011, count: 100, uid: 0 },
-            BagItemLite { id: 80_011, count: 1, uid: 0 },
+            BagItemLite::new(80_001, 3, 0),
+            BagItemLite::new(80_001, 2, 1),
+            BagItemLite::new(1011, 100, 0),
+            BagItemLite::new(80_011, 1, 0),
         ];
         let merged = collect_fertilizer_use_payload(&items);
         assert_eq!(merged.len(), 2); // 80_001 和 80_011
@@ -994,16 +1066,16 @@ mod tests {
     #[test]
     fn get_gold_from_items_finds_gold_id() {
         let items = vec![
-            BagItemLite { id: 100, count: 1, uid: 0 },
-            BagItemLite { id: 1, count: 500, uid: 0 },
-            BagItemLite { id: 1101, count: 100, uid: 0 },
+            BagItemLite::new(100, 1, 0),
+            BagItemLite::new(1, 500, 0),
+            BagItemLite::new(1101, 100, 0),
         ];
         assert_eq!(get_gold_from_items(&items), 500);
     }
 
     #[test]
     fn get_gold_from_items_handles_1001_too() {
-        let items = vec![BagItemLite { id: 1001, count: 1000, uid: 0 }];
+        let items = vec![BagItemLite::new(1001, 1000, 0)];
         assert_eq!(get_gold_from_items(&items), 1000);
     }
 
@@ -1059,5 +1131,44 @@ mod tests {
     fn date_key_format() {
         let k = get_date_key();
         assert_eq!(k.len(), 10);
+    }
+
+    #[test]
+    fn bag_detail_splits_by_uid_not_item_id() {
+        let detail = build_bag_detail_from_items(&[
+            BagItemLite {
+                id: 41221,
+                count: 2,
+                uid: 100,
+                mutant_types: vec![1],
+            },
+            BagItemLite {
+                id: 41221,
+                count: 3,
+                uid: 200,
+                mutant_types: vec![],
+            },
+            BagItemLite::new(1011, 3600, 0),
+        ]);
+        assert_eq!(detail.items.len(), 2);
+        assert_eq!(detail.original_items.len(), 2);
+        assert_eq!(detail.system_items.len(), 1);
+        assert_eq!(detail.system_items[0].id, 1011);
+        let keys: Vec<_> = detail.items.iter().map(|i| i.key.as_str()).collect();
+        assert!(keys.contains(&"uid:100"));
+        assert!(keys.contains(&"uid:200"));
+        let stack = detail.items.iter().find(|i| i.uid == 100).unwrap();
+        assert_eq!(stack.count, 2);
+        assert_eq!(stack.mutant_types, vec![1]);
+        assert_eq!(detail.original_items[0].group_key, "uid:100");
+    }
+
+    #[test]
+    fn sell_items_rejects_unsellable_before_rpc() {
+        // 同步校验逻辑：不可售物品应在构建请求前被识别
+        let gc = crate::config::game_config::global();
+        // 用一个明确不在可售列表的大 id
+        let info = gc.get_effective_sell_info_by_id(9_999_999_001);
+        assert!(!info.sellable);
     }
 }

@@ -103,7 +103,7 @@ async fn e2e_register_login_validate_flow() {
     let bytes = to_bytes(resp.into_body(), 1024).await.unwrap();
     let v: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(v["ok"], true);
-    assert_eq!(v["username"], username);
+    assert_eq!(v["data"]["valid"], true);
 
     // 4. 错误 token → 401
     let resp = app
@@ -465,9 +465,9 @@ async fn e2e_account_creation_returns_account_id() {
     let body = to_bytes(resp.into_body(), 1024).await.unwrap();
     let v: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(v["ok"], true, "register 应成功: {v}");
-    // 检查 user 字段
-    assert!(v["user"].is_object(), "user 字段应存在: {v}");
-    let user_obj = &v["user"];
+    // 注册成功体在 data 下（ok_data），含 username/role/card
+    assert!(v["data"].is_object(), "data 字段应存在: {v}");
+    let user_obj = &v["data"];
     assert_eq!(user_obj["username"], username);
     assert_eq!(user_obj["role"], "user");
 }

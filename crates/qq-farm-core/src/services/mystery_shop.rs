@@ -53,18 +53,17 @@ impl MysteryShopService {
         Ok(GetActiveNpcReply::decode(&body[..])?)
     }
 
-    /// 购买指定 NPC 的商品
+    /// 购买指定 NPC 的商品（对齐 bot：无回包）
     ///
     /// # Errors
     /// - 网络 / 网关错误
     pub async fn buy(&self, npc_id: i64) -> Result<()> {
         let req = BuyRequest { npc_id };
         self.gateway
-            .request(
+            .send_no_reply(
                 MYSTERY_SHOP_SERVICE,
                 "Buy",
                 &req.encode_to_vec(),
-                10_000,
             )
             .await?;
         Ok(())

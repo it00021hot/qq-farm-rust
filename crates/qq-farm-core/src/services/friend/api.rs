@@ -28,6 +28,10 @@ pub struct FriendApi {
     gateway: Arc<Gateway>,
     account_id: Arc<parking_lot::Mutex<String>>,
     on_operation_limits_update: Arc<parking_lot::Mutex<Option<crate::services::farm::api::OperationLimitsCallback>>>,
+    /// 捣乱日限门控（对齐 TS schedulerRef）
+    bad_is_limit_reached: Arc<parking_lot::Mutex<Option<Arc<dyn Fn() -> bool + Send + Sync>>>>,
+    bad_remaining: Arc<parking_lot::Mutex<Option<Arc<dyn Fn() -> i64 + Send + Sync>>>>,
+    bad_mark_limit: Arc<parking_lot::Mutex<Option<Arc<dyn Fn(&str) + Send + Sync>>>>,
     /// FriendService 串行（对齐 TS rate-limiter maxConcurrent=1）
     rpc_gate: Arc<AsyncMutex<()>>,
     last_list: Arc<parking_lot::Mutex<Option<(Instant, Vec<GameFriend>)>>>,
@@ -41,6 +45,9 @@ impl FriendApi {
             gateway,
             account_id: Arc::new(parking_lot::Mutex::new(String::new())),
             on_operation_limits_update: Arc::new(parking_lot::Mutex::new(None)),
+            bad_is_limit_reached: Arc::new(parking_lot::Mutex::new(None)),
+            bad_remaining: Arc::new(parking_lot::Mutex::new(None)),
+            bad_mark_limit: Arc::new(parking_lot::Mutex::new(None)),
             rpc_gate: Arc::new(AsyncMutex::new(())),
             last_list: Arc::new(parking_lot::Mutex::new(None)),
         }
@@ -61,6 +68,42 @@ impl FriendApi {
         cb: crate::services::farm::api::OperationLimitsCallback,
     ) {
         *self.on_operation_limits_update.lock() = Some(cb);
+    }
+
+    /// 设置捣乱日限门控（对齐 TS `isBadOperationLimitReached` / remaining / mark）
+    pub fn set_bad_gate(
+        &self,
+        is_reached: Arc<dyn Fn() -> bool + Send + Sync>,
+        remaining: Arc<dyn Fn() -> i64 + Send + Sync>,
+        mark: Arc<dyn Fn(&str) + Send + Sync>,
+    ) {
+        *self.bad_is_limit_reached.lock() = Some(is_reached);
+        *self.bad_remaining.lock() = Some(remaining);
+        *self.bad_mark_limit.lock() = Some(mark);
+    }
+
+    fn bad_limit_reached(&self) -> bool {
+        self.bad_is_limit_reached
+            .lock()
+            .as_ref()
+            .map(|f| f())
+            .unwrap_or(false)
+    }
+
+    /// 对外：剩余捣乱次数（无门控时返回较大值）
+    #[must_use]
+    pub fn remaining_bad_times(&self) -> i64 {
+        self.bad_remaining
+            .lock()
+            .as_ref()
+            .map(|f| f())
+            .unwrap_or(999)
+    }
+
+    fn mark_bad_limit(&self, method: &str) {
+        if let Some(f) = self.bad_mark_limit.lock().as_ref() {
+            f(method);
+        }
     }
 
     fn fire_operation_limits(&self, limits: Vec<OperationLimit>) {
@@ -385,118 +428,163 @@ impl FriendApi {
         Ok(())
     }
 
-    /// 放草（捣乱）—— 对应原 `putWeeds` / `putWeedsDetailed`
-    ///
-    /// 简化实现：每块地独立发包；返回成功数。
+    /// 放草（捣乱）—— 对齐 bot `putWeedsDetailed`（按地、日限、1001046）
     pub async fn put_weeds(&self, host_gid: i64, land_ids: Vec<i64>) -> Result<usize> {
-        use crate::proto::generated::gamepb::plantpb::{
-            PutInsectsReply, PutInsectsRequest, PutWeedsReply, PutWeedsRequest,
-        };
-        let mut ok = 0usize;
-        for land_id in land_ids {
-            let body_weed = PutWeedsRequest {
-                host_gid,
-                land_ids: vec![land_id],
-            }
-            .encode_to_vec();
-            let weed_resp = self
-                .gateway
-                .request(
-                    "gamepb.plantpb.PlantService",
-                    "PutWeeds",
-                    &body_weed,
-                    DEFAULT_TIMEOUT_MS,
-                )
-                .await;
-            match weed_resp {
-                Ok(resp) => {
-                    if let Ok(reply) = PutWeedsReply::decode(&*resp) {
-                        self.fire_operation_limits(reply.operation_limits);
-                        ok += 1;
-                        continue;
-                    }
-                }
-                Err(_) => {}
-            }
-            // 退化：发 PutInsects
-            let body_insect = PutInsectsRequest {
-                host_gid,
-                land_ids: vec![land_id],
-            }
-            .encode_to_vec();
-            if let Ok(resp) = self
-                .gateway
-                .request(
-                    "gamepb.plantpb.PlantService",
-                    "PutInsects",
-                    &body_insect,
-                    DEFAULT_TIMEOUT_MS,
-                )
-                .await
-            {
-                if let Ok(reply) = PutInsectsReply::decode(&*resp) {
-                    self.fire_operation_limits(reply.operation_limits);
-                    ok += 1;
-                }
-            }
-        }
-        Ok(ok)
+        Ok(self
+            .put_plant_items_detailed(host_gid, land_ids, BadPutKind::Weeds)
+            .await
+            .ok)
     }
 
-    /// 放虫（捣乱）—— 对应原 `putInsects` / `putInsectsDetailed`
+    /// 放虫（捣乱）—— 对齐 bot `putInsectsDetailed`
     pub async fn put_insects(&self, host_gid: i64, land_ids: Vec<i64>) -> Result<usize> {
+        Ok(self
+            .put_plant_items_detailed(host_gid, land_ids, BadPutKind::Insects)
+            .await
+            .ok)
+    }
+
+    /// 详细放草/放虫结果
+    pub async fn put_weeds_detailed(
+        &self,
+        host_gid: i64,
+        land_ids: Vec<i64>,
+    ) -> BadPutResult {
+        self.put_plant_items_detailed(host_gid, land_ids, BadPutKind::Weeds)
+            .await
+    }
+
+    pub async fn put_insects_detailed(
+        &self,
+        host_gid: i64,
+        land_ids: Vec<i64>,
+    ) -> BadPutResult {
+        self.put_plant_items_detailed(host_gid, land_ids, BadPutKind::Insects)
+            .await
+    }
+
+    async fn put_plant_items_detailed(
+        &self,
+        host_gid: i64,
+        land_ids: Vec<i64>,
+        kind: BadPutKind,
+    ) -> BadPutResult {
+        use crate::network::error::NetworkError;
         use crate::proto::generated::gamepb::plantpb::{
             PutInsectsReply, PutInsectsRequest, PutWeedsReply, PutWeedsRequest,
         };
+
+        let mut ids: Vec<i64> = land_ids.into_iter().filter(|id| *id > 0).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        if ids.is_empty() {
+            return BadPutResult::default();
+        }
+        if self.bad_limit_reached() {
+            return BadPutResult {
+                ok: 0,
+                limit_reached: true,
+                failed: ids
+                    .iter()
+                    .map(|id| BadPutFail {
+                        land_id: *id,
+                        reason: "今日放虫/放草次数已达上限".into(),
+                    })
+                    .collect(),
+            };
+        }
+
+        let method = kind.method();
         let mut ok = 0usize;
-        for land_id in land_ids {
-            let body = PutInsectsRequest {
-                host_gid,
-                land_ids: vec![land_id],
+        let mut failed = Vec::new();
+        for (index, land_id) in ids.iter().copied().enumerate() {
+            if self.bad_limit_reached() || self.remaining_bad_times() <= 0 {
+                self.mark_bad_limit("operation_limit");
+                failed.extend(ids[index..].iter().map(|id| BadPutFail {
+                    land_id: *id,
+                    reason: "今日放虫/放草次数已达上限".into(),
+                }));
+                break;
             }
-            .encode_to_vec();
-            let resp = self
+
+            let body = match kind {
+                BadPutKind::Weeds => PutWeedsRequest {
+                    host_gid,
+                    land_ids: vec![land_id],
+                }
+                .encode_to_vec(),
+                BadPutKind::Insects => PutInsectsRequest {
+                    host_gid,
+                    land_ids: vec![land_id],
+                }
+                .encode_to_vec(),
+            };
+
+            match self
                 .gateway
                 .request(
                     "gamepb.plantpb.PlantService",
-                    "PutInsects",
+                    method,
                     &body,
                     DEFAULT_TIMEOUT_MS,
                 )
-                .await;
-            match resp {
-                Ok(r) => {
-                    if let Ok(reply) = PutInsectsReply::decode(&*r) {
-                        self.fire_operation_limits(reply.operation_limits);
-                        ok += 1;
-                        continue;
-                    }
-                }
-                _ => {}
-            }
-            // 退化：发 PutWeeds
-            let body_weed = PutWeedsRequest {
-                host_gid,
-                land_ids: vec![land_id],
-            }
-            .encode_to_vec();
-            if let Ok(r) = self
-                .gateway
-                .request(
-                    "gamepb.plantpb.PlantService",
-                    "PutWeeds",
-                    &body_weed,
-                    DEFAULT_TIMEOUT_MS,
-                )
                 .await
             {
-                if let Ok(reply) = PutWeedsReply::decode(&*r) {
-                    self.fire_operation_limits(reply.operation_limits);
-                    ok += 1;
+                Ok(resp) => {
+                    let confirmed = match kind {
+                        BadPutKind::Weeds => PutWeedsReply::decode(&*resp)
+                            .map(|reply| {
+                                self.fire_operation_limits(reply.operation_limits);
+                                reply.land.iter().any(|l| l.id == land_id)
+                            })
+                            .unwrap_or(false),
+                        BadPutKind::Insects => PutInsectsReply::decode(&*resp)
+                            .map(|reply| {
+                                self.fire_operation_limits(reply.operation_limits);
+                                reply.land.iter().any(|l| l.id == land_id)
+                            })
+                            .unwrap_or(false),
+                    };
+                    if confirmed {
+                        ok += 1;
+                    } else {
+                        failed.push(BadPutFail {
+                            land_id,
+                            reason: "服务端未确认土地状态变化".into(),
+                        });
+                    }
+                }
+                Err(e) => {
+                    let limit = matches!(
+                        &e,
+                        NetworkError::Gateway { code: 1_001_046, .. }
+                    );
+                    if limit {
+                        self.mark_bad_limit(method);
+                        failed.extend(ids[index..].iter().map(|id| BadPutFail {
+                            land_id: *id,
+                            reason: "今日放虫/放草次数已达上限".into(),
+                        }));
+                        break;
+                    }
+                    failed.push(BadPutFail {
+                        land_id,
+                        reason: e.to_string(),
+                    });
                 }
             }
+
+            if index + 1 < ids.len() && !self.bad_limit_reached() {
+                let ms = 80 + (index as u64 % 80);
+                tokio::time::sleep(Duration::from_millis(ms)).await;
+            }
         }
-        Ok(ok)
+
+        BadPutResult {
+            ok,
+            failed,
+            limit_reached: self.bad_limit_reached(),
+        }
     }
 
     /// 检查某操作是否可执行（对应原 `checkCanOperate`）
@@ -524,6 +612,34 @@ impl FriendApi {
         let reply = CheckCanOperateReply::decode(&*resp).map_err(Error::from)?;
         Ok((reply.can_operate, reply.can_steal_num))
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BadPutKind {
+    Weeds,
+    Insects,
+}
+
+impl BadPutKind {
+    fn method(self) -> &'static str {
+        match self {
+            Self::Weeds => "PutWeeds",
+            Self::Insects => "PutInsects",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct BadPutResult {
+    pub ok: usize,
+    pub failed: Vec<BadPutFail>,
+    pub limit_reached: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct BadPutFail {
+    pub land_id: i64,
+    pub reason: String,
 }
 
 fn decode_get_all_friends(resp: &[u8]) -> Vec<GameFriend> {
