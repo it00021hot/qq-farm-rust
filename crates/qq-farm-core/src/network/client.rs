@@ -20,8 +20,8 @@ use std::collections::HashMap;
 use futures::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::handshake::client::{generate_key, Request as WsRequest};
-use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Message as WsMessage};
-use tokio_tungstenite::{connect_async, WebSocketStream};
+use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Message as WsMessage, WebSocketConfig};
+use tokio_tungstenite::{connect_async_with_config, WebSocketStream};
 
 use crate::network::error::{NetworkError, Result};
 
@@ -88,11 +88,18 @@ impl WsClient {
             .body(())
             .map_err(|e| NetworkError::WebSocket(format!("build request: {e}")))?;
 
-        let (stream, _response) = connect_async(request)
+        // 对齐 Node `ws` 默认 maxPayload=100MB。GetAll 好友回包带图鉴/头像框时，
+        // tungstenite 默认 max_frame_size=16MB 会直接丢掉该帧，表现为 20s 超时。
+        #[allow(deprecated)]
+        let mut ws_config = WebSocketConfig::default();
+        ws_config.max_message_size = Some(100 * 1024 * 1024);
+        ws_config.max_frame_size = Some(100 * 1024 * 1024);
+        ws_config.write_buffer_size = 0;
+        let (stream, _response) = connect_async_with_config(request, Some(ws_config), false)
             .await
             .map_err(|e| NetworkError::WebSocket(format!("connect: {e}")))?;
 
-        let rx_capacity = if options.rx_capacity == 0 { 64 } else { options.rx_capacity };
+        let rx_capacity = if options.rx_capacity == 0 { 256 } else { options.rx_capacity };
         let (frame_tx, frame_rx) = mpsc::channel::<ReceivedFrame>(rx_capacity);
         let (cmd_tx, cmd_rx) = mpsc::channel::<WsCommand>(32);
 
@@ -133,8 +140,6 @@ async fn run_io_task(
 ) {
     loop {
         tokio::select! {
-            // 优先处理读
-            biased;
             frame = stream.next() => {
                 match frame {
                     Some(Ok(WsMessage::Binary(data))) => {

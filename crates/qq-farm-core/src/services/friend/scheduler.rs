@@ -146,6 +146,8 @@ pub struct FriendService {
     is_checking: AtomicBool,
     /// 对齐 TS `externalSchedulerMode`
     external_scheduler: AtomicBool,
+    /// 对齐 TS `friendsListCache`（仅面板 HTTP，巡查不走这份缓存）
+    friends_list_cache: Mutex<Option<(u64, Vec<serde_json::Value>)>>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -208,6 +210,7 @@ impl FriendService {
             help_auto_disabled: AtomicBool::new(false),
             is_checking: AtomicBool::new(false),
             external_scheduler: AtomicBool::new(false),
+            friends_list_cache: Mutex::new(None),
         }
     }
 
@@ -437,10 +440,12 @@ impl FriendService {
         let friends = match self.api.get_all_game_friends().await {
             Ok(f) => f,
             Err(e) => {
+                let raw = e.to_string();
+                let msg = raw.strip_prefix("network error: ").unwrap_or(&raw);
                 crate::services::panel_log::log_warn(
                     account_id,
                     "好友",
-                    format!("巡查异常: {e}"),
+                    format!("巡查异常: {msg}"),
                     Some(serde_json::json!({
                         "module": "friend",
                         "event": "friend_cycle",
@@ -904,8 +909,25 @@ impl FriendService {
     }
 
     /// 获取好友列表（1:1 对齐原 TS `getFriendsList`）
-    pub async fn get_friends_list(&self, _force: bool) -> Result<Vec<serde_json::Value>> {
+    pub async fn get_friends_list(&self, force: bool) -> Result<Vec<serde_json::Value>> {
         let account_id = self.account_id.lock().clone();
+        let ttl_ms = crate::models::store::account_config::get_friends_list_cache_ttl_sec(
+            if account_id.is_empty() {
+                None
+            } else {
+                Some(account_id.as_str())
+            },
+        )
+        .max(10) as u64
+            * 1000;
+        let now = now_ms();
+        if !force {
+            if let Some((cached_at, cached)) = self.friends_list_cache.lock().as_ref() {
+                if now.saturating_sub(*cached_at) < ttl_ms {
+                    return Ok(cached.clone());
+                }
+            }
+        }
         crate::services::panel_log::log(
             &account_id,
             "好友",
@@ -915,13 +937,15 @@ impl FriendService {
         let friends = match self.api.get_all_game_friends().await {
             Ok(f) => f,
             Err(e) => {
+                let raw = e.to_string();
+                let msg = raw.strip_prefix("network error: ").unwrap_or(&raw);
                 crate::services::panel_log::log(
                     &account_id,
                     "好友",
-                    format!("获取好友列表失败: {e}"),
+                    format!("获取好友列表失败: {msg}"),
                     Some(serde_json::json!({ "module": "friend", "event": "获取好友列表", "result": "error" })),
                 );
-                return Err(e);
+                return Ok(Vec::new());
             }
         };
         let my_gid = *self.host_gid.lock();
@@ -944,15 +968,20 @@ impl FriendService {
                 "count": result.len(),
             })),
         );
-        Ok(result
+        let json: Vec<serde_json::Value> = result
             .into_iter()
             .filter_map(|f| serde_json::to_value(f).ok())
-            .collect())
+            .collect();
+        *self.friends_list_cache.lock() = Some((now, json.clone()));
+        Ok(json)
     }
 
     /// 清除好友列表缓存（1:1 对齐原 TS `clearFriendsListCache`）
     pub fn clear_friends_list_cache(&self) {
         self.gid_manager.clear_cache();
+        self.api.invalidate_list_cache();
+        *self.friends_list_cache.lock() = None;
+        crate::services::friend::visit_strategy::clear_friends_list_cache();
     }
 
     /// 获取好友土地详情（1:1 对齐原 TS `getFriendLandsDetail`）

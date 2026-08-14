@@ -3,13 +3,15 @@
 //! 对应原 `core/src/services/friend/api.ts`（307 行）。
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use prost::Message as _;
+use tokio::sync::Mutex as AsyncMutex;
 
 use crate::error::{Error, Result};
 use crate::network::gateway::Gateway;
 use crate::proto::generated::gamepb::friendpb::{
-    GameFriend, GetAllReply, GetGameFriendsReply, GetGameFriendsRequest, SyncAllReply,
+    GameFriend, GetAllReply, GetAllRequest, GetGameFriendsReply, GetGameFriendsRequest, SyncAllReply,
     SyncAllRequest,
 };
 use crate::proto::generated::gamepb::plantpb::{LandInfo, OperationLimit};
@@ -17,6 +19,8 @@ use crate::proto::generated::gamepb::visitpb::{EnterReply, EnterRequest, LeaveRe
 
 const DEFAULT_TIMEOUT_MS: u64 = 20_000;
 const QQ_FRIEND_LIST_BATCH_SIZE: usize = 35;
+/// 同一时刻 Vue `/api/friends` 与巡查都会打 GetAll，合并 800ms 内的成功结果。
+const FRIEND_LIST_COALESCE_MS: u64 = 800;
 
 /// 好友 API 客户端
 #[derive(Clone)]
@@ -24,6 +28,9 @@ pub struct FriendApi {
     gateway: Arc<Gateway>,
     account_id: Arc<parking_lot::Mutex<String>>,
     on_operation_limits_update: Arc<parking_lot::Mutex<Option<crate::services::farm::api::OperationLimitsCallback>>>,
+    /// FriendService 串行（对齐 TS rate-limiter maxConcurrent=1）
+    rpc_gate: Arc<AsyncMutex<()>>,
+    last_list: Arc<parking_lot::Mutex<Option<(Instant, Vec<GameFriend>)>>>,
 }
 
 impl FriendApi {
@@ -34,11 +41,18 @@ impl FriendApi {
             gateway,
             account_id: Arc::new(parking_lot::Mutex::new(String::new())),
             on_operation_limits_update: Arc::new(parking_lot::Mutex::new(None)),
+            rpc_gate: Arc::new(AsyncMutex::new(())),
+            last_list: Arc::new(parking_lot::Mutex::new(None)),
         }
     }
 
     pub fn set_account_id(&self, account_id: &str) {
         *self.account_id.lock() = account_id.to_string();
+    }
+
+    /// 清空 GetAll 短缓存（面板「清除好友缓存」）
+    pub fn invalidate_list_cache(&self) {
+        *self.last_list.lock() = None;
     }
 
     /// 设置操作限制更新回调（对齐 TS `schedulerRef().updateOperationLimits`）
@@ -70,30 +84,61 @@ impl FriendApi {
 
     /// 完整 GameFriend 列表。WX 走 GetAll；QQ 走 GetGameFriends + 已知 GID。
     pub async fn get_all_game_friends(&self) -> Result<Vec<GameFriend>> {
-        let platform = self.gateway.platform();
-        if platform.eq_ignore_ascii_case("qq") {
-            self.fetch_qq_friends().await
-        } else {
-            self.fetch_wx_friends().await
+        let _gate = self.rpc_gate.lock().await;
+        if let Some((at, friends)) = self.last_list.lock().as_ref() {
+            if at.elapsed() < Duration::from_millis(FRIEND_LIST_COALESCE_MS) {
+                return Ok(friends.clone());
+            }
         }
+        let platform = self.gateway.platform();
+        let friends = if platform.eq_ignore_ascii_case("qq") {
+            self.fetch_qq_friends().await?
+        } else {
+            self.fetch_wx_friends().await?
+        };
+        *self.last_list.lock() = Some((Instant::now(), friends.clone()));
+        Ok(friends)
     }
 
     async fn fetch_wx_friends(&self) -> Result<Vec<GameFriend>> {
-        let resp = self
+        let body = GetAllRequest {}.encode_to_vec();
+        match self
             .gateway
             .request(
                 "gamepb.friendpb.FriendService",
                 "GetAll",
-                &[],
+                &body,
                 DEFAULT_TIMEOUT_MS,
             )
-            .await?;
-        if resp.is_empty() {
-            return Ok(Vec::new());
-        }
-        match GetAllReply::decode(&*resp) {
-            Ok(reply) => Ok(reply.game_friends),
-            Err(_) => Ok(Vec::new()),
+            .await
+        {
+            Ok(resp) => Ok(decode_get_all_friends(&resp)),
+            Err(e) => {
+                // 对齐 gid-manager 的 GetAll 失败兜底：空 open_ids 的 SyncAll
+                let fallback = SyncAllRequest {
+                    open_ids: Vec::new(),
+                }
+                .encode_to_vec();
+                match self
+                    .gateway
+                    .request(
+                        "gamepb.friendpb.FriendService",
+                        "SyncAll",
+                        &fallback,
+                        DEFAULT_TIMEOUT_MS,
+                    )
+                    .await
+                {
+                    Ok(resp) => {
+                        if let Ok(reply) = SyncAllReply::decode(&*resp) {
+                            Ok(dedupe_friends_by_gid(reply.game_friends))
+                        } else {
+                            Ok(Vec::new())
+                        }
+                    }
+                    Err(_) => Err(e.into()),
+                }
+            }
         }
     }
 
@@ -185,6 +230,7 @@ impl FriendApi {
     /// 拉取待处理好友申请（对齐 TS `getApplications`）
     pub async fn get_applications(&self) -> Result<Vec<(i64, String)>> {
         use crate::proto::generated::gamepb::friendpb::{GetApplicationsReply, GetApplicationsRequest};
+        let _gate = self.rpc_gate.lock().await;
         let body = GetApplicationsRequest {}.encode_to_vec();
         let resp = self
             .gateway
@@ -207,6 +253,7 @@ impl FriendApi {
     /// 接受好友申请（1:1 对齐原 `acceptFriends`，RPC 方法 `AcceptFriends`）
     pub async fn accept_applications(&self, gids: Vec<i64>) -> Result<()> {
         use crate::proto::generated::gamepb::friendpb::AcceptFriendsRequest;
+        let _gate = self.rpc_gate.lock().await;
         let body = AcceptFriendsRequest { friend_gids: gids }.encode_to_vec();
         self.gateway
             .request(
@@ -477,6 +524,15 @@ impl FriendApi {
         let reply = CheckCanOperateReply::decode(&*resp).map_err(Error::from)?;
         Ok((reply.can_operate, reply.can_steal_num))
     }
+}
+
+fn decode_get_all_friends(resp: &[u8]) -> Vec<GameFriend> {
+    if resp.is_empty() {
+        return Vec::new();
+    }
+    GetAllReply::decode(resp)
+        .map(|reply| reply.game_friends)
+        .unwrap_or_default()
 }
 
 fn dedupe_friends_by_gid(friends: Vec<GameFriend>) -> Vec<GameFriend> {

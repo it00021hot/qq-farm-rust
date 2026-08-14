@@ -406,6 +406,7 @@ impl Gateway {
                     client_seq: seq,
                     service_name: service.to_string(),
                     method_name: method.to_string(),
+                    pending: self.inner.requests.pending_count(),
                 })
             }
         }
@@ -550,7 +551,7 @@ async fn dispatch_loop(mut rx: mpsc::Receiver<crate::network::client::ReceivedFr
         let parsed = match FrameParser::parse(&frame.bytes) {
             Ok(p) => p,
             Err(e) => {
-                tracing::warn!(error = %e, "frame decode failed");
+                tracing::warn!(error = %e, bytes = frame.bytes.len(), "frame decode failed");
                 continue;
             }
         };
@@ -561,9 +562,22 @@ async fn dispatch_loop(mut rx: mpsc::Receiver<crate::network::client::ReceivedFr
             inner.server_seq.store(server_seq, Ordering::SeqCst);
         }
 
-        // 3. 分发
+        // 3. 分发。部分大包（如 FriendService.GetAll）可能不带标准 Response type，
+        // 只要 client_seq 对得上 pending 就按回包完成，避免 20s 空等超时。
+        let client_seq = parsed.client_seq();
+        let pending_method = inner.requests.peek(client_seq);
+        let is_pending_reply = client_seq != 0
+            && pending_method.as_ref().is_some_and(|(_, method)| {
+                parsed.method_name().is_empty() || parsed.method_name() == method
+            });
         match parsed.message_type() {
             Some(MessageType::Response) => {
+                handle_response(&inner, &parsed);
+            }
+            Some(MessageType::Notify) if !is_pending_reply => {
+                handle_notify(&inner, &parsed);
+            }
+            _ if is_pending_reply => {
                 handle_response(&inner, &parsed);
             }
             Some(MessageType::Notify) => {
@@ -573,6 +587,9 @@ async fn dispatch_loop(mut rx: mpsc::Receiver<crate::network::client::ReceivedFr
                 tracing::debug!(
                     service = parsed.service_name(),
                     method = parsed.method_name(),
+                    client_seq,
+                    msg_type = parsed.message_type().map(|t| t as i32),
+                    bytes = frame.bytes.len(),
                     "received non-response/notify message"
                 );
             }
@@ -598,11 +615,17 @@ fn handle_response(inner: &Arc<Inner>, parsed: &FrameParser) {
             client_seq,
         };
         let _ = inner.requests.fail(client_seq, err);
-    } else {
-        // 对齐 network.ts：只加密 Request；Response / Notify 是明文 protobuf
-        inner
-            .requests
-            .complete(client_seq, parsed.body().to_vec(), parsed.server_seq());
+    } else if !inner
+        .requests
+        .complete(client_seq, parsed.body().to_vec(), parsed.server_seq())
+    {
+        tracing::debug!(
+            client_seq,
+            service = parsed.service_name(),
+            method = parsed.method_name(),
+            body_len = parsed.body().len(),
+            "response for unknown seq"
+        );
     }
 }
 

@@ -122,6 +122,22 @@ impl RequestManager {
         self.inner.pending.lock().len()
     }
 
+    /// 该 seq 是否仍在等待回包
+    #[must_use]
+    pub fn has_pending(&self, seq: i64) -> bool {
+        self.inner.pending.lock().contains_key(&seq)
+    }
+
+    /// 偷看 pending 的 service/method（不移除）
+    #[must_use]
+    pub fn peek(&self, seq: i64) -> Option<(String, String)> {
+        self.inner
+            .pending
+            .lock()
+            .get(&seq)
+            .map(|p| (p.service_name.clone(), p.method_name.clone()))
+    }
+
     /// 拒绝所有待处理请求（连接断开时调用）
     pub fn reject_all(&self) -> usize {
         let mut pending_map = self.inner.pending.lock();

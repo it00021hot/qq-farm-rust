@@ -287,6 +287,7 @@ pub fn is_transient_network_error(error_message: &str) -> bool {
     const KEYWORDS: &[&str] = &[
         "连接未打开",
         "请求超时",
+        "request timeout",
         "请求已中断",
         "连接关闭",
         "连接已在加密途中关闭",
@@ -1875,6 +1876,7 @@ mod tests {
     fn transient_network_error_detected() {
         assert!(is_transient_network_error("连接未打开"));
         assert!(is_transient_network_error("请求超时: foo"));
+        assert!(is_transient_network_error("request timeout: foo"));
         assert!(is_transient_network_error("连接关闭 (code=1006)"));
         assert!(is_transient_network_error("worker exited"));
         assert!(!is_transient_network_error("业务错误"));
