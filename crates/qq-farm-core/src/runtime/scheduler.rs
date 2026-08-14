@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 use tokio::sync::Notify;
-use tokio::task::{AbortHandle, JoinHandle};
+use tokio::task::AbortHandle;
 use tokio_util::sync::CancellationToken;
 
 /// 任务状态（用于快照）

@@ -2,13 +2,23 @@
 //!
 //! 真实接通 `services::wx_login::WxLoginService`：
 //! 1. `POST /api/wx-login/tasks` → create_qr_session（生成 QR）
-//! 2. `GET  /api/wx-login/tasks/:id/qr` → 返回 QR 二进制
+//! 2. `GET  /api/wx-login/tasks/:id/qr` → 返回 QR jpeg 二进制
 //! 3. `GET  /api/wx-login/tasks/:id/status` → poll 状态
 //! 4. `POST /api/wx-login/tasks/:id/confirm` → confirm 扫码
 //! 5. `POST /api/wx-login/tasks/:id/code` → issue_code 拿到 game auth code
 //! 6. `DELETE /api/wx-login/tasks/:id` → destroy
+//!
+//! ## 响应结构（1:1 对齐原 bot `wx-login-routes.ts`）
+//! - 成功：`{ok: true, data: {task_id, app_id, status, expires_at, qr_url, ...}}`
+//! - 失败：`{ok: false, error: "..."}`（502 / 404 / 400 / 401）
+//!
+//! ## 鉴权
+//! - 6 端点都强制 `x-admin-token`（由 `routes::build()` 的 `auth_check` 中间件统一覆盖）
+//! - task owner 校验（防越权访问别人的 task）
+//! - `app_id` 必须匹配 `TARGET_APP_ID`，否则 400
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 
 use axum::{
@@ -21,19 +31,20 @@ use axum::{
 use parking_lot::Mutex;
 use serde::Deserialize;
 use serde_json::json;
-use tokio::sync::oneshot;
 
-use crate::context::{ok, ok_empty, AdminContext, ApiError, ApiResult};
+use crate::context::{AdminContext, ApiError};
 use qq_farm_core::services::wx_login::service::{ScanStatus, WxLoginService, WxLoginSession};
 
-/// 微信登录任务
+/// 微信登录任务（1:1 对应原 bot 的 Task interface）
 struct WxLoginTask {
     /// tokio::Mutex 让 lock().await 可跨 await 持有
     session: tokio::sync::Mutex<WxLoginSession>,
-    qr_png: Vec<u8>,
-    last_status: tokio::sync::Mutex<ScanStatus>,
-    /// auth code（confirm + issue 后填充）
-    auth_code: tokio::sync::Mutex<Option<String>>,
+    /// QR jpeg 二进制
+    qr_jpeg: Vec<u8>,
+    /// task owner（admin username）— 防越权
+    owner: String,
+    /// 创建时间（毫秒），confirm 后会刷新以给 /code 足够 TTL
+    created_at: AtomicI64,
     /// app_id
     app_id: String,
 }
@@ -53,21 +64,6 @@ impl WxLoginState {
             tasks: Arc::new(Mutex::new(HashMap::new())),
         }
     }
-
-    fn create(&self, app_id: String) -> Result<String, ApiError> {
-        // async block → 用 oneshot 转
-        let (tx, rx) = oneshot::channel();
-        let service = self.service.clone();
-        let tasks = self.tasks.clone();
-        let app_id_for_task = app_id.clone();
-        tokio::spawn(async move {
-            let result = service.create_qr_session().await;
-            let _ = tx.send(result);
-        });
-        // 实际不能这样 — 创建是 async。改成在 handler 内部 await。
-        let _ = (rx, tasks, app_id_for_task);
-        Err(ApiError::Internal("should be called from create_task handler".to_string()))
-    }
 }
 
 impl Default for WxLoginState {
@@ -76,7 +72,21 @@ impl Default for WxLoginState {
     }
 }
 
+/// 原 bot 强制使用 `wx5306c5978fdb76e4`（前端 AccountModal 写死）
+pub const TARGET_APP_ID: &str = "wx5306c5978fdb76e4";
+/// Task TTL（毫秒）— 与原 bot 一致
+pub const TASK_TTL_MS: i64 = 110_000;
+
+fn now_ms_i64() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 /// 构造 wx-login 路由
+/// 鉴权由 `routes::build()` 的 `auth_check` layer 统一覆盖
 pub fn router() -> Router<Arc<AdminContext>> {
     Router::new()
         .route("/api/wx-login/tasks", post(create_task))
@@ -87,235 +97,224 @@ pub fn router() -> Router<Arc<AdminContext>> {
         .route("/api/wx-login/tasks/{task_id}/code", post(consume_code))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 struct CreateTaskBody {
     #[serde(default)]
     app_id: Option<String>,
-    #[serde(default)]
-    owner: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct ConfirmBody {
-    #[serde(default)]
-    action: Option<String>,
+fn wx_state_from_ctx(ctx: &AdminContext) -> WxLoginState {
+    ctx.wx.clone()
 }
 
-const DEFAULT_APP_ID: &str = "1112386029";
+/// 从请求头解析 task owner（对齐 TS `owner(req)`：优先 username，回退 token）
+fn owner_from_headers(ctx: &AdminContext, headers: &axum::http::HeaderMap) -> String {
+    let token = headers
+        .get("x-admin-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    ctx.sessions
+        .get_username(token)
+        .filter(|u| !u.is_empty())
+        .unwrap_or_else(|| token.to_string())
+}
 
-fn wx_state_from_ctx(ctx: &AdminContext) -> Result<WxLoginState, ApiError> {
-    // wx-login state 现在是 lazy：每个 request 共享 AdminContext.wx
-    // AdminContext 加 wx 字段
-    Ok(ctx.wx.clone())
+/// 找 task + 校验 TTL + 校验 owner（删过期/越权 task）
+fn find_task(
+    ctx: &AdminContext,
+    task_id: &str,
+    owner: &str,
+) -> Result<Arc<WxLoginTask>, ApiError> {
+    let wx = wx_state_from_ctx(ctx);
+    let task = wx
+        .tasks
+        .lock()
+        .get(task_id)
+        .cloned()
+        .ok_or_else(|| ApiError::NotFound("Login task not found or expired".to_string()))?;
+    let expired = now_ms_i64() - task.created_at.load(Ordering::Relaxed) > TASK_TTL_MS;
+    if expired || task.owner != owner {
+        let _ = wx.tasks.lock().remove(task_id);
+        return Err(ApiError::NotFound(
+            "Login task not found or expired".to_string(),
+        ));
+    }
+    Ok(task)
 }
 
 async fn create_task(
     State(ctx): State<Arc<AdminContext>>,
-    Json(body): Json<CreateTaskBody>,
-) -> ApiResult<serde_json::Value> {
-    let app_id = body.app_id.unwrap_or_else(|| DEFAULT_APP_ID.to_string());
-    let wx = wx_state_from_ctx(&ctx)?;
-    let service = wx.service.clone();
-    let tasks = wx.tasks.clone();
-    let app_id_for_task = app_id.clone();
+    headers: axum::http::HeaderMap,
+    body: Option<Json<CreateTaskBody>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let body = body.map(|Json(b)| b).unwrap_or_default();
 
-    let (session, qr_png) = service
+    // 校验 app_id（如果传了）
+    if let Some(ref app) = body.app_id {
+        if app != TARGET_APP_ID {
+            return Err(ApiError::BadRequest("Unsupported app_id".to_string()));
+        }
+    }
+
+    let wx = wx_state_from_ctx(&ctx);
+    let service = wx.service.clone();
+
+    // 调 service 拿 session + QR
+    let (session, qr_jpeg) = service
         .create_qr_session()
         .await
-        .map_err(ApiError::Internal)?;
+        .map_err(ApiError::BadGateway)?;
 
-    let task_id = uuid::Uuid::new_v4().to_string();
+    // task_id：原 bot 用 `crypto.randomBytes(32).to_string('hex')` = 64 hex
+    // 我们用两个 uuid v4 拼成 64 hex char
+    let task_id = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    let created_at = now_ms_i64();
+
     let task = Arc::new(WxLoginTask {
         session: tokio::sync::Mutex::new(session),
-        qr_png,
-        last_status: tokio::sync::Mutex::new(ScanStatus::Waiting),
-        auth_code: tokio::sync::Mutex::new(None),
-        app_id: app_id_for_task,
+        qr_jpeg,
+        owner: owner_from_headers(&ctx, &headers),
+        created_at: AtomicI64::new(created_at),
+        app_id: TARGET_APP_ID.to_string(),
     });
-    tasks.lock().insert(task_id.clone(), task);
+    wx.tasks.lock().insert(task_id.clone(), task);
 
+    let qr_url = format!("/api/wx-login/tasks/{task_id}/qr");
     Ok(Json(json!({
         "ok": true,
-        "task_id": task_id,
-        "app_id": app_id,
-        "status": "waiting",
+        "data": {
+            "task_id": task_id,
+            "app_id": TARGET_APP_ID,
+            "status": "waiting",
+            "expires_at": (created_at + TASK_TTL_MS) / 1000,
+            "qr_url": qr_url,
+        }
     })))
 }
 
 async fn get_qr(
     State(ctx): State<Arc<AdminContext>>,
+    headers: axum::http::HeaderMap,
     Path(task_id): Path<String>,
-) -> Result<impl IntoResponse, ApiError> {
-    let wx = wx_state_from_ctx(&ctx)?;
-    let task = wx
-        .tasks
-        .lock()
-        .get(&task_id)
-        .cloned()
-        .ok_or_else(|| ApiError::NotFound(format!("task not found: {task_id}")))?;
+) -> Result<axum::response::Response, ApiError> {
+    let owner = owner_from_headers(&ctx, &headers);
+    let task = find_task(&ctx, &task_id, &owner)?;
     Ok((
-        [(header::CONTENT_TYPE, "image/png")],
-        task.qr_png.clone(),
-    ))
+        [(header::CONTENT_TYPE, "image/jpeg")],
+        task.qr_jpeg.clone(),
+    )
+        .into_response())
 }
 
 async fn delete_task(
     State(ctx): State<Arc<AdminContext>>,
+    headers: axum::http::HeaderMap,
     Path(task_id): Path<String>,
-) -> ApiResult<serde_json::Value> {
-    let wx = wx_state_from_ctx(&ctx)?;
-    let task = wx.tasks.lock().remove(&task_id);
-    if let Some(task) = task {
-        let mut session = task.session.lock().await;
-        wx.service.destroy(&mut *session);
-    }
-    ok_empty()
-}
-
-#[allow(dead_code)]
-async fn get_status(
-    State(ctx): State<Arc<AdminContext>>,
-    Path(task_id): Path<String>,
-) -> Result<axum::Json<serde_json::Value>, ApiError> {
-    let wx = wx_state_from_ctx(&ctx)?;
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let owner = owner_from_headers(&ctx, &headers);
+    let wx = wx_state_from_ctx(&ctx);
     let task = wx
         .tasks
         .lock()
         .get(&task_id)
         .cloned()
-        .ok_or_else(|| ApiError::NotFound(format!("task not found: {task_id}")))?;
+        .ok_or_else(|| ApiError::NotFound("Login task not found or expired".to_string()))?;
+    if task.owner != owner {
+        return Err(ApiError::NotFound("Login task not found or expired".to_string()));
+    }
+    let removed = wx.tasks.lock().remove(&task_id);
+    if let Some(t) = removed {
+        let mut session = t.session.lock().await;
+        wx.service.destroy(&mut *session);
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn get_status(
+    State(ctx): State<Arc<AdminContext>>,
+    headers: axum::http::HeaderMap,
+    Path(task_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let owner = owner_from_headers(&ctx, &headers);
+    let task = find_task(&ctx, &task_id, &owner)?;
+    let wx = wx_state_from_ctx(&ctx);
     let service = wx.service.clone();
-    // poll 内部需要 &mut session，session 在另一个线程持有不安全。
-    // 用 tokio::sync::Mutex 替换 parkink_lot::Mutex 给 session
     let mut session = task.session.lock().await;
-    let status = {
-        let s: &mut WxLoginSession = &mut *session;
-        service.poll(s).await.map_err(ApiError::Internal)?
-    };
-    *task.last_status.lock().await = status;
-    Ok(Json(json!({
-        "ok": true,
+    let status = service.poll(&mut *session).await.map_err(ApiError::BadGateway)?;
+    let data = json!({
+        "task_id": task_id,
+        "app_id": task.app_id,
         "status": status_name(status),
-    })))
+        "expires_at": (task.created_at.load(Ordering::Relaxed) + TASK_TTL_MS) / 1000,
+    });
+    // 对齐 TS：cancelled / expired 时销毁 task
+    if matches!(status, ScanStatus::Cancelled | ScanStatus::Expired) {
+        drop(session);
+        let removed = wx.tasks.lock().remove(&task_id);
+        if let Some(t) = removed {
+            let mut s = t.session.lock().await;
+            wx.service.destroy(&mut *s);
+        }
+    }
+    Ok(Json(json!({ "ok": true, "data": data })))
 }
 
 async fn confirm_task(
     State(ctx): State<Arc<AdminContext>>,
+    headers: axum::http::HeaderMap,
     Path(task_id): Path<String>,
-    Json(_body): Json<ConfirmBody>,
-) -> ApiResult<serde_json::Value> {
-    let wx = wx_state_from_ctx(&ctx)?;
-    let task = wx
-        .tasks
-        .lock()
-        .get(&task_id)
-        .cloned()
-        .ok_or_else(|| ApiError::NotFound(format!("task not found: {task_id}")))?;
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let owner = owner_from_headers(&ctx, &headers);
+    let task = find_task(&ctx, &task_id, &owner)?;
+    let wx = wx_state_from_ctx(&ctx);
     let service = wx.service.clone();
     let mut session = task.session.lock().await;
-    let (openid, _) = {
-        let s: &mut WxLoginSession = &mut *session;
-        service.confirm(s).await.map_err(ApiError::Internal)?
-    };
-    Ok(Json(json!({
-        "ok": true,
-        "openid": openid,
-        "status": "authorized",
-    })))
+    service.confirm(&mut *session).await.map_err(ApiError::BadGateway)?;
+    drop(session);
+    task.created_at.store(now_ms_i64(), Ordering::Relaxed);
+    let data = json!({
+        "task_id": task_id,
+        "app_id": task.app_id,
+        "status": "ready_for_code",
+        "expires_at": (task.created_at.load(Ordering::Relaxed) + TASK_TTL_MS) / 1000,
+    });
+    Ok(Json(json!({ "ok": true, "data": data })))
 }
 
 async fn consume_code(
     State(ctx): State<Arc<AdminContext>>,
+    headers: axum::http::HeaderMap,
     Path(task_id): Path<String>,
-) -> Result<axum::Json<serde_json::Value>, ApiError> {
-    let wx = wx_state_from_ctx(&ctx)?;
-    let task = wx
-        .tasks
-        .lock()
-        .get(&task_id)
-        .cloned()
-        .ok_or_else(|| ApiError::NotFound(format!("task not found: {task_id}")))?;
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let owner = owner_from_headers(&ctx, &headers);
+    let task = find_task(&ctx, &task_id, &owner)?;
+    let wx = wx_state_from_ctx(&ctx);
     let service = wx.service.clone();
     let app_id = task.app_id.clone();
     let session = task.session.lock().await;
-    let code = service
-        .issue_code(&*session, &app_id)
-        .await
-        .map_err(ApiError::Internal)?;
-    *task.auth_code.lock().await = Some(code.clone());
+    let code = service.issue_code(&*session, &app_id).await.map_err(ApiError::BadGateway)?;
+    let openid = session.openid.clone().unwrap_or_default();
+    drop(session);
 
-    // === 全链路打通：auth_code → 创建 store Account → 启动 worker ===
-    let account_id = persist_and_start(&ctx, &code, &app_id, &task_id);
+    let removed = wx.tasks.lock().remove(&task_id);
+    if let Some(t) = removed {
+        let mut s = t.session.lock().await;
+        wx.service.destroy(&mut *s);
+    }
 
     Ok(Json(json!({
         "ok": true,
-        "code": code,
-        "account_id": account_id,
+        "data": {
+            "openid": openid,
+            "app_id": app_id,
+            "code": code,
+            "err_msg": "login:ok",
+        }
     })))
-}
-
-/// 把 auth_code 落到 store Account + 启动 worker
-fn persist_and_start(
-    ctx: &AdminContext,
-    auth_code: &str,
-    app_id: &str,
-    task_id: &str,
-) -> String {
-    use qq_farm_core::models::Account;
-    use qq_farm_core::models::store::accounts as accounts_store;
-
-    // 1. 构造 store Account（code 字段就是 auth_code）
-    let display_name = format!(
-        "wx-{}",
-        &app_id.chars().take(8).collect::<String>()
-    );
-    let mut store_acc = accounts_store::Account {
-        id: String::new(), // 让 add_or_update_account 自动生成
-        name: display_name.clone(),
-        code: auth_code.to_string(),
-        platform: "wx".to_string(),
-        qq: String::new(),
-        uin: String::new(),
-        avatar: String::new(),
-        username: String::new(),
-        created_at: 0,
-        updated_at: 0,
-    };
-    let saved = accounts_store::add_or_update_account(store_acc.clone());
-    let account_id = saved.id.clone();
-    store_acc.id = account_id.clone();
-
-    // 2. 转 models::Account + start_worker
-    let models_acc = Account::new(
-        account_id.clone(),
-        auth_code.to_string(), // open_id 字段实际存 auth_code
-        display_name.clone(),
-    );
-    let eng = ctx.engine.clone();
-    match eng.start_worker(models_acc) {
-        Ok(()) => {
-            tracing::info!(
-                account_id = %account_id,
-                task_id = %task_id,
-                "微信扫码全链路打通：worker 已启动"
-            );
-            // 写日志
-            ctx.engine
-                .runtime_state()
-                .add_account_log("wx-login", "扫码登录成功，worker 已启动", Some(&account_id), Some(&display_name), None);
-        }
-        Err(e) => {
-            tracing::warn!(account_id = %account_id, "启动 worker 失败: {e}");
-            ctx.engine.runtime_state().add_account_log(
-                "wx-login",
-                &format!("worker 启动失败: {e}"),
-                Some(&account_id),
-                Some(&display_name),
-                None,
-            );
-        }
-    }
-    account_id
 }
 
 fn status_name(s: ScanStatus) -> &'static str {

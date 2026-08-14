@@ -82,10 +82,28 @@ fn shared_engine() -> Result<&'static Engine> {
     let mut config = Config::new();
     config.wasm_multi_memory(false);
     config.wasm_multi_value(true);
+    match wasmtime::Cache::new(wasmtime::CacheConfig::new()) {
+        Ok(cache) => {
+            config.cache(Some(cache));
+        }
+        Err(e) => tracing::warn!(error = %e, "TSDK wasm 编译缓存不可用"),
+    }
     let engine = Engine::new(&config)
         .map_err(|e| Error::crypto(format!("create engine failed: {e}")))?;
     let _ = ENGINE.set(engine);
     Ok(ENGINE.get().expect("engine initialized"))
+}
+
+static MODULE: OnceLock<Module> = OnceLock::new();
+
+fn shared_module(engine: &Engine, wasm_path: &Path) -> Result<&'static Module> {
+    if let Some(m) = MODULE.get() {
+        return Ok(m);
+    }
+    let module = Module::from_file(engine, wasm_path)
+        .map_err(|e| Error::crypto(format!("load wasm failed: {e}")))?;
+    let _ = MODULE.set(module);
+    Ok(MODULE.get().expect("module initialized"))
 }
 
 // ===== TSDK 运行时 =====
@@ -160,8 +178,7 @@ impl TsdkRuntime {
             return Ok(());
         }
         let engine = shared_engine()?;
-        let module = Module::from_file(engine, wasm_path)
-            .map_err(|e| Error::crypto(format!("load wasm failed: {e}")))?;
+        let module = shared_module(engine, wasm_path)?;
 
         let host = HostState {
             data_dir: self.data_dir.clone(),

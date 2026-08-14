@@ -12,7 +12,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::context::{ok, AdminContext, ApiError, ApiResult};
+use crate::context::{ok, ok_data, AdminContext, ApiError, ApiResult};
 
 /// 构造 commerce 路由
 pub fn router() -> Router<Arc<AdminContext>> {
@@ -25,26 +25,28 @@ pub fn router() -> Router<Arc<AdminContext>> {
 
 #[derive(Debug, Deserialize)]
 struct MallQuery {
-    #[serde(default)]
+    #[serde(default, alias = "slotType")]
     slot_type: Option<i32>,
-    #[serde(default)]
+    #[serde(default, alias = "subSlotType")]
     sub_slot_type: Option<i32>,
-    #[serde(default)]
+    #[serde(default, alias = "accountId")]
     account_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct PurchaseMallBody {
+    #[serde(alias = "goodsId")]
     goods_id: i32,
     count: i32,
-    #[serde(default)]
+    #[serde(default, alias = "accountId")]
     account_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct PurchaseMysteryBody {
-    offer_id: String,
-    #[serde(default)]
+    #[serde(default, alias = "npcId", alias = "offerId")]
+    offer_id: serde_json::Value,
+    #[serde(default, alias = "accountId")]
     account_id: Option<String>,
 }
 
@@ -54,7 +56,7 @@ fn get_loop(
 ) -> Result<Arc<qq_farm_core::runtime::worker_loop::WorkerLoop>, ApiError> {
     ctx.engine
         .worker_loop(account_id)
-        .ok_or_else(|| ApiError::NotFound(format!("worker not running: {account_id}")))
+        .ok_or(ApiError::AccountNotRunning)
 }
 
 fn resolve_account_id(
@@ -80,7 +82,7 @@ async fn get_mall(
     );
     let r = commerce.get_mall_catalog(q.slot_type, q.sub_slot_type).await;
     match r {
-        Ok(dto) => ok(json!({ "ok": true, "mall": dto })),
+        Ok(dto) => ok_data(dto),
         Err(e) => Ok(Json(json!({ "ok": false, "error": e.to_string() }))),
     }
 }
@@ -100,7 +102,7 @@ async fn purchase_mall(
     );
     let r = commerce.purchase_mall_product(&body.goods_id.to_string(), &body.count.to_string()).await;
     match r {
-        Ok(dto) => ok(json!({ "ok": true, "purchase": dto })),
+        Ok(dto) => ok_data(dto),
         Err(e) => Ok(Json(json!({ "ok": false, "error": e.to_string() }))),
     }
 }
@@ -120,7 +122,7 @@ async fn get_mystery_shop(
     );
     let r = commerce.get_mystery_shop().await;
     match r {
-        Ok(dto) => ok(json!({ "ok": true, "mystery": dto })),
+        Ok(dto) => ok_data(dto),
         Err(e) => Ok(Json(json!({ "ok": false, "error": e.to_string() }))),
     }
 }
@@ -138,9 +140,13 @@ async fn purchase_mystery(
         Arc::new(mystery),
         loop_.warehouse().clone(),
     );
-    let r = commerce.purchase_mystery_offer(&body.offer_id).await;
+    let offer = match &body.offer_id {
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    let r = commerce.purchase_mystery_offer(&offer).await;
     match r {
-        Ok(dto) => ok(json!({ "ok": true, "purchase": dto })),
+        Ok(dto) => ok_data(dto),
         Err(e) => Ok(Json(json!({ "ok": false, "error": e.to_string() }))),
     }
 }

@@ -47,6 +47,7 @@ pub mod login_url_profile;
 pub mod mall;
 pub mod monthcard;
 pub mod mystery_shop;
+pub mod panel_log;
 pub mod pay;
 pub mod push;
 pub mod qrlogin;

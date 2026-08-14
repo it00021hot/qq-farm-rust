@@ -19,7 +19,6 @@
 //! - 持久化 stats 来自 `services::stats::load_persisted_stats`
 //! - store 通过抽象 `AccountStoreLike` trait 注入（不绑死 `models::store`）
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -36,6 +35,7 @@ pub const ACCOUNT_LOG_CAP: usize = 300;
 
 /// 日志条目
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LogEntry {
     pub time: String,
     pub tag: String,
@@ -56,6 +56,7 @@ pub struct LogEntry {
 
 /// 账号日志条目
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AccountLogEntry {
     pub time: String,
     pub action: String,
@@ -105,6 +106,7 @@ pub trait AccountStoreLike: Send + Sync {
 
 /// 默认 status
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DefaultStatus {
     pub connection: ConnectionStatus,
     pub status: BasicStatus,
@@ -120,6 +122,7 @@ pub struct DefaultStatus {
     pub ws_error: Option<String>,
     pub automation: serde_json::Value,
     pub preferred_seed: i64,
+    #[serde(rename = "levelProgress")]
     pub exp_progress: ExpProgress,
     pub config_revision: u64,
     pub account_id: String,
@@ -180,13 +183,19 @@ pub struct WorkerInfo {
     pub stopping: bool,
     /// 已 terminal 处理
     pub terminal_handled: bool,
+    /// 最近一次判定为断开的时间
+    #[serde(default)]
+    pub disconnected_since: Option<i64>,
+    /// 离线超时自删是否已触发
+    #[serde(default)]
+    pub auto_delete_triggered: bool,
 }
 
 impl RuntimeState {
     /// 创建 runtime state
     #[must_use]
     pub fn new(store: Arc<dyn AccountStoreLike>, operation_keys: Vec<String>) -> Self {
-        let (events, _) = broadcast::channel(256);
+        let (events, _) = broadcast::channel(4096);
         Self {
             workers: Mutex::new(Default::default()),
             global_logs: Mutex::new(Vec::new()),
@@ -228,30 +237,42 @@ impl RuntimeState {
         let time = format_local_datetime24(None);
         let level = if tag == "错误" { "error" } else { "info" };
         let module_name = if tag == "系统" || tag == "错误" { "system" } else { "" };
-        let entry = LogEntry {
+        let extra_val = extra.clone();
+        let mut entry = LogEntry {
             time,
             tag: tag.to_string(),
             msg: msg.to_string(),
             meta: if module_name.is_empty() {
-                serde_json::Value::Null
+                extra_val.clone().unwrap_or(serde_json::Value::Null)
             } else {
-                serde_json::json!({ "module": module_name })
+                let mut meta = extra_val.clone().unwrap_or_else(|| serde_json::json!({}));
+                if let Some(obj) = meta.as_object_mut() {
+                    obj.entry("module".to_string()).or_insert(serde_json::json!(module_name));
+                }
+                meta
             },
             ts: now_ms(),
             search_text: String::new(),
-            account_id: None,
-            account_name: None,
-            is_warn: tag == "错误",
+            account_id: extra_val
+                .as_ref()
+                .and_then(|v| v.get("accountId").or_else(|| v.get("account_id")))
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            account_name: extra_val
+                .as_ref()
+                .and_then(|v| v.get("accountName").or_else(|| v.get("account_name")))
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            is_warn: tag == "错误"
+                || extra_val
+                    .as_ref()
+                    .and_then(|v| v.get("isWarn").or_else(|| v.get("is_warn")))
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
         };
-        // 拼接 search text
-        let meta_str = entry.meta.to_string();
-        let mut entry = entry;
-        entry.search_text = format!("{} {} {}", entry.msg, entry.tag, meta_str).to_lowercase();
-
+        entry.search_text = format!("{} {} {}", entry.msg, entry.tag, entry.meta).to_lowercase();
+        let _ = level;
         tracing::info!(target: "runtime", "{}", msg);
-
-        let _ = level; // tracing-level 已隐含
-        let _ = extra; // extra 已合并到 meta（如果需要）
 
         {
             let mut logs = self.global_logs.lock();
@@ -510,7 +531,7 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use std::collections::HashSet;
 
     /// Mock store
     struct MockStore;

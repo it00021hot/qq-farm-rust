@@ -6,9 +6,9 @@
 //!
 //! 跨天自动重置每日统计；金/经验变化计算 session 增量。
 
-use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -17,16 +17,20 @@ use crate::config::paths::get_data_dir;
 
 /// 操作计数器
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OperationsMap {
     pub harvest: i64,
     pub farming: i64,
     pub fertilize: i64,
     pub plant: i64,
     pub steal: i64,
+    #[serde(alias = "help_farming")]
     pub help_farming: i64,
+    #[serde(alias = "task_claim")]
     pub task_claim: i64,
     pub sell: i64,
     pub upgrade: i64,
+    #[serde(alias = "level_up")]
     pub level_up: i64,
 }
 
@@ -138,6 +142,46 @@ static SESSION: Mutex<SessionData> = Mutex::new(SessionData {
 static CURRENT_DATE_KEY: Mutex<Option<String>> = Mutex::new(None);
 static CURRENT_ACCOUNT_ID: Mutex<Option<String>> = Mutex::new(None);
 
+#[derive(Clone)]
+struct StatsSlot {
+    operations: OperationsMap,
+    last: LastState,
+    initial: InitialState,
+    session: SessionData,
+    date_key: Option<String>,
+}
+
+impl Default for StatsSlot {
+    fn default() -> Self {
+        Self {
+            operations: OperationsMap::default(),
+            last: LastState {
+                gold: -1,
+                exp: -1,
+                coupon: -1,
+            },
+            initial: InitialState::default(),
+            session: SessionData::default(),
+            date_key: None,
+        }
+    }
+}
+
+static SLOTS: LazyLock<Mutex<std::collections::HashMap<String, StatsSlot>>> =
+    LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+fn slot_for(account_id: &str) -> StatsSlot {
+    SLOTS
+        .lock()
+        .entry(account_id.to_string())
+        .or_default()
+        .clone()
+}
+
+fn put_slot(account_id: &str, slot: StatsSlot) {
+    SLOTS.lock().insert(account_id.to_string(), slot);
+}
+
 // =====================================================================
 // 文件路径
 // =====================================================================
@@ -238,6 +282,41 @@ pub fn record_operation(op_type: &str, count: i64) {
     schedule_save();
 }
 
+/// 按账号记录操作（多 worker 隔离）
+pub fn record_operation_for(account_id: &str, op_type: &str, count: i64) {
+    if account_id.is_empty() {
+        record_operation(op_type, count);
+        return;
+    }
+    let mut slot = slot_for(account_id);
+    let today = get_today_key();
+    if let Some(prev) = slot.date_key.as_ref() {
+        if prev != &today {
+            slot.operations.reset();
+        }
+    }
+    slot.date_key = Some(today);
+    match op_type {
+        "harvest" => slot.operations.harvest += count,
+        "farming" => slot.operations.farming += count,
+        "fertilize" => slot.operations.fertilize += count,
+        "plant" => slot.operations.plant += count,
+        "steal" => slot.operations.steal += count,
+        "helpFarming" => slot.operations.help_farming += count,
+        "taskClaim" => slot.operations.task_claim += count,
+        "sell" => slot.operations.sell += count,
+        "upgrade" => slot.operations.upgrade += count,
+        "levelUp" => slot.operations.level_up += count,
+        _ => {
+            put_slot(account_id, slot);
+            return;
+        }
+    }
+    put_slot(account_id, slot);
+    *CURRENT_ACCOUNT_ID.lock() = Some(account_id.to_string());
+    schedule_save();
+}
+
 /// 初始化（不持久化）
 pub fn init_stats(gold: i64, exp: i64, coupon: i64) {
     let g = gold; // i64 always finite
@@ -288,6 +367,13 @@ pub fn init_stats_with_persistence(account_id: &str, gold: i64, exp: i64, coupon
     }
 
     init_stats(gold, exp, coupon);
+    let mut slot = slot_for(account_id);
+    slot.operations = OPERATIONS.lock().clone();
+    slot.last = LAST_STATE.lock().clone();
+    slot.initial = INITIAL_STATE.lock().clone();
+    slot.session = SESSION.lock().clone();
+    slot.date_key = CURRENT_DATE_KEY.lock().clone();
+    put_slot(account_id, slot);
 }
 
 /// 更新最后状态（用于 session 计算）
@@ -344,6 +430,30 @@ pub fn reset_session_gains() {
     s.last_gold_gain = 0;
     s.last_exp_gain = 0;
     s.last_exp_time = None;
+}
+
+/// 按账号重置 session 增量（登录基线之后调用，对齐 TS `resetSessionGains`）
+pub fn reset_session_gains_for(account_id: &str) {
+    reset_session_gains();
+    if account_id.is_empty() {
+        return;
+    }
+    let mut slot = slot_for(account_id);
+    slot.session.gold_gained = 0;
+    slot.session.exp_gained = 0;
+    slot.session.coupon_gained = 0;
+    slot.session.last_gold_gain = 0;
+    slot.session.last_exp_gain = 0;
+    slot.session.last_exp_time = None;
+    put_slot(account_id, slot);
+}
+
+fn json_i64(value: Option<&serde_json::Value>) -> Option<i64> {
+    let value = value?;
+    value
+        .as_i64()
+        .or_else(|| value.as_u64().map(|n| n as i64))
+        .or_else(|| value.as_f64().map(|n| n as i64))
 }
 
 /// 重算 session 增量
@@ -465,6 +575,121 @@ pub fn get_stats(
     })
 }
 
+/// 按账号取统计快照
+#[must_use]
+pub fn get_stats_for(
+    account_id: &str,
+    status_data: Option<&serde_json::Value>,
+    user_state: Option<&serde_json::Value>,
+    connected: bool,
+    limits: serde_json::Value,
+) -> serde_json::Value {
+    if account_id.is_empty() {
+        return get_stats(status_data, user_state, connected, limits);
+    }
+    let mut slot = slot_for(account_id);
+    let today = get_today_key();
+    if let Some(prev) = slot.date_key.as_ref() {
+        if prev != &today {
+            slot.operations.reset();
+        }
+    }
+    slot.date_key = Some(today);
+
+    let status_obj = status_data
+        .and_then(|v| v.as_object())
+        .cloned()
+        .unwrap_or_default();
+    let user_obj = user_state
+        .and_then(|v| v.as_object())
+        .cloned()
+        .unwrap_or_default();
+    let current_gold = json_i64(user_obj.get("gold"))
+        .or_else(|| json_i64(status_obj.get("gold")))
+        .unwrap_or(0);
+    let current_exp = json_i64(user_obj.get("exp"))
+        .or_else(|| json_i64(status_obj.get("exp")))
+        .unwrap_or(0);
+    let current_coupon = json_i64(user_obj.get("coupon"))
+        .or_else(|| json_i64(status_obj.get("coupon")))
+        .unwrap_or(0);
+    let current_gold_bean = json_i64(user_obj.get("goldBean"))
+        .or_else(|| json_i64(status_obj.get("goldBean")))
+        .unwrap_or(0);
+
+    if connected {
+        if slot.last.gold == -1 {
+            slot.last.gold = current_gold;
+        }
+        if slot.last.exp == -1 {
+            slot.last.exp = current_exp;
+        }
+        if current_gold > slot.last.gold {
+            slot.session.last_gold_gain = current_gold - slot.last.gold;
+        } else if current_gold < slot.last.gold {
+            slot.session.last_gold_gain = 0;
+        }
+        slot.last.gold = current_gold;
+        if current_exp > slot.last.exp {
+            slot.session.last_exp_gain = current_exp - slot.last.exp;
+        } else {
+            slot.session.last_exp_gain = 0;
+        }
+        slot.last.exp = current_exp;
+        if slot.initial.gold.is_none() {
+            slot.initial.gold = Some(current_gold);
+            slot.initial.exp = Some(current_exp);
+            slot.initial.coupon = Some(current_coupon);
+        }
+        slot.session.gold_gained = current_gold - slot.initial.gold.unwrap_or(0);
+        slot.session.exp_gained = current_exp - slot.initial.exp.unwrap_or(0);
+        slot.session.coupon_gained = current_coupon - slot.initial.coupon.unwrap_or(0);
+    }
+
+    let name = user_obj
+        .get("name")
+        .and_then(|v| v.as_str())
+        .or_else(|| status_obj.get("name").and_then(|v| v.as_str()))
+        .unwrap_or("")
+        .to_string();
+    let level = status_obj
+        .get("level")
+        .and_then(|v| v.as_i64())
+        .or_else(|| user_obj.get("level").and_then(|v| v.as_i64()))
+        .unwrap_or(0);
+    let platform = status_obj
+        .get("platform")
+        .and_then(|v| v.as_str())
+        .or_else(|| user_obj.get("platform").and_then(|v| v.as_str()))
+        .unwrap_or("qq")
+        .to_string();
+    let ops = slot.operations.clone();
+    let session = slot.session.clone();
+    put_slot(account_id, slot);
+
+    serde_json::json!({
+        "connection": { "connected": connected },
+        "status": {
+            "name": name,
+            "level": level,
+            "gold": current_gold,
+            "coupon": current_coupon,
+            "goldBean": current_gold_bean,
+            "exp": current_exp,
+            "platform": platform,
+            "travelPass": null,
+        },
+        "uptime": 0,
+        "operations": ops,
+        "sessionExpGained": session.exp_gained,
+        "sessionGoldGained": session.gold_gained,
+        "sessionCouponGained": session.coupon_gained,
+        "lastExpGain": session.last_exp_gain,
+        "lastGoldGain": session.last_gold_gain,
+        "limits": limits,
+    })
+}
+
 /// 立即保存
 pub fn save_stats() {
     let account = CURRENT_ACCOUNT_ID.lock().clone();
@@ -523,6 +748,7 @@ pub fn reset_for_test() {
     *SESSION.lock() = SessionData::default();
     *CURRENT_DATE_KEY.lock() = None;
     *CURRENT_ACCOUNT_ID.lock() = None;
+    SLOTS.lock().clear();
 }
 
 // =====================================================================
@@ -664,6 +890,26 @@ mod tests {
         assert!(obj.contains_key("status"));
         assert!(obj.contains_key("operations"));
         assert!(obj.contains_key("sessionExpGained"));
+    }
+
+    #[test]
+    #[serial(stats)]
+    fn get_stats_for_session_exp_from_float_json() {
+        reset_for_test();
+        let account = "acc-eff";
+        init_stats_with_persistence(account, 100, 50, 0);
+        reset_session_gains_for(account);
+        let status = serde_json::json!({"name": "t", "level": 5, "exp": 80.0, "gold": 150.0});
+        let user = serde_json::json!({"gold": 150.0, "exp": 80.0});
+        let s = get_stats_for(
+            account,
+            Some(&status),
+            Some(&user),
+            true,
+            serde_json::json!({}),
+        );
+        assert_eq!(s["sessionExpGained"], 30);
+        assert_eq!(s["sessionGoldGained"], 50);
     }
 
     #[test]

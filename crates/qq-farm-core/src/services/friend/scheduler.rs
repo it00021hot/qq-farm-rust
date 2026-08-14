@@ -17,7 +17,8 @@
 //! - 帮 / 偷 / 巡 分批预算
 //! - gift / wish 流程
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -29,7 +30,7 @@ use crate::error::Result;
 use crate::network::gateway::Gateway;
 use crate::runtime::scheduler::Scheduler;
 use crate::services::friend::api::FriendApi;
-use crate::services::friend::gid_manager::{GidEvent, GidManager};
+use crate::services::friend::gid_manager::GidManager;
 use crate::services::friend::visit_strategy::{
     analyze_friend_lands, is_enter_farm_banned_error, is_transient_network_error, now_ms,
     parse_rpc_error_code, steal_lands_with_reward_log, HelpState, LandSnapshot, RecentHelpCache,
@@ -133,9 +134,39 @@ pub struct FriendService {
     strategy: Arc<VisitStrategy>,
     scheduler: Scheduler,
     host_gid: Arc<Mutex<i64>>,
+    account_id: Arc<Mutex<String>>,
     current_loop: Arc<Mutex<Option<CancellationToken>>>,
     event_tx: broadcast::Sender<FriendEvent>,
+    bad_ran_on_startup: AtomicBool,
+    operation_limits: Arc<Mutex<HashMap<i64, OpLimitEntry>>>,
+    bad_operation_limit_reached: AtomicBool,
+    /// 对齐 TS `helpAutoDisabledByLimit`
+    help_auto_disabled: AtomicBool,
+    /// 对齐 TS `isCheckingFriends`
+    is_checking: AtomicBool,
+    /// 对齐 TS `externalSchedulerMode`
+    external_scheduler: AtomicBool,
 }
+
+#[derive(Debug, Clone, Copy, Default)]
+struct OpLimitEntry {
+    day_times: i64,
+    day_times_limit: i64,
+    day_exp_times: i64,
+    day_exp_times_limit: i64,
+}
+
+const OP_NAMES: [(i64, &str); 8] = [
+    (10001, "浇水"),
+    (10002, "除虫"),
+    (10003, "捣乱共享额度"),
+    (10004, "放虫"),
+    (10005, "帮助操作 #10005"),
+    (10006, "帮助操作 #10006"),
+    (10007, "帮助操作 #10007"),
+    (10008, "铲除"),
+];
+const BAD_SHARED_LIMIT_ID: i64 = 10003;
 
 /// 好友服务事件
 #[derive(Debug, Clone)]
@@ -168,8 +199,15 @@ impl FriendService {
             strategy: Arc::new(VisitStrategy::new(batch_size)),
             scheduler: Scheduler::new("friend-service"),
             host_gid: Arc::new(Mutex::new(0)),
+            account_id: Arc::new(Mutex::new(String::new())),
             current_loop: Arc::new(Mutex::new(None)),
             event_tx,
+            bad_ran_on_startup: AtomicBool::new(false),
+            operation_limits: Arc::new(Mutex::new(HashMap::new())),
+            bad_operation_limit_reached: AtomicBool::new(false),
+            help_auto_disabled: AtomicBool::new(false),
+            is_checking: AtomicBool::new(false),
+            external_scheduler: AtomicBool::new(false),
         }
     }
 
@@ -195,8 +233,442 @@ impl FriendService {
         *self.host_gid.lock() = gid;
     }
 
+    pub fn set_account_id(&self, account_id: &str) {
+        *self.account_id.lock() = account_id.to_string();
+        self.api.set_account_id(account_id);
+    }
+
+    /// 好友操作限额（对齐 TS `getOperationLimits`）
+    #[must_use]
+    pub fn get_operation_limits(&self) -> serde_json::Value {
+        let map = self.operation_limits.lock();
+        let mut result = serde_json::Map::new();
+        for (id, name) in OP_NAMES {
+            if let Some(limit) = map.get(&id) {
+                let remaining = self.remaining_times_locked(id, limit);
+                result.insert(
+                    id.to_string(),
+                    serde_json::json!({
+                        "name": name,
+                        "dayTimes": limit.day_times,
+                        "dayTimesLimit": limit.day_times_limit,
+                        "dayExpTimes": limit.day_exp_times,
+                        "dayExpTimesLimit": limit.day_exp_times_limit,
+                        "remaining": remaining,
+                    }),
+                );
+            }
+        }
+        serde_json::Value::Object(result)
+    }
+
+    /// 对齐 TS `updateOperationLimits`
+    pub fn update_operation_limits(
+        &self,
+        limits: &[crate::proto::generated::gamepb::plantpb::OperationLimit],
+    ) {
+        if limits.is_empty() {
+            return;
+        }
+        let mut map = self.operation_limits.lock();
+        for limit in limits {
+            if limit.id <= 0 {
+                continue;
+            }
+            let data = OpLimitEntry {
+                day_times: limit.day_times,
+                day_times_limit: limit.day_times_lt,
+                day_exp_times: limit.day_exp_times,
+                day_exp_times_limit: limit.day_ex_times_lt,
+            };
+            map.insert(limit.id, data);
+            if limit.id == BAD_SHARED_LIMIT_ID
+                && data.day_times_limit > 0
+                && data.day_times >= data.day_times_limit
+            {
+                self.bad_operation_limit_reached
+                    .store(true, Ordering::Release);
+            }
+        }
+    }
+
+    fn remaining_times_locked(&self, op_id: i64, limit: &OpLimitEntry) -> i64 {
+        if (op_id == BAD_SHARED_LIMIT_ID || op_id == 10004)
+            && self.bad_operation_limit_reached.load(Ordering::Acquire)
+        {
+            return 0;
+        }
+        if limit.day_times_limit <= 0 {
+            return 999;
+        }
+        (limit.day_times_limit - limit.day_times).max(0)
+    }
+
+    /// 底层 API
+    #[must_use]
+    pub fn api(&self) -> &FriendApi {
+        &self.api
+    }
+
+    /// 对齐 TS `isHelpExpLimitReached`
+    #[must_use]
+    pub fn is_help_exp_limit_reached(&self) -> bool {
+        self.help_auto_disabled.load(Ordering::Acquire)
+    }
+
+    /// 对齐 TS `autoDisableHelpByExpLimit`
+    pub fn auto_disable_help_by_exp_limit(&self) {
+        if self.help_auto_disabled.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let acc = self.account_id.lock().clone();
+        crate::services::panel_log::log(
+            &acc,
+            "好友",
+            "今日帮助经验已达上限，自动停止帮忙",
+            Some(serde_json::json!({
+                "module": "friend",
+                "event": "friend_cycle",
+                "result": "ok",
+            })),
+        );
+    }
+
+    /// 对齐 TS `checkAndAcceptApplications` / `onFriendApplicationReceived`
+    pub async fn accept_friend_applications(&self, gids: Vec<i64>, names: &[String]) {
+        if gids.is_empty() {
+            return;
+        }
+        let acc = self.account_id.lock().clone();
+        if !names.is_empty() {
+            crate::services::panel_log::log(
+                &acc,
+                "申请",
+                format!("收到 {} 个好友申请: {}", names.len(), names.join(", ")),
+                Some(serde_json::json!({ "module": "friend", "event": "好友申请" })),
+            );
+        }
+        match self.api.accept_applications(gids).await {
+            Ok(()) => crate::services::panel_log::log(
+                &acc,
+                "申请",
+                "已同意好友申请",
+                Some(serde_json::json!({ "module": "friend", "event": "同意好友申请" })),
+            ),
+            Err(e) => crate::services::panel_log::log_warn(
+                &acc,
+                "申请",
+                format!("同意失败: {e}"),
+                Some(serde_json::json!({ "module": "friend", "event": "同意好友申请" })),
+            ),
+        }
+    }
+
+    /// 登录后拉一次待处理申请并同意（QQ 平台可能不支持，失败忽略）
+    pub async fn check_and_accept_applications(&self) {
+        let Ok(apps) = self.api.get_applications().await else {
+            return;
+        };
+        if apps.is_empty() {
+            return;
+        }
+        let names: Vec<String> = apps
+            .iter()
+            .map(|(gid, name)| {
+                if name.is_empty() {
+                    format!("GID:{gid}")
+                } else {
+                    name.clone()
+                }
+            })
+            .collect();
+        let gids: Vec<i64> = apps.into_iter().map(|(g, _)| g).collect();
+        let acc = self.account_id.lock().clone();
+        crate::services::panel_log::log(
+            &acc,
+            "申请",
+            format!("发现 {} 个待处理申请: {}", names.len(), names.join(", ")),
+            Some(serde_json::json!({ "module": "friend", "event": "待处理申请" })),
+        );
+        self.accept_friend_applications(gids, &[]).await;
+    }
+
+    /// 仅帮忙巡查（对齐 TS `checkFriends({onlyHelp: true})`）
+    pub async fn check_friends_help(&self, account_id: &str) -> Result<usize> {
+        self.visit_batch(account_id, VisitKind::Help).await
+    }
+
+    /// 仅偷菜巡查（对齐 TS `checkFriends({onlySteal: true})`）
+    pub async fn check_friends_steal(&self, account_id: &str) -> Result<usize> {
+        self.visit_batch(account_id, VisitKind::Steal).await
+    }
+
+    /// 对齐 TS `startFriendCheckLoop({ externalScheduler: true })`
+    pub fn set_external_scheduler(&self, enabled: bool) {
+        self.external_scheduler.store(enabled, Ordering::Release);
+        if enabled {
+            self.stop_check_loop();
+        }
+    }
+
+    async fn visit_batch(&self, account_id: &str, kind: VisitKind) -> Result<usize> {
+        if self.is_checking.swap(true, Ordering::AcqRel) {
+            return Ok(0);
+        }
+        let result = self.visit_batch_inner(account_id, kind).await;
+        self.is_checking.store(false, Ordering::Release);
+        result
+    }
+
+    async fn visit_batch_inner(&self, account_id: &str, kind: VisitKind) -> Result<usize> {
+        let my_gid = *self.host_gid.lock();
+        if my_gid == 0 {
+            return Ok(0);
+        }
+        if !crate::services::automation::is_automation_on_for(account_id, "friend") {
+            return Ok(0);
+        }
+        if crate::services::friend::visit_strategy::in_friend_quiet_hours_for(
+            Some(account_id),
+            None,
+        ) {
+            return Ok(0);
+        }
+        let friends = match self.api.get_all_game_friends().await {
+            Ok(f) => f,
+            Err(e) => {
+                crate::services::panel_log::log_warn(
+                    account_id,
+                    "好友",
+                    format!("巡查异常: {e}"),
+                    Some(serde_json::json!({
+                        "module": "friend",
+                        "event": "friend_cycle",
+                        "result": "error",
+                    })),
+                );
+                return Err(e);
+            }
+        };
+        self.gid_manager
+            .update(friends.iter().map(|f| f.gid).collect());
+        if friends.is_empty() {
+            crate::services::panel_log::log(
+                account_id,
+                "好友",
+                "没有好友",
+                Some(serde_json::json!({
+                    "module": "friend",
+                    "event": "好友扫描",
+                    "result": "empty",
+                })),
+            );
+            return Ok(0);
+        }
+
+        let cfg_blacklist: HashSet<i64> =
+            crate::models::store::account_config::get_friend_blacklist(Some(account_id))
+                .into_iter()
+                .collect();
+        let mut steal_friends: Vec<FriendSummary> = Vec::new();
+        let mut help_friends: Vec<(FriendSummary, i64)> = Vec::new();
+        let mut seen = HashSet::new();
+        for f in friends {
+            if f.gid == my_gid || f.gid <= 0 || !seen.insert(f.gid) {
+                continue;
+            }
+            if cfg_blacklist.contains(&f.gid) || self.strategy.is_blacklisted(f.gid) {
+                continue;
+            }
+            let summary =
+                crate::services::friend::visit_strategy::game_friend_to_summary(f);
+            let steal_num = summary
+                .plant
+                .as_ref()
+                .map(|p| p.steal_num)
+                .unwrap_or(0);
+            let help_need = summary
+                .plant
+                .as_ref()
+                .map(|p| p.dry_num + p.weed_num + p.insect_num)
+                .unwrap_or(0);
+            if kind == VisitKind::Steal && steal_num > 0 {
+                steal_friends.push(summary);
+            } else if kind == VisitKind::Help && help_need > 0 {
+                help_friends.push((summary, help_need));
+            }
+        }
+
+        steal_friends.sort_by(|a, b| {
+            let sa = a.plant.as_ref().map(|p| p.steal_num).unwrap_or(0);
+            let sb = b.plant.as_ref().map(|p| p.steal_num).unwrap_or(0);
+            sb.cmp(&sa)
+        });
+        help_friends.sort_by(|a, b| b.1.cmp(&a.1));
+
+        let mut total = crate::services::friend::visit_strategy::TotalActions::default();
+        let recent = self.strategy.recent_help();
+
+        if kind == VisitKind::Steal && !steal_friends.is_empty() {
+            crate::services::panel_log::log(
+                account_id,
+                "好友",
+                format!("开始批量偷菜，共 {} 个好友有可偷", steal_friends.len()),
+                Some(serde_json::json!({
+                    "module": "friend",
+                    "event": "visit_friend",
+                    "count": steal_friends.len(),
+                })),
+            );
+            for friend in &steal_friends {
+                let _ = crate::services::friend::visit_strategy::visit_friend_for_steal(
+                    &self.api,
+                    recent,
+                    friend,
+                    &mut total,
+                    my_gid,
+                    account_id,
+                )
+                .await;
+                crate::utils::random::random_delay(500, 800).await;
+            }
+        }
+
+        if kind == VisitKind::Help && !help_friends.is_empty() {
+            crate::services::panel_log::log(
+                account_id,
+                "好友",
+                format!("开始批量帮助，共 {} 个好友需要帮助", help_friends.len()),
+                Some(serde_json::json!({
+                    "module": "friend",
+                    "event": "visit_friend",
+                    "count": help_friends.len(),
+                })),
+            );
+            for (i, (friend, _)) in help_friends.iter().enumerate() {
+                if crate::services::automation::is_automation_on_for(
+                    account_id,
+                    "friend_help_exp_limit",
+                ) && self.is_help_exp_limit_reached()
+                {
+                    crate::services::panel_log::log(
+                        account_id,
+                        "好友",
+                        "批量帮助中断：经验已达上限",
+                        Some(serde_json::json!({
+                            "module": "friend",
+                            "event": "friend_cycle",
+                            "reason": "exp_limit",
+                        })),
+                    );
+                    break;
+                }
+                crate::services::panel_log::log(
+                    account_id,
+                    "好友",
+                    format!(
+                        "批量帮助第 {}/{} 个好友: {}",
+                        i + 1,
+                        help_friends.len(),
+                        friend.name
+                    ),
+                    Some(serde_json::json!({
+                        "module": "friend",
+                        "event": "visit_friend",
+                        "index": i + 1,
+                        "total": help_friends.len(),
+                        "friendName": friend.name,
+                    })),
+                );
+                let _ = crate::services::friend::visit_strategy::visit_friend_for_help(
+                    &self.api,
+                    recent,
+                    friend,
+                    &mut total,
+                    my_gid,
+                    account_id,
+                    false,
+                    &self.help_auto_disabled,
+                )
+                .await;
+                crate::utils::random::random_delay(500, 800).await;
+            }
+        }
+
+        let mut summary: Vec<String> = Vec::new();
+        if total.steal > 0 {
+            summary.push(format!("偷{}", total.steal));
+        }
+        if total.farming > 0 {
+            summary.push(format!("一键务农{}", total.farming));
+        }
+        if total.put_bug > 0 {
+            summary.push(format!("放虫{}", total.put_bug));
+        }
+        if total.put_weed > 0 {
+            summary.push(format!("放草{}", total.put_weed));
+        }
+        if !summary.is_empty() {
+            crate::services::panel_log::log(
+                account_id,
+                "好友",
+                format!("巡查完成 → {}", summary.join("/")),
+                Some(serde_json::json!({
+                    "module": "friend",
+                    "event": "friend_cycle",
+                    "result": "ok",
+                    "visited": steal_friends.len() + help_friends.len(),
+                    "summary": summary,
+                })),
+            );
+        }
+
+        Ok(if kind == VisitKind::Steal {
+            total.steal
+        } else {
+            total.farming
+        })
+    }
+
+    /// 启动时执行一次放虫放草（对齐 TS `runBadOnceOnStartup`）
+    pub async fn run_bad_once_on_startup(&self, account_id: &str) -> Result<usize> {
+        if self.bad_ran_on_startup.swap(true, Ordering::AcqRel) {
+            return Ok(0);
+        }
+        if !crate::services::automation::is_automation_on_for(account_id, "friend_bad") {
+            return Ok(0);
+        }
+        let my_gid = *self.host_gid.lock();
+        if my_gid == 0 {
+            return Ok(0);
+        }
+        let friends = self.api.get_friends_list().await.unwrap_or_default();
+        let mut acted = 0usize;
+        for &fg in friends.iter().take(20) {
+            if fg == my_gid || self.strategy.is_blacklisted(fg) {
+                continue;
+            }
+            let enter = match self.api.enter_farm(fg).await {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let result =
+                crate::services::friend::visit_strategy::do_bad_op(&self.api, fg, &enter.lands)
+                    .await;
+            let _ = self.api.leave_farm(fg).await;
+            if result.get("count").and_then(|v| v.as_u64()).unwrap_or(0) > 0 {
+                acted += 1;
+            }
+        }
+        Ok(acted)
+    }
+
     /// 启动巡访循环
     pub fn start_check_loop(&self) {
+        if self.external_scheduler.load(Ordering::Acquire) {
+            self.stop_check_loop();
+            return;
+        }
         self.stop_check_loop();
         let cancel = CancellationToken::new();
         *self.current_loop.lock() = Some(cancel.clone());
@@ -206,6 +678,7 @@ impl FriendService {
         let strategy = self.strategy.clone();
         let event_tx = self.event_tx.clone();
         let host_gid = self.host_gid.clone();
+        let account_id = self.account_id.clone();
         let cancel_for_task = cancel.clone();
         let interval = Duration::from_secs(120);
 
@@ -218,6 +691,7 @@ impl FriendService {
                 let strategy = strategy.clone();
                 let event_tx = event_tx.clone();
                 let host_gid = host_gid.clone();
+                let account_id = account_id.clone();
                 let cancel = cancel_for_task.clone();
                 Box::pin(async move {
                     if cancel.is_cancelled() {
@@ -230,7 +704,8 @@ impl FriendService {
                         });
                         return;
                     }
-                    match Self::run_one_cycle(&api, &gid_manager, &strategy, gid).await {
+                    let acc = account_id.lock().clone();
+                    match Self::run_one_cycle(&api, &gid_manager, &strategy, gid, &acc).await {
                         Ok((batch_size, helped, stolen, banned)) => {
                             let _ = event_tx.send(FriendEvent::Checked {
                                 batch_size,
@@ -270,7 +745,8 @@ impl FriendService {
     /// 单次巡访
     pub async fn check_friends(&self) -> Result<(usize, usize, usize, usize)> {
         let gid = *self.host_gid.lock();
-        Self::run_one_cycle(&self.api, &self.gid_manager, &self.strategy, gid).await
+        let acc = self.account_id.lock().clone();
+        Self::run_one_cycle(&self.api, &self.gid_manager, &self.strategy, gid, &acc).await
     }
 
     async fn run_one_cycle(
@@ -278,6 +754,7 @@ impl FriendService {
         gid_manager: &GidManager,
         strategy: &VisitStrategy,
         host_gid: i64,
+        account_id: &str,
     ) -> Result<(usize, usize, usize, usize)> {
         // 1. 同步 GID 列表（如果需要）
         let friends = if gid_manager.needs_sync() {
@@ -289,6 +766,12 @@ impl FriendService {
         };
 
         if friends.is_empty() {
+            crate::services::panel_log::log(
+                account_id,
+                "好友",
+                "没有好友",
+                Some(serde_json::json!({ "module": "friend", "event": "好友扫描", "result": "empty" })),
+            );
             return Ok((0, 0, 0, 0));
         }
 
@@ -399,6 +882,18 @@ impl FriendService {
             }
         }
 
+        crate::services::panel_log::log(
+            account_id,
+            "好友",
+            format!("巡查完成 → 帮{helped}/偷{stolen}/封{banned}"),
+            Some(serde_json::json!({
+                "module": "friend",
+                "event": "巡查完成",
+                "helped": helped,
+                "stolen": stolen,
+                "banned": banned,
+            })),
+        );
         Ok((batch_size, helped, stolen, banned))
     }
 
@@ -410,10 +905,48 @@ impl FriendService {
 
     /// 获取好友列表（1:1 对齐原 TS `getFriendsList`）
     pub async fn get_friends_list(&self, _force: bool) -> Result<Vec<serde_json::Value>> {
-        let gids = self.api.get_friends_list().await?;
-        Ok(gids
+        let account_id = self.account_id.lock().clone();
+        crate::services::panel_log::log(
+            &account_id,
+            "好友",
+            "开始获取好友列表",
+            Some(serde_json::json!({ "module": "friend", "event": "获取好友列表" })),
+        );
+        let friends = match self.api.get_all_game_friends().await {
+            Ok(f) => f,
+            Err(e) => {
+                crate::services::panel_log::log(
+                    &account_id,
+                    "好友",
+                    format!("获取好友列表失败: {e}"),
+                    Some(serde_json::json!({ "module": "friend", "event": "获取好友列表", "result": "error" })),
+                );
+                return Err(e);
+            }
+        };
+        let my_gid = *self.host_gid.lock();
+        let mut result: Vec<crate::services::friend::visit_strategy::FriendSummary> = friends
             .into_iter()
-            .map(|g| serde_json::json!({ "gid": g }))
+            .filter(|f| f.gid != my_gid && f.name != "小小农夫" && f.remark != "小小农夫")
+            .map(crate::services::friend::visit_strategy::game_friend_to_summary)
+            .collect();
+        result.sort_by(|a, b| a.name.cmp(&b.name).then(a.gid.cmp(&b.gid)));
+        self.gid_manager
+            .update(result.iter().map(|f| f.gid).collect());
+        crate::services::panel_log::log(
+            &account_id,
+            "好友",
+            format!("获取好友列表成功，共 {} 位好友", result.len()),
+            Some(serde_json::json!({
+                "module": "friend",
+                "event": "获取好友列表",
+                "result": "ok",
+                "count": result.len(),
+            })),
+        );
+        Ok(result
+            .into_iter()
+            .filter_map(|f| serde_json::to_value(f).ok())
             .collect())
     }
 
@@ -425,22 +958,26 @@ impl FriendService {
     /// 获取好友土地详情（1:1 对齐原 TS `getFriendLandsDetail`）
     pub async fn get_friend_lands_detail(&self, gid: i64) -> Result<serde_json::Value> {
         let enter_reply = self.api.enter_farm(gid).await?;
-        let lands: Vec<serde_json::Value> = enter_reply
-            .lands
-            .iter()
-            .map(|l| {
-                serde_json::json!({
-                    "id": l.id,
-                    "unlocked": l.unlocked,
-                    "level": l.level,
-                })
-            })
-            .collect();
-        // leave_farm 即便失败也 swallow
+        let my_gid = *self.host_gid.lock();
+        let account_id = self.account_id.lock().clone();
+        let blacklist = crate::models::store::account_config::get_plant_blacklist(
+            if account_id.is_empty() {
+                None
+            } else {
+                Some(account_id.as_str())
+            },
+        );
+        let analyzed = crate::services::friend::visit_strategy::analyze_friend_lands(
+            &enter_reply.lands,
+            my_gid,
+            &blacklist,
+            false,
+        );
+        let lands = crate::services::farm::land_analysis::friend_lands_detail(&enter_reply.lands);
         let _ = self.api.leave_farm(gid).await;
         Ok(serde_json::json!({
-            "gid": gid,
             "lands": lands,
+            "summary": analyzed,
         }))
     }
 
@@ -450,69 +987,13 @@ impl FriendService {
         op: crate::models::types::FriendOperation,
         gid: i64,
     ) -> Result<serde_json::Value> {
-        use crate::models::types::FriendOperation;
-        match op {
-            FriendOperation::Farming | FriendOperation::Water => {
-                // farming: 一键除草 + 除虫 + 浇水；water: 仅浇水
-                let enter_reply = self.api.enter_farm(gid).await?;
-                let land_ids: Vec<i64> = enter_reply.lands.iter().map(|l| l.id).collect();
-                let count = if !land_ids.is_empty() {
-                    self.api.help_farm(gid, land_ids.clone()).await?;
-                    land_ids.len()
-                } else {
-                    0
-                };
-                let _ = self.api.leave_farm(gid).await;
-                Ok(serde_json::json!({
-                    "op": op.as_str(),
-                    "gid": gid,
-                    "land_count": count,
-                }))
-            }
-            FriendOperation::Steal => {
-                let enter_reply = self.api.enter_farm(gid).await?;
-                let stealable: Vec<i64> = enter_reply.lands.iter().map(|l| l.id).collect();
-                let count = if !stealable.is_empty() {
-                    self.api.steal_farm(gid, stealable.clone()).await?;
-                    stealable.len()
-                } else {
-                    0
-                };
-                let _ = self.api.leave_farm(gid).await;
-                Ok(serde_json::json!({
-                    "op": "steal",
-                    "gid": gid,
-                    "land_count": count,
-                }))
-            }
-            FriendOperation::Weed | FriendOperation::Insecticide | FriendOperation::Fertilize => {
-                // 通过 help_farm 复用（field_4 不同）
-                let enter_reply = self.api.enter_farm(gid).await?;
-                let land_ids: Vec<i64> = enter_reply.lands.iter().map(|l| l.id).collect();
-                let count = if !land_ids.is_empty() {
-                    self.api.help_farm(gid, land_ids.clone()).await?;
-                    land_ids.len()
-                } else {
-                    0
-                };
-                let _ = self.api.leave_farm(gid).await;
-                Ok(serde_json::json!({
-                    "op": op.as_str(),
-                    "gid": gid,
-                    "land_count": count,
-                }))
-            }
-            FriendOperation::Bad => {
-                // 暂未实现放虫放草，返回 ok=true
-                let _ = self.api.enter_farm(gid).await;
-                let _ = self.api.leave_farm(gid).await;
-                Ok(serde_json::json!({
-                    "op": "bad",
-                    "gid": gid,
-                    "count": 0,
-                }))
-            }
-        }
+        Ok(crate::services::friend::visit_strategy::do_friend_operation(
+            &self.api,
+            self.strategy.recent_help(),
+            gid,
+            op,
+        )
+        .await)
     }
 }
 

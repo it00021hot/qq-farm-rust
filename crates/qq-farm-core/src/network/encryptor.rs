@@ -14,7 +14,6 @@
 
 use std::sync::Arc;
 
-use parking_lot::Mutex;
 
 use crate::crypto::tsdk::TsdkRuntime;
 use crate::error::Result;

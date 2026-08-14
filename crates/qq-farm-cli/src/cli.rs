@@ -33,6 +33,9 @@ pub enum Command {
     /// 跑一次完整好友操作：同步 → 帮 → 偷（阶段 1D 验证用）
     #[command(name = "friend-demo")]
     FriendDemo(commands::friend_demo::Args),
+    /// 用 login_buffer 走 MMTLS 拿 wx.login code（调试扫码登录用）
+    #[command(name = "wx-code")]
+    WxCode(commands::wx_code::Args),
 }
 
 impl Cli {
@@ -43,6 +46,7 @@ impl Cli {
             Command::WorkerDemo(args) => commands::worker_demo::execute(args),
             Command::FarmDemo(args) => commands::farm_demo::execute(args),
             Command::FriendDemo(args) => commands::friend_demo::execute(args),
+            Command::WxCode(args) => commands::wx_code::execute(args),
         }
     }
 }

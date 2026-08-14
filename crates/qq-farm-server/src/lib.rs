@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use axum::{routing::get, Json, Router};
+use tower_http::services::ServeDir;
 use serde_json::json;
 
 pub mod context;
@@ -28,7 +29,16 @@ pub struct TestApp {
 
 /// 构造测试用 axum Router（包含完整路由 + middleware + health）
 pub async fn build_test_app(cfg: TestApp) -> Router {
+    use std::sync::Once;
     use qq_farm_core::runtime::engine::{EngineConfig, GatewayConfigTemplate, RuntimeEngine};
+
+    // persist_global 会写 accounts.json；测试必须隔离，避免污染开发 data/
+    static INIT_DATA_DIR: Once = Once::new();
+    INIT_DATA_DIR.call_once(|| {
+        let dir = std::env::temp_dir().join(format!("qq-farm-e2e-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        std::env::set_var("FARM_DATA_DIR", &dir);
+    });
 
     let _ = cfg;
     let engine = Arc::new(RuntimeEngine::assemble(EngineConfig {
@@ -47,6 +57,7 @@ pub async fn build_test_app(cfg: TestApp) -> Router {
     }));
 
     let ctx = Arc::new(AdminContext::new(engine));
+    ctx.engine.spawn_event_bridge();
 
     // 启动时尝试加载状态（即便失败也不影响 E2E）
     let _ = qq_farm_core::models::store::accounts::load_into_global();
@@ -67,6 +78,10 @@ pub async fn build_test_app(cfg: TestApp) -> Router {
         .route("/health", get(health))
         .route("/ws", get(socket::ws_handler))
         .merge(routes::build(ctx.clone()))
+        .nest_service(
+            "/game-config",
+            ServeDir::new(qq_farm_core::config::game_config_static_dir()),
+        )
         .with_state(ctx)
         .layer(axum::middleware::from_fn(middleware::cors_layer))
 }

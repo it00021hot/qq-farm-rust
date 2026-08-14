@@ -30,13 +30,16 @@ impl Default for UIConfig {
 
 /// 离线提醒配置
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OfflineReminder {
     pub channel: String,
+    #[serde(alias = "relogin_url_mode")]
     pub relogin_url_mode: String,
     pub endpoint: String,
     pub token: String,
     pub title: String,
     pub msg: String,
+    #[serde(alias = "offline_delete_sec")]
     pub offline_delete_sec: i64,
 }
 
@@ -56,9 +59,12 @@ pub fn default_offline_reminder() -> OfflineReminder {
 
 /// 公告
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Announcement {
     pub content: String,
+    #[serde(alias = "show_once")]
     pub show_once: bool,
+    #[serde(alias = "updated_at")]
     pub updated_at: i64,
 }
 

@@ -5,6 +5,8 @@
 //! 阶段 1C.1：checkFarm + startFarmCheckLoop + stopFarmCheckLoop 框架
 //! 阶段 1C.2：runFarmOperation 完整实现（收获 → 锄地 → 施肥 → 种植）
 
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,9 +18,10 @@ use crate::network::gateway::Gateway;
 use crate::runtime::scheduler::Scheduler;
 use crate::services::farm::api::Api;
 use crate::services::farm::land_analysis::{
-    collect_dead, collect_harvestable, collect_plantable, summarize_lands, LandSummary,
+    analyze_lands, build_land_map, classify_harvested_lands_by_map, collect_dead,
+    collect_harvestable, summarize_lands, LandAnalysis, LandSummary,
 };
-use crate::services::farm::planting::{PlantingConfig, PlantingEngine, FertilizeResult};
+use crate::services::farm::planting::{PlantingConfig, PlantingEngine};
 
 /// 农场服务
 pub struct FarmService {
@@ -30,10 +33,16 @@ pub struct FarmService {
     check_interval: Arc<parking_lot::Mutex<Duration>>,
     /// 当前账号 host_gid（运行期可变）
     host_gid: Arc<parking_lot::Mutex<i64>>,
+    /// 账号 id（读 AccountConfig）
+    account_id: Arc<parking_lot::Mutex<String>>,
     /// 取消 token（每轮询独立）
     current_loop: Arc<parking_lot::Mutex<Option<CancellationToken>>>,
     /// 状态事件订阅
     event_tx: broadcast::Sender<FarmEvent>,
+    /// 对齐 TS `isCheckingFarm`
+    is_checking: AtomicBool,
+    /// 对齐 TS `externalSchedulerMode`：由 worker 统一 tick 驱动，不跑内部 interval
+    external_scheduler: AtomicBool,
 }
 
 /// 农场服务事件
@@ -61,7 +70,7 @@ impl FarmService {
     pub fn new(gateway: Arc<Gateway>) -> Self {
         let api = Api::new(gateway.clone());
         let planting = PlantingEngine::new(api.clone(), PlantingConfig::default());
-        let (event_tx, _) = broadcast::channel(64);
+        let (event_tx, _) = broadcast::channel(256);
         Self {
             gateway,
             api,
@@ -69,8 +78,11 @@ impl FarmService {
             scheduler: Scheduler::new("farm-service"),
             check_interval: Arc::new(parking_lot::Mutex::new(Duration::from_secs(60))),
             host_gid: Arc::new(parking_lot::Mutex::new(0)),
+            account_id: Arc::new(parking_lot::Mutex::new(String::new())),
             current_loop: Arc::new(parking_lot::Mutex::new(None)),
             event_tx,
+            is_checking: AtomicBool::new(false),
+            external_scheduler: AtomicBool::new(false),
         }
     }
 
@@ -90,15 +102,31 @@ impl FarmService {
         *self.host_gid.lock() = gid;
     }
 
+    /// 设置账号 id（登录后调用，用于按账号读 automation / 种植策略）
+    pub fn set_account_id(&self, account_id: &str) {
+        *self.account_id.lock() = account_id.to_string();
+    }
+
     /// 订阅事件
     pub fn subscribe(&self) -> broadcast::Receiver<FarmEvent> {
         self.event_tx.subscribe()
     }
 
+    /// 对齐 TS `startFarmCheckLoop({ externalScheduler: true })`
+    pub fn set_external_scheduler(&self, enabled: bool) {
+        self.external_scheduler.store(enabled, Ordering::Release);
+        if enabled {
+            self.stop_check_loop();
+        }
+    }
+
     /// 设置轮询间隔
     pub fn set_check_interval(&self, interval: Duration) {
         *self.check_interval.lock() = interval;
-        // 重启循环以应用新间隔
+        // 外部调度模式下不重启内部循环（对齐 TS `externalSchedulerMode`）
+        if self.external_scheduler.load(Ordering::Acquire) {
+            return;
+        }
         if self.current_loop.lock().is_some() {
             self.start_check_loop();
         }
@@ -106,6 +134,10 @@ impl FarmService {
 
     /// 启动巡田循环
     pub fn start_check_loop(&self) {
+        if self.external_scheduler.load(Ordering::Acquire) {
+            self.stop_check_loop();
+            return;
+        }
         self.stop_check_loop();
         let cancel = CancellationToken::new();
         *self.current_loop.lock() = Some(cancel.clone());
@@ -114,6 +146,7 @@ impl FarmService {
         let planting = self.planting.clone();
         let event_tx = self.event_tx.clone();
         let host_gid = self.host_gid.clone();
+        let account_id = self.account_id.clone();
         let cancel_for_task = cancel.clone();
         let interval = *self.check_interval.lock();
 
@@ -125,6 +158,7 @@ impl FarmService {
                 let planting = planting.clone();
                 let event_tx = event_tx.clone();
                 let host_gid = host_gid.clone();
+                let account_id = account_id.clone();
                 let cancel = cancel_for_task.clone();
                 Box::pin(async move {
                     if cancel.is_cancelled() {
@@ -137,12 +171,18 @@ impl FarmService {
                         });
                         return;
                     }
-                    // 完整一轮操作
-                    match Self::run_one_cycle(&api, &planting, gid, &event_tx).await {
+                    let acc = account_id.lock().clone();
+                    match Self::run_one_cycle(&api, &planting, gid, &acc, &event_tx).await {
                         Ok(()) => {
                             let _ = event_tx.send(FarmEvent::CycleCompleted);
                         }
                         Err(e) => {
+                            crate::services::panel_log::log_warn(
+                                &acc,
+                                "巡田",
+                                format!("检查失败: {e}"),
+                                Some(serde_json::json!({ "module": "farm", "event": "巡田" })),
+                            );
                             let _ = event_tx.send(FarmEvent::Error {
                                 message: format!("cycle failed: {e}"),
                             });
@@ -161,57 +201,52 @@ impl FarmService {
         self.scheduler.clear("farm_check");
     }
 
-    /// 刷新（重启）巡田循环
+    /// 刷新（重启）巡田循环。外部调度模式下是 no-op（对齐 TS `refreshFarmCheckLoop`）。
     pub fn refresh_check_loop(&self) {
+        if self.external_scheduler.load(Ordering::Acquire) {
+            return;
+        }
         self.start_check_loop();
     }
 
-    /// 单次巡田（只检查 + 统计，不做操作）
+    /// 单次巡田（对齐 TS `checkFarm`：只跑 `runFarmOperation('all')`，不额外 AllLands）
     pub async fn check_farm(&self) -> Result<LandSummary> {
-        let (summary, _) = Self::check_once(&self.api, *self.host_gid.lock()).await?;
-        Ok(summary)
+        let gid = *self.host_gid.lock();
+        let acc = self.account_id.lock().clone();
+        if gid == 0 || !crate::services::automation::is_automation_on_for(&acc, "farm") {
+            return Ok(LandSummary::default());
+        }
+        if crate::services::friend::visit_strategy::in_friend_quiet_hours(None) {
+            return Ok(LandSummary::default());
+        }
+        if self.is_checking.swap(true, Ordering::AcqRel) {
+            return Ok(LandSummary::default());
+        }
+        let result = self.run_farm_operation().await;
+        self.is_checking.store(false, Ordering::Release);
+        match result {
+            Ok(()) => Ok(LandSummary::default()),
+            Err(e) => Err(e),
+        }
     }
 
     /// 获取土地详情（lands + summary）
-    pub async fn get_lands_detail(&self) -> Result<(Vec<serde_json::Value>, LandSummary)> {
+    pub async fn get_lands_detail(
+        &self,
+    ) -> Result<(
+        Vec<serde_json::Value>,
+        crate::services::farm::land_analysis::LandDetailSummary,
+    )> {
         let host_gid = *self.host_gid.lock();
         let reply = self.api.get_all_lands(host_gid).await?;
-        let lands: Vec<serde_json::Value> = reply
-            .lands
-            .iter()
-            .map(|l| {
-                serde_json::json!({
-                    "id": l.id,
-                    "unlocked": l.unlocked,
-                    "level": l.level,
-                    "could_unlock": l.could_unlock,
-                    "could_upgrade": l.could_upgrade,
-                    "has_plant": l.plant.is_some(),
-                })
-            })
-            .collect();
-        let summary = summarize_lands(&reply.lands);
-        Ok((lands, summary))
-    }
-
-    async fn check_once(api: &Api, host_gid: i64) -> Result<(LandSummary, String)> {
-        let reply = api.get_all_lands(host_gid).await?;
-        let lands = reply.lands;
-        let summary = summarize_lands(&lands);
-        let phase = if summary.ripe > 0 {
-            "需要收获".to_string()
-        } else if summary.plantable > 0 {
-            "可种植".to_string()
-        } else {
-            "生长中".to_string()
-        };
-        Ok((summary, phase))
+        Ok(crate::services::farm::land_analysis::own_lands_detail(&reply.lands))
     }
 
     /// 完整一轮农场操作：收获 → 铲除 → 种植 → 施肥
     pub async fn run_farm_operation(&self) -> Result<()> {
         let gid = *self.host_gid.lock();
-        let result = Self::run_one_cycle(&self.api, &self.planting, gid, &self.event_tx).await;
+        let acc = self.account_id.lock().clone();
+        let result = Self::run_one_cycle(&self.api, &self.planting, gid, &acc, &self.event_tx).await;
         if result.is_ok() {
             let _ = self.event_tx.send(FarmEvent::CycleCompleted);
         }
@@ -295,11 +330,12 @@ impl FarmService {
         if planted.is_empty() {
             return Ok(FertilizeOpResult::default());
         }
+        let acc = self.account_id.lock().clone();
         let result = self
             .planting
             .lock()
             .await
-            .fertilize_by_config(&planted, gid)
+            .fertilize_by_config_ex(&planted, gid, &acc, Default::default())
             .await?;
         let _ = self.event_tx.send(FarmEvent::Fertilized {
             normal: result.normal,
@@ -311,25 +347,25 @@ impl FarmService {
         })
     }
 
-    /// 种植（`op=plant`）—— 用 config.preferred_seed_id 种所有可种土地
+    /// 种植（`op=plant`）—— 自动选种种空地/枯地
     pub async fn op_plant(&self) -> Result<usize> {
         let gid = *self.host_gid.lock();
+        let acc = self.account_id.lock().clone();
         let reply = self.api.get_all_lands(gid).await?;
-        let plantable_ids = collect_plantable(&reply.lands);
-        let n = plantable_ids.len();
-        if plantable_ids.is_empty() {
+        let status = analyze_lands(&reply.lands, gid);
+        if status.empty.is_empty() && status.dead.is_empty() {
             return Ok(0);
         }
-        let seed_id = self.planting.lock().await.config().preferred_seed_id;
-        if seed_id <= 0 {
-            return Ok(0);
-        }
-        self.planting
+        let result = self
+            .planting
             .lock()
             .await
-            .plant_seeds(seed_id, plantable_ids.clone(), gid)
+            .auto_plant_empty_lands(&status.dead, &status.empty, gid, &acc)
             .await?;
-        let _ = self.event_tx.send(FarmEvent::Planted { count: n });
+        let n = result.planted_lands.len();
+        if n > 0 {
+            let _ = self.event_tx.send(FarmEvent::Planted { count: n });
+        }
         Ok(n)
     }
 
@@ -377,83 +413,351 @@ impl FarmService {
         api: &Api,
         planting: &Arc<Mutex<PlantingEngine>>,
         host_gid: i64,
+        account_id: &str,
         event_tx: &broadcast::Sender<FarmEvent>,
     ) -> Result<()> {
-        // 1. 拉取土地
         let reply = api.get_all_lands(host_gid).await?;
         let lands = reply.lands;
+        if lands.is_empty() {
+            crate::services::panel_log::log(
+                account_id,
+                "农场",
+                "没有土地数据",
+                Some(serde_json::json!({ "module": "farm", "event": "farm_cycle" })),
+            );
+            return Ok(());
+        }
+        let status = analyze_lands(&lands, host_gid);
         let summary = summarize_lands(&lands);
         let _ = event_tx.send(FarmEvent::Checked {
             summary,
             phase_hint: String::new(),
         });
+        let mut actions: Vec<String> = Vec::new();
 
-        // 2. 收获 ripe
-        let ripe_ids = collect_harvestable(&lands);
-        let n_harvested = ripe_ids.len();
-        if !ripe_ids.is_empty() {
-            if let Err(e) = api.harvest(ripe_ids.clone(), host_gid, true).await {
-                tracing::warn!(error = %e, "harvest failed");
-            } else {
-                tracing::info!(count = n_harvested, "harvested");
-            }
-        }
-        let _ = event_tx.send(FarmEvent::Harvested { count: n_harvested });
-
-        // 3. 铲除已收获的植物（用 `is_dead` 阶段 4 判断）
-        let dead_ids = collect_dead(&lands);
-        let n_removed = dead_ids.len();
-        if !dead_ids.is_empty() {
-            if let Err(e) = api.remove_plant(dead_ids.clone()).await {
-                tracing::warn!(error = %e, "remove_plant failed");
-            } else {
-                tracing::info!(count = n_removed, "removed");
-            }
-        }
-        let _ = event_tx.send(FarmEvent::Removed { count: n_removed });
-
-        // 4. 重新拉取
-        let reply2 = api.get_all_lands(host_gid).await?;
-        let lands2 = reply2.lands;
-
-        // 5. 选种子 + 种植
-        let plantable_ids = collect_plantable(&lands2);
-        if !plantable_ids.is_empty() {
-            let seed_id = planting.lock().await.config().preferred_seed_id;
-            if seed_id > 0 {
-                let n_planted = plantable_ids.len();
-                if let Err(e) = planting
-                    .lock()
-                    .await
-                    .plant_seeds(seed_id, plantable_ids.clone(), host_gid)
-                    .await
-                {
-                    tracing::warn!(error = %e, "plant_seeds failed");
-                } else {
-                    tracing::info!(count = n_planted, "planted");
-                    let _ = event_tx.send(FarmEvent::Planted { count: n_planted });
+        let skip_own =
+            crate::services::automation::is_automation_on_for(account_id, "skip_own_weed_bug");
+        let mut farming_ids: Vec<i64> = status
+            .need_weed
+            .iter()
+            .chain(status.need_bug.iter())
+            .chain(status.need_water.iter())
+            .copied()
+            .collect();
+        farming_ids.sort_unstable();
+        farming_ids.dedup();
+        if !skip_own && !farming_ids.is_empty() {
+            match api.farming(farming_ids.clone(), host_gid).await {
+                Err(e) => {
+                    tracing::warn!(error = %e, "farming failed");
+                    crate::services::panel_log::log_warn(
+                        account_id,
+                        "农场",
+                        format!("一键务农失败: {e}"),
+                        Some(serde_json::json!({ "module": "farm", "event": "farm_cycle" })),
+                    );
+                }
+                Ok(reply) => {
+                    crate::services::status::apply_reward_deltas_for(
+                        account_id,
+                        reply.results.iter().filter_map(|r| r.reward.as_ref()),
+                    );
+                    crate::services::stats::record_operation_for(
+                        account_id,
+                        "farming",
+                        farming_ids.len() as i64,
+                    );
+                    actions.push(farm_cycle_farming_action(&status));
                 }
             }
         }
 
-        // 6. 施肥
-        let planted_for_fertilize = plantable_ids; // 用刚种下的
-        match planting
-            .lock()
-            .await
-            .fertilize_by_config(&planted_for_fertilize, host_gid)
-            .await
+        let mut harvested_land_ids: Vec<i64> = Vec::new();
+        let mut harvest_lands: Vec<crate::proto::generated::gamepb::plantpb::LandInfo> = Vec::new();
+        if !status.harvestable.is_empty() {
+            match api
+                .harvest(status.harvestable.clone(), host_gid, true)
+                .await
+            {
+                Ok(hr) => {
+                    harvested_land_ids = status.harvestable.clone();
+                    harvest_lands = hr.land;
+                    crate::services::stats::record_operation_for(
+                        account_id,
+                        "harvest",
+                        harvested_land_ids.len() as i64,
+                    );
+                    let _ = event_tx.send(FarmEvent::Harvested {
+                        count: harvested_land_ids.len(),
+                    });
+                    crate::services::status::apply_reward_deltas_for(account_id, &hr.items);
+                    crate::services::panel_log::log(
+                        account_id,
+                        "收获",
+                        format!("收获完成 {} 块土地", harvested_land_ids.len()),
+                        Some(serde_json::json!({
+                            "module": "farm",
+                            "event": "harvest_crop",
+                            "result": "ok",
+                            "count": harvested_land_ids.len(),
+                            "landIds": harvested_land_ids,
+                        })),
+                    );
+                    actions.push(format!("收获{}", harvested_land_ids.len()));
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "harvest failed");
+                    crate::services::panel_log::log_warn(
+                        account_id,
+                        "收获",
+                        e.to_string(),
+                        Some(serde_json::json!({
+                            "module": "farm",
+                            "event": "harvest_crop",
+                            "result": "error",
+                        })),
+                    );
+                }
+            }
+        }
+
+        let all_empty = status.empty.clone();
+        let mut all_dead = status.dead.clone();
+        let mut post_growing: Vec<i64> = Vec::new();
+        if !harvested_land_ids.is_empty() {
+            tokio::time::sleep(Duration::from_millis(1200)).await;
+            let first = classify_harvested_lands_by_map(
+                &harvested_land_ids,
+                &build_land_map(&harvest_lands),
+            );
+            let mut removable = first.removable;
+            post_growing = first.growing;
+            let mut unknown = first.unknown;
+            if !unknown.is_empty() {
+                if let Ok(latest) = api.get_all_lands(host_gid).await {
+                    let second =
+                        classify_harvested_lands_by_map(&unknown, &build_land_map(&latest.lands));
+                    removable.extend(second.removable);
+                    post_growing.extend(second.growing);
+                    unknown = second.unknown;
+                }
+            }
+            removable.extend(unknown);
+            removable.sort_unstable();
+            removable.dedup();
+            all_dead.extend(removable);
+            all_dead.sort_unstable();
+            all_dead.dedup();
+        }
+
+        if !all_dead.is_empty() || !all_empty.is_empty() {
+            let plant_count = all_dead.len() + all_empty.len();
+            match planting
+                .lock()
+                .await
+                .auto_plant_empty_lands(&all_dead, &all_empty, host_gid, account_id)
+                .await
+            {
+                Ok(r) => {
+                    crate::services::stats::record_operation_for(account_id, "plant", plant_count as i64);
+                    let _ = event_tx.send(FarmEvent::Planted {
+                        count: r.planted_lands.len(),
+                    });
+                    if !r.planted_lands.is_empty() {
+                        actions.push(format!("种植{}", r.planted_lands.len()));
+                        crate::services::panel_log::log(
+                            account_id,
+                            "种植",
+                            format!("种植完成 {} 块土地", r.planted_lands.len()),
+                            Some(serde_json::json!({
+                                "module": "farm",
+                                "event": "plant_seed",
+                                "result": "ok",
+                                "count": r.planted_lands.len(),
+                                "landIds": r.planted_lands,
+                            })),
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "auto plant failed");
+                    crate::services::panel_log::log_warn(
+                        account_id,
+                        "种植",
+                        e.to_string(),
+                        Some(serde_json::json!({ "module": "farm", "event": "plant_seed" })),
+                    );
+                }
+            }
+        }
+
+        if !post_growing.is_empty()
+            && crate::services::automation::is_automation_on_for(
+                account_id,
+                "fertilizer_multi_season",
+            )
         {
-            Ok(result) => {
+            post_growing.sort_unstable();
+            post_growing.dedup();
+            if let Ok(result) = planting
+                .lock()
+                .await
+                .fertilize_by_config_ex(
+                    &post_growing,
+                    host_gid,
+                    account_id,
+                    crate::services::farm::planting::FertilizeOptions {
+                        skip_normal: false,
+                        multi_season: true,
+                    },
+                )
+                .await
+            {
                 let _ = event_tx.send(FarmEvent::Fertilized {
                     normal: result.normal,
                     organic: result.organic,
                 });
-                tracing::info!(normal = result.normal, organic = result.organic, "fertilized");
+                if result.normal + result.organic > 0 {
+                    actions.push(format!("施肥{}/{}", result.normal, result.organic));
+                    crate::services::panel_log::log(
+                        account_id,
+                        "施肥",
+                        format!(
+                            "多季补肥完成 普通{} / 有机{}",
+                            result.normal, result.organic
+                        ),
+                        Some(serde_json::json!({
+                            "module": "farm",
+                            "event": "fertilize",
+                            "result": "ok",
+                            "normal": result.normal,
+                            "organic": result.organic,
+                            "landIds": post_growing,
+                        })),
+                    );
+                }
             }
-            Err(e) => {
-                tracing::warn!(error = %e, "fertilize failed");
+        }
+
+        if crate::services::automation::is_automation_on_for(account_id, "land_upgrade") {
+            for land_id in &status.unlockable {
+                match api.unlock_land(*land_id, false).await {
+                    Ok(_) => {
+                        crate::services::panel_log::log(
+                            account_id,
+                            "解锁",
+                            format!("土地#{land_id} 解锁成功"),
+                            Some(serde_json::json!({
+                                "module": "farm",
+                                "event": "unlock_land",
+                                "result": "ok",
+                                "landId": land_id,
+                            })),
+                        );
+                        actions.push(format!("解锁{land_id}"));
+                    }
+                    Err(e) => crate::services::panel_log::log_warn(
+                        account_id,
+                        "解锁",
+                        format!("土地#{land_id} 解锁失败: {e}"),
+                        Some(serde_json::json!({
+                            "module": "farm",
+                            "event": "unlock_land",
+                            "result": "error",
+                            "landId": land_id,
+                        })),
+                    ),
+                }
+                tokio::time::sleep(Duration::from_millis(1200)).await;
             }
+            for land_id in &status.upgradable {
+                match api.upgrade_land(*land_id).await {
+                    Ok(_) => {
+                        crate::services::stats::record_operation_for(account_id, "upgrade", 1);
+                        crate::services::panel_log::log(
+                            account_id,
+                            "升级",
+                            format!("土地#{land_id} 升级成功"),
+                            Some(serde_json::json!({
+                                "module": "farm",
+                                "event": "upgrade_land",
+                                "result": "ok",
+                                "landId": land_id,
+                            })),
+                        );
+                        actions.push(format!("升级{land_id}"));
+                    }
+                    Err(e) => crate::services::panel_log::log(
+                        account_id,
+                        "升级",
+                        format!("土地#{land_id} 升级失败: {e}"),
+                        Some(serde_json::json!({
+                            "module": "farm",
+                            "event": "upgrade_land",
+                            "result": "error",
+                            "landId": land_id,
+                        })),
+                    ),
+                }
+                tokio::time::sleep(Duration::from_millis(1200)).await;
+            }
+        }
+
+        let fertilizer_mode = crate::models::store::account_config::get_automation(Some(account_id))
+            .fertilizer;
+        if matches!(
+            fertilizer_mode,
+            crate::models::types::FertilizerMode::Smart
+        ) {
+            if let Ok(result) = planting
+                .lock()
+                .await
+                .fertilize_by_config_ex(
+                    &[],
+                    host_gid,
+                    account_id,
+                    crate::services::farm::planting::FertilizeOptions {
+                        skip_normal: true,
+                        multi_season: false,
+                    },
+                )
+                .await
+            {
+                if result.organic > 0 {
+                    let _ = event_tx.send(FarmEvent::Fertilized {
+                        normal: result.normal,
+                        organic: result.organic,
+                    });
+                    actions.push(format!("有机肥{}", result.organic));
+                    crate::services::panel_log::log(
+                        account_id,
+                        "施肥",
+                        format!("巡田施肥完成 有机{}", result.organic),
+                        Some(serde_json::json!({
+                            "module": "farm",
+                            "event": "fertilize",
+                            "result": "ok",
+                            "organic": result.organic,
+                        })),
+                    );
+                }
+            }
+        }
+
+        if !actions.is_empty() {
+            let status_parts = farm_cycle_status_parts(&status);
+            let action_str = format!(" → {}", actions.join("/"));
+            crate::services::panel_log::log(
+                account_id,
+                "农场",
+                format!("[{}]{action_str}", status_parts.join(" ")),
+                Some(serde_json::json!({
+                    "module": "farm",
+                    "event": "farm_cycle",
+                    "opType": "all",
+                    "actions": actions,
+                })),
+            );
         }
 
         Ok(())
@@ -464,6 +768,55 @@ impl FarmService {
         self.stop_check_loop();
         self.scheduler.shutdown();
     }
+}
+
+/// 对齐 TS `statusParts`：`收:N 农:N 水:N 枯:N 空:N 解:N 升:N 长:N`
+fn farm_cycle_status_parts(status: &LandAnalysis) -> Vec<String> {
+    let mut parts = Vec::new();
+    if !status.harvestable.is_empty() {
+        parts.push(format!("收:{}", status.harvestable.len()));
+    }
+    let farming_count = {
+        let mut ids = HashSet::new();
+        ids.extend(status.need_weed.iter().copied());
+        ids.extend(status.need_bug.iter().copied());
+        ids.len()
+    };
+    if farming_count > 0 {
+        parts.push(format!("农:{farming_count}"));
+    }
+    if !status.need_water.is_empty() {
+        parts.push(format!("水:{}", status.need_water.len()));
+    }
+    if !status.dead.is_empty() {
+        parts.push(format!("枯:{}", status.dead.len()));
+    }
+    if !status.empty.is_empty() {
+        parts.push(format!("空:{}", status.empty.len()));
+    }
+    if !status.unlockable.is_empty() {
+        parts.push(format!("解:{}", status.unlockable.len()));
+    }
+    if !status.upgradable.is_empty() {
+        parts.push(format!("升:{}", status.upgradable.len()));
+    }
+    parts.push(format!("长:{}", status.growing.len()));
+    parts
+}
+
+/// 对齐 TS `一键务农草N/虫N/水N`
+fn farm_cycle_farming_action(status: &LandAnalysis) -> String {
+    let mut parts = Vec::new();
+    if !status.need_weed.is_empty() {
+        parts.push(format!("草{}", status.need_weed.len()));
+    }
+    if !status.need_bug.is_empty() {
+        parts.push(format!("虫{}", status.need_bug.len()));
+    }
+    if !status.need_water.is_empty() {
+        parts.push(format!("水{}", status.need_water.len()));
+    }
+    format!("一键务农{}", parts.join("/"))
 }
 
 /// 单步施肥结果
@@ -554,6 +907,20 @@ mod tests {
         let s = serde_json::to_string(&r).unwrap();
         assert!(s.contains("\"normal\":5"));
         assert!(s.contains("\"organic\":3"));
+    }
+
+    #[test]
+    fn farm_cycle_status_parts_always_includes_growing() {
+        let status = LandAnalysis {
+            need_weed: vec![1, 2],
+            need_bug: vec![2],
+            need_water: vec![3],
+            growing: vec![4, 5, 6],
+            ..Default::default()
+        };
+        let parts = farm_cycle_status_parts(&status);
+        assert_eq!(parts, vec!["农:2", "水:1", "长:3"]);
+        assert_eq!(farm_cycle_farming_action(&status), "一键务农草2/虫1/水1");
     }
 
     #[test]

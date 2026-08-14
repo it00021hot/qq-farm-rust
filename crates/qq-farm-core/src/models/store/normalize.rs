@@ -151,7 +151,7 @@ pub fn normalize_time_string(v: impl Into<Option<String>>, fallback: &str) -> St
 
 /// 规范化 IntervalConfig
 pub fn normalize_intervals(intervals: IntervalConfig) -> IntervalConfig {
-    let to_sec = |v: i64, d: i64| v.max(1);
+    let to_sec = |v: i64, _d: i64| v.max(1);
     let farm = to_sec(intervals.farm, 2);
 
     let mut farm_min = to_sec(intervals.farm_min, farm);
@@ -195,9 +195,9 @@ pub fn default_account_config() -> AccountConfig {
             friend: true,
             friend_help_exp_limit: false,
             friend_steal: true,
-            friend_steal_activity_only: true,
-            friend_help: false,
-            friend_bad: false,
+            friend_steal_activity_only: false,
+            friend_help: true,
+            friend_bad: true,
             task: true,
             fertilizer_gift: false,
             fertilizer_buy_organic: false,

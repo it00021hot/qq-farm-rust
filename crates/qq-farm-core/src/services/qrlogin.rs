@@ -223,9 +223,8 @@ impl MiniProgramLoginSession {
             .unwrap_or("")
             .to_string();
         let url = Self::build_login_url(&login_code);
-        // QR image: real call needs QRCode::to_data_url; here we generate a minimal placeholder.
-        // Production code should integrate `qrcode` crate to fill this in.
-        let image = String::new();
+        // 生成 PNG data URL（对齐 TS `QRCode.toDataURL(url, {width:300, margin:1, level:M})`）
+        let image = qr_png_data_url(&url);
         Ok(MpLoginCodeResult {
             code: login_code,
             url,
@@ -328,6 +327,30 @@ impl MiniProgramLoginSession {
             .unwrap_or("")
             .to_string())
     }
+}
+
+/// 生成 PNG 二维码 data URL（对齐 TS `QRCode.toDataURL(url, {width:300, margin:1, level:'M'})`）
+///
+/// 输出格式：`data:image/png;base64,<base64>`。
+/// 编码失败时回退为空字符串（调用方已有 `url` 兜底）。
+#[must_use]
+pub fn qr_png_data_url(text: &str) -> String {
+    use base64::Engine;
+    use qrcode::QrCode;
+
+    let Ok(code) = QrCode::with_error_correction_level(text, qrcode::EcLevel::M) else {
+        return String::new();
+    };
+    // 生成 300x300 的 PNG（scale 尽量大以接近 300px，再放大到目标尺寸）
+    let img = code.render::<image::Luma<u8>>().min_dimensions(300, 300).build();
+    let img = image::DynamicImage::ImageLuma8(img)
+        .resize_exact(300, 300, image::imageops::FilterType::Nearest);
+    let mut buf = std::io::Cursor::new(Vec::new());
+    if img.write_to(&mut buf, image::ImageFormat::Png).is_err() {
+        return String::new();
+    }
+    let b64 = base64::engine::general_purpose::STANDARD.encode(buf.into_inner());
+    format!("data:image/png;base64,{b64}")
 }
 
 // =====================================================================
@@ -456,5 +479,25 @@ mod tests {
     fn session_new_works() {
         let s = MiniProgramLoginSession::new();
         let _ = s.client();
+    }
+
+    #[test]
+    fn qr_png_data_url_generates_png() {
+        use base64::Engine;
+        let data_url = qr_png_data_url("https://example.com/qr");
+        assert!(data_url.starts_with("data:image/png;base64,"));
+        let b64 = data_url.trim_start_matches("data:image/png;base64,");
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .expect("应解码出有效 PNG");
+        // PNG 魔数
+        assert_eq!(&bytes[0..8], &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+    }
+
+    #[test]
+    fn qr_png_data_url_empty_text_still_encodes() {
+        // 空文本也能编码（不 panic），返回空串或合法 data URL 均可接受
+        let data_url = qr_png_data_url("");
+        assert!(data_url.is_empty() || data_url.starts_with("data:image/png;base64,"));
     }
 }

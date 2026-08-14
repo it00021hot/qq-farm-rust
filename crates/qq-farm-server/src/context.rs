@@ -77,10 +77,15 @@ pub enum ApiError {
     BadRequest(String),
     #[error("unauthorized: {0}")]
     Unauthorized(String),
-    #[error("not implemented")]
-    NotImplemented,
+    #[error("{0}")]
+    Forbidden(String),
+    #[error("bad gateway: {0}")]
+    BadGateway(String),
     #[error("internal: {0}")]
     Internal(String),
+    /// 对齐原 bot `handleApiError`：worker 未运行时 HTTP 200 + `{ok:false, error:"账号未运行"}`，避免前端 4xx 连弹 toast
+    #[error("账号未运行")]
+    AccountNotRunning,
 }
 
 impl axum::response::IntoResponse for ApiError {
@@ -91,15 +96,25 @@ impl axum::response::IntoResponse for ApiError {
             Self::NotFound(m) => (StatusCode::NOT_FOUND, m.as_str()),
             Self::BadRequest(m) => (StatusCode::BAD_REQUEST, m.as_str()),
             Self::Unauthorized(m) => (StatusCode::UNAUTHORIZED, m.as_str()),
-            Self::NotImplemented => (StatusCode::NOT_IMPLEMENTED, "not implemented"),
+            Self::Forbidden(m) => (StatusCode::FORBIDDEN, m.as_str()),
+            Self::BadGateway(m) => (StatusCode::BAD_GATEWAY, m.as_str()),
             Self::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, m.as_str()),
+            Self::AccountNotRunning => (StatusCode::OK, "账号未运行"),
         };
         (
             status,
-            Json(serde_json::json!({
-                "ok": false,
-                "error": msg,
-            })),
+            Json(if matches!(self, Self::AccountNotRunning) {
+                serde_json::json!({
+                    "ok": false,
+                    "error": msg,
+                    "errorCode": "ACCOUNT_OFFLINE",
+                })
+            } else {
+                serde_json::json!({
+                    "ok": false,
+                    "error": msg,
+                })
+            }),
         )
             .into_response()
     }
@@ -116,4 +131,9 @@ pub fn ok<T: serde::Serialize>(value: T) -> ApiResult<T> {
 /// 构造 ok 响应（无 data）
 pub fn ok_empty() -> ApiResult<serde_json::Value> {
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// 对齐原 bot：`{ ok: true, data }`
+pub fn ok_data<T: serde::Serialize>(data: T) -> ApiResult<serde_json::Value> {
+    Ok(Json(serde_json::json!({ "ok": true, "data": data })))
 }

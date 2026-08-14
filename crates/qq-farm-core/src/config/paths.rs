@@ -98,6 +98,31 @@ pub fn get_share_file_path() -> PathBuf {
     get_app_root().join("share.txt")
 }
 
+/// 面板 `/game-config` 静态目录（对齐原 `express.static(gameConfig)`）。
+#[must_use]
+pub fn game_config_static_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("FARM_GAME_CONFIG_DIR") {
+        if !dir.is_empty() {
+            return PathBuf::from(dir);
+        }
+    }
+    let rust_dir = get_resource_path(&["assets", "game_config"]);
+    if rust_dir.join("seed_images_named").is_dir() {
+        return rust_dir;
+    }
+    if let Some(parent) = get_resource_root().parent() {
+        let bot_dir = parent
+            .join("qq-farm-bot")
+            .join("core")
+            .join("src")
+            .join("gameConfig");
+        if bot_dir.join("seed_images_named").is_dir() || bot_dir.is_dir() {
+            return bot_dir;
+        }
+    }
+    rust_dir
+}
+
 // =====================================================================
 // 单元测试
 // =====================================================================
@@ -149,5 +174,11 @@ mod tests {
     fn get_resource_path_concatenates() {
         let p = get_resource_path(&["assets", "tsdk.wasm"]);
         assert!(p.ends_with("assets/tsdk.wasm"));
+    }
+
+    #[test]
+    fn game_config_static_dir_resolves() {
+        let p = game_config_static_dir();
+        assert!(!p.as_os_str().is_empty());
     }
 }

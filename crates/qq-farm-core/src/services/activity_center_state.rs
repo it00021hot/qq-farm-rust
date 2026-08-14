@@ -375,6 +375,27 @@ pub fn persist_constellation_state(
     merged
 }
 
+fn json_node_id(node: &serde_json::Value) -> Option<String> {
+    let value = node
+        .get("node_id")
+        .or_else(|| node.get("nodeId"))
+        .or_else(|| node.get("id"))?;
+    if let Some(s) = value.as_str() {
+        let t = s.trim();
+        if t.is_empty() {
+            None
+        } else {
+            Some(t.to_string())
+        }
+    } else if let Some(n) = value.as_i64() {
+        Some(n.to_string())
+    } else if let Some(n) = value.as_u64() {
+        Some(n.to_string())
+    } else {
+        None
+    }
+}
+
 pub fn state_from_dynamic_nodes(
     identity: &ActivityStateIdentity,
     nodes: serde_json::Value,
@@ -383,12 +404,7 @@ pub fn state_from_dynamic_nodes(
     let mut lit: Vec<String> = Vec::new();
     if let Some(arr) = nodes.as_array() {
         for node in arr {
-            let id_str = node
-                .get("node_id")
-                .or_else(|| node.get("nodeId"))
-                .or_else(|| node.get("id"))
-                .and_then(|v| v.as_str())
-                .map(String::from);
+            let id_str = json_node_id(node);
             let Some(id) = id_str else { continue };
             if !id.chars().all(|c| c.is_ascii_digit()) || id.is_empty() {
                 continue;

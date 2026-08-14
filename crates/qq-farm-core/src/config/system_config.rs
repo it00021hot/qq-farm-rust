@@ -14,7 +14,24 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 /// 默认客户端版本（与原 TS DEFAULT_CLIENT_VERSION 一致）
-pub const DEFAULT_CLIENT_VERSION: &str = "1.13.0.5_20260723";
+pub const DEFAULT_CLIENT_VERSION: &str = "1.13.1.6_20260723";
+
+/// 默认游戏网关（与原 TS `CONFIG.serverUrl` 一致）
+pub const DEFAULT_GATEWAY_URL: &str = "wss://gate-obt.nqf.qq.com/prod/ws";
+
+/// 把历史错误默认值 / 空值纠正成真实网关。`https://game.qq.com` 不是 WebSocket。
+#[must_use]
+pub fn sanitize_gateway_url(url: &str) -> String {
+    let t = url.trim();
+    if t.is_empty() {
+        return DEFAULT_GATEWAY_URL.to_string();
+    }
+    let lower = t.trim_end_matches('/').to_ascii_lowercase();
+    if lower == "https://game.qq.com" || lower == "http://game.qq.com" {
+        return DEFAULT_GATEWAY_URL.to_string();
+    }
+    t.to_string()
+}
 
 /// 生长阶段枚举（与原 TS PlantPhase 1:1）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,13 +78,18 @@ impl PlantPhase {
 
 /// 设备信息（发到游戏服务器的标识）
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DeviceInfo {
     pub os: String,
+    #[serde(alias = "client_version")]
     pub client_version: String,
+    #[serde(alias = "sys_software")]
     pub sys_software: String,
     pub network: String,
     pub memory: String,
+    #[serde(alias = "device_id")]
     pub device_id: String,
+    #[serde(alias = "user_agent")]
     pub user_agent: String,
 }
 
@@ -163,6 +185,7 @@ impl DeviceInfo {
 
 /// 设备预设（前端可选）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DevicePreset {
     pub id: &'static str,
     pub name: &'static str,
@@ -219,11 +242,15 @@ pub fn device_presets() -> Vec<DevicePreset> {
 
 /// 系统配置（用户可见部分）
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SystemConfig {
+    #[serde(alias = "server_url")]
     pub server_url: String,
+    #[serde(alias = "client_version")]
     pub client_version: String,
     pub platform: String,
     pub os: String,
+    #[serde(alias = "device_info")]
     pub device_info: DeviceInfo,
 }
 
@@ -238,7 +265,7 @@ impl SystemConfig {
         let os = d.os.clone();
         let client_version = d.client_version.clone();
         Self {
-            server_url: "wss://gate-obt.nqf.qq.com/prod/ws".to_string(),
+            server_url: DEFAULT_GATEWAY_URL.to_string(),
             client_version,
             platform: "qq".to_string(),
             os,
@@ -255,27 +282,40 @@ impl SystemConfig {
 
 /// 运行时配置（SystemConfig + 内部参数）
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RuntimeConfig {
+    #[serde(alias = "server_url")]
     pub server_url: String,
+    #[serde(alias = "client_version")]
     pub client_version: String,
     pub platform: String,
     pub os: String,
+    #[serde(alias = "device_info")]
     pub device_info: DeviceInfo,
     /// 心跳间隔（毫秒）
+    #[serde(alias = "heartbeat_interval_ms")]
     pub heartbeat_interval_ms: i64,
     /// 农场检查间隔（毫秒）
+    #[serde(alias = "farm_check_interval_ms")]
     pub farm_check_interval_ms: i64,
     /// 好友检查间隔（毫秒）
+    #[serde(alias = "friend_check_interval_ms")]
     pub friend_check_interval_ms: i64,
     /// 农场检查间隔范围（毫秒）
+    #[serde(alias = "farm_check_interval_min_ms")]
     pub farm_check_interval_min_ms: i64,
+    #[serde(alias = "farm_check_interval_max_ms")]
     pub farm_check_interval_max_ms: i64,
     /// 好友检查间隔范围（毫秒）
+    #[serde(alias = "friend_check_interval_min_ms")]
     pub friend_check_interval_min_ms: i64,
+    #[serde(alias = "friend_check_interval_max_ms")]
     pub friend_check_interval_max_ms: i64,
     /// 管理端口
+    #[serde(alias = "admin_port")]
     pub admin_port: u16,
     /// 管理员密码（None 表示未设）
+    #[serde(alias = "admin_password")]
     pub admin_password: Option<String>,
 }
 
@@ -412,10 +452,21 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_gateway_url_replaces_http_game_host() {
+        assert_eq!(sanitize_gateway_url(""), DEFAULT_GATEWAY_URL);
+        assert_eq!(sanitize_gateway_url("https://game.qq.com"), DEFAULT_GATEWAY_URL);
+        assert_eq!(sanitize_gateway_url("https://game.qq.com/"), DEFAULT_GATEWAY_URL);
+        assert_eq!(
+            sanitize_gateway_url("wss://gate-obt.nqf.qq.com/prod/ws"),
+            "wss://gate-obt.nqf.qq.com/prod/ws"
+        );
+    }
+
+    #[test]
     fn system_config_default_has_client_version() {
         let sys = SystemConfig::default_system();
         assert_eq!(sys.client_version, DEFAULT_CLIENT_VERSION);
-        assert_eq!(sys.server_url, "wss://gate-obt.nqf.qq.com/prod/ws");
+        assert_eq!(sys.server_url, DEFAULT_GATEWAY_URL);
         assert_eq!(sys.platform, "qq");
     }
 

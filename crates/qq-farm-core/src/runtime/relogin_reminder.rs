@@ -21,7 +21,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::sleep;
@@ -232,6 +231,7 @@ impl ReloginReminderService {
             uin: uin.to_string(),
             avatar,
             username: String::new(),
+            nick: String::new(),
             created_at: 0,
             updated_at: 0,
         };
@@ -385,8 +385,7 @@ impl ReloginReminderService {
 
         let cfg = self.get_offline_reminder_config(&username);
         if cfg.channel.is_empty() && cfg.token.is_empty() && cfg.title.is_empty() && cfg.msg.is_empty() {
-            self.logger
-                .log("错误", &format!("未找到下线提醒配置: 用户={}", if username.is_empty() { "(空)" } else { &username }), None);
+            tracing::debug!(account_id = %account_id, "未配置下线提醒，跳过");
             return;
         }
 
@@ -576,6 +575,7 @@ fn now_ms() -> i64 {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use parking_lot::Mutex;
 
     /// 测试用 logger
     #[derive(Default)]
@@ -772,9 +772,8 @@ mod tests {
             .await;
             // 不完整，应该不发
             let logs = logger.logs.lock().clone();
-            assert!(logs
-                .iter()
-                .any(|(_, m)| m.contains("未找到下线提醒配置") || m.contains("不完整")));
+            assert!(logs.iter().any(|(_, m)| m.contains("触发下线提醒")));
+            assert!(!logs.iter().any(|(_, m)| m.contains("下线提醒配置: 渠道=")));
         });
     }
 
@@ -864,6 +863,7 @@ mod tests {
             qq: "q".to_string(),
             avatar: String::new(),
             username: String::new(),
+            nick: String::new(),
             created_at: 0,
             updated_at: 0,
         };

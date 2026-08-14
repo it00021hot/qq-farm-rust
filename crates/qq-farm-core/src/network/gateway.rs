@@ -17,8 +17,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 
 use parking_lot::RwLock;
-use tokio::sync::mpsc;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::network::client::{ConnectOptions, WsClient};
 use crate::network::encryptor::Encryptor;
@@ -90,6 +89,64 @@ fn urlencoding(s: &str) -> String {
         .collect()
 }
 
+fn header_missing(headers: &HashMap<String, String>, name: &str) -> bool {
+    !headers.keys().any(|k| k.eq_ignore_ascii_case(name))
+}
+
+fn rpc_phase_ok(phase: ConnectionPhase, require_online: bool) -> Result<()> {
+    if require_online {
+        if phase != ConnectionPhase::Online {
+            return Err(NetworkError::Phase(format!(
+                "request requires Online, current: {phase:?}"
+            )));
+        }
+    } else if !matches!(
+        phase,
+        ConnectionPhase::Login | ConnectionPhase::Online
+    ) {
+        return Err(NetworkError::Phase(format!(
+            "connection not open: {phase:?}"
+        )));
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn origin_from_ws_url(server_url: &str) -> String {
+    let (scheme, rest) = if let Some(rest) = server_url.strip_prefix("wss://") {
+        ("https", rest)
+    } else if let Some(rest) = server_url.strip_prefix("ws://") {
+        ("http", rest)
+    } else {
+        return "https://gate-obt.nqf.qq.com".to_string();
+    };
+    let host = rest.split('/').next().unwrap_or("gate-obt.nqf.qq.com");
+    if host.is_empty() {
+        "https://gate-obt.nqf.qq.com".to_string()
+    } else {
+        format!("{scheme}://{host}")
+    }
+}
+
+fn apply_default_ws_headers(headers: &mut HashMap<String, String>, _server_url: &str) {
+    if header_missing(headers, "Origin") {
+        // 对齐 network.ts：Origin 固定为游戏网关，不随自定义 serverUrl 变
+        headers.insert(
+            "Origin".to_string(),
+            "https://gate-obt.nqf.qq.com".to_string(),
+        );
+    }
+    if header_missing(headers, "User-Agent") {
+        let ua = crate::config::get_runtime_config().device_info.user_agent;
+        let ua = if ua.is_empty() {
+            crate::config::DeviceInfo::windows_pc().user_agent
+        } else {
+            ua
+        };
+        headers.insert("User-Agent".to_string(), ua);
+    }
+}
+
 /// 网关连接（对外接口）
 pub struct Gateway {
     inner: Arc<Inner>,
@@ -107,12 +164,15 @@ struct Inner {
     notify_subscribers: RwLock<Vec<mpsc::Sender<NotifyEvent>>>,
     /// WS 发送端（connect 时设置）
     ws_sender: parking_lot::Mutex<Option<mpsc::Sender<Vec<u8>>>>,
+    /// 当前会话是否已结束（dispatch 退出 / 主动断开）
+    session_end: watch::Sender<bool>,
 }
 
 impl Gateway {
     /// 创建（不连接）
     #[must_use]
     pub fn new(config: GatewayConfig, encryptor: Arc<dyn Encryptor>) -> Self {
+        let (session_end, _) = watch::channel(false);
         Self {
             inner: Arc::new(Inner {
                 config,
@@ -123,6 +183,7 @@ impl Gateway {
                 encryptor,
                 notify_subscribers: RwLock::new(Vec::new()),
                 ws_sender: parking_lot::Mutex::new(None),
+                session_end,
             }),
         }
     }
@@ -131,6 +192,12 @@ impl Gateway {
     #[must_use]
     pub fn phase(&self) -> ConnectionPhase {
         *self.inner.phase.read()
+    }
+
+    /// 当前连接使用的平台（qq / wx），对齐 TS worker 内 `CONFIG.platform`
+    #[must_use]
+    pub fn platform(&self) -> String {
+        self.inner.config.platform.clone()
     }
 
     /// 连接到服务器（不含登录）
@@ -143,12 +210,22 @@ impl Gateway {
             *phase = ConnectionPhase::Connecting;
         }
 
+        let _ = self.inner.session_end.send(false);
+
         let url = self.inner.config.build_ws_url();
         let mut options = ConnectOptions::default();
         for (k, v) in &self.inner.config.headers {
             options.headers.insert(k.clone(), v.clone());
         }
-        let (client, rx) = WsClient::connect(&url, options).await?;
+        apply_default_ws_headers(&mut options.headers, &self.inner.config.server_url);
+        let (client, rx) = match WsClient::connect(&url, options).await {
+            Ok(v) => v,
+            Err(e) => {
+                *self.inner.phase.write() = ConnectionPhase::Disconnected;
+                let _ = self.inner.session_end.send(true);
+                return Err(e);
+            }
+        };
 
         // 创建 frame 发送 channel（业务调用 request() 通过这里发）
         let (frame_tx, mut frame_rx) = mpsc::channel::<Vec<u8>>(64);
@@ -181,19 +258,42 @@ impl Gateway {
             *phase = ConnectionPhase::Closing;
         }
         ws.close().await?;
-        // 拒绝所有待处理请求
+        self.mark_session_ended();
+        Ok(())
+    }
+
+    /// 被动/超时断开：结束会话，worker 主循环据此退出，不再用旧 Code 重连
+    pub fn force_disconnect(&self) {
+        self.mark_session_ended();
+    }
+
+    /// 当前会话结束后返回（dispatch 退出或 `force_disconnect`）
+    pub async fn wait_session_end(&self) {
+        let mut rx = self.inner.session_end.subscribe();
+        if *rx.borrow() {
+            return;
+        }
+        while rx.changed().await.is_ok() {
+            if *rx.borrow() {
+                return;
+            }
+        }
+    }
+
+    fn mark_session_ended(&self) {
+        *self.inner.phase.write() = ConnectionPhase::Disconnected;
+        *self.inner.ws_sender.lock() = None;
         let n = self.inner.requests.reject_all();
         if n > 0 {
-            tracing::warn!(count = n, "rejected pending requests on close");
+            tracing::warn!(count = n, "rejected pending requests on disconnect");
         }
-        *self.inner.phase.write() = ConnectionPhase::Disconnected;
-        Ok(())
+        let _ = self.inner.session_end.send(true);
     }
 
     /// 发送一个业务请求
     ///
     /// 返回 `client_seq` + 响应 receiver
-    pub fn begin_request(&self, service: &str, method: &str) -> (i64, oneshot::Receiver<crate::network::request::Response>) {
+    pub fn begin_request(&self, service: &str, method: &str) -> (i64, oneshot::Receiver<std::result::Result<crate::network::request::Response, NetworkError>>) {
         self.inner.requests.call(service, method)
     }
 
@@ -225,20 +325,7 @@ impl Gateway {
 
     /// 高阶 API：发请求 + 等响应（带超时）
     ///
-    /// 业务层最常用：`let resp = gateway.request("gamepb.plantpb.PlantService", "AllLands", &body).await?;`
-    ///
-    /// 流程：
-    /// 1. 分配 client_seq
-    /// 2. encode frame（body 加密）
-    /// 3. 通过 WsClient 发送
-    /// 4. 等 receiver，timeout = `timeout_ms`
-    ///
-    /// # Errors
-    /// - 阶段错误（未在 Online）
-    /// - 帧编码失败
-    /// - 发送失败
-    /// - 超时
-    /// - 网关错误（error_code != 0）
+    /// 对齐原 `sendMsgAsync`：必须已经 Online。登录包走 [`login`]，对应 `sendMsg`。
     pub async fn request(
         &self,
         service: &str,
@@ -246,25 +333,57 @@ impl Gateway {
         body: &[u8],
         timeout_ms: u64,
     ) -> Result<Vec<u8>> {
-        // 1. 阶段检查
+        self.send_rpc(service, method, body, timeout_ms, true).await
+    }
+
+    /// 对齐原 `sendMsgNoReply`：必须已经 Online，只发送不等待回包。
+    pub async fn send_no_reply(&self, service: &str, method: &str, body: &[u8]) -> Result<()> {
         {
             let phase = *self.inner.phase.read();
-            if phase != ConnectionPhase::Online {
-                return Err(NetworkError::Phase(format!(
-                    "request requires Online, current: {phase:?}"
-                )));
+            rpc_phase_ok(phase, true)?;
+        }
+        let seq = self.inner.requests.next_seq();
+        let token = crate::utils::random::create_gateway_token();
+        let frame_bytes = self.encode_request(service, method, body, seq, &token)?;
+        let ws_tx = self
+            .inner
+            .ws_sender
+            .lock()
+            .as_ref()
+            .ok_or_else(|| NetworkError::Phase("ws not connected".into()))?
+            .clone();
+        ws_tx
+            .send(frame_bytes)
+            .await
+            .map_err(|_| NetworkError::WebSocket("send failed".into()))?;
+        Ok(())
+    }
+
+    /// `sendMsg` / `sendMsgAsync` 共用发送路径。
+    /// `require_online=true` 对齐 `sendMsgAsync`；`false` 对齐登录用的 `sendMsg`。
+    async fn send_rpc(
+        &self,
+        service: &str,
+        method: &str,
+        body: &[u8],
+        timeout_ms: u64,
+        require_online: bool,
+    ) -> Result<Vec<u8>> {
+        {
+            let phase = *self.inner.phase.read();
+            rpc_phase_ok(phase, require_online)?;
+        }
+        if require_online {
+            let pending = self.inner.requests.pending_count();
+            if pending >= 5 {
+                return Err(NetworkError::QueueFull { pending });
             }
         }
 
-        // 2. 分配 seq
         let (seq, rx) = self.inner.requests.call(service, method);
+        let token = crate::utils::random::create_gateway_token();
+        let frame_bytes = self.encode_request(service, method, body, seq, &token)?;
 
-        // 3. 编码 frame
-        let frame_bytes = self.encode_request(service, method, body, seq, "")?;
-        let _ = body; // 抑制未使用警告
-
-        // 4. 发送（需要 WsClient handle —— 通过 channel 找到）
-        // —— 简化：直接通过 Gateway 内部保存的 ws_sender
         let ws_tx = self
             .inner
             .ws_sender
@@ -277,12 +396,11 @@ impl Gateway {
             .await
             .map_err(|_| NetworkError::WebSocket("ws sender closed".into()))?;
 
-        // 5. 等响应（带超时）
         match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), rx).await {
-            Ok(Ok(resp)) => Ok(resp.body),
+            Ok(Ok(Ok(resp))) => Ok(resp.body),
+            Ok(Ok(Err(e))) => Err(e),
             Ok(Err(_)) => Err(NetworkError::Phase("response channel cancelled".into())),
             Err(_) => {
-                // 超时 —— 清理 pending
                 self.inner.requests.cancel(seq);
                 Err(NetworkError::Timeout {
                     client_seq: seq,
@@ -340,9 +458,9 @@ impl Gateway {
         };
         let body = prost::Message::encode_to_vec(&req);
 
-        // 3. 发请求（阶段会自动从 Login → Online 在收到响应后）
+        // 3. 对齐 sendLogin：用 sendMsg（Login 阶段可发），不是 sendMsgAsync
         let reply_bytes = self
-            .request("gamepb.userpb.UserService", "Login", &body, 15_000)
+            .send_rpc("gamepb.userpb.UserService", "Login", &body, 20_000, false)
             .await?;
 
         // 4. 解码 LoginReply
@@ -383,6 +501,22 @@ impl Gateway {
         );
 
         Ok(reply)
+    }
+
+    /// 登录后拉用户设置（对齐 `fetchUserSettings`，失败忽略）
+    pub async fn fetch_user_settings(&self) -> Result<()> {
+        let req = crate::proto::generated::gamepb::userpb::GetUserSettingsRequest {};
+        let body = prost::Message::encode_to_vec(&req);
+        let reply_bytes = self
+            .request("gamepb.userpb.UserService", "GetUserSettings", &body, 20_000)
+            .await?;
+        let reply =
+            crate::proto::generated::gamepb::userpb::GetUserSettingsReply::decode(reply_bytes.as_slice())
+                .map_err(|e| NetworkError::Frame(format!("decode GetUserSettingsReply: {e}")))?;
+        if reply.settings.is_some() {
+            tracing::info!("用户设置已同步");
+        }
+        Ok(())
     }
 
     /// 发 Heartbeat 请求（同步服务器时间 + 维持连接）
@@ -444,6 +578,9 @@ async fn dispatch_loop(mut rx: mpsc::Receiver<crate::network::client::ReceivedFr
             }
         }
     }
+    *inner.phase.write() = ConnectionPhase::Disconnected;
+    *inner.ws_sender.lock() = None;
+    let _ = inner.session_end.send(true);
     tracing::debug!("dispatch loop exited");
 }
 
@@ -462,30 +599,19 @@ fn handle_response(inner: &Arc<Inner>, parsed: &FrameParser) {
         };
         let _ = inner.requests.fail(client_seq, err);
     } else {
-        // 业务成功
-        let body_encrypted = parsed.body();
-        let body_plain = match inner.encryptor.decrypt(body_encrypted) {
-            Ok(b) => b,
-            Err(e) => {
-                tracing::warn!(error = %e, "decrypt body failed");
-                return;
-            }
-        };
-        inner.requests.complete(client_seq, body_plain, parsed.server_seq());
+        // 对齐 network.ts：只加密 Request；Response / Notify 是明文 protobuf
+        inner
+            .requests
+            .complete(client_seq, parsed.body().to_vec(), parsed.server_seq());
     }
 }
 
 fn handle_notify(inner: &Arc<Inner>, parsed: &FrameParser) {
-    // body 里是 EventMessage，已加密
-    let body_encrypted = parsed.body();
-    let body_plain = match inner.encryptor.decrypt(body_encrypted) {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::warn!(error = %e, "decrypt notify body failed");
-            return;
-        }
-    };
-    let event_msg = match crate::proto::generated::gatepb::EventMessage::decode(&*body_plain) {
+    let body = parsed.body();
+    if body.is_empty() {
+        return;
+    }
+    let event_msg = match crate::proto::generated::gatepb::EventMessage::decode(body) {
         Ok(m) => m,
         Err(e) => {
             tracing::warn!(error = %e, "decode EventMessage failed");
@@ -508,6 +634,16 @@ use prost::Message as _;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn login_send_allowed_in_login_phase() {
+        assert!(rpc_phase_ok(ConnectionPhase::Login, false).is_ok());
+        assert!(rpc_phase_ok(ConnectionPhase::Online, false).is_ok());
+        assert!(rpc_phase_ok(ConnectionPhase::Login, true).is_err());
+        assert!(rpc_phase_ok(ConnectionPhase::Online, true).is_ok());
+        assert!(rpc_phase_ok(ConnectionPhase::Connecting, false).is_err());
+        assert!(rpc_phase_ok(ConnectionPhase::Disconnected, false).is_err());
+    }
 
     #[test]
     fn build_ws_url() {

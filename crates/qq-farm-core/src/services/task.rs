@@ -47,7 +47,7 @@ use crate::proto::generated::gamepb::taskpb::{
 };
 
 use super::automation::{category, is_automation_on};
-use super::stats::record_operation;
+use super::stats::record_operation_for;
 use super::warehouse::{get_bag_items, WarehouseService};
 
 const TASK_SERVICE: &str = "gamepb.taskpb.TaskService";
@@ -133,6 +133,7 @@ pub struct TaskService {
     checking: Mutex<bool>,
     task_claim_done_date_key: Mutex<String>,
     task_claim_last_at: Mutex<i64>,
+    account_id: Mutex<String>,
 }
 
 impl TaskService {
@@ -143,7 +144,13 @@ impl TaskService {
             checking: Mutex::new(false),
             task_claim_done_date_key: Mutex::new(String::new()),
             task_claim_last_at: Mutex::new(0),
+            account_id: Mutex::new(String::new()),
         }
+    }
+
+    /// 绑定账号（登录后调用，隔离 taskClaim 计数）
+    pub fn set_account_id(&self, account_id: &str) {
+        *self.account_id.lock() = account_id.to_string();
     }
 
     /// 拉取任务信息
@@ -263,9 +270,21 @@ impl TaskService {
             .collect();
         if !claimable.is_empty() {
             tracing::info!("[任务] 发现 {} 个可领取任务", claimable.len());
+            crate::services::panel_log::log(
+                &self.account_id.lock(),
+                "任务",
+                format!("发现 {} 个可领取任务", claimable.len()),
+                Some(serde_json::json!({ "module": "task", "event": "检查任务", "count": claimable.len() })),
+            );
             if !daily_claimable.is_empty() {
                 let descs: Vec<&str> = daily_claimable.iter().map(|t| t.desc.as_str()).collect();
                 tracing::info!("[任务] 每日任务可领取: {}", descs.join("，"));
+                crate::services::panel_log::log(
+                    &self.account_id.lock(),
+                    "任务",
+                    format!("每日任务可领取: {}", descs.join("，")),
+                    Some(serde_json::json!({ "module": "task", "event": "每日任务" })),
+                );
             }
             let mut daily_claim_success: i32 = 0;
             for task in &claimable {
@@ -313,9 +332,15 @@ impl TaskService {
                     multiple_str,
                     reward_str
                 );
+                crate::services::panel_log::log(
+                    &self.account_id.lock(),
+                    "任务",
+                    format!("领取({category_name}): {}{multiple_str} → {reward_str}", task.desc),
+                    Some(serde_json::json!({ "module": "task", "event": "领取任务" })),
+                );
                 *self.task_claim_done_date_key.lock() = get_date_key();
                 *self.task_claim_last_at.lock() = now_ms();
-                record_operation("taskClaim", 1);
+                record_operation_for(&self.account_id.lock(), "taskClaim", 1);
                 tokio::time::sleep(Duration::from_millis(300)).await;
                 true
             }
@@ -355,12 +380,24 @@ impl TaskService {
                 type_name,
                 point_ids.len()
             );
+            crate::services::panel_log::log(
+                &self.account_id.lock(),
+                "活跃",
+                format!("{type_name} 发现 {} 个可领取奖励", point_ids.len()),
+                Some(serde_json::json!({ "module": "task", "event": "活跃度" })),
+            );
             match self.claim_daily_reward(active_type, point_ids.clone()).await {
                 Ok(reply) => {
                     if !reply.items.is_empty() {
                         let reward = get_reward_summary(&reply.items);
                         if !reward.is_empty() {
                             tracing::info!("[活跃] {} 领取: {}", type_name, reward);
+                            crate::services::panel_log::log(
+                                &self.account_id.lock(),
+                                "活跃",
+                                format!("{type_name} 领取: {reward}"),
+                                Some(serde_json::json!({ "module": "task", "event": "活跃度" })),
+                            );
                         }
                     }
                     result.claimed += point_ids.len() as i32;
@@ -369,6 +406,12 @@ impl TaskService {
                 Err(e) => {
                     result.errors += 1;
                     tracing::warn!("[活跃] {} 领取失败: {}", type_name, e);
+                    crate::services::panel_log::log_warn(
+                        &self.account_id.lock(),
+                        "活跃",
+                        format!("{type_name} 领取失败: {e}"),
+                        Some(serde_json::json!({ "module": "task", "event": "活跃度" })),
+                    );
                 }
             }
         }
@@ -389,9 +432,15 @@ impl TaskService {
         }
         let total_items = reply.items.len() + reply.bonus_items.len();
         tracing::info!("[任务] 领取成功: 点券{}", gain);
+        crate::services::panel_log::log(
+            &self.account_id.lock(),
+            "任务",
+            format!("领取成功: 点券{gain}"),
+            Some(serde_json::json!({ "module": "task", "event": "图鉴" })),
+        );
         *self.task_claim_done_date_key.lock() = get_date_key();
         *self.task_claim_last_at.lock() = now_ms();
-        record_operation("taskClaim", 1);
+        record_operation_for(&self.account_id.lock(), "taskClaim", 1);
         let _ = total_items;
         true
     }
@@ -704,10 +753,17 @@ async fn get_ticket_balance_from_bag(gateway: &Arc<Gateway>) -> i64 {
 }
 
 fn get_date_key() -> String {
+    // 对齐 TS `getDateKey`：服务器时间 + 北京时区（UTC+8）
     use chrono::Datelike;
-    use chrono::Local;
-    let now = Local::now();
-    format!("{}-{:02}-{:02}", now.year(), now.month(), now.day())
+    let server_secs = crate::utils::time::get_server_time_secs();
+    let bj_ms = if server_secs > 0 {
+        (server_secs as i64) * 1000 + 8 * 3600 * 1000
+    } else {
+        crate::utils::time::now_ms() + 8 * 3600 * 1000
+    };
+    let dt = chrono::DateTime::from_timestamp_millis(bj_ms)
+        .unwrap_or_else(|| chrono::Utc::now());
+    format!("{}-{:02}-{:02}", dt.year(), dt.month(), dt.day())
 }
 
 fn now_ms() -> i64 {

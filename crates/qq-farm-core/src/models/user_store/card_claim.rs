@@ -38,6 +38,7 @@ pub type ClaimResult = Result<ClaimSuccess, String>;
 
 /// 领取成功
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClaimSuccess {
     pub card_code: String,
     pub days: i64,

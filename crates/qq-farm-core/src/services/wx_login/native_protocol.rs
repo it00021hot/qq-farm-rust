@@ -13,22 +13,23 @@
 //!
 //! ## 与原 TS 的差异
 //!
-//! - 真实 TCP 收发（`getNativeWxLoginCode`）留到集成时实现：
-//!   本模块提供 `get_native_wx_login_code` stub，返回 `unimplemented!()`，
-//!   所有依赖的编解码原语都可单独测试。
-//! - 真实 HTTPDNS 解析（`targets`）同理：返回 hardcoded fallback。
+//! - 真实 TCP 收发（`getNativeWxLoginCode`）已实现：`get_native_wx_login_code`
+//!   完成 long link MMTLS 握手 + short link 0-RTT，拿回 wx.login code。
+//! - HTTPDNS 解析（`targets` / `fetch_httpdns_targets`）已实现；解析失败时回退 hardcoded fallback。
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use aes::Aes192;
+use aes_gcm::aead::generic_array::typenum::U12;
 use aes_gcm::aead::{Aead, KeyInit};
-use aes_gcm::{Aes128Gcm, Aes256Gcm, Nonce};
+use aes_gcm::{Aes128Gcm, Aes256Gcm, AesGcm, Nonce};
 use hmac::{Hmac, Mac};
 use p256::elliptic_curve::sec1::ToEncodedPoint;
-use p256::PublicKey;
 use sha2::{Digest, Sha256};
 
-const U8: fn(&[u8]) -> Vec<u8> = |s: &[u8]| s.to_vec();
+/// Hybrid ECDH 使用 AES-192-GCM（TS `aes-${key.length*8}-gcm`，key 取 24 字节）。
+type Aes192Gcm = AesGcm<Aes192, U12>;
 
 /// MMTLS record type
 pub const REC: u16 = 0xF103;
@@ -268,87 +269,55 @@ pub fn gcm(
     aad[11..13].copy_from_slice(&(data_len as u16).to_be_bytes());
 
     let nonce_arr = mmtls_nonce(iv, seq);
-    let nonce = Nonce::from_slice(&nonce_arr);
 
-    if key.len() == 16 {
-        let cipher = Aes128Gcm::new_from_slice(key).unwrap_or_else(|_| Aes128Gcm::new_from_slice(&[0u8; 16]).unwrap());
-        if decrypt {
-            if data.len() < 16 {
-                return vec![];
-            }
-            // 把末尾 16 字节当 tag；前面是 ciphertext
-            // aes-gcm crate decrypt 期望 msg = ciphertext + tag
-            match cipher.decrypt(
-                nonce,
-                aes_gcm::aead::Payload {
-                    msg: data,
-                    aad: &aad,
-                },
-            ) {
-                Ok(plain) => plain,
-                Err(_) => vec![],
-            }
-        } else {
-            cipher
-                .encrypt(
-                    nonce,
-                    aes_gcm::aead::Payload {
-                        msg: data,
-                        aad: &aad,
-                    },
-                )
-                .unwrap_or_default()
+    match key.len() {
+        16 => gcm_mmtls::<Aes128Gcm>(key, &nonce_arr, &aad, data, decrypt),
+        32 => gcm_mmtls::<Aes256Gcm>(key, &nonce_arr, &aad, data, decrypt),
+        n => {
+            tracing::error!(key_len = n, "unsupported MMTLS AES-GCM key length");
+            vec![]
         }
-    } else if key.len() == 32 {
-        let cipher = Aes256Gcm::new_from_slice(key).unwrap_or_else(|_| Aes256Gcm::new_from_slice(&[0u8; 32]).unwrap());
-        if decrypt {
-            if data.len() < 16 {
-                return vec![];
-            }
-            match cipher.decrypt(
-                nonce,
-                aes_gcm::aead::Payload {
-                    msg: data,
-                    aad: &aad,
-                },
-            ) {
-                Ok(plain) => plain,
-                Err(_) => vec![],
-            }
-        } else {
-            cipher
-                .encrypt(
-                    nonce,
-                    aes_gcm::aead::Payload {
-                        msg: data,
-                        aad: &aad,
-                    },
-                )
-                .unwrap_or_default()
-        }
-    } else {
-        vec![]
     }
 }
 
-/// 普通 AES-GCM（返回 ciphertext + iv + tag，1:1 对齐原 TS `layout`）
+/// MMTLS record GCM。密钥非法或加解密失败一律返回空，**绝不**回退全零密钥。
+fn gcm_mmtls<C: KeyInit + Aead>(
+    key: &[u8],
+    nonce: &[u8],
+    aad: &[u8],
+    data: &[u8],
+    decrypt: bool,
+) -> Vec<u8> {
+    let Ok(cipher) = C::new_from_slice(key) else {
+        return vec![];
+    };
+    let nonce = Nonce::from_slice(nonce);
+    let payload = aes_gcm::aead::Payload { msg: data, aad };
+    if decrypt {
+        if data.len() < 16 {
+            return vec![];
+        }
+        cipher.decrypt(nonce, payload).unwrap_or_default()
+    } else {
+        cipher.encrypt(nonce, payload).unwrap_or_default()
+    }
+}
+
+/// 普通 AES-GCM（返回 ciphertext + iv + tag，1:1 对齐原 TS `layout`）。
+///
+/// 加密失败返回空 Vec，**绝不**用零 tag 占位——发出去会被风控当成异常客户端。
 #[must_use]
 pub fn layout(key: &[u8], plain: &[u8], aad: &[u8]) -> Vec<u8> {
     let iv = random_bytes(12);
     let ct = gcm_simple(key, &iv, plain, aad, false);
-    // ct = ciphertext + tag（共 plain.len() + 16 字节；如加密失败则为空）
-    // 输出 = ciphertext + iv + tag
-    let mut out = Vec::with_capacity(plain.len() + 12 + 16);
-    if ct.len() >= 16 {
-        out.extend_from_slice(&ct[..ct.len() - 16]); // ciphertext
+    if ct.len() < 16 {
+        tracing::error!(key_len = key.len(), "AES-GCM layout encrypt failed");
+        return vec![];
     }
+    let mut out = Vec::with_capacity(ct.len() + 12);
+    out.extend_from_slice(&ct[..ct.len() - 16]);
     out.extend_from_slice(&iv);
-    if ct.len() >= 16 {
-        out.extend_from_slice(&ct[ct.len() - 16..]); // tag
-    } else {
-        // 加密失败：返回 iv + 16 字节 0 作为占位 tag
-        out.extend(std::iter::repeat(0u8).take(16));
-    }
+    out.extend_from_slice(&ct[ct.len() - 16..]);
     out
 }
 
@@ -368,43 +337,67 @@ pub fn unlayout(key: &[u8], blob: &[u8], aad: &[u8]) -> Vec<u8> {
     gcm_simple(key, iv, &combined, aad, true)
 }
 
-/// 普通 AES-GCM 加解密（不带 seq 变体）
+/// 普通 AES-GCM 加解密（不带 seq 变体）。
+///
+/// 对齐 TS `createCipheriv('aes-${key.length*8}-gcm')`：16 / 24 / 32 字节密钥。
 fn gcm_simple(key: &[u8], iv: &[u8], data: &[u8], aad: &[u8], decrypt: bool) -> Vec<u8> {
+    match key.len() {
+        16 => gcm_simple_cipher::<Aes128Gcm>(key, iv, data, aad, decrypt),
+        24 => gcm_simple_cipher::<Aes192Gcm>(key, iv, data, aad, decrypt),
+        32 => gcm_simple_cipher::<Aes256Gcm>(key, iv, data, aad, decrypt),
+        n => {
+            tracing::error!(key_len = n, "unsupported AES-GCM key length");
+            vec![]
+        }
+    }
+}
+
+fn gcm_simple_cipher<C: KeyInit + Aead>(
+    key: &[u8],
+    iv: &[u8],
+    data: &[u8],
+    aad: &[u8],
+    decrypt: bool,
+) -> Vec<u8> {
+    let Ok(cipher) = C::new_from_slice(key) else {
+        return vec![];
+    };
     let nonce = Nonce::from_slice(iv);
-    if key.len() == 16 {
-        let cipher = Aes128Gcm::new(key.into());
-        if decrypt {
-            use aes_gcm::aead::Aead;
-            cipher
-                .decrypt(nonce, aes_gcm::aead::Payload { msg: data, aad })
-                .unwrap_or_default()
-        } else {
-            use aes_gcm::aead::Aead;
-            cipher
-                .encrypt(nonce, aes_gcm::aead::Payload { msg: data, aad })
-                .unwrap_or_default()
-        }
-    } else if key.len() == 32 {
-        let cipher = Aes256Gcm::new(key.into());
-        if decrypt {
-            use aes_gcm::aead::Aead;
-            cipher
-                .decrypt(nonce, aes_gcm::aead::Payload { msg: data, aad })
-                .unwrap_or_default()
-        } else {
-            use aes_gcm::aead::Aead;
-            cipher
-                .encrypt(nonce, aes_gcm::aead::Payload { msg: data, aad })
-                .unwrap_or_default()
-        }
+    let payload = aes_gcm::aead::Payload { msg: data, aad };
+    if decrypt {
+        cipher.decrypt(nonce, payload).unwrap_or_default()
     } else {
-        vec![]
+        cipher.encrypt(nonce, payload).unwrap_or_default()
     }
 }
 
 // =====================================================================
 // 帧 / 握手 / 容器
 // =====================================================================
+
+/// ShortLink HTTP/1.0 请求头。必须与 TS 模板字符串逐字节一致（含小写 hex path）。
+///
+/// 不要用 `\` 续行：续行会吃掉换行后的空白，但后续改缩进就会把空格打进报文。
+#[must_use]
+pub fn short_link_request_head(ts_hex: &str, body_len: usize) -> String {
+    format!(
+        "POST /mmtls/{ts_hex} HTTP/1.0\r\nAccept: */*\r\nCache-Control: no-cache\r\nConnection: close\r\nContent-Length: {body_len}\r\nContent-Type: application/octet-stream\r\nHost: shortcloud.weixin.com\r\nUpgrade: mmtls\r\nUser-Agent: MicroMessenger Client\r\nX-Online-Host: shortcloud.weixin.com\r\n\r\n"
+    )
+}
+
+/// ShortLink 0-RTT type-8 early-data header（20 字节，timestamp 写 offset 16）。
+///
+/// 1:1 对齐 TS：
+/// `Buffer.from([0,0,0,16, 8,0,0,0, 11,1,0,0, 0,6,0,18, 0,0,0,0]); writeUInt32BE(ts, 16)`
+#[must_use]
+pub fn type8_early_data(ts: u32) -> Vec<u8> {
+    let mut type8 = vec![
+        0x00, 0x00, 0x00, 0x10, 0x08, 0x00, 0x00, 0x00, 0x0B, 0x01, 0x00, 0x00, 0x00, 0x06,
+        0x00, 0x12, 0x00, 0x00, 0x00, 0x00,
+    ];
+    type8[16..20].copy_from_slice(&ts.to_be_bytes());
+    type8
+}
 
 /// 构造 record
 #[must_use]
@@ -477,7 +470,7 @@ pub struct HandshakeFrame {
 }
 
 // =====================================================================
-// LZ4（仅 literal 模式，因为协议只用 literal）
+// LZ4：请求侧只用 literal；服务端响应带 back-reference，解码必须按 TS 重叠拷贝
 // =====================================================================
 
 /// LZ4 literal 编码（无 back-reference）
@@ -551,11 +544,12 @@ pub fn lz4(data: &[u8]) -> Result<Vec<u8>, String> {
         if off == 0 || off > out.len() {
             return Err("lz4 invalid offset".to_string());
         }
-        for j in 0..m {
-            let pos = out.len() - off + j;
-            if pos < out.len() {
-                out.push(out[pos]);
-            }
+        // 必须按 TS `out.push(out[out.length - off])`：每次 push 后长度变化，
+        // 重叠回引用（offset=1 的 RLE）才能展开。用「起始 pos + j」会少拷字节，
+        // ManualAuth 响应解出来就会缺 field 3。
+        for _ in 0..m {
+            let b = out[out.len() - off];
+            out.push(b);
         }
     }
     Ok(out)
@@ -660,7 +654,6 @@ pub struct EcdhKeyPair {
 
 impl EcdhKeyPair {
     pub fn generate() -> Result<Self, String> {
-        use rand::RngCore;
         let mut rng = rand::thread_rng();
         let sk = p256::SecretKey::random(&mut rng);
         let pk_bytes = sk.public_key().to_encoded_point(false).as_bytes().to_vec();
@@ -733,6 +726,9 @@ pub fn hybrid(plain: &[u8]) -> Result<HybridResult, String> {
     let h1 = sha256(&h1_input);
     let cek = random_bytes(32);
     let enc_key = layout(&secret_hash[..24], &cek, &h1);
+    if enc_key.len() != 32 + 12 + 16 {
+        return Err("hybrid encKey AES-192-GCM failed".into());
+    }
     let salt = b"security hdkf expand";
     let okm = expand(&sha256_with(salt, &cek), "", &h1, 56);
     let comp = lz4_literal(plain);
@@ -743,6 +739,9 @@ pub fn hybrid(plain: &[u8]) -> Result<HybridResult, String> {
     h2_input.extend_from_slice(&enc_key);
     let h2 = sha256(&h2_input);
     let enc = layout(&okm[..24], &comp, &h2);
+    if enc.len() < 12 + 16 {
+        return Err("hybrid ciphertext AES-192-GCM failed".into());
+    }
     let mut wire = pbv(1, 1);
     let mut key_share = pbv(1, 415);
     key_share.extend(pbl(2, &a.public_bytes));
@@ -774,9 +773,15 @@ pub struct HybridTemp {
 }
 
 /// 构造业务 envelope（1:1 对齐原 TS `envelope`）
-#[must_use]
-pub fn envelope(session: &Session, plain: &[u8]) -> Vec<u8> {
-    let enc = layout(&session.send_key, &lz4_literal(plain), &[]);
+pub fn envelope(session: &Session, plain: &[u8]) -> Result<Vec<u8>, String> {
+    let compressed = lz4_literal(plain);
+    let enc = layout(&session.send_key, &compressed, &[]);
+    if enc.len() != compressed.len() + 12 + 16 {
+        return Err(format!(
+            "envelope layout failed (send_key_len={})",
+            session.send_key.len()
+        ));
+    }
     let mut head_ints = HashMap::new();
     head_ints.insert(1, 1);
     head_ints.insert(2, session.uin as i64);
@@ -825,7 +830,7 @@ pub fn envelope(session: &Session, plain: &[u8]) -> Vec<u8> {
     n[0..4].copy_from_slice(&(b.len() as u32).to_be_bytes());
     let mut out = n;
     out.extend(b);
-    out
+    Ok(out)
 }
 
 /// Session（用于 envelope）
@@ -927,6 +932,10 @@ pub struct OneWayKeys {
 // =====================================================================
 
 /// 构造标准 ClientHello（双 ECDH 密钥对 + key_share）
+///
+/// 1:1 对齐原 TS `ch()`：`b = [03 F1 01 C0 2B] + random(32) + ts(4)`，
+/// offers 包进 `ks = [0,16,2] + offer1 + offer2 + [0,0,0,1]`，
+/// `ext = [1] + len(ks) + ks`，最终 `hs(1, b + len(ext) + ext)`。
 #[must_use]
 pub fn client_hello(pub1: &[u8], pub2: &[u8]) -> Vec<u8> {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -934,40 +943,40 @@ pub fn client_hello(pub1: &[u8], pub2: &[u8]) -> Vec<u8> {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
+    client_hello_with(pub1, pub2, &random_bytes(32), now as u32)
+}
 
+/// 确定性版 `client_hello`（注入 random 与 timestamp，供 golden 向量测试）
+#[must_use]
+pub fn client_hello_with(pub1: &[u8], pub2: &[u8], random32: &[u8], timestamp: u32) -> Vec<u8> {
+    debug_assert_eq!(random32.len(), 32, "client_hello random must be 32 bytes");
+
+    // b = [03 F1 01 C0 2B] + random(32) + timestamp(4)
     let mut b = vec![0x03, 0xF1, 0x01, 0xC0, 0x2B];
-    b.extend(random_bytes(32));
-    b.extend((now as u32).to_be_bytes());
-    b.extend(0u32.to_be_bytes()); // legacy_session_id (4 bytes placeholder)
-    let _ = b.split_off(b.len() - 4); // 移除多余的 4 字节 placeholder
+    b.extend_from_slice(random32);
+    b.extend(timestamp.to_be_bytes());
 
-    // 重新组装正确格式
-    let mut b = vec![0x03, 0xF1, 0x01, 0xC0, 0x2B];
-    b.extend(random_bytes(32));
-    b.extend((now as u32).to_be_bytes());
-    // legacy_session_id 长度 0
-    b.push(0);
-
-    let offers = [pub1, pub2];
-    for (i, p) in offers.iter().enumerate() {
+    // ks = [0,16,2] + offer1 + offer2 + [0,0,0,1]
+    let mut ks = vec![0x00, 0x10, 0x02];
+    for (i, p) in [pub1, pub2].iter().enumerate() {
+        // x = uint32BE(i?2:1) + uint16BE(65)
         let mut x = vec![0u8; 6];
         x[0..4].copy_from_slice(&(if i == 0 { 1u32 } else { 2u32 }).to_be_bytes());
-        x[4..6].copy_from_slice(&(65u16).to_be_bytes());
+        x[4..6].copy_from_slice(&65u16.to_be_bytes());
+        // z = x + pub；offer = uint32BE(z.len()) + z
         let z = [x.as_slice(), *p].concat();
-        let n = (z.len() as u32).to_be_bytes();
-        b.extend(n);
-        b.extend(z);
+        ks.extend((z.len() as u32).to_be_bytes());
+        ks.extend(z);
     }
+    ks.extend([0x00, 0x00, 0x00, 0x01]);
 
-    // 简易 key_share extension（Magic + length + 内容）
-    let ks = b[6..].to_vec();
-    let mut ext = vec![1u8]; // magic
+    // ext = [1] + uint32BE(ks.len()) + ks
+    let mut ext = vec![0x01u8];
     ext.extend((ks.len() as u32).to_be_bytes());
     ext.extend(ks);
 
-    let mut n2 = vec![0u8; 4];
-    n2.copy_from_slice(&(ext.len() as u32).to_be_bytes());
-    b.extend(n2);
+    // b += uint32BE(ext.len()) + ext
+    b.extend((ext.len() as u32).to_be_bytes());
     b.extend(ext);
 
     hs(1, &b) // type=1 ClientHello
@@ -976,6 +985,14 @@ pub fn client_hello(pub1: &[u8], pub2: &[u8]) -> Vec<u8> {
 /// 构造 PSK ClientHello（用于 short link 0-RTT）
 #[must_use]
 pub fn psk_client_hello(ticket: &[u8], timestamp: u32) -> Vec<u8> {
+    psk_client_hello_with(ticket, timestamp, &random_bytes(32))
+}
+
+/// 确定性版 `psk_client_hello`（注入 random，供 golden 向量测试）
+#[must_use]
+pub fn psk_client_hello_with(ticket: &[u8], timestamp: u32, random32: &[u8]) -> Vec<u8> {
+    debug_assert_eq!(random32.len(), 32, "psk_client_hello random must be 32 bytes");
+
     let mut ticket_ext = vec![0x00, 0x0F, 0x01];
     ticket_ext.extend((ticket.len() as u32).to_be_bytes());
     ticket_ext.extend(ticket);
@@ -985,7 +1002,7 @@ pub fn psk_client_hello(ticket: &[u8], timestamp: u32) -> Vec<u8> {
     ext.extend(ticket_ext);
 
     let mut body = vec![0x03, 0xF1, 0x01, 0x00, 0xA8];
-    body.extend(random_bytes(32));
+    body.extend_from_slice(random32);
     body.extend(timestamp.to_be_bytes());
     body.extend((ext.len() as u32).to_be_bytes());
     body.extend(ext);
@@ -1000,9 +1017,15 @@ pub fn psk_client_hello(ticket: &[u8], timestamp: u32) -> Vec<u8> {
 /// 构造 js-login 客户端 ManualAuth 请求 payload
 #[must_use]
 pub fn js_plain(uin: u64, app_id: &str, host: &[u8]) -> Vec<u8> {
+    js_plain_with(uin, app_id, host, &random_bytes(6))
+}
+
+/// 确定性版 `js_plain`（注入 mac 6 字节，供 golden 向量测试）
+#[must_use]
+pub fn js_plain_with(uin: u64, app_id: &str, host: &[u8], mac6: &[u8]) -> Vec<u8> {
+    debug_assert_eq!(mac6.len(), 6, "js_plain mac must be 6 bytes");
     // mac = random 6 bytes, byte[0] = (mac[0] | 2) & 0xFE
-    let mac = random_bytes(6);
-    let mut mac_mut = mac.clone();
+    let mut mac_mut = mac6.to_vec();
     mac_mut[0] = (mac_mut[0] | 0x02) & 0xFE;
     let dev_str = mac_mut
         .iter()
@@ -1048,87 +1071,129 @@ pub fn js_plain(uin: u64, app_id: &str, host: &[u8]) -> Vec<u8> {
 // =====================================================================
 
 /// 解析 ShortLink 返回的 ManualAuthResponse
-#[must_use]
-pub fn parse_manual(body: &[u8], temp: &HybridTemp) -> Option<ParsedManualResponse> {
-    // 找到 HybridEcdhResponse 标记
+///
+/// 1:1 对齐原 TS `parseManual`。返回 `Err` 时携带 ManualAuth 拒绝的 code/message。
+pub fn parse_manual(body: &[u8], temp: &HybridTemp) -> Result<ParsedManualResponse, String> {
     let marker = [0x08u8, 0x9F, 0x03, 0x12, 0x41, 0x04];
-    let mut offset = 0;
 
-    // 尝试通过 read_wpkg 找到边界
+    // 找 HybridEcdhResponse：先试 read_wpkg 边界（offset 处为 0x0A），否则回退 marker 定位
+    let mut offset: Option<usize> = None;
     if let Ok(off) = read_wpkg(body) {
         if off < body.len() && body[off] == 0x0A {
-            offset = off;
+            offset = Some(off);
         }
     }
-    if offset == 0 {
-        if let Some(pos) = body.windows(marker.len()).position(|w| w == marker) {
-            if pos >= 2 {
-                offset = pos - 2;
-            } else {
-                return None;
-            }
-        } else {
-            return None;
-        }
-    }
+    let offset = offset.or_else(|| {
+        body.windows(marker.len())
+            .position(|w| w == marker)
+            .filter(|pos| *pos >= 2)
+            .map(|pos| pos - 2)
+    });
+    let offset = offset.ok_or_else(|| {
+        let preview = hex::encode(&body[..body.len().min(48)]);
+        format!(
+            "HybridEcdhResponse not found (len={}, head={preview})",
+            body.len()
+        )
+    })?;
 
     let hybrid_response = pbf(&body[offset..]);
-    let key_fields_bytes = match required_field(&hybrid_response, 1, "HybridEcdhResponse field 1") {
-        Ok(b) => b.to_vec(),
-        Err(_) => return None,
-    };
+    let key_fields_bytes =
+        required_field(&hybrid_response, 1, "HybridEcdhResponse field 1")?.to_vec();
     let key_fields = pbf(&key_fields_bytes);
-    let peer = match required_field(&key_fields, 2, "HybridEcdhResponse server public key") {
-        Ok(b) => b.to_vec(),
-        Err(_) => return None,
-    };
-    let ct = match required_field(&hybrid_response, 3, "HybridEcdhResponse ciphertext") {
-        Ok(b) => b.to_vec(),
-        Err(_) => return None,
-    };
+    let peer =
+        required_field(&key_fields, 2, "HybridEcdhResponse server public key")?.to_vec();
+    let ct = required_field(&hybrid_response, 3, "HybridEcdhResponse ciphertext")?.to_vec();
     let cred = hybrid_response
         .get(&2)
         .and_then(|v| v.as_varint())
         .unwrap_or(1);
 
     // compute shared secret from peer pub
-    let peer_pk = match p256::PublicKey::from_sec1_bytes(&peer) {
-        Ok(pk) => pk,
-        Err(_) => return None,
-    };
-    let shared = p256::ecdh::diffie_hellman(temp.key_pair.secret_key.to_nonzero_scalar(), peer_pk.as_affine());
+    let peer_pk = p256::PublicKey::from_sec1_bytes(&peer).map_err(|e| e.to_string())?;
+    let shared = p256::ecdh::diffie_hellman(
+        temp.key_pair.secret_key.to_nonzero_scalar(),
+        peer_pk.as_affine(),
+    );
     let secret = sha256(shared.raw_secret_bytes().as_ref());
 
-    // aad = sha256(okm[24..] ++ comp ++ b'415' ++ peer ++ b'' + cred)
+    // aad = sha256(okm[24..] ++ comp ++ b"415" ++ peer ++ String(cred))
+    // 注意：cred 用其十进制字符串的 ASCII 字节（对齐 TS `U8(String(cred))`），而非原始字节。
     let mut aad_input = Vec::new();
     aad_input.extend(&temp.okm[24..]);
     aad_input.extend(&temp.comp);
     aad_input.extend_from_slice(b"415");
     aad_input.extend(&peer);
-    aad_input.push(cred as u8);
+    aad_input.extend(cred.to_string().as_bytes());
     let aad = sha256(&aad_input);
 
-    let plain = match lz4(&unlayout(&secret[..24], &ct, &aad)) {
-        Ok(p) => p,
-        Err(_) => return None,
-    };
+    let laid = unlayout(&secret[..24], &ct, &aad);
+    if laid.is_empty() {
+        return Err("HybridEcdhResponse AES-192-GCM decrypt failed".into());
+    }
+    let plain = lz4(&laid).map_err(|e| e.to_string())?;
     let manual = pbf(&plain);
     let body_fields_bytes = match required_field(&manual, 3, "ManualAuthResponse field 3") {
         Ok(b) => b.to_vec(),
-        Err(_) => return None,
+        Err(_) => {
+            let keys: Vec<String> = {
+                let mut ks: Vec<_> = manual.keys().copied().collect();
+                ks.sort_unstable();
+                ks.into_iter()
+                    .map(|k| {
+                        let kind = match manual.get(&k) {
+                            Some(PbfValue::Varint(n)) => format!("varint:{n}"),
+                            Some(PbfValue::Bytes(b)) => format!("bytes:{}", b.len()),
+                            None => "none".into(),
+                        };
+                        format!("{k}={kind}")
+                    })
+                    .collect()
+            };
+            let head = hex::encode(&plain[..plain.len().min(64)]);
+            // field 1 常为 BaseResponse：ret / errMsg
+            let base = manual.get(&1).and_then(PbfValue::as_bytes).map(pbf);
+            let ret = base
+                .as_ref()
+                .and_then(|b| b.get(&1).and_then(PbfValue::as_varint));
+            let errmsg = base
+                .as_ref()
+                .and_then(|b| b.get(&2).and_then(PbfValue::as_bytes))
+                .map(|m| String::from_utf8_lossy(m).into_owned());
+            return Err(format!(
+                "ManualAuthResponse field 3 is missing (fields=[{}], len={}, head={head}, ret={}, errmsg={})",
+                keys.join(","),
+                plain.len(),
+                ret.map(|n| n.to_string()).unwrap_or_else(|| "-".into()),
+                errmsg.unwrap_or_else(|| "-".into()),
+            ));
+        }
     };
     let body_fields = pbf(&body_fields_bytes);
+
+    // 缺少 field 2 => ManualAuth 拒绝：抛带 code/message 的详细错误（对齐 TS）
     if body_fields.get(&2).and_then(|v| v.as_bytes()).is_none() {
-        return None;
+        let code = body_fields.get(&4).and_then(|v| v.as_varint());
+        let message = body_fields.get(&5).and_then(|v| v.as_bytes());
+        let detail = message
+            .map(|m| String::from_utf8_lossy(m).to_string())
+            .unwrap_or_else(|| "unknown error".to_string());
+        let code_str = code
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        return Err(format!("ManualAuth rejected: code={code_str} message={detail}"));
     }
-    let session = body_fields.get(&2).and_then(|v| v.as_bytes()).map(|b| pbf(b));
-    let identity = body_fields.get(&3).and_then(|v| v.as_bytes()).map(|b| pbf(b));
+
+    let session = body_fields.get(&2).and_then(|v| v.as_bytes()).map(pbf);
+    let identity = body_fields.get(&3).and_then(|v| v.as_bytes()).map(pbf);
     let send_key = session
         .as_ref()
-        .and_then(|s| s.get(&1).and_then(|v| v.as_bytes()).map(<[u8]>::to_vec));
+        .and_then(|s| s.get(&1).and_then(|v| v.as_bytes()).map(<[u8]>::to_vec))
+        .ok_or_else(|| "ManualAuthResponse send key missing".to_string())?;
     let recv_key = session
         .as_ref()
-        .and_then(|s| s.get(&2).and_then(|v| v.as_bytes()).map(<[u8]>::to_vec));
+        .and_then(|s| s.get(&2).and_then(|v| v.as_bytes()).map(<[u8]>::to_vec))
+        .ok_or_else(|| "ManualAuthResponse receive key missing".to_string())?;
     let f9 = session
         .as_ref()
         .and_then(|s| s.get(&9).and_then(|v| v.as_bytes()).map(<[u8]>::to_vec))
@@ -1137,9 +1202,9 @@ pub fn parse_manual(body: &[u8], temp: &HybridTemp) -> Option<ParsedManualRespon
         .as_ref()
         .and_then(|s| s.get(&1).and_then(|v| v.as_varint()))
         .unwrap_or(0);
-    Some(ParsedManualResponse {
-        send_key: send_key?,
-        recv_key: recv_key?,
+    Ok(ParsedManualResponse {
+        send_key,
+        recv_key,
         f9,
         uin,
     })
@@ -1168,7 +1233,6 @@ pub async fn connect_socket(
     port: u16,
     timeout_ms: u64,
 ) -> Result<MmtlsSocket, String> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
     use tokio::time::{timeout, Duration};
 
@@ -1180,7 +1244,7 @@ pub async fn connect_socket(
         .set_nodelay(true)
         .map_err(|e| format!("set_nodelay: {e}"))?;
 
-    let (read_half, mut write_half) = stream.into_split();
+    let (read_half, write_half) = stream.into_split();
     let reader = tokio::io::BufReader::new(read_half);
 
     Ok(MmtlsSocket {
@@ -1217,22 +1281,36 @@ impl MmtlsSocket {
         use tokio::io::AsyncReadExt;
         use tokio::time::{timeout, Duration};
         loop {
-            // 先看 buffer 里有没有完整 record
+            // 先看 buffer 里有没有完整 record（guard 必须先 drop，再重新加锁 drain）
             {
-                let buf = self.buffer.lock();
-                if buf.len() >= 5 {
-                    let len = u16::from_be_bytes([buf[3], buf[4]]) as usize;
-                    if buf.len() >= 5 + len {
-                        let mut buf = buf.clone();
-                        drop(buf);
-                        let mut buf = self.buffer.lock();
-                        let out = RecordFrame {
-                            rec_type: buf[0],
-                            body: buf[5..5 + len].to_vec(),
-                        };
-                        buf.drain(..5 + len);
-                        return Ok(out);
+                let frame = {
+                    let buf = self.buffer.lock();
+                    if buf.len() >= 5 {
+                        let magic = u16::from_be_bytes([buf[1], buf[2]]);
+                        if magic != REC {
+                            Some(Err(format!(
+                                "invalid MMTLS record magic {magic:#06x}"
+                            )))
+                        } else {
+                            let len = u16::from_be_bytes([buf[3], buf[4]]) as usize;
+                            if buf.len() >= 5 + len {
+                                Some(Ok((
+                                    buf[0],
+                                    buf[5..5 + len].to_vec(),
+                                    5 + len,
+                                )))
+                            } else {
+                                None
+                            }
+                        }
+                    } else {
+                        None
                     }
+                };
+                if let Some(parsed) = frame {
+                    let (rec_type, body, total) = parsed?;
+                    self.buffer.lock().drain(..total);
+                    return Ok(RecordFrame { rec_type, body });
                 }
             }
             // 否则读
@@ -1316,7 +1394,7 @@ pub async fn get_native_wx_login_code(login_buffer: &str, app_id: &str) -> Resul
     let mut failures: Vec<String> = Vec::new();
 
     for t in long_targets.iter().take(6) {
-        match long_link_handshake(&manual.req, &device, &host).await {
+        match long_link_handshake(t, &manual.req, &device, &host).await {
             Ok(s) => {
                 session = Some(s);
                 break;
@@ -1332,7 +1410,10 @@ pub async fn get_native_wx_login_code(login_buffer: &str, app_id: &str) -> Resul
     })?;
 
     // 3. 构造 envelope + 走 short link
-    let env = envelope(&session, &js_plain(session.uin, app_id, &session.host_app_id));
+    let env = envelope(
+        &session,
+        &js_plain(session.uin, app_id, &session.host_app_id),
+    )?;
 
     // 4. 尝试 short targets
     let short_targets = fetch_short_targets().await;
@@ -1342,18 +1423,25 @@ pub async fn get_native_wx_login_code(login_buffer: &str, app_id: &str) -> Resul
         short_targets
     };
 
+    let mut short_failures: Vec<String> = Vec::new();
     for t in short_targets.iter() {
         match short_link_post(t, &env, &session).await {
             Ok(code) if !code.is_empty() => return Ok(code),
-            Ok(_) => continue,
-            Err(_) => continue,
+            Ok(_) => short_failures.push(format!("{}:{} empty code", t.ip, t.port)),
+            Err(e) => short_failures.push(format!("{}:{} {}", t.ip, t.port, e)),
         }
     }
-    Err("ShortLink 全部失败".to_string())
+    Err(format!(
+        "Unable to request wx.login code: {}",
+        short_failures.join("; ")
+    ))
 }
 
 /// Long link 完整握手 + ManualAuth + Session 建立
+///
+/// `target` 由调用方（HTTPDNS 解析结果）传入，避免重试循环失效。
 async fn long_link_handshake(
+    target: &Target,
     req: &[u8],
     device: &[u8],
     host: &[u8],
@@ -1363,10 +1451,6 @@ async fn long_link_handshake(
     let b = EcdhKeyPair::generate().map_err(|e| format!("ecdh b: {e}"))?;
     let hello = client_hello(&a.public_bytes, &b.public_bytes);
 
-    let target = targets("long")
-        .into_iter()
-        .next()
-        .ok_or_else(|| "no long target".to_string())?;
     let sock = connect_socket(&target.ip, target.port, 30_000).await?;
     sock.send(&rec(0x16, &hello)).await?;
 
@@ -1402,11 +1486,17 @@ async fn long_link_handshake(
     let mut ticket_entries: Vec<Vec<u8>> = Vec::new();
     let mut rx_seq: u64 = 1; // ServerHello 收下，sequence 1
     let mut transcript = transcript1.clone();
-    let mut found_finished = false;
 
     for _ in 0..32 {
         let r = sock.take().await?;
         let plain = gcm(&hs_keys.sk, &hs_keys.si, rx_seq, r.rec_type, &r.body, true);
+        if plain.is_empty() {
+            return Err(format!(
+                "handshake GCM decrypt failed seq={rx_seq} type={:#x} len={}",
+                r.rec_type,
+                r.body.len()
+            ));
+        }
         rx_seq += 1;
         let x = split_hs(&plain)?;
         if x.hs_type != 0x14 {
@@ -1417,12 +1507,11 @@ async fn long_link_handshake(
         }
         if x.hs_type == 0x04 {
             // NewSessionTicket: count (1B) + (len 4B + entry) *
-            let mut o = 1;
             if x.body.is_empty() {
                 continue;
             }
             let n = x.body[0] as usize;
-            o = 1;
+            let mut o = 1;
             for _ in 0..n {
                 if o + 4 > x.body.len() {
                     break;
@@ -1471,59 +1560,58 @@ async fn long_link_handshake(
             );
             sock.send(&rec(
                 0x16,
-                &gcm(&hs_keys.ck, &hs_keys.ci, 1, 0x16, &finish, false),
+                &{
+                    let ct = gcm(&hs_keys.ck, &hs_keys.ci, 1, 0x16, &finish, false);
+                    if ct.is_empty() {
+                        return Err("client Finished encrypt failed".into());
+                    }
+                    ct
+                },
             ))
             .await?;
 
             // 构造 hybrid auth
             let h = hybrid(req)?;
-            let mut header = wpkg_ints(&[
-                (1, 1),
-                (2, 0),
-                (3, 0),
-                (4, 0),
-                (5, 524545),
-                (6, 11),
-                (7, 0),
-                (8, 0),
-                (9, 0),
-                (10, 1),
-                (11, 0),
-                (12, 0),
-                (13, 0),
-                (17, 0),
-                (18, 1),
-                (20, 1504),
-                (21, 0),
-                (22, 0),
-                (23, 0),
-                (25, 17),
-                (26, 4),
-                (28, 1),
-                (29, 1),
-                (30, 0),
-            ]);
-            header.extend(wpkg_bytes(&[(14, &[]), (24, device), (27, &[])]));
+            // 1:1 对齐 TS：ints 与 bytes 必须在同一个 wpkg 容器内（中间 vi(0) 分隔），
+            // 不能拆成两次 wpkg 调用再拼接。
+            let mut head_ints = HashMap::new();
+            for (k, v) in [
+                (1, 1i64), (2, 0), (3, 0), (4, 0), (5, 524545), (6, 11), (7, 0), (8, 0),
+                (9, 0), (10, 1), (11, 0), (12, 0), (13, 0), (17, 0), (18, 1), (20, 1504),
+                (21, 0), (22, 0), (23, 0), (25, 17), (26, 4), (28, 1), (29, 1), (30, 0),
+            ] {
+                head_ints.insert(k, v);
+            }
+            let mut head_bytes = HashMap::new();
+            head_bytes.insert(14, Vec::new());
+            head_bytes.insert(24, device.to_vec());
+            head_bytes.insert(27, Vec::new());
+            let header = wpkg(&head_ints, &head_bytes);
             let body = [header, h.wire].concat();
-            sock.send(&rec(
+            let auth_ct = gcm(
+                &app_keys.ck,
+                &app_keys.ci,
+                2,
                 0x17,
-                &gcm(
-                    &app_keys.ck,
-                    &app_keys.ci,
-                    2,
-                    0x17,
-                    &short(0x0D7D, 0, &body),
-                    false,
-                ),
-            ))
-            .await?;
+                &short(0x0D7D, 0, &body),
+                false,
+            );
+            if auth_ct.is_empty() {
+                return Err("ManualAuth AppData encrypt failed".into());
+            }
+            sock.send(&rec(0x17, &auth_ct)).await?;
 
-            // 读 AppData
             let ar = sock.take().await?;
             let auth = gcm(&app_keys.sk, &app_keys.si, rx_seq, ar.rec_type, &ar.body, true);
-            rx_seq += 1;
+            if auth.is_empty() {
+                return Err(format!(
+                    "AppData GCM decrypt failed type={:#x} len={}",
+                    ar.rec_type,
+                    ar.body.len()
+                ));
+            }
             let (_, auth_body) = parse_short(&auth)?;
-            let s = parse_manual(&auth_body, &h.temp).ok_or_else(|| "parse_manual failed".to_string())?;
+            let s = parse_manual(&auth_body, &h.temp)?;
 
             // 取第一个 type=1 的 ticket
             let tickets: Vec<(Vec<u8>, Vec<u8>)> = if let Some(ch) = &cert_hash {
@@ -1539,11 +1627,12 @@ async fn long_link_handshake(
                 || s.recv_key.is_empty()
                 || s.uin == 0
                 || tickets.is_empty()
+                || ![16, 24, 32].contains(&s.send_key.len())
+                || ![16, 24, 32].contains(&s.recv_key.len())
             {
                 return Err("ManualAuth did not return a usable session".to_string());
             }
             let (psk, ticket) = tickets.into_iter().next().unwrap();
-            found_finished = true;
             return Ok(Session {
                 send_key: s.send_key,
                 recv_key: s.recv_key,
@@ -1556,10 +1645,7 @@ async fn long_link_handshake(
             });
         }
     }
-    if !found_finished {
-        return Err("MMTLS handshake not finished".to_string());
-    }
-    Err("unreachable".to_string())
+    Err("MMTLS handshake not finished".to_string())
 }
 
 /// ShortLink 早期数据 POST（HTTP/1.0 + Upgrade: mmtls + 0-RTT）
@@ -1574,9 +1660,10 @@ async fn short_link_post(
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let ts_hex = format!("{:08X}", ts);
-    let ticket = &session.ticket;
     let ts_u32 = ts as u32;
+    // JS `ts.toString(16).padStart(8,'0')` 是小写 hex，大小写进风控指纹
+    let ts_hex = format!("{ts_u32:08x}");
+    let ticket = &session.ticket;
     let hello = psk_client_hello(ticket, ts_u32);
     let ek = one_way_keys(
         &session.psk,
@@ -1584,39 +1671,23 @@ async fn short_link_post(
         &sha256(&hello),
     );
 
-    // type8 = 22 bytes (含 ts)
-    let mut type8 = vec![0u8; 22];
-    type8[0..4].copy_from_slice(&0u32.to_be_bytes());
-    type8[4..8].copy_from_slice(&16u32.to_be_bytes());
-    type8[8] = 8;
-    type8[9..13].copy_from_slice(&0u32.to_be_bytes());
-    type8[13] = 11;
-    type8[14..18].copy_from_slice(&1u32.to_be_bytes());
-    type8[18..22].copy_from_slice(&0u32.to_be_bytes());
-    type8[16..20].copy_from_slice(&ts.to_be_bytes()); // ts 覆盖占位
+    let type8 = type8_early_data(ts_u32);
+    let rec_type8 = gcm(&ek.key, &ek.iv, 1, 0x19, &type8, false);
+    let rec_env = gcm(&ek.key, &ek.iv, 2, 0x17, env, false);
+    let rec_close = gcm(&ek.key, &ek.iv, 3, 0x15, &[0, 0, 0, 3, 0, 1, 1], false);
+    if rec_type8.is_empty() || rec_env.is_empty() || rec_close.is_empty() {
+        return Err("ShortLink 0-RTT encrypt failed".into());
+    }
 
     let body = [
         rec(0x19, &hello),
-        rec(0x19, &gcm(&ek.key, &ek.iv, 1, 0x19, &type8, false)),
-        rec(0x17, &gcm(&ek.key, &ek.iv, 2, 0x17, env, false)),
-        rec(0x15, &gcm(&ek.key, &ek.iv, 3, 0x15, &[0, 0, 0, 3, 0, 1, 1], false)),
+        rec(0x19, &rec_type8),
+        rec(0x17, &rec_env),
+        rec(0x15, &rec_close),
     ]
     .concat();
 
-    let request_head = format!(
-        "POST /mmtls/{ts_hex} HTTP/1.0\r\n\
-         Accept: */*\r\n\
-         Cache-Control: no-cache\r\n\
-         Connection: close\r\n\
-         Content-Length: {len}\r\n\
-         Content-Type: application/octet-stream\r\n\
-         Host: shortcloud.weixin.com\r\n\
-         Upgrade: mmtls\r\n\
-         User-Agent: MicroMessenger Client\r\n\
-         X-Online-Host: shortcloud.weixin.com\r\n\r\n",
-        ts_hex = ts_hex,
-        len = body.len(),
-    );
+    let request_head = short_link_request_head(&ts_hex, body.len());
 
     let sock = connect_socket(&target.ip, target.port, 8_000).await?;
     sock.send(&[request_head.as_bytes(), &body].concat()).await?;
@@ -1633,13 +1704,13 @@ async fn short_link_post(
     let server_hello = recs
         .iter()
         .find(|r| r.rec_type == 0x16)
-        .ok_or_else(|| "missing ServerHello".to_string())?
+            .ok_or_else(|| "ShortLink response missing ServerHello/AppData".to_string())?
         .body
         .clone();
     let app_data = recs
         .iter()
         .find(|r| r.rec_type == 0x17)
-        .ok_or_else(|| "missing AppData".to_string())?
+            .ok_or_else(|| "ShortLink response missing ServerHello/AppData".to_string())?
         .body
         .clone();
 
@@ -1668,11 +1739,18 @@ async fn short_link_post(
                 for cand in candidates {
                     for offset in 0..cand.len().min(220) {
                         if let Ok(plain) = lz4(&unlayout(&session.recv_key, &cand[offset..], &[])) {
-                            if let Ok(code) = std::str::from_utf8(&plain)
-                                .map(|s| s.trim().to_string())
+                            // 1:1 对齐 TS：pbf(plain) → field2 → pbf → field3 → bytes → string
+                            let outer = pbf(&plain);
+                            if let Some(inner_bytes) =
+                                outer.get(&2).and_then(|v| v.as_bytes())
                             {
-                                if !code.is_empty() && code.len() < 256 {
-                                    return Ok(code);
+                                let inner = pbf(inner_bytes);
+                                if let Some(code_bytes) =
+                                    inner.get(&3).and_then(|v| v.as_bytes())
+                                {
+                                    if !code_bytes.is_empty() {
+                                        return Ok(String::from_utf8_lossy(code_bytes).to_string());
+                                    }
                                 }
                             }
                         }
@@ -1681,7 +1759,7 @@ async fn short_link_post(
             }
         }
     }
-    Err("all transcripts failed".to_string())
+    Err("ShortLink AppData decrypt/parse failed".to_string())
 }
 
 // =====================================================================
@@ -1754,7 +1832,11 @@ async fn fetch_httpdns_targets(kind: &str) -> Vec<Target> {
         .and_then(|p| p.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(|v| v.as_u64().map(|n| n as u16))
+                .filter_map(|v| {
+                    v.as_u64()
+                        .map(|n| n as u16)
+                        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+                })
                 .collect()
         })
         .unwrap_or_else(|| vec![default_port]);
@@ -1777,28 +1859,6 @@ async fn fetch_httpdns_targets(kind: &str) -> Vec<Target> {
     } else {
         out
     }
-}
-
-// =====================================================================
-// wpkg helpers for runtime header
-// =====================================================================
-
-/// wpkg 整数字段（避免重复 imports）
-fn wpkg_ints(pairs: &[(u32, i64)]) -> Vec<u8> {
-    let mut ints = HashMap::new();
-    for (k, v) in pairs {
-        ints.insert(*k, *v);
-    }
-    wpkg(&ints, &HashMap::new())
-}
-
-/// wpkg 字节字段
-fn wpkg_bytes(pairs: &[(u32, &[u8])]) -> Vec<u8> {
-    let mut bytes = HashMap::new();
-    for (k, v) in pairs {
-        bytes.insert(*k, v.to_vec());
-    }
-    wpkg(&HashMap::new(), &bytes)
 }
 
 // =====================================================================
@@ -1844,6 +1904,7 @@ fn base64_decode(s: &str) -> Result<Vec<u8>, String> {
     STANDARD.decode(s).map_err(|e| e.to_string())
 }
 
+#[cfg(test)]
 fn base64_encode(b: &[u8]) -> String {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
@@ -2108,6 +2169,50 @@ mod tests {
     }
 
     #[test]
+    fn layout_unlayout_aes192() {
+        let key = [0x5Au8; 24];
+        let plain = b"hybrid-ecdh-aes192";
+        let blob = layout(&key, plain, b"aad-192");
+        assert_eq!(blob.len(), plain.len() + 12 + 16);
+        let restored = unlayout(&key, &blob, b"aad-192");
+        assert_eq!(restored, plain);
+        let bad = unlayout(&[0x5Bu8; 24], &blob, b"aad-192");
+        assert!(bad.is_empty());
+    }
+
+    #[test]
+    fn layout_rejects_unsupported_key_len() {
+        let blob = layout(&[0u8; 15], b"x", &[]);
+        assert!(blob.is_empty(), "must not emit a fake iv+zero-tag packet");
+    }
+
+    #[test]
+    fn mmtls_path_hex_is_lowercase_like_js() {
+        // JS: Number(ts).toString(16).padStart(8, '0') → lowercase
+        let ts = 1_700_000_000u32;
+        assert_eq!(format!("{ts:08x}"), "6553f100");
+        assert_eq!(format!("{ts:08X}"), "6553F100");
+    }
+
+    #[test]
+    fn short_link_http_head_matches_js_template() {
+        let head = short_link_request_head("6553f100", 1234);
+        assert_eq!(
+            head,
+            "POST /mmtls/6553f100 HTTP/1.0\r\nAccept: */*\r\nCache-Control: no-cache\r\nConnection: close\r\nContent-Length: 1234\r\nContent-Type: application/octet-stream\r\nHost: shortcloud.weixin.com\r\nUpgrade: mmtls\r\nUser-Agent: MicroMessenger Client\r\nX-Online-Host: shortcloud.weixin.com\r\n\r\n"
+        );
+        assert!(!head.contains(" \r\n"), "header lines must not be indented");
+        assert!(head.ends_with("\r\n\r\n"));
+    }
+
+    #[test]
+    fn gcm_rejects_unsupported_key_len() {
+        let iv = [0x22u8; 12];
+        assert!(gcm(&[0u8; 24], &iv, 1, 0x17, b"x", false).is_empty());
+        assert!(gcm(&[0u8; 15], &iv, 1, 0x17, b"x", false).is_empty());
+    }
+
+    #[test]
     fn layout_unlayout_wrong_key() {
         let key1 = [1u8; 32];
         let key2 = [2u8; 32];
@@ -2123,6 +2228,28 @@ mod tests {
         let encoded = [(5u8 << 4), b'h', b'e', b'l', b'l', b'o'];
         let decoded = lz4(&encoded).unwrap();
         assert_eq!(decoded, b"hello");
+    }
+
+    #[test]
+    fn lz4_backref_rle_matches_js() {
+        // token 0x10: literal 1 + match 4, offset=1 → "AAAAA"（TS out[out.length-off]）
+        let encoded = [0x10, b'A', 0x01, 0x00];
+        assert_eq!(lz4(&encoded).unwrap(), b"AAAAA");
+    }
+
+    #[test]
+    fn lz4_backref_copy_matches_js() {
+        // token 0x40: literal 4 + match 4, offset=4 → "ABCDABCD"
+        let encoded = [0x40, b'A', b'B', b'C', b'D', 0x04, 0x00];
+        assert_eq!(lz4(&encoded).unwrap(), b"ABCDABCD");
+    }
+
+    #[test]
+    fn lz4_backref_overlapping_offset_2() {
+        // "ababab" : literal "ab" + offset 2 + match 4
+        // token 0x20: literal 2, match 4
+        let encoded = [0x20, b'a', b'b', 0x02, 0x00];
+        assert_eq!(lz4(&encoded).unwrap(), b"ababab");
     }
 
     #[test]
@@ -2264,5 +2391,333 @@ mod tests {
             let r = connect_socket("127.0.0.1", 1, 1000).await;
             assert!(r.is_err(), "应该 connect 失败");
         });
+    }
+
+    // =====================================================================
+    // Golden 向量测试：与参考 native-protocol.ts 逐字节一致
+    // 向量由 `scripts/wx-golden-gen.mts` 生成（确定性 randomBytes + 固定 Date.now）
+    // =====================================================================
+
+    fn hex(v: &[u8]) -> String {
+        v.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    fn unhex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn golden_client_hello() {
+        let random32: Vec<u8> = (0..32u8).collect();
+        let pub1 = [vec![0x04u8], vec![0x11u8; 64]].concat();
+        let pub2 = [vec![0x04u8], vec![0x22u8; 64]].concat();
+        let got = client_hello_with(&pub1, &pub2, &random32, 1700000000);
+        assert_eq!(
+            hex(&got),
+            "000000d00103f101c02b000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f6553f100000000a2010000009d00100200000047000000010041041111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111100000047000000020041042222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222200000001"
+        );
+    }
+
+    #[test]
+    fn golden_psk_client_hello() {
+        let random32: Vec<u8> = (32..64u8).collect();
+        let ticket = vec![0xAAu8; 100];
+        let got = psk_client_hello_with(&ticket, 1700000000, &random32);
+        assert_eq!(
+            hex(&got),
+            "0000009e0103f10100a8202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f6553f10000000070010000006b000f0100000064aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+    }
+
+    #[test]
+    fn golden_js_plain() {
+        // mac6 = counter 64..69（0x40..0x45）
+        let mac6 = [0x40u8, 0x41, 0x42, 0x43, 0x44, 0x45];
+        let got = js_plain_with(12345678, "wxd44977328b36e647", b"my_host_app_id", &mac6);
+        assert_eq!(
+            hex(&got),
+            "0a350a0a73657373696f6e6b657910cec2f1051a1134322d34312d34322d34332d34342d343520ff8d9c98062a0757696e646f77733000121b2f6367692d62696e2f6d6d62697a2d62696e2f6a732d6c6f67696e1a0e6d795f686f73745f6170705f696420052a5c0a3e0a0a73657373696f6e6b657910cec2f1051a1134322d34312d34322d34332d34342d343520ff8d9c98062a10556e6966696564504357696e646f77733000121277786434343937373332386233366536343720012a0032003801321277786434343937373332386233366536343738850840d1f28080064a1157696e646f777378576562506c7567696e50d1f2c49102"
+        );
+    }
+
+    #[test]
+    fn golden_lz4_literal_and_roundtrip() {
+        assert_eq!(hex(&lz4_literal(b"hello")), "5068656c6c6f");
+        assert_eq!(
+            hex(&lz4_literal(&vec![b'A'; 20])),
+            "f0054141414141414141414141414141414141414141"
+        );
+        let lit = lz4_literal(b"the quick brown fox");
+        assert_eq!(hex(&lz4(&lit).unwrap()), "74686520717569636b2062726f776e20666f78");
+    }
+
+    #[test]
+    fn golden_wpkg_short_pbl_pbv() {
+        let mut ints = HashMap::new();
+        ints.insert(1, 1);
+        ints.insert(2, 12345);
+        let mut bytes = HashMap::new();
+        bytes.insert(3, b"xyz".to_vec());
+        assert_eq!(hex(&wpkg(&ints, &bytes)), "01010102b96000030378797a000d");
+
+        assert_eq!(hex(&short(0x0d7d, 0, &[1, 2, 3])), "000000131110076d00000d7d00000000010203");
+        assert_eq!(hex(&pbl(2, b"abc")), "1203616263");
+        assert_eq!(hex(&pbv(2, 300)), "10ac02");
+    }
+
+    #[test]
+    fn golden_expand_and_nonce() {
+        assert_eq!(
+            hex(&expand(b"secret", "label", b"ctx", 32)),
+            "e35ba6122d834ae0f6f5de6fb05255f8a9fc4f4223cc6a9318a6a056679a0ebb"
+        );
+        let iv = unhex("0000000000000000000000ff");
+        let n = mmtls_nonce(&iv, 7);
+        assert_eq!(hex(&n), "0000000000000000000000f8");
+    }
+
+    #[test]
+    fn node_ecdh_priv1_shared_secret() {
+        // Node: createECDH('prime256v1'); setPrivateKey(1); computeSecret(SERVER_PUB)
+        let mut priv_bytes = [0u8; 32];
+        priv_bytes[31] = 1;
+        let sk = p256::SecretKey::from_slice(&priv_bytes).expect("priv 1");
+        let pair = EcdhKeyPair {
+            secret_key: sk.clone(),
+            public_bytes: sk.public_key().to_encoded_point(false).as_bytes().to_vec(),
+        };
+        assert_eq!(
+            hex(&pair.public_bytes),
+            "046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5"
+        );
+        let server = hex_decode(SERVER_PUB_HEX).unwrap();
+        let shared = pair.shared_secret(&server).unwrap();
+        assert_eq!(shared.len(), 32);
+        assert_eq!(
+            hex(&shared),
+            "ef87876d6478b15f1796eab12068610541173b7176b67f1dcc86683e901acd44"
+        );
+    }
+
+    #[test]
+    fn node_aes192_layout_unlayout() {
+        // Node createCipheriv('aes-192-gcm') → ciphertext||iv||tag
+        let blob = unhex("8e48de4360f6ce2734566495fd05792e2f97111111111111111111111111dbae6d00a91de85f6e255b8aaf551dc3");
+        let key = [0x5Au8; 24];
+        let plain = unlayout(&key, &blob, b"aad-192");
+        assert_eq!(plain, b"hybrid-ecdh-aes192");
+    }
+
+    #[test]
+    fn node_mmtls_gcm_encrypt() {
+        let key = [0x11u8; 16];
+        let iv = [0x22u8; 12];
+        let ct = gcm(&key, &iv, 7, 0x17, b"mmtls-gcm-roundtrip", false);
+        assert_eq!(
+            hex(&ct),
+            "78c82c7e43ee7748cfaeb0680a5f2a1e85450dfd9c45f54a63df158a7e41a0f76a5225"
+        );
+    }
+
+    #[test]
+    fn lz4_long_literal_then_rle_backref() {
+        // token 0xF6: literal 20 (=15+5) + match 10, offset=1 → 30 个 'A'
+        let mut encoded = vec![0xF6, 0x05];
+        encoded.extend(std::iter::repeat(b'A').take(20));
+        encoded.extend([0x01, 0x00]);
+        assert_eq!(lz4(&encoded).unwrap(), vec![b'A'; 30]);
+    }
+
+    #[test]
+    fn golden_type8_early_data() {
+        let t = type8_early_data(1_700_000_000);
+        assert_eq!(t.len(), 20);
+        assert_eq!(
+            hex(&t),
+            "00000010080000000b010000000600126553f100"
+        );
+        // 再写一个不会 panic 的大时间戳（u32 最大值）
+        let t_max = type8_early_data(u32::MAX);
+        assert_eq!(t_max.len(), 20);
+        assert_eq!(&t_max[16..20], &[0xff, 0xff, 0xff, 0xff]);
+    }
+
+    #[test]
+    fn gcm_roundtrip_aes128() {
+        let key = [0x11u8; 16];
+        let iv = [0x22u8; 12];
+        let plain = b"mmtls-gcm-roundtrip";
+        let ct = gcm(&key, &iv, 7, 0x17, plain, false);
+        assert!(ct.len() > plain.len());
+        let back = gcm(&key, &iv, 7, 0x17, &ct, true);
+        assert_eq!(back, plain);
+        // 错 seq 解不开
+        let bad = gcm(&key, &iv, 8, 0x17, &ct, true);
+        assert!(bad.is_empty());
+    }
+
+    #[test]
+    fn hybrid_wire_structure() {
+        let h = hybrid(b"hello-hybrid").expect("hybrid");
+        assert!(!h.wire.is_empty());
+        assert!(!h.temp.okm.is_empty());
+        assert!(!h.temp.comp.is_empty());
+        let fields = pbf(&h.wire);
+        assert_eq!(fields.get(&1).and_then(|v| v.as_varint()), Some(1));
+        let key_share = fields.get(&2).and_then(|v| v.as_bytes()).expect("field 2");
+        let inner = pbf(key_share);
+        assert_eq!(inner.get(&1).and_then(|v| v.as_varint()), Some(415));
+        let pub_bytes = inner.get(&2).and_then(|v| v.as_bytes()).expect("pub");
+        assert_eq!(pub_bytes.len(), 65);
+        assert_eq!(pub_bytes[0], 0x04);
+        let enc_key = fields.get(&3).and_then(|v| v.as_bytes()).expect("field 3");
+        // cek(32) + iv(12) + tag(16) — AES-192-GCM layout，不能是失败时的 iv+零 tag（28 字节）
+        assert_eq!(enc_key.len(), 32 + 12 + 16);
+        let enc = fields.get(&5).and_then(|v| v.as_bytes()).expect("field 5");
+        assert!(enc.len() > 28, "hybrid ciphertext too short for AES-192 layout");
+    }
+
+    #[test]
+    fn golden_manual_request() {
+        let ticket = vec![0xAAu8; 100];
+        let device = vec![0xCDu8; 16];
+        let host = b"wx".repeat(16);
+        let mut login_buffer_raw = pbl(1, &ticket);
+        login_buffer_raw.extend(pbl(2, &device));
+        login_buffer_raw.extend(pbl(3, &host));
+        let login_buffer = base64_encode(&login_buffer_raw);
+
+        let app_bytes = vec![0xABu8; 32];
+        let m = manual_request(&login_buffer, &app_bytes).unwrap();
+        assert_eq!(
+            hex(&m.req),
+            "0a250a20abababababababababababababababababababababababababababababababab10ed0e1a660a64aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2004320038004006"
+        );
+    }
+
+    #[test]
+    fn envelope_shortlink_structure_matches_js() {
+        let session = Session {
+            send_key: vec![0x11u8; 16],
+            recv_key: vec![0x22u8; 16],
+            f9: vec![0x33u8; 8],
+            uin: 12345678,
+            device_id: b"device-id-bytes".to_vec(),
+            host_app_id: HOST_APP.to_vec(),
+            psk: vec![0x44u8; 32],
+            ticket: vec![0x55u8; 16],
+        };
+        let env = envelope(&session, b"js-login-plain").expect("envelope");
+        let total = u32::from_be_bytes(env[0..4].try_into().unwrap()) as usize;
+        assert_eq!(total, env.len() - 4);
+
+        let mut o = 4;
+        let path_len = u16::from_be_bytes(env[o..o + 2].try_into().unwrap()) as usize;
+        o += 2;
+        assert_eq!(&env[o..o + path_len], TRANSFER_PATH);
+        o += path_len;
+        let host_len = u16::from_be_bytes(env[o..o + 2].try_into().unwrap()) as usize;
+        o += 2;
+        assert_eq!(&env[o..o + host_len], TRANSFER_HOST);
+        o += host_len;
+        let inner_len = u32::from_be_bytes(env[o..o + 4].try_into().unwrap()) as usize;
+        o += 4;
+        let inner = &env[o..o + inner_len];
+        assert_eq!(&inner[4..6], &0x1110u16.to_be_bytes());
+        assert_eq!(&inner[6..8], &0x076Du16.to_be_bytes());
+        assert_eq!(&inner[8..12], &0x0B41u32.to_be_bytes());
+        assert_eq!(&inner[12..16], &0u32.to_be_bytes());
+
+        let (cmd, body) = parse_short(inner).unwrap();
+        assert_eq!(cmd, 0x0B41);
+        let wpkg_len = read_wpkg(&body).unwrap();
+        assert!(wpkg_len > 0 && wpkg_len < body.len());
+        let enc = &body[wpkg_len..];
+        let compressed = lz4_literal(b"js-login-plain");
+        assert_eq!(enc.len(), compressed.len() + 12 + 16);
+    }
+
+    #[test]
+    fn golden_wpkg_longlink_and_envelope_headers() {
+        // 与 TS native-protocol.ts 同一套 ints/bytes，逐字节锁定 cmd 容器指纹
+        let device = vec![0xCDu8; 16];
+        let mut long_ints = HashMap::new();
+        for (k, v) in [
+            (1, 1i64),
+            (2, 0),
+            (3, 0),
+            (4, 0),
+            (5, 524545),
+            (6, 11),
+            (7, 0),
+            (8, 0),
+            (9, 0),
+            (10, 1),
+            (11, 0),
+            (12, 0),
+            (13, 0),
+            (17, 0),
+            (18, 1),
+            (20, 1504),
+            (21, 0),
+            (22, 0),
+            (23, 0),
+            (25, 17),
+            (26, 4),
+            (28, 1),
+            (29, 1),
+            (30, 0),
+        ] {
+            long_ints.insert(k, v);
+        }
+        let mut long_bytes = HashMap::new();
+        long_bytes.insert(14, Vec::new());
+        long_bytes.insert(24, device);
+        long_bytes.insert(27, Vec::new());
+        assert_eq!(
+            hex(&wpkg(&long_ints, &long_bytes)),
+            "01010102000300040005818220060b0700080009000a010b000c000d001100120114e00b15001600170019111a041c011d011e00000e001810cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd1b00004c"
+        );
+
+        let mut env_ints = HashMap::new();
+        for (k, v) in [
+            (1, 1i64),
+            (2, 12345678),
+            (3, 0),
+            (4, 0),
+            (5, 524545),
+            (6, 11),
+            (7, 0),
+            (8, 0),
+            (9, 0),
+            (10, 1),
+            (11, 0),
+            (12, 0),
+            (13, 0),
+            (17, 0),
+            (18, 1),
+            (20, 1504),
+            (21, 0),
+            (22, 12345678),
+            (23, 0),
+            (25, 16),
+            (26, 4),
+            (28, 1),
+            (29, 1),
+            (30, 0),
+        ] {
+            env_ints.insert(k, v);
+        }
+        let mut env_bytes = HashMap::new();
+        env_bytes.insert(14, Vec::new());
+        env_bytes.insert(24, b"device-id-bytes".to_vec());
+        env_bytes.insert(27, vec![0x33u8; 8]);
+        assert_eq!(
+            hex(&wpkg(&env_ints, &env_bytes)),
+            "01010102cec2f1050300040005818220060b0700080009000a010b000c000d001100120114e00b150016cec2f105170019101a041c011d011e00000e00180f6465766963652d69642d62797465731b0833333333333333330059"
+        );
     }
 }

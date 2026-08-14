@@ -167,7 +167,7 @@ impl InteractService {
 // =====================================================================
 
 fn normalize_record(record: &crate::proto::generated::gamepb::interactpb::InteractRecord, index: usize) -> NormalizedRecord {
-    use crate::proto::generated::gamepb::interactpb::InteractRecord;
+    
     let (land_id, flag1, flag2) = match &record.extra {
         Some(e) => (e.land_id as i64, e.flag1 as i64, e.flag2 as i64),
         None => (0, 0, 0),

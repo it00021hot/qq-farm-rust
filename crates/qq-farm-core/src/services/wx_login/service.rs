@@ -13,7 +13,7 @@
 //!
 //! - 真实 HTTP 走 `reqwest`（TS 用 `fetch`）
 //! - Cookie store 用 `HashMap<String, String>`（TS 用 `Map`）
-//! - `issue_code` 调 native_protocol；该函数真实实现留到集成时（见 `native_protocol::get_native_wx_login_code`）
+//! - `issue_code` 调 `native_protocol::get_native_wx_login_code` 拿真实 wx.login code
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -189,7 +189,7 @@ impl WxLoginService {
         let callback = self
             .request(&format!("{CALLBACK_URL}?{query}"), &mut session.cookies, None)
             .await?;
-        if callback.status >= 400 {
+        if callback.status < 200 || callback.status >= 400 {
             return Err(format!(
                 "WeChat authorization callback failed (HTTP {})",
                 callback.status
@@ -198,14 +198,23 @@ impl WxLoginService {
         let openid = required_cookie(&session.cookies, "openid")?;
         let access_token = required_cookie(&session.cookies, "accesstoken")?;
 
-        // 构造 JSON payload
-        let payload = format!(
-            r#"{{"extInfo":{{"listS":{{"unionid":{{"value":["{openid}"]}},"user_id":{{"value":["{openid}"]}},"access_token":{{"value":["{access_token}"]}}}},"listI":{{"user_type":{{"value":[0]}}}}}}}}"#,
-        );
+        // 构造 JSON payload（用 serde_json 序列化，避免 format! 拼接在特殊字符下出错）
+        let payload = serde_json::json!({
+            "extInfo": {
+                "listS": {
+                    "unionid": { "value": [openid.clone()] },
+                    "user_id": { "value": [openid.clone()] },
+                    "access_token": { "value": [access_token] },
+                },
+                "listI": {
+                    "user_type": { "value": [0] },
+                },
+            },
+        })
+        .to_string();
         let timestamp = now_ms_string();
         let nonce = random_int(1000, 10000).to_string();
-        let signature_input = format!("{payload}{timestamp}{LOGIN_BUFFER_ACCESS_KEY}{nonce}");
-        let signature = md5_hex(signature_input.as_bytes());
+        let signature = login_buffer_signature(&payload, &timestamp, &nonce);
 
         let mut extra_headers = HashMap::new();
         extra_headers.insert("Content-Type".to_string(), "application/json".to_string());
@@ -260,7 +269,8 @@ impl WxLoginService {
     /// 真实协议拿 wx.login code
     ///
     /// # Errors
-    /// - 当前阶段返回 stub 错误（真实网络收发留到集成时）
+    /// - login_buffer 缺失（尚未 confirm）
+    /// - 原生协议网络 / 握手 / 解密失败
     pub async fn issue_code(&self, session: &WxLoginSession, app_id: &str) -> Result<String, String> {
         let buffer = session
             .login_buffer
@@ -283,13 +293,14 @@ impl WxLoginService {
         cookies: &mut HashMap<String, String>,
         input: Option<RequestInput>,
     ) -> Result<HttpResult, String> {
-        let method = input
+        let mut method = input
             .as_ref()
             .map(|i| i.method.to_string())
             .unwrap_or_else(|| "GET".to_string());
         let mut body = input.as_ref().and_then(|i| i.body.clone());
 
         let mut current_url = url.to_string();
+        // 最多跟随 5 次重定向（对齐 TS `request()`）
         for _ in 0..=5 {
             let method_parsed: reqwest::Method = match method.as_str() {
                 "GET" => reqwest::Method::GET,
@@ -316,8 +327,16 @@ impl WxLoginService {
             let status = resp.status().as_u16();
             let headers_snapshot = headers_to_map(resp.headers());
             store_cookies(cookies, &resp);
-            if status >= 300 || status < 200 {
-                // 非重定向状态码（包括 4xx/5xx）
+
+            let location = resp
+                .headers()
+                .get("location")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+
+            // 对齐 TS：非 3xx、或 4xx/5xx、或没有 location，则读取 body 并返回。
+            // 只有「3xx 且有 location」才会跟随重定向。
+            if status < 300 || status >= 400 || location.is_none() {
                 let bytes = resp.bytes().await.map_err(|e| e.to_string())?.to_vec();
                 return Ok(HttpResult {
                     status,
@@ -325,23 +344,15 @@ impl WxLoginService {
                     headers: headers_snapshot,
                 });
             }
-            if let Some(location) = resp.headers().get("location") {
-                let location_str = location.to_str().map_err(|e| e.to_string())?.to_string();
-                // 相对路径转绝对
-                current_url = resolve_url(&current_url, &location_str);
-                if status == 303 || ((status == 301 || status == 302) && method == "POST") {
-                    // GET 化
-                    body = None;
-                    let _ = body;
-                }
-                continue;
+
+            // 跟随重定向
+            let location = location.expect("checked is_none above");
+            current_url = resolve_url(&current_url, &location);
+            if status == 303 || ((status == 301 || status == 302) && method == "POST") {
+                // 303 / 301+POST / 302+POST 转 GET，丢弃 body
+                method = "GET".to_string();
+                body = None;
             }
-            let bytes = resp.bytes().await.map_err(|e| e.to_string())?.to_vec();
-            return Ok(HttpResult {
-                status,
-                body: bytes,
-                headers: headers_snapshot,
-            });
         }
         Err("Too many redirects while contacting WeChat".to_string())
     }
@@ -367,18 +378,24 @@ fn cookie_header(cookies: &HashMap<String, String>) -> String {
 }
 
 fn store_cookies(cookies: &mut HashMap<String, String>, resp: &reqwest::Response) {
-    for (name, value) in resp.headers() {
-        if name.as_str().eq_ignore_ascii_case("set-cookie") {
-            if let Ok(s) = value.to_str() {
-                let pair = s.split(';').next().unwrap_or("").trim();
-                if let Some(eq) = pair.find('=') {
-                    let k = pair[..eq].to_string();
-                    let v = pair[eq + 1..].to_string();
-                    cookies.insert(k, v);
-                }
+    for value in resp.headers().get_all("set-cookie") {
+        let s = match value.to_str() {
+            Ok(v) => v.to_string(),
+            Err(_) => String::from_utf8_lossy(value.as_bytes()).into_owned(),
+        };
+        let pair = s.split(';').next().unwrap_or("").trim();
+        if let Some(eq) = pair.find('=') {
+            let k = pair[..eq].to_string();
+            let v = pair[eq + 1..].to_string();
+            if !k.is_empty() {
+                cookies.insert(k, v);
             }
         }
     }
+}
+
+fn login_buffer_signature(payload: &str, timestamp: &str, nonce: &str) -> String {
+    md5_hex(format!("{payload}{timestamp}{LOGIN_BUFFER_ACCESS_KEY}{nonce}").as_bytes())
 }
 
 fn required_cookie(cookies: &HashMap<String, String>, name: &str) -> Result<String, String> {
@@ -615,10 +632,6 @@ pub fn md5(input: &[u8]) -> [u8; 16] {
     out[8..12].copy_from_slice(&h2.to_le_bytes());
     out[12..16].copy_from_slice(&h3.to_le_bytes());
     out
-}
-
-fn s_shift_unused() {
-    // 已合并到 md5 函数内部
 }
 
 // =====================================================================
@@ -882,5 +895,92 @@ mod tests {
             s.oauth_code = Some("code".to_string());
             assert_eq!(svc.poll(&mut s).await.unwrap(), ScanStatus::Authorized);
         });
+    }
+
+    #[test]
+    fn login_buffer_signature_stable() {
+        let sig = login_buffer_signature("{}", "1", "2");
+        assert_eq!(sig.len(), 32);
+        assert_eq!(sig, login_buffer_signature("{}", "1", "2"));
+        assert_ne!(sig, login_buffer_signature("{}", "1", "3"));
+    }
+
+    #[test]
+    fn confirm_payload_json_roundtrip() {
+        let payload = serde_json::json!({
+            "extInfo": {
+                "listS": {
+                    "unionid": { "value": ["o\"x"] },
+                    "user_id": { "value": ["o\"x"] },
+                    "access_token": { "value": ["a&b"] },
+                },
+                "listI": {
+                    "user_type": { "value": [0] },
+                },
+            },
+        })
+        .to_string();
+        let v: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(v["extInfo"]["listS"]["unionid"]["value"][0], "o\"x");
+        assert_eq!(v["extInfo"]["listS"]["access_token"]["value"][0], "a&b");
+    }
+
+    #[tokio::test]
+    async fn request_follows_redirect_and_stores_cookies() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut hop = 0u8;
+            loop {
+                let (mut sock, _) = match listener.accept().await {
+                    Ok(v) => v,
+                    Err(_) => break,
+                };
+                let mut buf = vec![0u8; 4096];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+                hop += 1;
+                let resp = if hop == 1 {
+                    format!(
+                        "HTTP/1.1 302 Found\r\n\
+                         Location: http://{addr}/next\r\n\
+                         Set-Cookie: sid=abc; Path=/\r\n\
+                         Content-Length: 0\r\n\r\n"
+                    )
+                } else if req.starts_with("GET ") {
+                    "HTTP/1.1 200 OK\r\n\
+                     Set-Cookie: openid=oxxx; Path=/\r\n\
+                     Set-Cookie: accesstoken=atok; Path=/\r\n\
+                     Content-Length: 5\r\n\r\nhello"
+                        .to_string()
+                } else {
+                    "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n".to_string()
+                };
+                let _ = sock.write_all(resp.as_bytes()).await;
+            }
+        });
+
+        let svc = WxLoginService::new();
+        let mut cookies = HashMap::new();
+        let result = svc
+            .request(
+                &format!("http://{addr}/start"),
+                &mut cookies,
+                Some(RequestInput {
+                    method: "POST",
+                    body: Some(b"unused".to_vec()),
+                    extra_headers: HashMap::new(),
+                }),
+            )
+            .await
+            .expect("request");
+        assert_eq!(result.status, 200);
+        assert_eq!(result.body, b"hello");
+        assert_eq!(cookies.get("sid").map(String::as_str), Some("abc"));
+        assert_eq!(cookies.get("openid").map(String::as_str), Some("oxxx"));
+        assert_eq!(cookies.get("accesstoken").map(String::as_str), Some("atok"));
     }
 }

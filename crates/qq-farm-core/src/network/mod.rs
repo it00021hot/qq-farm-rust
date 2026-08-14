@@ -3,7 +3,6 @@
 //! ## 模块
 //!
 //! - [`client`] — WebSocket 客户端（actor 模式）
-//! - [`codec`] — 帧编解码占位（实际由 [`frame`] 提供）
 //! - [`encryptor`] — 加密/解密器（trait + TSDK 实现）
 //! - [`error`] — 网络层错误
 //! - [`frame`] — GateMessage 帧的 protobuf 编码/解码
@@ -13,7 +12,6 @@
 //! - [`user_state`] — 登录后用户运行时状态
 
 pub mod client;
-pub mod codec;
 pub mod encryptor;
 pub mod error;
 pub mod frame;

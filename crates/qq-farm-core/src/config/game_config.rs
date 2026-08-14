@@ -49,13 +49,30 @@ pub struct PlantFruit {
     pub count: i64,
 }
 
-/// 种子信息（plant 中提取的子集）
+/// 种子信息（plant 中提取的子集，对齐 TS getAllSeeds）
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SeedInfo {
     pub seed_id: i64,
     pub name: String,
     pub required_level: i64,
     pub plant_id: i64,
+    #[serde(default)]
+    pub price: i64,
+    #[serde(default)]
+    pub image: String,
+    #[serde(default)]
+    pub seasons: i64,
+    #[serde(default)]
+    pub exp: i64,
+    #[serde(default)]
+    pub grow_phases: String,
+    #[serde(default)]
+    pub grow_time: i64,
+    #[serde(default)]
+    pub size: i64,
+    #[serde(default)]
+    pub harvest_count: i64,
 }
 
 // ===== Item =====
@@ -69,6 +86,10 @@ pub struct Item {
     pub name: String,
     pub interaction_type: Option<String>,
     pub sells: Option<serde_json::Value>,
+    #[serde(default)]
+    pub sell_cond: Option<serde_json::Value>,
+    #[serde(default)]
+    pub cond_sells: Option<serde_json::Value>,
     pub level: Option<i64>,
     pub target_id: Option<i64>,
     pub asset_name: Option<String>,
@@ -140,12 +161,13 @@ impl GameConfig {
         }
     }
 
-    /// 加载所有 JSON
+    /// 加载所有 JSON（embed + 运行时 overlay）
     pub fn load(&self) {
         self.load_plants();
         self.load_items();
         self.load_lands();
         self.load_role_levels();
+        self.apply_overlay();
     }
 
     fn load_plants(&self) {
@@ -171,6 +193,158 @@ impl GameConfig {
         let levels: Vec<RoleLevel> =
             serde_json::from_str(json).expect("RoleLevel.json parse failed");
         *self.role_level.write() = Some(levels);
+    }
+
+    fn overlay_dir() -> std::path::PathBuf {
+        crate::config::paths::get_data_dir().join("game_config")
+    }
+
+    fn apply_overlay(&self) {
+        self.merge_overlay_plants();
+        self.merge_overlay_items();
+    }
+
+    fn merge_overlay_plants(&self) {
+        let path = Self::overlay_dir().join("Plant.json");
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        let Ok(overlay) = serde_json::from_str::<Vec<Plant>>(&text) else {
+            return;
+        };
+        let mut guard = self.plant_map.write();
+        let Some(plants) = guard.as_mut() else { return };
+        for p in overlay {
+            if let Some(existing) = plants.iter_mut().find(|x| x.id == p.id) {
+                *existing = p;
+            } else {
+                plants.push(p);
+            }
+        }
+    }
+
+    fn merge_overlay_items(&self) {
+        let path = Self::overlay_dir().join("ItemInfo.json");
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        let Ok(overlay) = serde_json::from_str::<Vec<Item>>(&text) else {
+            return;
+        };
+        let mut guard = self.item_map.write();
+        let Some(items) = guard.as_mut() else { return };
+        for it in overlay {
+            if let Some(existing) = items.iter_mut().find(|x| x.id == it.id) {
+                *existing = it;
+            } else {
+                items.push(it);
+            }
+        }
+    }
+
+    fn write_json(path: &std::path::Path, value: &impl Serialize) -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let text = serde_json::to_string_pretty(value).unwrap_or_else(|_| "[]".into());
+        std::fs::write(path, text)
+    }
+
+    /// 写入植物 overlay 并热更新内存
+    pub fn upsert_plant(&self, plant: Plant) -> std::io::Result<()> {
+        let path = Self::overlay_dir().join("Plant.json");
+        let mut overlay: Vec<Plant> = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default();
+        overlay.retain(|p| p.id != plant.id);
+        overlay.push(plant);
+        Self::write_json(&path, &overlay)?;
+        self.load_plants();
+        self.merge_overlay_plants();
+        Ok(())
+    }
+
+    /// 删除 overlay 植物并重载
+    pub fn delete_plant_overlay(&self, plant_id: i64) -> std::io::Result<bool> {
+        let path = Self::overlay_dir().join("Plant.json");
+        let mut overlay: Vec<Plant> = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default();
+        let before = overlay.len();
+        overlay.retain(|p| p.id != plant_id);
+        Self::write_json(&path, &overlay)?;
+        self.load_plants();
+        self.merge_overlay_plants();
+        Ok(overlay.len() < before)
+    }
+
+    /// 写入物品 overlay 并热更新内存
+    pub fn upsert_item(&self, item: Item) -> std::io::Result<()> {
+        let path = Self::overlay_dir().join("ItemInfo.json");
+        let mut overlay: Vec<Item> = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default();
+        overlay.retain(|i| i.id != item.id);
+        overlay.push(item);
+        Self::write_json(&path, &overlay)?;
+        self.load_items();
+        self.merge_overlay_items();
+        Ok(())
+    }
+
+    /// 删除 overlay 物品并重载
+    pub fn delete_item_overlay(&self, item_id: i64) -> std::io::Result<bool> {
+        let path = Self::overlay_dir().join("ItemInfo.json");
+        let mut overlay: Vec<Item> = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default();
+        let before = overlay.len();
+        overlay.retain(|i| i.id != item_id);
+        Self::write_json(&path, &overlay)?;
+        self.load_items();
+        self.merge_overlay_items();
+        Ok(overlay.len() < before)
+    }
+
+    /// 保存配置图片（base64），返回相对 URL
+    pub fn save_config_image_base64(name: &str, b64: &str) -> std::io::Result<String> {
+        let trimmed = b64.split(',').next_back().unwrap_or(b64).trim();
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(trimmed)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+        Self::save_config_image(name, &bytes)
+    }
+
+    /// 保存配置图片，返回相对 URL
+    pub fn save_config_image(name: &str, bytes: &[u8]) -> std::io::Result<String> {
+        let safe: String = name
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_' || *c == '-')
+            .collect();
+        if safe.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid image name",
+            ));
+        }
+        let dir = Self::overlay_dir().join("images");
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(dir.join(&safe), bytes)?;
+        Ok(format!("/api/config/images/{safe}"))
+    }
+
+    /// 读取配置图片
+    pub fn read_config_image(name: &str) -> Option<Vec<u8>> {
+        let safe: String = name
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_' || *c == '-')
+            .collect();
+        std::fs::read(Self::overlay_dir().join("images").join(safe)).ok()
     }
 
     // ===== 查询 API =====
@@ -270,22 +444,26 @@ impl GameConfig {
     /// 全部种子（从 plant 中提取有 seed_id 的）
     #[must_use]
     pub fn get_all_seeds(&self) -> Vec<SeedInfo> {
-        self.plant_map
-            .read()
-            .as_ref()
-            .map(|p| {
-                p.iter()
-                    .filter_map(|x| {
-                        x.seed_id.map(|sid| SeedInfo {
-                            seed_id: sid,
-                            name: x.name.clone(),
-                            required_level: x.land_level_need.unwrap_or(1),
-                            plant_id: x.id,
-                        })
-                    })
-                    .collect()
+        let plants = self.plant_map.read().clone().unwrap_or_default();
+        plants
+            .iter()
+            .filter_map(|x| {
+                x.seed_id.map(|sid| SeedInfo {
+                    seed_id: sid,
+                    name: x.name.clone(),
+                    required_level: x.land_level_need.unwrap_or(1),
+                    plant_id: x.id,
+                    price: self.get_seed_price(sid),
+                    image: mapped_item_image(sid),
+                    seasons: x.seasons.unwrap_or(1),
+                    exp: x.exp.unwrap_or(0),
+                    grow_phases: x.grow_phases.clone().unwrap_or_default(),
+                    grow_time: self.get_plant_grow_time(x.id),
+                    size: x.size.unwrap_or(0),
+                    harvest_count: x.fruit.as_ref().map(|f| f.count).unwrap_or(0),
+                })
             })
-            .unwrap_or_default()
+            .collect()
     }
 
     /// 全部植物
@@ -326,6 +504,17 @@ impl GameConfig {
             .read()
             .as_ref()
             .and_then(|lands| lands.iter().find(|l| l.id == land_id).cloned())
+    }
+
+    /// 按网格坐标查土地配置（对齐 TS `getLandConfigByCoordinate`）
+    #[must_use]
+    pub fn get_land_config_by_coordinate(&self, grid_x: i64, grid_y: i64) -> Option<Land> {
+        self.land_map.read().as_ref().and_then(|lands| {
+            lands
+                .iter()
+                .find(|l| l.grid_x == grid_x && l.grid_y == grid_y)
+                .cloned()
+        })
     }
 
     /// 全部土地配置
@@ -371,46 +560,53 @@ impl GameConfig {
         (total_exp - cur, needed)
     }
 
-    /// 种子商店价格
+    /// 种子商店价格（读 ItemInfo `sells`，与果实同一套解析）
     #[must_use]
     pub fn get_seed_price(&self, seed_id: i64) -> i64 {
-        // 简化：植物的 fruit.count * 10（占位）
-        self.get_plant_by_seed_id(seed_id).and_then(|p| p.fruit).map(|f| f.count * 10).unwrap_or(0)
+        if let Some(price) = self.parse_sells_price(seed_id) {
+            return price;
+        }
+        self.get_plant_by_seed_id(seed_id)
+            .and_then(|p| p.fruit)
+            .map(|f| f.count * 10)
+            .unwrap_or(0)
     }
 
-    /// 果实出售价格（从 ItemInfo.json 的 sells 字段读取，简化：count * 8）
+    /// 果实出售价格（从 ItemInfo.json 的 sells 字段读取）
     #[must_use]
     pub fn get_fruit_price(&self, fruit_id: i64) -> i64 {
-        let item = self.get_item_by_id(fruit_id);
-        if let Some(ref i) = item {
-            if let Some(sells) = &i.sells {
-                if let Some(arr) = sells.as_array() {
-                    if let Some(v) = arr.first() {
-                        if let Some(obj) = v.as_object() {
-                            if let Some(c) = obj.get("count").and_then(|v| v.as_i64()) {
-                                return c;
-                            }
-                        }
-                    }
-                }
-            }
+        if let Some(price) = self.parse_sells_price(fruit_id) {
+            return price;
         }
-        // 兜底：默认售价 = 物品等级 * 8
-        item.and_then(|i| i.level).unwrap_or(1) * 8
+        self.get_item_by_id(fruit_id)
+            .and_then(|i| i.level)
+            .unwrap_or(1)
+            * 8
     }
 
-    /// 物品图标 URL（asset_name 字段）
+    fn parse_sells_price(&self, item_id: i64) -> Option<i64> {
+        let item = self.get_item_by_id(item_id)?;
+        let sells = item.sells.as_ref()?;
+        let arr = sells.as_array()?;
+        let obj = arr.first()?.as_object()?;
+        obj.get("count").and_then(|v| v.as_i64())
+    }
+
+    /// 物品图标 URL（对齐 TS `/game-config/seed_images_named/{id}.png`）
     #[must_use]
     pub fn get_item_image_by_id(&self, item_id: i64) -> Option<String> {
-        self.get_item_by_id(item_id).and_then(|i| i.asset_name.clone())
+        let url = mapped_item_image(item_id);
+        if url.is_empty() {
+            None
+        } else {
+            Some(url)
+        }
     }
 
-    /// 种子图标 URL（优先 icon_res 字段，否则走 asset_name）
+    /// 种子图标 URL（与物品同一路径规则）
     #[must_use]
     pub fn get_seed_image_by_seed_id(&self, seed_id: i64) -> Option<String> {
-        self.get_item_by_id(seed_id).and_then(|i| {
-            i.icon_res.clone().or_else(|| i.asset_name.clone())
-        })
+        self.get_item_image_by_id(seed_id)
     }
 
     /// 解析 sells 字符串（如 "1:100;1002:50"）→ [(currency_id, price)]
@@ -433,9 +629,108 @@ impl GameConfig {
             })
             .collect()
     }
+
+    /// 解析 ItemInfo.json 里的 sells / cond_sells（字符串或 null）
+    #[must_use]
+    pub fn parse_sells_value(&self, sells: Option<&serde_json::Value>) -> Vec<(i64, i64)> {
+        let Some(value) = sells else {
+            return vec![];
+        };
+        if let Some(s) = value.as_str() {
+            return self.parse_sells(s);
+        }
+        vec![]
+    }
+
+    /// 对齐 TS `getEffectiveSellInfo`：只认直接可卖价格，不猜动态条件。
+    #[must_use]
+    pub fn get_effective_sell_info(&self, item: &Item) -> EffectiveSellInfo {
+        let normal: Vec<(i64, i64)> = self
+            .parse_sells_value(item.sells.as_ref())
+            .into_iter()
+            .filter(|(cid, price)| *cid > 0 && *price > 0)
+            .collect();
+        let condition = json_trimmed_string(item.sell_cond.as_ref());
+        let conditional: Vec<(i64, i64)> = self
+            .parse_sells_value(item.cond_sells.as_ref())
+            .into_iter()
+            .filter(|(cid, price)| *cid > 0 && *price > 0)
+            .collect();
+        if !normal.is_empty() {
+            return EffectiveSellInfo {
+                sellable: true,
+                status: "available",
+                condition,
+                sells: normal,
+            };
+        }
+        if condition.as_ref().is_some_and(|s| !s.is_empty()) && !conditional.is_empty() {
+            return EffectiveSellInfo {
+                sellable: false,
+                status: "conditional",
+                condition,
+                sells: vec![],
+            };
+        }
+        EffectiveSellInfo {
+            sellable: false,
+            status: "unavailable",
+            condition,
+            sells: vec![],
+        }
+    }
+
+    /// 按物品 id 解析可售信息
+    #[must_use]
+    pub fn get_effective_sell_info_by_id(&self, item_id: i64) -> EffectiveSellInfo {
+        match self.get_item_by_id(item_id) {
+            Some(item) => self.get_effective_sell_info(&item),
+            None => EffectiveSellInfo {
+                sellable: false,
+                status: "unavailable",
+                condition: None,
+                sells: vec![],
+            },
+        }
+    }
+}
+
+/// 对齐 TS `EffectiveSellInfo`
+#[derive(Debug, Clone, Default)]
+pub struct EffectiveSellInfo {
+    pub sellable: bool,
+    pub status: &'static str,
+    pub condition: Option<String>,
+    pub sells: Vec<(i64, i64)>,
+}
+
+fn json_trimmed_string(value: Option<&serde_json::Value>) -> Option<String> {
+    let value = value?;
+    let text = if let Some(s) = value.as_str() {
+        s.trim().to_string()
+    } else if value.is_null() {
+        String::new()
+    } else {
+        value.to_string()
+    };
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
 }
 
 // ===== 全局单例 =====
+
+/// 面板图标 URL，对齐 `gameConfig.ts` 的 `getItemImageById`。
+#[must_use]
+pub fn mapped_item_image(item_id: i64) -> String {
+    if item_id <= 0 {
+        String::new()
+    } else {
+        format!("/game-config/seed_images_named/{item_id}.png")
+    }
+}
 
 static GLOBAL: OnceLock<GameConfig> = OnceLock::new();
 
@@ -556,6 +851,19 @@ mod tests {
         let seeds = gc.get_all_seeds();
         assert!(!seeds.is_empty());
         assert!(seeds.iter().any(|s| s.seed_id == 29999));
+        let one = seeds.iter().find(|s| s.seed_id == 29999).unwrap();
+        assert_eq!(one.image, "/game-config/seed_images_named/29999.png");
+    }
+
+    #[test]
+    fn item_image_url_matches_panel_path() {
+        assert_eq!(mapped_item_image(0), "");
+        assert_eq!(mapped_item_image(1), "/game-config/seed_images_named/1.png");
+        let gc = reload_for_test();
+        assert_eq!(
+            gc.get_item_image_by_id(10000).as_deref(),
+            Some("/game-config/seed_images_named/10000.png")
+        );
     }
 
     #[test]
@@ -580,6 +888,10 @@ mod tests {
         let land = gc.get_land_config_by_id(1).expect("land 1");
         assert_eq!(land.grid_x, 0);
         assert_eq!(land.grid_y, 5);
+        let by_coord = gc
+            .get_land_config_by_coordinate(land.grid_x, land.grid_y)
+            .expect("coord");
+        assert_eq!(by_coord.id, 1);
     }
 
     #[test]
@@ -596,5 +908,19 @@ mod tests {
         let g1 = global();
         let g2 = global();
         assert!(std::ptr::eq(g1, g2));
+    }
+
+    #[test]
+    fn golden_fruit_sellable_from_sells_string() {
+        let gc = reload_for_test();
+        let item = gc
+            .get_all_items()
+            .into_iter()
+            .find(|i| i.item_type == 17 && i.sells.as_ref().and_then(|v| v.as_str()).is_some())
+            .expect("type 17 fruit with sells");
+        let info = gc.get_effective_sell_info(&item);
+        assert!(info.sellable, "{} should be sellable", item.name);
+        assert_eq!(info.status, "available");
+        assert!(!info.sells.is_empty());
     }
 }

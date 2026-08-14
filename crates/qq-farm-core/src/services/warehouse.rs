@@ -89,6 +89,7 @@ pub struct WarehouseService {
     gateway: Arc<Gateway>,
     fertilizer_gift_done_date_key: Mutex<String>,
     fertilizer_gift_last_open_at: Mutex<i64>,
+    account_id: Mutex<String>,
 }
 
 impl WarehouseService {
@@ -98,7 +99,12 @@ impl WarehouseService {
             gateway,
             fertilizer_gift_done_date_key: Mutex::new(String::new()),
             fertilizer_gift_last_open_at: Mutex::new(0),
+            account_id: Mutex::new(String::new()),
         }
+    }
+
+    pub fn set_account_id(&self, account_id: &str) {
+        *self.account_id.lock() = account_id.to_string();
     }
 
     /// 拉取背包
@@ -126,15 +132,7 @@ impl WarehouseService {
     pub async fn sell_items(&self, items: &[(i64, i64, i64)]) -> Result<SellReply> {
         let payload: Vec<CoreItem> = items
             .iter()
-            .map(|(id, count, _uid)| CoreItem {
-                id: *id,
-                count: *count,
-                expire_time: 0,
-                uid: 0,
-                is_new: false,
-                mutant_types: vec![],
-                show: None,
-            })
+            .map(|(id, count, uid)| core_item(*id, *count, *uid))
             .collect();
         let req = SellRequest { items: payload };
         let body = self
@@ -144,19 +142,52 @@ impl WarehouseService {
         Ok(SellReply::decode(&body)?)
     }
 
-    /// 单个使用（带容错：param error 1000020 时降级为 item wrapper 编码）
-    pub async fn use_item(
-        &self,
-        item_id: i64,
-        count: i64,
-        land_ids: Vec<i64>,
-    ) -> Result<UseReply> {
-        let req = UseRequest {
-            item_id,
-            count,
-            land_ids,
+    /// 使用背包物品。对齐原 `warehouse.useItem`：`UseRequest { item: { id, count, uid } }`。
+    pub async fn use_item(&self, item_id: i64, count: i64, uid: i64) -> Result<UseReply> {
+        let count = count.max(1);
+        let bag = self.get_bag().await?;
+        let bag_items = get_bag_items(&bag);
+        let candidates: Vec<BagItemLite> = bag_items
+            .iter()
+            .copied()
+            .filter(|it| it.id == item_id && (uid <= 0 || it.uid == uid))
+            .collect();
+        let available: i64 = candidates.iter().map(|it| it.count.max(0)).sum();
+        if available < count {
+            return Err(crate::error::Error::Business(format!(
+                "物品数量不足: 需要 {count}，当前 {available}"
+            )));
+        }
+        let single = candidates.iter().find(|it| it.count >= count).copied();
+        if single.is_none() && candidates.len() > 1 {
+            let mut remaining = count;
+            let mut batch = Vec::new();
+            for candidate in &candidates {
+                let use_count = remaining.min(candidate.count.max(0));
+                if use_count <= 0 {
+                    continue;
+                }
+                batch.push((item_id, use_count, candidate.uid));
+                remaining -= use_count;
+                if remaining == 0 {
+                    break;
+                }
+            }
+            let reply = self.batch_use_items(&batch).await?;
+            return Ok(UseReply {
+                used_items: reply.used_items,
+                items: reply.items,
+            });
+        }
+        let Some(item) = single else {
+            return Err(crate::error::Error::Business(format!(
+                "背包中未找到物品 {item_id}"
+            )));
         };
-        let body = match self
+        let req = UseRequest {
+            item: Some(core_item(item_id, count, item.uid)),
+        };
+        let body = self
             .gateway
             .request(
                 "gamepb.itempb.ItemService",
@@ -164,17 +195,7 @@ impl WarehouseService {
                 &req.encode_to_vec(),
                 10_000,
             )
-            .await
-        {
-            Ok(b) => b,
-            Err(e) => {
-                let msg = e.to_string();
-                if !(msg.contains("code=1000020") || msg.contains("请求参数错误")) {
-                    return Err(crate::error::Error::Network(e));
-                }
-                return Err(crate::error::Error::Network(e));
-            }
-        };
+            .await?;
         Ok(UseReply::decode(&body)?)
     }
 
@@ -185,15 +206,7 @@ impl WarehouseService {
     ) -> Result<BatchUseReply> {
         let payload: Vec<CoreItem> = items
             .iter()
-            .map(|(id, count, _uid)| CoreItem {
-                id: *id,
-                count: *count,
-                expire_time: 0,
-                uid: 0,
-                is_new: false,
-                mutant_types: vec![],
-                show: None,
-            })
+            .map(|(id, count, uid)| core_item(*id, *count, *uid))
             .collect();
         let req = BatchUseRequest { items: payload };
         let body = self
@@ -263,48 +276,185 @@ impl WarehouseService {
             *self.fertilizer_gift_done_date_key.lock() = get_date_key();
             *self.fertilizer_gift_last_open_at.lock() = crate::utils::time::now_ms();
             tracing::info!("[仓库] 自动使用化肥类道具 x{opened}");
+            crate::services::panel_log::log(
+                &self.account_id.lock(),
+                "仓库",
+                format!("自动使用化肥类道具 x{opened}"),
+                Some(serde_json::json!({ "module": "warehouse", "event": "fertilizer_gift_open", "count": opened })),
+            );
         }
         (opened, normal_h, organic_h)
     }
 
-    /// 自动出售所有果实
+    /// 自动出售所有果实。对齐 TS `sellAllFruits`：
+    /// 果实 + `getEffectiveSellInfo.sellable`，批量失败逐个重试，成功记入今日统计「出售」。
     pub async fn sell_all_fruits(&self) -> i64 {
+        let account_id = self.account_id.lock().clone();
+        if !crate::services::automation::is_automation_on_for(&account_id, "sell") {
+            return 0;
+        }
         let bag = match self.get_bag().await {
             Ok(b) => b,
-            Err(_) => return 0,
+            Err(e) => {
+                crate::services::panel_log::log_warn(
+                    &account_id,
+                    "仓库",
+                    format!("出售失败: {e}"),
+                    Some(serde_json::json!({
+                        "module": "warehouse",
+                        "event": "sell_done",
+                        "result": "error",
+                    })),
+                );
+                return 0;
+            }
         };
         let items = get_bag_items(&bag);
-        let to_sell: Vec<_> = items
-            .iter()
-            .filter_map(|it| {
-                let id = it.id;
-                let count = it.count;
-                if count > 0 && is_fruit_item_id(id) {
-                    Some((id, count, it.uid))
-                } else {
-                    None
-                }
-            })
-            .collect();
+        let gc = crate::config::game_config::global();
+        let mut to_sell: Vec<(i64, i64, i64)> = Vec::new();
+        let mut names: Vec<String> = Vec::new();
+        for it in &items {
+            if it.count <= 0 {
+                continue;
+            }
+            if !is_fruit_item_id(it.id) {
+                continue;
+            }
+            if !gc.get_effective_sell_info_by_id(it.id).sellable {
+                continue;
+            }
+            let fruit_name = gc.get_fruit_name(it.id);
+            let label = if fruit_name.is_empty() {
+                format!("物品{}x{}", it.id, it.count)
+            } else {
+                format!("{fruit_name}x{}", it.count)
+            };
+            names.push(label);
+            to_sell.push((it.id, it.count, it.uid));
+        }
 
         if to_sell.is_empty() {
+            crate::services::panel_log::log(
+                &account_id,
+                "仓库",
+                "无果实可出售",
+                Some(serde_json::json!({
+                    "module": "warehouse",
+                    "event": "sell_done",
+                    "result": "empty",
+                })),
+            );
             return 0;
         }
 
-        let mut total_gold: i64 = 0;
+        let gold_before = crate::services::status::status_data_for(&account_id).gold;
+        let mut known_gold = gold_before;
+        let mut server_gold_total: i64 = 0;
         for chunk in to_sell.chunks(SELL_BATCH_SIZE) {
-            if let Ok(reply) = self.sell_items(chunk).await {
-                // 累加金币（reply 包含 get_items）
-                for item in &reply.get_items {
-                    if (item.id == 1 || item.id == 1001) && item.count > 0 {
-                        total_gold += item.count;
+            match self.sell_items(chunk).await {
+                Ok(reply) => {
+                    let inferred = derive_gold_gain_from_sell_reply(&reply, known_gold);
+                    if inferred.gain > 0 {
+                        server_gold_total += inferred.gain;
+                    }
+                    known_gold = inferred.next_known_gold;
+                }
+                Err(batch_err) => {
+                    crate::services::panel_log::log_warn(
+                        &account_id,
+                        "仓库",
+                        format!("批量出售失败，改为逐个重试: {batch_err}"),
+                        Some(serde_json::json!({ "module": "warehouse", "event": "sell_done" })),
+                    );
+                    for item in chunk {
+                        match self.sell_items(&[*item]).await {
+                            Ok(reply) => {
+                                let inferred =
+                                    derive_gold_gain_from_sell_reply(&reply, known_gold);
+                                if inferred.gain > 0 {
+                                    server_gold_total += inferred.gain;
+                                }
+                                known_gold = inferred.next_known_gold;
+                            }
+                            Err(single_err) => {
+                                crate::services::panel_log::log_warn(
+                                    &account_id,
+                                    "仓库",
+                                    format!(
+                                        "跳过不可售物品: ID={} x{} ({single_err})",
+                                        item.0, item.1
+                                    ),
+                                    Some(serde_json::json!({
+                                        "module": "warehouse",
+                                        "event": "sell_done",
+                                        "result": "skip",
+                                        "itemId": item.0,
+                                        "count": item.1,
+                                    })),
+                                );
+                            }
+                        }
                     }
                 }
             }
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         }
+
+        let mut gold_after = gold_before;
+        let wait_start = crate::utils::time::now_ms();
+        while crate::utils::time::now_ms() - wait_start < 2000 {
+            let current = crate::services::status::status_data_for(&account_id).gold;
+            if current != gold_before {
+                gold_after = current;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+        let notify_delta = if gold_after > gold_before {
+            gold_after - gold_before
+        } else {
+            0
+        };
+        let mut bag_delta: i64 = 0;
+        if notify_delta <= 0 && server_gold_total <= 0 {
+            if let Ok(bag_after) = self.get_bag().await {
+                let bag_gold = get_gold_from_items(&get_bag_items(&bag_after));
+                if bag_gold > gold_before {
+                    bag_delta = bag_gold - gold_before;
+                }
+            }
+        }
+        let total_gold = notify_delta.max(server_gold_total).max(bag_delta);
+        if notify_delta <= 0 && total_gold > 0 {
+            crate::services::status::update_status_gold_for(&account_id, gold_before + total_gold);
+        }
+        let event = if total_gold > 0 {
+            "sell_success"
+        } else {
+            "sell_done"
+        };
+        crate::services::panel_log::log(
+            &account_id,
+            "仓库",
+            format!(
+                "出售 {}{}",
+                names.join(", "),
+                if total_gold > 0 {
+                    format!("，获得 {total_gold} 金币")
+                } else {
+                    String::new()
+                }
+            ),
+            Some(serde_json::json!({
+                "module": "warehouse",
+                "event": event,
+                "result": if total_gold > 0 { "ok" } else { "unknown_gain" },
+                "count": to_sell.len(),
+                "gold": total_gold,
+            })),
+        );
         if total_gold > 0 {
-            tracing::info!("[仓库] 出售 {} 种物品，获得 {} 金币", to_sell.len(), total_gold);
+            crate::services::stats::record_operation_for(&account_id, "sell", 1);
         }
         total_gold
     }
@@ -315,6 +465,7 @@ impl WarehouseService {
         let raw_items = get_bag_items(&bag);
 
         let mut original_items = Vec::new();
+        let mut system_items = Vec::new();
         let mut merged: HashMap<i64, BagItemView> = HashMap::new();
         for it in &raw_items {
             let id = it.id;
@@ -323,7 +474,43 @@ impl WarehouseService {
             if id <= 0 || count <= 0 {
                 continue;
             }
-            original_items.push((id, count, uid));
+            if uid <= 0 {
+                let gc = crate::config::game_config::global();
+                let item_info = gc.get_item_by_id(id);
+                let interaction_type = item_info
+                    .as_ref()
+                    .and_then(|i| i.interaction_type.clone())
+                    .unwrap_or_default();
+                let hours_text = if interaction_type == "fertilizerbucket" {
+                    let h = ((count as f64) / 3600.0 * 10.0).floor() / 10.0;
+                    format!("{h:.1}小时")
+                } else {
+                    String::new()
+                };
+                system_items.push(BagItemView {
+                    id,
+                    count,
+                    name: item_info
+                        .as_ref()
+                        .map(|i| i.name.clone())
+                        .filter(|n| !n.is_empty())
+                        .unwrap_or_else(|| format!("物品{id}")),
+                    image: gc.get_item_image_by_id(id),
+                    category: "system".to_string(),
+                    item_type: item_info.as_ref().map(|i| i.item_type).unwrap_or(0),
+                    sellable: false,
+                    sell_status: "unavailable".to_string(),
+                    sell_condition: None,
+                    price_id: 0,
+                    price: 0,
+                    price_unit: String::new(),
+                    level: item_info.as_ref().and_then(|i| i.level).unwrap_or(0),
+                    interaction_type,
+                    hours_text,
+                });
+                continue;
+            }
+            original_items.push(OriginalBagItem { id, count, uid });
 
             let gc = crate::config::game_config::global();
             let item_info = gc.get_item_by_id(id);
@@ -358,13 +545,11 @@ impl WarehouseService {
                 .as_ref()
                 .and_then(|i| i.interaction_type.clone())
                 .unwrap_or_default();
-            let sells_list = item_info
+            let sell_info = item_info
                 .as_ref()
-                .and_then(|i| i.sells.as_ref())
-                .and_then(|s| s.as_str())
-                .map(|s| gc.parse_sells(s))
+                .map(|i| gc.get_effective_sell_info(i))
                 .unwrap_or_default();
-            let (price_id, price) = if let Some(&(c, p)) = sells_list.first() {
+            let (price_id, price) = if let Some(&(c, p)) = sell_info.sells.first() {
                 (c, p)
             } else {
                 (0, 0)
@@ -382,6 +567,9 @@ impl WarehouseService {
                 image: gc.get_item_image_by_id(id),
                 category: category.clone(),
                 item_type: item_info.as_ref().map(|i| i.item_type).unwrap_or(0),
+                sellable: sell_info.sellable,
+                sell_status: sell_info.status.to_string(),
+                sell_condition: sell_info.condition.clone(),
                 price_id,
                 price,
                 price_unit: price_unit.to_string(),
@@ -419,6 +607,7 @@ impl WarehouseService {
             total_kinds: items.len(),
             items,
             original_items,
+            system_items,
         })
     }
 
@@ -474,13 +663,25 @@ impl WarehouseService {
 // =====================================================================
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BagDetail {
     pub total_kinds: usize,
     pub items: Vec<BagItemView>,
-    pub original_items: Vec<(i64, i64, i64)>, // (id, count, uid)
+    pub original_items: Vec<OriginalBagItem>,
+    #[serde(default)]
+    pub system_items: Vec<BagItemView>,
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OriginalBagItem {
+    pub id: i64,
+    pub count: i64,
+    pub uid: i64,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BagItemView {
     pub id: i64,
     pub count: i64,
@@ -488,6 +689,10 @@ pub struct BagItemView {
     pub image: Option<String>,
     pub category: String,
     pub item_type: i64,
+    pub sellable: bool,
+    pub sell_status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sell_condition: Option<String>,
     pub price_id: i64,
     pub price: i64,
     pub price_unit: String,
@@ -497,6 +702,7 @@ pub struct BagItemView {
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BagSeedInfo {
     pub seed_id: i64,
     pub name: String,
@@ -540,6 +746,18 @@ pub struct BagItemLite {
     pub id: i64,
     pub count: i64,
     pub uid: i64,
+}
+
+fn core_item(id: i64, count: i64, uid: i64) -> CoreItem {
+    CoreItem {
+        id,
+        count,
+        expire_time: 0,
+        uid,
+        is_new: false,
+        mutant_types: vec![],
+        show: None,
+    }
 }
 
 /// 判断是否是果实
@@ -631,6 +849,48 @@ pub fn get_gold_from_items(items: &[BagItemLite]) -> i64 {
         }
     }
     0
+}
+
+fn gold_from_core_items(items: &[CoreItem]) -> i64 {
+    for it in items {
+        if (it.id == 1 || it.id == 1001) && it.count > 0 {
+            return it.count;
+        }
+    }
+    0
+}
+
+struct GoldGain {
+    gain: i64,
+    next_known_gold: i64,
+}
+
+/// 对齐 TS `deriveGoldGainFromSellReply`
+fn derive_gold_gain_from_sell_reply(reply: &SellReply, last_known_gold: i64) -> GoldGain {
+    let from_get = gold_from_core_items(&reply.get_items);
+    if from_get > 0 {
+        return GoldGain {
+            gain: from_get,
+            next_known_gold: last_known_gold,
+        };
+    }
+    let current_or_delta = gold_from_core_items(&reply.sell_items);
+    if current_or_delta <= 0 {
+        return GoldGain {
+            gain: 0,
+            next_known_gold: last_known_gold,
+        };
+    }
+    if last_known_gold > 0 && current_or_delta >= last_known_gold {
+        return GoldGain {
+            gain: current_or_delta - last_known_gold,
+            next_known_gold: current_or_delta,
+        };
+    }
+    GoldGain {
+        gain: current_or_delta,
+        next_known_gold: last_known_gold,
+    }
 }
 
 trait EncodeExt {
@@ -750,6 +1010,34 @@ mod tests {
     #[test]
     fn get_gold_from_items_empty() {
         assert_eq!(get_gold_from_items(&[]), 0);
+    }
+
+    #[test]
+    fn derive_gold_gain_prefers_get_items() {
+        let reply = SellReply {
+            sell_items: vec![],
+            get_items: vec![core_item(1001, 88, 0)],
+        };
+        let inferred = derive_gold_gain_from_sell_reply(&reply, 1000);
+        assert_eq!(inferred.gain, 88);
+        assert_eq!(inferred.next_known_gold, 1000);
+    }
+
+    #[test]
+    fn use_request_encodes_nested_item_not_scalar_ids() {
+        let req = UseRequest {
+            item: Some(core_item(101351, 1, 42)),
+        };
+        let bytes = prost::Message::encode_to_vec(&req);
+        assert!(!bytes.is_empty());
+        // field 1 + wire type 2 (length-delimited) = 0x0A
+        // 旧错误形状 item_id 是 varint，tag 会是 0x08，服务端就会 1000020。
+        assert_eq!(bytes[0], 0x0A, "UseRequest.item must be a nested message");
+        let decoded = UseRequest::decode(&bytes[..]).expect("decode");
+        let item = decoded.item.expect("item");
+        assert_eq!(item.id, 101351);
+        assert_eq!(item.count, 1);
+        assert_eq!(item.uid, 42);
     }
 
     #[test]

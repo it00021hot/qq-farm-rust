@@ -10,6 +10,9 @@ description = "QQ 农场业务核心库（纯逻辑层）"
 [lints]
 workspace = true
 
+[features]
+packaged = []
+
 [dependencies]
 # 异步运行时
 tokio = { workspace = true }
@@ -59,10 +62,13 @@ url = { workspace = true }
 dotenvy = { workspace = true }
 sha2 = { workspace = true }
 hmac = { workspace = true }
+pbkdf2 = { workspace = true }
 aes = { workspace = true }
 aes-gcm = { workspace = true }
 lz4_flex = { workspace = true }
 p256 = { workspace = true }
+qrcode = { version = "0.14.1", features = ["image"] }
+image = { version = "0.25.6", features = ["png"] }
 
 [build-dependencies]
 prost-build = { workspace = true }

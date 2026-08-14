@@ -23,7 +23,7 @@ struct Pending {
     service_name: String,
     method_name: String,
     /// 用于在 channel 完成时通知调用方
-    sender: Option<oneshot::Sender<Response>>,
+    sender: Option<oneshot::Sender<std::result::Result<Response, NetworkError>>>,
 }
 
 /// 响应数据（成功）
@@ -72,7 +72,7 @@ impl RequestManager {
         &self,
         service_name: impl Into<String>,
         method_name: impl Into<String>,
-    ) -> (i64, oneshot::Receiver<Response>) {
+    ) -> (i64, oneshot::Receiver<std::result::Result<Response, NetworkError>>) {
         let seq = self.next_seq();
         let (tx, rx) = oneshot::channel();
         let pending = Pending {
@@ -91,7 +91,7 @@ impl RequestManager {
         let mut pending_map = self.inner.pending.lock();
         if let Some(mut pending) = pending_map.remove(&seq) {
             if let Some(tx) = pending.sender.take() {
-                let _ = tx.send(Response { body, server_seq });
+                let _ = tx.send(Ok(Response { body, server_seq }));
                 return true;
             }
         }
@@ -103,11 +103,7 @@ impl RequestManager {
         let mut pending_map = self.inner.pending.lock();
         if let Some(mut pending) = pending_map.remove(&seq) {
             if let Some(tx) = pending.sender.take() {
-                // 把错误包成 NetworkError::Gateway 之外的某类 — 这里用 oneshot 没法直接发 err
-                // 改：把错误转成空 body + caller 自行判断。但更干净是改成 oneshot::Sender<Result<Response, _>>
-                // —— 后续优化。先 drop 即可（caller 用 select! + timeout 检测完成）
-                let _ = tx; // drop
-                tracing::warn!(?err, "request failed (no detail returned to caller)");
+                let _ = tx.send(Err(err));
                 return true;
             }
         }
@@ -160,7 +156,7 @@ mod tests {
             mgr2.complete(seq, b"resp".to_vec(), 100);
         });
 
-        let resp = rx.await.expect("channel");
+        let resp = rx.await.expect("channel").expect("ok");
         assert_eq!(resp.body, b"resp");
         assert_eq!(resp.server_seq, 100);
         assert_eq!(mgr.pending_count(), 0);

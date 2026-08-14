@@ -21,7 +21,6 @@ use std::time::Duration;
 use prost::Message;
 
 use crate::config::paths::get_share_file_path;
-use crate::config::system_config::get_runtime_config;
 use crate::error::Result;
 use crate::network::gateway::Gateway;
 use crate::proto::generated::gamepb::userpb::{ReportArkClickReply, ReportArkClickRequest};
@@ -124,8 +123,7 @@ impl InviteService {
 
     /// 处理邀请码列表（仅微信环境）
     pub async fn process_invite_codes(&self) -> InviteProcessResult {
-        let cfg = get_runtime_config();
-        if cfg.platform != "wx" {
+        if self.gateway.platform() != "wx" {
             tracing::info!("[邀请] 当前为 QQ 环境，跳过邀请码处理（仅微信支持）");
             return InviteProcessResult::default();
         }

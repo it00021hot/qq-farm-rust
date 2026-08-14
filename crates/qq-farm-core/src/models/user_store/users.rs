@@ -2,7 +2,6 @@
 //!
 //! 1:1 翻译原 `core/src/models/user-store/users.ts`（707 行）。
 
-use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -22,11 +21,13 @@ const CARD_CODE_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
 /// 用户卡密
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UserCard {
     pub code: String,
     pub description: String,
     pub days: i64,
     /// None = 永久
+    #[serde(alias = "expires_at")]
     pub expires_at: Option<i64>,
     pub enabled: bool,
 }
@@ -52,6 +53,7 @@ pub struct User {
 
 /// 卡密
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Card {
     pub code: String,
     pub description: String,
@@ -60,8 +62,11 @@ pub struct Card {
     #[serde(rename = "type")]
     pub card_type: String,
     pub enabled: bool,
+    #[serde(alias = "used_by")]
     pub used_by: Option<String>,
+    #[serde(alias = "used_at")]
     pub used_at: Option<i64>,
+    #[serde(alias = "created_at")]
     pub created_at: i64,
 }
 
@@ -263,11 +268,15 @@ pub fn validate_user(username: &str, password: &str, ip: &str) -> ValidationResu
 
 /// 用户摘要
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UserSummary {
     pub username: String,
     pub role: String,
     pub card: Option<UserCard>,
+    #[serde(alias = "account_limit")]
     pub account_limit: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub must_change_password: Option<bool>,
 }
 
 /// 注册结果
@@ -310,7 +319,7 @@ pub fn create_user_with_role(
 fn create_user_internal(
     username: &str,
     password: &str,
-    role: &str,
+    _role: &str,
     card_code: &str,
 ) -> RegisterResult {
 
@@ -366,6 +375,7 @@ fn create_user_internal(
         role: new_user.role,
         card: new_user.card,
         account_limit: new_user.account_limit,
+        must_change_password: new_user.must_change_password,
     })
 }
 
@@ -470,6 +480,7 @@ pub fn get_all_users() -> Vec<UserSummary> {
             role: u.role.clone(),
             card: u.card.clone(),
             account_limit: if u.account_limit == 0 { DEFAULT_ACCOUNT_LIMIT } else { u.account_limit },
+            must_change_password: u.must_change_password,
         })
         .collect()
 }
@@ -494,13 +505,15 @@ pub fn update_user(username: &str, expires_at: Option<Option<i64>>, enabled: Opt
     }
     let card = user.card.clone();
     let account_limit = user.account_limit;
+    let role = user.role.clone();
     drop(users);
     save_users();
     Some(UserSummary {
         username: username.to_string(),
-        role: "user".to_string(),
+        role,
         card,
         account_limit: if account_limit == 0 { DEFAULT_ACCOUNT_LIMIT } else { account_limit },
+        must_change_password: None,
     })
 }
 
@@ -601,6 +614,7 @@ pub fn edit_user(old_username: &str, updates: EditUpdates) -> EditResult {
         role,
         card,
         account_limit: if account_limit == 0 { DEFAULT_ACCOUNT_LIMIT } else { account_limit },
+        must_change_password: None,
     })
 }
 
@@ -646,6 +660,7 @@ pub fn get_session_user(username: &str) -> Option<UserSummary> {
         role: u.role.clone(),
         card: u.card.clone(),
         account_limit: if u.account_limit == 0 { DEFAULT_ACCOUNT_LIMIT } else { u.account_limit },
+        must_change_password: u.must_change_password,
     })
 }
 

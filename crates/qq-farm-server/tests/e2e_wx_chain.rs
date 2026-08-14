@@ -74,12 +74,22 @@ async fn e2e_create_account_with_code_returns_account_id() {
     let v: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(status, StatusCode::OK, "create_account 应成功: {v}");
     assert_eq!(v["ok"], true);
-    let account = &v["account"];
-    assert!(account["id"].is_string(), "account.id 应存在: {v}");
-    let account_id = account["id"].as_str().unwrap();
+    let account_id = v["data"]["accounts"]
+        .as_array()
+        .and_then(|arr| arr.iter().rev().find(|a| a["name"] == "test-wx-account-1"))
+        .and_then(|a| a["id"].as_str())
+        .expect("account.id 应存在")
+        .to_string();
     assert!(!account_id.is_empty());
+    let account = v["data"]["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == account_id)
+        .unwrap();
     assert_eq!(account["code"], "fake_auth_code_12345_abcdef");
     assert_eq!(account["platform"], "wx");
+    assert_eq!(account["username"], "admin");
 }
 
 #[tokio::test]
@@ -108,7 +118,12 @@ async fn e2e_create_account_persists_to_store() {
         .unwrap();
     let bytes = to_bytes(resp.into_body(), 4096).await.unwrap();
     let v: Value = serde_json::from_slice(&bytes).unwrap();
-    let account_id = v["account"]["id"].as_str().unwrap().to_string();
+    let account_id = v["data"]["accounts"]
+        .as_array()
+        .and_then(|arr| arr.iter().rev().find(|a| a["name"] == "test-persist-1"))
+        .and_then(|a| a["id"].as_str())
+        .unwrap()
+        .to_string();
 
     // 验证 store 中存在
     let accounts = accounts_store::get_accounts();
@@ -151,7 +166,12 @@ async fn e2e_list_accounts_includes_created() {
         .unwrap();
     let bytes = to_bytes(resp.into_body(), 4096).await.unwrap();
     let v: Value = serde_json::from_slice(&bytes).unwrap();
-    let new_id = v["account"]["id"].as_str().unwrap().to_string();
+    let new_id = v["data"]["accounts"]
+        .as_array()
+        .and_then(|arr| arr.iter().rev().find(|a| a["name"] == "test-list-1"))
+        .and_then(|a| a["id"].as_str())
+        .unwrap()
+        .to_string();
 
     // 列出
     let resp = app
@@ -169,7 +189,7 @@ async fn e2e_list_accounts_includes_created() {
     assert_eq!(resp.status(), StatusCode::OK);
     let bytes = to_bytes(resp.into_body(), 65536).await.unwrap();
     let v: Value = serde_json::from_slice(&bytes).unwrap();
-    let accounts = v["accounts"].as_array().expect("accounts 数组");
+    let accounts = v["data"]["accounts"].as_array().expect("accounts 数组");
     assert!(
         accounts.iter().any(|a| a["id"] == new_id),
         "新创建的账号 {new_id} 应在列表中"
@@ -204,7 +224,12 @@ async fn e2e_delete_account_removes() {
         .unwrap();
     let bytes = to_bytes(resp.into_body(), 4096).await.unwrap();
     let v: Value = serde_json::from_slice(&bytes).unwrap();
-    let account_id = v["account"]["id"].as_str().unwrap().to_string();
+    let account_id = v["data"]["accounts"]
+        .as_array()
+        .and_then(|arr| arr.iter().rev().find(|a| a["name"] == "test-delete-1"))
+        .and_then(|a| a["id"].as_str())
+        .unwrap()
+        .to_string();
 
     let resp = app
         .clone()
@@ -268,7 +293,12 @@ async fn e2e_create_account_starts_worker_registered() {
     assert_eq!(resp.status(), StatusCode::OK);
     let bytes = to_bytes(resp.into_body(), 4096).await.unwrap();
     let v: Value = serde_json::from_slice(&bytes).unwrap();
-    let account_id = v["account"]["id"].as_str().unwrap().to_string();
+    let account_id = v["data"]["accounts"]
+        .as_array()
+        .and_then(|arr| arr.iter().rev().find(|a| a["name"] == "test-worker-start-1"))
+        .and_then(|a| a["id"].as_str())
+        .unwrap()
+        .to_string();
 
     // 立刻查 engine 状态：worker 应该被注册（即使 WS 连接在后台失败，
     // engine.start_worker 已成功塞到 workers HashMap）

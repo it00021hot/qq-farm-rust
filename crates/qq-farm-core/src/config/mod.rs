@@ -14,11 +14,12 @@ pub use app::AppConfig;
 pub use game_config::{GameConfig, SeedInfo};
 pub use game_config::global as global_game_config;
 pub use paths::{
-    ensure_data_dir, get_app_root, get_data_dir, get_data_file, get_resource_path,
-    get_resource_root, get_share_file_path, IS_PACKAGED,
+    ensure_data_dir,     get_app_root, get_data_dir, get_data_file, get_resource_path,
+    get_resource_root, get_share_file_path, game_config_static_dir, IS_PACKAGED,
 };
 pub use system_config::{
     device_presets, get_default_system_config, get_device_presets, get_runtime_config,
     global as global_system_config, update_runtime_config, DeviceInfo, DevicePreset, PlantPhase,
-    RuntimeConfig, SystemConfig, DEFAULT_CLIENT_VERSION, PHASE_NAMES,
+    RuntimeConfig, SystemConfig, DEFAULT_CLIENT_VERSION, DEFAULT_GATEWAY_URL, PHASE_NAMES,
+    sanitize_gateway_url,
 };

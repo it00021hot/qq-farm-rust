@@ -2,7 +2,8 @@
 //!
 //! 1:1 对应原 `controllers/admin/auth-routes.ts`（327 行）。
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use std::time::Instant;
 
 use axum::{
     extract::{Path, Query, State},
@@ -15,7 +16,13 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::context::{ok, ok_empty, AdminContext, ApiError, ApiResult};
+use crate::context::{ok, ok_data, ok_empty, AdminContext, ApiError, ApiResult};
+
+static STARTED_AT: OnceLock<Instant> = OnceLock::new();
+
+fn server_uptime_secs() -> f64 {
+    STARTED_AT.get_or_init(Instant::now).elapsed().as_secs_f64()
+}
 
 /// 构造 auth 路由
 pub fn router() -> Router<Arc<AdminContext>> {
@@ -88,10 +95,27 @@ async fn login(
         .unwrap_or("unknown")
         .to_string();
 
-    let validation = qq_farm_core::models::user_store::users::validate_user(
-        &body.username,
-        &body.password,
-        &client_ip,
+    let username = body.username.clone();
+    let password = body.password.clone();
+    let ip = client_ip.clone();
+    let started = Instant::now();
+    let validation = match tokio::task::spawn_blocking(move || {
+        qq_farm_core::models::user_store::users::validate_user(&username, &password, &ip)
+    })
+    .await
+    {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": "登录校验中断" })),
+            )
+                .into_response();
+        }
+    };
+    tracing::info!(
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "登录密码校验完成"
     );
 
     // 失败分支：error 字段 + 写失败日志
@@ -216,6 +240,7 @@ async fn login(
                 "accountLimit": account_limit,
                 "user": user_json,
                 "username": username,
+                "mustChangePassword": user_obj.as_ref().and_then(|u| u.must_change_password).unwrap_or(false),
             }
         })),
     )
@@ -226,13 +251,17 @@ async fn register(
     State(_ctx): State<Arc<AdminContext>>,
     Json(body): Json<RegisterBody>,
 ) -> ApiResult<serde_json::Value> {
-    let result = qq_farm_core::models::user_store::users::register_user(
-        &body.username,
-        &body.password,
-        &body.card_code,
-    );
+    let result = tokio::task::spawn_blocking(move || {
+        qq_farm_core::models::user_store::users::register_user(
+            &body.username,
+            &body.password,
+            &body.card_code,
+        )
+    })
+    .await
+    .map_err(|_| ApiError::Internal("注册中断".to_string()))?;
     match result {
-        Ok(user) => ok(json!({ "ok": true, "user": user })),
+        Ok(user) => ok_data(user),
         Err(e) => Ok(Json(json!({ "ok": false, "error": e }))),
     }
 }
@@ -262,7 +291,12 @@ async fn get_me(
             .as_ref()
             .and_then(|u| serde_json::to_value(u).ok())
             .unwrap_or(json!({ "username": info.username, "role": info.role }));
-        return ok(json!({ "ok": true, "user": user_json }));
+        return ok_data(json!({
+            "username": info.username,
+            "role": info.role,
+            "card": user_json.get("card").cloned().unwrap_or(json!(null)),
+            "accountLimit": user_json.get("accountLimit").cloned().unwrap_or(json!(2)),
+        }));
     }
     Err(ApiError::Unauthorized("missing or invalid token".to_string()))
 }
@@ -334,12 +368,16 @@ async fn change_password(
 }
 
 async fn ping(State(_ctx): State<Arc<AdminContext>>) -> ApiResult<serde_json::Value> {
-    ok(json!({ "ok": true, "pong": true }))
+    ok_data(json!({
+        "ok": true,
+        "uptime": server_uptime_secs(),
+        "version": env!("CARGO_PKG_VERSION"),
+    }))
 }
 
 async fn game_version(State(_ctx): State<Arc<AdminContext>>) -> ApiResult<serde_json::Value> {
-    // 阶段 2A 占位（实际从 game_config 读 latest）
-    ok(json!({ "ok": true, "version": "1.0.0" }))
+    let cv = qq_farm_core::config::get_runtime_config().client_version;
+    Ok(Json(json!({ "ok": true, "clientVersion": cv })))
 }
 
 /// /api/auth/validate：真验证 token 是否存在 + 触碰更新 last_active
@@ -352,13 +390,9 @@ async fn validate(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     match ctx.sessions.get(token) {
-        Some(info) => {
+        Some(_) => {
             ctx.sessions.touch(token);
-            ok(json!({
-                "ok": true,
-                "username": info.username,
-                "role": info.role,
-            }))
+            ok_data(json!({ "valid": true }))
         }
         None => Err(ApiError::Unauthorized("invalid token".to_string())),
     }
@@ -389,7 +423,7 @@ async fn get_login_logs(
     let limit = q.limit.unwrap_or(100);
     let offset = q.offset.unwrap_or(0);
     let (logs, total) = qq_farm_core::models::user_store::auth::get_login_logs(limit, offset);
-    ok(json!({ "ok": true, "logs": logs, "total": total }))
+    ok_data(json!({ "logs": logs, "total": total }))
 }
 
 async fn delete_login_logs(
@@ -406,7 +440,11 @@ async fn card_info(
     let cards = qq_farm_core::models::user_store::users::get_all_cards();
     let card = cards.into_iter().find(|c| c.code == code);
     match card {
-        Some(c) => ok(json!({ "ok": true, "card": c })),
+        Some(c) => ok_data(json!({
+            "type": c.card_type,
+            "days": c.days,
+            "description": c.description,
+        })),
         None => Ok(Json(json!({ "ok": false, "error": "card not found" }))),
     }
 }

@@ -4,13 +4,11 @@
 //!
 //! ## 渠道
 //!
-//! - `webhook` — 通用 webhook POST（实现）
-//! - 其他渠道（serverchan / pushplus / 自定义）— 占位返回 `unsupported_channel` 错误
+//! - `webhook` / `serverchan` / `pushplus` / `bark` / `telegram` / `dingtalk` / `wecom`
 //!
 //! ## 与原 TS 的差异
 //!
-//! - 原 TS 依赖 `pushoo` npm 包（多渠道聚合）
-//!   本实现聚焦 webhook（实际使用最广泛的渠道），其它渠道暂未实现
+//! - 原 TS 依赖 `pushoo` npm 包；这里用 reqwest 直接调各渠道 HTTP API
 //! - 返回结构与原 TS 一致：`{ ok, code, msg, raw }`
 
 use std::time::Duration;
@@ -101,6 +99,91 @@ impl PushService {
 
         match channel {
             "webhook" => self.send_webhook(endpoint, token, title, content).await,
+            "serverchan" => {
+                let url = if endpoint.is_empty() {
+                    format!("https://sctapi.ftqq.com/{token}.send")
+                } else {
+                    endpoint.to_string()
+                };
+                self.send_form_or_json(
+                    &url,
+                    serde_json::json!({ "title": title, "desp": content }),
+                )
+                .await
+            }
+            "pushplus" => {
+                let url = if endpoint.is_empty() {
+                    "https://www.pushplus.plus/send".to_string()
+                } else {
+                    endpoint.to_string()
+                };
+                self.send_form_or_json(
+                    &url,
+                    serde_json::json!({ "token": token, "title": title, "content": content }),
+                )
+                .await
+            }
+            "bark" => {
+                let url = if !endpoint.is_empty() {
+                    format!(
+                        "{}/{}/{}",
+                        endpoint.trim_end_matches('/'),
+                        urlencoding(title),
+                        urlencoding(content)
+                    )
+                } else {
+                    format!(
+                        "https://api.day.app/{}/{}/{}",
+                        token,
+                        urlencoding(title),
+                        urlencoding(content)
+                    )
+                };
+                self.send_get(&url).await
+            }
+            "telegram" => {
+                let url = if endpoint.contains("api.telegram.org") {
+                    endpoint.to_string()
+                } else {
+                    format!("https://api.telegram.org/bot{token}/sendMessage")
+                };
+                let chat_id = if endpoint.is_empty() || endpoint.contains("api.telegram.org") {
+                    payload
+                        .endpoint
+                        .trim()
+                        .split('/')
+                        .next_back()
+                        .unwrap_or("")
+                } else {
+                    endpoint
+                };
+                self.send_form_or_json(
+                    &url,
+                    serde_json::json!({
+                        "chat_id": chat_id,
+                        "text": format!("{title}\n{content}"),
+                    }),
+                )
+                .await
+            }
+            "dingtalk" | "wecom" => {
+                if endpoint.is_empty() {
+                    return PushResult {
+                        ok: false,
+                        code: "missing_endpoint".to_string(),
+                        msg: "该渠道需要 endpoint".to_string(),
+                        raw: serde_json::Value::Null,
+                    };
+                }
+                self.send_form_or_json(
+                    endpoint,
+                    serde_json::json!({
+                        "msgtype": "text",
+                        "text": { "content": format!("{title}\n{content}") },
+                    }),
+                )
+                .await
+            }
             other => PushResult {
                 ok: false,
                 code: "unsupported_channel".to_string(),
@@ -197,6 +280,68 @@ impl PushService {
             },
         }
     }
+
+    async fn send_form_or_json(&self, url: &str, body: serde_json::Value) -> PushResult {
+        match self
+            .client
+            .post(url)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(resp) => self.map_http_response(resp).await,
+            Err(e) => PushResult {
+                ok: false,
+                code: "network_error".to_string(),
+                msg: e.to_string(),
+                raw: serde_json::Value::Null,
+            },
+        }
+    }
+
+    async fn send_get(&self, url: &str) -> PushResult {
+        match self.client.get(url).send().await {
+            Ok(resp) => self.map_http_response(resp).await,
+            Err(e) => PushResult {
+                ok: false,
+                code: "network_error".to_string(),
+                msg: e.to_string(),
+                raw: serde_json::Value::Null,
+            },
+        }
+    }
+
+    async fn map_http_response(&self, resp: reqwest::Response) -> PushResult {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        let raw_json: serde_json::Value =
+            serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!({ "raw": text }));
+        let ok = status.is_success();
+        PushResult {
+            ok,
+            code: if ok { "ok".into() } else { "http_error".into() },
+            msg: if ok {
+                "ok".into()
+            } else {
+                format!("HTTP {}", status.as_u16())
+            },
+            raw: raw_json,
+        }
+    }
+}
+
+fn urlencoding(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.as_bytes() {
+        match *b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*b as char);
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 // =====================================================================
@@ -266,7 +411,7 @@ mod tests {
     async fn unsupported_channel() {
         let svc = PushService::new();
         let p = PushPayload {
-            channel: "serverchan".to_string(),
+            channel: "not-a-real-channel".to_string(),
             title: "t".to_string(),
             content: "c".to_string(),
             ..Default::default()

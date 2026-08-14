@@ -10,7 +10,7 @@
 //! - 卡密领取（card-claim）— 公开 + 管理员
 //! - 用户（users）— 管理员
 //!
-//! 鉴权：阶段 2A-3 占位（adminRequired 暂放过），后续 commit 接 user_store 真实鉴权。
+//! 鉴权：admin 路由走 `admin_required`；公开卡密领取走 `public_router`。
 
 use std::sync::Arc;
 
@@ -22,15 +22,11 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::context::{ok, ok_empty, AdminContext, ApiError, ApiResult};
+use crate::context::{ok, ok_data, ok_empty, AdminContext, ApiError, ApiResult};
 
 /// 构造 admin 路由（带 admin 鉴权）
 pub fn router() -> Router<Arc<AdminContext>> {
     Router::new()
-        // 公告（authRequired 任意用户）
-        .route("/api/announcement", get(get_announcement))
-        .route("/api/announcement/read", post(mark_announcement_read))
-        // 下面所有路由都要求 admin role
         .route("/api/admin/announcement", post(set_announcement))
         // 系统配置
         .route("/api/admin/device-presets", get(get_device_presets))
@@ -57,19 +53,23 @@ pub fn router() -> Router<Arc<AdminContext>> {
         )
 }
 
+/// 公开卡密领取（无需 admin）
+pub fn public_router() -> Router<Arc<AdminContext>> {
+    Router::new()
+        .route("/api/card-claim/status", get(get_card_claim_status))
+        .route("/api/card-claim/claim", post(claim_card))
+}
+
 #[derive(Debug, Deserialize)]
 struct AnnouncementBody {
     #[serde(default)]
     title: String,
     #[serde(default)]
     content: String,
+    #[serde(default, alias = "showOnce")]
+    show_once: Option<bool>,
     #[serde(default)]
     version: Option<i64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ReadAnnouncementBody {
-    username: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -121,12 +121,11 @@ struct ClaimCardBody {
 }
 
 #[derive(Debug, Deserialize)]
-struct CreateUserBody {
-    password: String,
+struct UpdateUserBody {
     #[serde(default)]
-    role: Option<String>,
-    #[serde(default)]
-    card_code: Option<String>,
+    enabled: Option<bool>,
+    #[serde(default, alias = "expiresAt")]
+    expires_at: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -146,49 +145,37 @@ struct AdminRenewBody {
     card_code: String,
 }
 
-async fn get_announcement(
-    State(_ctx): State<Arc<AdminContext>>,
-) -> ApiResult<serde_json::Value> {
-    let ann = qq_farm_core::models::store::global_config::get_announcement();
-    ok(json!({ "ok": true, "announcement": ann }))
-}
-
-async fn mark_announcement_read(
-    State(_ctx): State<Arc<AdminContext>>,
-    Json(body): Json<ReadAnnouncementBody>,
-) -> ApiResult<serde_json::Value> {
-    qq_farm_core::models::store::global_config::mark_announcement_read(&body.username);
-    ok_empty()
-}
-
 async fn set_announcement(
     State(_ctx): State<Arc<AdminContext>>,
     Json(body): Json<AnnouncementBody>,
 ) -> ApiResult<serde_json::Value> {
     let ann = qq_farm_core::models::store::global_config::Announcement {
         content: body.content,
-        show_once: true,
+        show_once: body.show_once.unwrap_or(true),
         updated_at: chrono::Utc::now().timestamp_millis(),
     };
-    qq_farm_core::models::store::global_config::set_announcement(ann);
-    ok_empty()
+    qq_farm_core::models::store::global_config::set_announcement(ann.clone());
+    ok_data(ann)
 }
 
 async fn get_device_presets(
     State(_ctx): State<Arc<AdminContext>>,
 ) -> ApiResult<serde_json::Value> {
     let presets = qq_farm_core::config::system_config::get_device_presets();
-    ok(json!({ "ok": true, "presets": presets }))
+    ok_data(presets)
 }
 
 async fn get_system_config(
     State(_ctx): State<Arc<AdminContext>>,
 ) -> ApiResult<serde_json::Value> {
-    let cfg = qq_farm_core::models::store::global_config::get_system_config();
-    match cfg {
-        Some(c) => ok(json!({ "ok": true, "systemConfig": c })),
-        None => Ok(Json(json!({ "ok": true, "systemConfig": null }))),
-    }
+    let saved = qq_farm_core::models::store::global_config::get_system_config();
+    let default = qq_farm_core::config::get_default_system_config();
+    let current = qq_farm_core::config::get_runtime_config();
+    ok_data(json!({
+        "saved": saved,
+        "default": default,
+        "current": current,
+    }))
 }
 
 async fn set_system_config(
@@ -197,22 +184,27 @@ async fn set_system_config(
 ) -> ApiResult<serde_json::Value> {
     let cfg: qq_farm_core::config::system_config::SystemConfig =
         serde_json::from_value(body.rest).map_err(|e| ApiError::BadRequest(e.to_string()))?;
-    qq_farm_core::models::store::global_config::set_system_config(cfg);
-    ok_empty()
+    qq_farm_core::models::store::global_config::set_system_config(cfg.clone());
+    qq_farm_core::config::update_runtime_config(&cfg);
+    let current = qq_farm_core::config::get_runtime_config();
+    ok_data(json!({ "saved": cfg, "current": current }))
 }
 
 async fn reset_system_config(
     State(_ctx): State<Arc<AdminContext>>,
 ) -> ApiResult<serde_json::Value> {
     qq_farm_core::models::store::global_config::reset_system_config();
-    ok_empty()
+    let saved = qq_farm_core::config::get_default_system_config();
+    qq_farm_core::config::update_runtime_config(&saved);
+    let current = qq_farm_core::config::get_runtime_config();
+    ok_data(json!({ "saved": saved, "current": current }))
 }
 
 async fn list_cards(
     State(_ctx): State<Arc<AdminContext>>,
 ) -> ApiResult<serde_json::Value> {
     let cards = qq_farm_core::models::user_store::users::get_all_cards();
-    ok(json!({ "ok": true, "cards": cards }))
+    ok_data(cards)
 }
 
 async fn create_card(
@@ -225,12 +217,17 @@ async fn create_card(
         let cards = qq_farm_core::models::user_store::users::create_cards_batch(
             &body.description, body.days, count, ctype,
         );
-        ok(json!({ "ok": true, "cards": cards }))
+        Ok(Json(json!({
+            "ok": true,
+            "data": cards,
+            "batch": true,
+            "count": cards.len(),
+        })))
     } else {
         let card = qq_farm_core::models::user_store::users::create_card(
             &body.description, body.days, ctype,
         );
-        ok(json!({ "ok": true, "card": card }))
+        ok_data(card)
     }
 }
 
@@ -240,7 +237,12 @@ async fn batch_delete_cards(
 ) -> ApiResult<serde_json::Value> {
     let codes: Vec<&str> = body.codes.iter().map(String::as_str).collect();
     let n = qq_farm_core::models::user_store::users::delete_cards_batch(&codes);
-    ok(json!({ "ok": true, "deleted": n }))
+    let not_found = body.codes.len().saturating_sub(n);
+    Ok(Json(json!({
+        "ok": true,
+        "deletedCount": n,
+        "notFoundCount": not_found,
+    })))
 }
 
 async fn update_card(
@@ -251,7 +253,10 @@ async fn update_card(
     let card = qq_farm_core::models::user_store::users::update_card(
         &code, body.enabled, body.days, body.description,
     );
-    ok(json!({ "ok": true, "card": card }))
+    match card {
+        Some(c) => ok_data(c),
+        None => Err(ApiError::NotFound("卡密不存在".to_string())),
+    }
 }
 
 async fn delete_card(
@@ -266,7 +271,7 @@ async fn get_card_claim_status(
     State(_ctx): State<Arc<AdminContext>>,
 ) -> ApiResult<serde_json::Value> {
     let status = qq_farm_core::models::user_store::card_claim::get_status();
-    ok(json!({ "ok": true, "status": status }))
+    Ok(Json(json!({ "ok": true, "enabled": status.enabled })))
 }
 
 async fn set_card_claim_status(
@@ -277,7 +282,7 @@ async fn set_card_claim_status(
         body.enabled.unwrap_or(true),
         body.message.clone(),
     );
-    ok_empty()
+    Ok(Json(json!({ "ok": true, "enabled": body.enabled.unwrap_or(true) })))
 }
 
 async fn claim_card(
@@ -298,7 +303,12 @@ async fn claim_card(
         &ua, body.username.as_deref(),
     );
     match r {
-        Ok(c) => ok(json!({ "ok": true, "card": c })),
+        Ok(c) => Ok(Json(json!({
+            "ok": true,
+            "cardCode": c.card_code,
+            "days": c.days,
+            "description": c.description,
+        }))),
         Err(e) => Ok(Json(json!({ "ok": false, "error": e }))),
     }
 }
@@ -314,29 +324,33 @@ async fn list_users(
     State(_ctx): State<Arc<AdminContext>>,
 ) -> ApiResult<serde_json::Value> {
     let users = qq_farm_core::models::user_store::users::get_all_users();
-    ok(json!({ "ok": true, "users": users }))
+    ok_data(users)
 }
 
 async fn list_users_with_password(
     State(_ctx): State<Arc<AdminContext>>,
 ) -> ApiResult<serde_json::Value> {
-    // 当前 API 不暴露密码（安全考虑）；返回同 list_users
     let users = qq_farm_core::models::user_store::users::get_all_users();
-    ok(json!({ "ok": true, "users": users }))
+    ok_data(users)
 }
 
 async fn create_user(
     State(_ctx): State<Arc<AdminContext>>,
     Path(username): Path<String>,
-    Json(body): Json<CreateUserBody>,
+    Json(body): Json<UpdateUserBody>,
 ) -> ApiResult<serde_json::Value> {
-    let role = body.role.unwrap_or_else(|| "user".to_string());
-    let result = qq_farm_core::models::user_store::users::create_user_with_role(
-        &username, &body.password, &role, body.card_code.as_deref().unwrap_or(""),
-    );
-    match result {
-        Ok(u) => ok(json!({ "ok": true, "user": u })),
-        Err(e) => Ok(Json(json!({ "ok": false, "error": e }))),
+    let expires = match &body.expires_at {
+        None => None,
+        Some(serde_json::Value::Null) => Some(None),
+        Some(v) => Some(v.as_i64()),
+    };
+    match qq_farm_core::models::user_store::users::update_user(
+        &username,
+        expires,
+        body.enabled,
+    ) {
+        Some(u) => ok_data(u),
+        None => Err(ApiError::NotFound("用户不存在".to_string())),
     }
 }
 
@@ -357,7 +371,7 @@ async fn edit_user(
     };
     let result = qq_farm_core::models::user_store::users::edit_user(&username, updates);
     match result {
-        Ok(u) => ok(json!({ "ok": true, "user": u })),
+        Ok(u) => ok_data(u),
         Err(e) => Ok(Json(json!({ "ok": false, "error": e }))),
     }
 }

@@ -2,6 +2,7 @@
 //!
 //! 1:1 对应原 `controllers/admin/account-routes.ts`（495 行）。
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use axum::{
@@ -12,7 +13,57 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::context::{ok, ok_empty, AdminContext, ApiError, ApiResult};
+use crate::context::{ok_data, ok_empty, AdminContext, ApiError, ApiResult};
+use crate::routes::{accessible_account_ids, current_session, resolve_account_id};
+
+fn accounts_list_payload(ctx: &AdminContext, username: Option<&str>) -> serde_json::Value {
+    let running: HashSet<String> = ctx
+        .engine
+        .list_workers()
+        .into_iter()
+        .map(|w| w.account_id)
+        .collect();
+    let data = qq_farm_core::models::store::accounts::accounts_data();
+    let accounts: Vec<serde_json::Value> = data
+        .accounts
+        .iter()
+        .filter(|a| username.is_none_or(|u| a.username == u))
+        .map(|a| {
+            let mut v = serde_json::to_value(a).unwrap_or(json!({}));
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("running".to_string(), json!(running.contains(&a.id)));
+                let status = ctx.engine.panel_status(&a.id);
+                if let Some(nick) = status
+                    .pointer("/status/name")
+                    .and_then(|n| n.as_str())
+                    .filter(|s| !s.is_empty())
+                {
+                    obj.insert("nick".to_string(), json!(nick));
+                }
+            }
+            v
+        })
+        .collect();
+    json!({
+        "accounts": accounts,
+        "nextId": data.next_id.max(1),
+    })
+}
+
+fn persist_accounts() {
+    qq_farm_core::models::store::accounts::persist_global();
+}
+
+fn username_from_headers(ctx: &AdminContext, headers: &axum::http::HeaderMap) -> String {
+    let token = headers
+        .get("x-admin-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    ctx.sessions
+        .get_username(token)
+        .filter(|u| !u.is_empty())
+        .unwrap_or_else(|| token.to_string())
+}
 
 /// 构造 account 路由
 pub fn router() -> Router<Arc<AdminContext>> {
@@ -23,10 +74,13 @@ pub fn router() -> Router<Arc<AdminContext>> {
         .route("/api/account-logs", get(get_account_logs))
         .route("/api/logs", get(get_logs).delete(delete_logs))
         .route("/api/settings", get(get_settings).post(save_settings))
+        .route("/api/settings/save", post(save_settings))
         .route("/api/settings/default", get(get_default_settings))
         .route("/api/settings/theme", post(set_theme))
         .route("/api/settings/offline-reminder", post(set_offline_reminder))
         .route("/api/settings/offline-reminder/test", post(test_offline_reminder))
+        .route("/api/announcement", get(get_announcement))
+        .route("/api/announcement/read", post(mark_announcement_read))
 }
 
 #[derive(Debug, Deserialize)]
@@ -37,8 +91,12 @@ struct RemarkBody {
 
 #[derive(Debug, Deserialize)]
 struct CreateAccountBody {
-    name: String,
-    code: String,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    code: Option<String>,
     #[serde(default)]
     platform: Option<String>,
     #[serde(default)]
@@ -55,12 +113,14 @@ struct CreateAccountBody {
 struct AccountLogsQuery {
     #[serde(default)]
     limit: Option<usize>,
-    #[serde(default)]
+    #[serde(default, alias = "accountId")]
     account_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct LogsQuery {
+    #[serde(default, alias = "accountId")]
+    account_id: Option<String>,
     #[serde(default)]
     keyword: Option<String>,
     #[serde(default)]
@@ -69,11 +129,11 @@ struct LogsQuery {
     module: Option<String>,
     #[serde(default)]
     event: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "isWarn")]
     is_warn: Option<bool>,
-    #[serde(default)]
+    #[serde(default, alias = "timeFrom")]
     time_from: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "timeTo")]
     time_to: Option<String>,
     #[serde(default)]
     limit: Option<usize>,
@@ -81,7 +141,7 @@ struct LogsQuery {
 
 #[derive(Debug, Deserialize)]
 struct SettingsBody {
-    #[serde(default)]
+    #[serde(default, alias = "accountId")]
     account_id: Option<String>,
     #[serde(flatten)]
     rest: serde_json::Value,
@@ -104,48 +164,175 @@ struct OfflineReminderBody {
 
 async fn list_accounts(
     State(ctx): State<Arc<AdminContext>>,
+    headers: axum::http::HeaderMap,
 ) -> ApiResult<serde_json::Value> {
-    let accounts = qq_farm_core::models::store::accounts::get_accounts();
-    let _ = ctx;
-    ok(json!({ "ok": true, "accounts": accounts }))
+    let Some(sess) = current_session(&ctx, &headers) else {
+        return ok_data(json!({ "accounts": [], "nextId": 1 }));
+    };
+    let filter = if sess.role == "admin" {
+        None
+    } else {
+        Some(sess.username)
+    };
+    ok_data(accounts_list_payload(&ctx, filter.as_deref()))
 }
 
 async fn create_account(
     State(ctx): State<Arc<AdminContext>>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<CreateAccountBody>,
 ) -> ApiResult<serde_json::Value> {
-    let platform = body.platform.unwrap_or_else(|| "qq".to_string());
-    let acc = qq_farm_core::models::store::accounts::Account {
-        id: String::new(),
-        name: body.name.clone(),
-        code: body.code.clone(),
-        platform,
-        qq: body.qq.unwrap_or_default(),
-        uin: body.uin.unwrap_or_default(),
-        avatar: body.avatar.unwrap_or_default(),
-        username: body.username.unwrap_or_default(),
-        created_at: 0,
-        updated_at: 0,
-    };
-    let saved = qq_farm_core::models::store::accounts::add_or_update_account(acc);
+    let sess = current_session(&ctx, &headers);
+    let owner = body
+        .username
+        .clone()
+        .filter(|u| !u.is_empty())
+        .or_else(|| sess.as_ref().map(|s| s.username.clone()))
+        .unwrap_or_else(|| username_from_headers(&ctx, &headers));
+    let name = body.name.as_deref().unwrap_or("").trim().to_string();
+    let code = body.code.clone().unwrap_or_default();
+    let platform_set = body.platform.is_some();
+    let platform = body.platform.clone().unwrap_or_else(|| "qq".to_string());
+    let mut update_id = body.id.as_deref().unwrap_or("").trim().to_string();
 
-    // 全链路打通：有 code + 平台 = wx 时，自动启动 worker
-    if !body.code.is_empty() {
-        let models_acc = qq_farm_core::models::Account::new(
-            saved.id.clone(),
-            body.code.clone(),
-            body.name.clone(),
-        );
-        if let Err(e) = ctx.engine.start_worker(models_acc) {
-            tracing::warn!(account_id = %saved.id, "自动启动 worker 失败: {e}");
+    let visible: Vec<_> = {
+        let all = qq_farm_core::models::store::accounts::get_accounts();
+        if sess.as_ref().map(|s| s.role.as_str()) == Some("admin") {
+            all
+        } else {
+            all.into_iter().filter(|a| a.username == owner).collect()
+        }
+    };
+    let remark_relogin = update_id.is_empty() && !name.is_empty() && visible.iter().any(|a| a.name.trim() == name);
+    if update_id.is_empty() && remark_relogin {
+        if let Some(matched) = visible.iter().find(|a| a.name.trim() == name) {
+            update_id = matched.id.clone();
         }
     }
 
-    ok(json!({ "ok": true, "account": saved }))
+    if update_id.is_empty() {
+        if let Some(sess) = sess.as_ref() {
+            if sess.role != "admin" {
+                let user = qq_farm_core::models::user_store::users::get_session_user(&sess.username);
+                let limit = user
+                    .map(|u| u.account_limit.max(1))
+                    .unwrap_or(qq_farm_core::models::user_store::users::DEFAULT_ACCOUNT_LIMIT);
+                let count = qq_farm_core::models::store::accounts::get_accounts()
+                    .iter()
+                    .filter(|a| a.username == sess.username)
+                    .count() as i64;
+                if count >= limit {
+                    return Err(ApiError::Forbidden(format!(
+                        "账号数量已达上限（{limit}个），请购买额度卡密增加额度"
+                    )));
+                }
+            }
+        }
+    }
+
+    let is_update = !update_id.is_empty();
+    let qq_set = body.qq.is_some();
+    let uin_set = body.uin.is_some();
+    let avatar_set = body.avatar.is_some();
+    let saved = if is_update {
+        let existing = qq_farm_core::models::store::accounts::get_accounts()
+            .into_iter()
+            .find(|a| a.id == update_id)
+            .ok_or_else(|| ApiError::NotFound(format!("account not found: {update_id}")))?;
+        if let Some(sess) = sess.as_ref() {
+            if sess.role != "admin" && existing.username != sess.username {
+                return Err(ApiError::Forbidden("无权访问此账号".to_string()));
+            }
+        }
+        let updated = qq_farm_core::models::store::accounts::Account {
+            name: if name.is_empty() { existing.name.clone() } else { name.clone() },
+            code: if code.is_empty() { existing.code.clone() } else { code.clone() },
+            platform: if platform_set { platform.clone() } else { existing.platform.clone() },
+            qq: body.qq.clone().unwrap_or(existing.qq),
+            uin: body.uin.clone().unwrap_or(existing.uin),
+            avatar: body.avatar.clone().unwrap_or(existing.avatar),
+            username: if owner.is_empty() { existing.username } else { owner },
+            ..existing
+        };
+        qq_farm_core::models::store::accounts::add_or_update_account(updated)
+    } else {
+        let acc = qq_farm_core::models::store::accounts::Account {
+            id: String::new(),
+            name: name.clone(),
+            code: code.clone(),
+            platform: platform.clone(),
+            qq: body.qq.unwrap_or_default(),
+            uin: body.uin.unwrap_or_default(),
+            avatar: body.avatar.unwrap_or_default(),
+            username: owner,
+            nick: String::new(),
+            created_at: 0,
+            updated_at: 0,
+        };
+        let mut saved = qq_farm_core::models::store::accounts::add_or_update_account(acc);
+        if saved.name.trim().is_empty() {
+            saved.name = format!("账号{}", saved.id);
+            saved = qq_farm_core::models::store::accounts::add_or_update_account(saved);
+        }
+        saved
+    };
+    persist_accounts();
+
+    let list_filter = sess.as_ref().and_then(|s| {
+        if s.role == "admin" {
+            None
+        } else {
+            Some(s.username.clone())
+        }
+    });
+
+    if !is_update {
+        ctx.engine.runtime_state().add_account_log(
+            "add",
+            &format!("添加账号: {}", saved.name),
+            Some(&saved.id),
+            Some(&saved.name),
+            None,
+        );
+        if !saved.code.is_empty() {
+            let models_acc = qq_farm_core::models::Account::from_store(&saved);
+            if let Err(e) = ctx.engine.start_worker(models_acc) {
+                tracing::warn!(account_id = %saved.id, "自动启动 worker 失败: {e}");
+            }
+        }
+    } else {
+        let only_remark = body.code.as_deref().unwrap_or("").is_empty()
+            && !platform_set
+            && !qq_set
+            && !uin_set
+            && !avatar_set;
+        let was_running = ctx.engine.has_worker(&saved.id);
+        let should_restart = remark_relogin || (was_running && !only_remark);
+        if should_restart && !saved.code.is_empty() {
+            let models_acc = qq_farm_core::models::Account::from_store(&saved);
+            if let Err(e) = ctx.engine.restart_worker(models_acc) {
+                tracing::warn!(account_id = %saved.id, "更新后重启 worker 失败: {e}");
+            }
+        }
+        let msg = if remark_relogin {
+            format!("通过备注重新登录账号: {}", saved.name)
+        } else {
+            format!("更新账号: {}", saved.name)
+        };
+        ctx.engine.runtime_state().add_account_log(
+            "update",
+            &msg,
+            Some(&saved.id),
+            Some(&saved.name),
+            None,
+        );
+    }
+
+    ok_data(accounts_list_payload(&ctx, list_filter.as_deref()))
 }
 
 async fn remark_account(
-    State(_ctx): State<Arc<AdminContext>>,
+    State(ctx): State<Arc<AdminContext>>,
     Json(body): Json<RemarkBody>,
 ) -> ApiResult<serde_json::Value> {
     let accounts = qq_farm_core::models::store::accounts::get_accounts();
@@ -157,38 +344,62 @@ async fn remark_account(
         name: body.name,
         ..acc
     };
-    let saved = qq_farm_core::models::store::accounts::add_or_update_account(updated);
-    ok(json!({ "ok": true, "account": saved }))
+    let _saved = qq_farm_core::models::store::accounts::add_or_update_account(updated);
+    persist_accounts();
+    ok_data(accounts_list_payload(&ctx, None))
 }
 
 async fn delete_account(
-    State(_ctx): State<Arc<AdminContext>>,
+    State(ctx): State<Arc<AdminContext>>,
     Path(id): Path<String>,
 ) -> ApiResult<serde_json::Value> {
+    ctx.engine.stop_worker(&id);
     let _ = qq_farm_core::models::store::accounts::delete_account(&id);
-    ok_empty()
+    persist_accounts();
+    ok_data(accounts_list_payload(&ctx, None))
 }
 
 async fn get_account_logs(
     State(ctx): State<Arc<AdminContext>>,
+    headers: axum::http::HeaderMap,
     Query(q): Query<AccountLogsQuery>,
 ) -> ApiResult<serde_json::Value> {
+    let sess = current_session(&ctx, &headers);
+    let is_admin = sess.as_ref().is_some_and(|s| s.role == "admin");
+    let owned: std::collections::HashSet<String> = if is_admin {
+        Default::default()
+    } else {
+        accessible_account_ids(&ctx, &headers).into_iter().collect()
+    };
     let state = ctx.engine.runtime_state();
     let logs = state.account_logs.lock().clone();
-    let filtered: Vec<_> = if let Some(target) = q.account_id.as_deref() {
-        logs.into_iter().filter(|l| l.account_id == target).collect()
-    } else {
-        logs
-    };
+    let filtered: Vec<_> = logs
+        .into_iter()
+        .filter(|l| {
+            if let Some(target) = q.account_id.as_deref() {
+                if l.account_id != target {
+                    return false;
+                }
+            }
+            is_admin || owned.contains(&l.account_id)
+        })
+        .collect();
     let limit = q.limit.unwrap_or(100);
     let limited: Vec<_> = filtered.into_iter().rev().take(limit).collect();
-    ok(json!({ "ok": true, "logs": limited }))
+    Ok(Json(serde_json::to_value(&limited).unwrap_or(json!([]))))
 }
 
 async fn get_logs(
     State(ctx): State<Arc<AdminContext>>,
+    headers: axum::http::HeaderMap,
     Query(q): Query<LogsQuery>,
 ) -> ApiResult<serde_json::Value> {
+    let query_ref = q.account_id.as_deref().unwrap_or("").trim();
+    let id = if query_ref.is_empty() || query_ref == "all" {
+        resolve_account_id(&ctx, &headers, None)
+    } else {
+        resolve_account_id(&ctx, &headers, Some(query_ref))
+    };
     let state = ctx.engine.runtime_state();
     let logs = state.global_logs.lock().clone();
     let filters = qq_farm_core::runtime::runtime_state::LogFilters {
@@ -200,52 +411,142 @@ async fn get_logs(
         time_from: q.time_from,
         time_to: q.time_to,
     };
-    let mut filtered = state.filter_logs(&logs, &filters);
-    if let Some(limit) = q.limit {
-        filtered.truncate(limit);
-    }
-    ok(json!({ "ok": true, "logs": filtered }))
+    let accessible = accessible_account_ids(&ctx, &headers);
+    let scoped: Vec<_> = if id.is_empty() {
+        logs.into_iter()
+            .filter(|l| {
+                l.account_id
+                    .as_deref()
+                    .map(|aid| accessible.iter().any(|x| x == aid))
+                    .unwrap_or(true)
+            })
+            .collect()
+    } else {
+        logs.into_iter()
+            .filter(|l| l.account_id.as_deref() == Some(id.as_str()))
+            .collect()
+    };
+    let mut filtered = state.filter_logs(&scoped, &filters);
+    filtered.sort_by(|a, b| b.ts.cmp(&a.ts));
+    let limit = q.limit.unwrap_or(100).max(1);
+    filtered.truncate(limit);
+    ok_data(filtered)
 }
 
 async fn delete_logs(
     State(ctx): State<Arc<AdminContext>>,
+    headers: axum::http::HeaderMap,
 ) -> ApiResult<serde_json::Value> {
+    let id = resolve_account_id(&ctx, &headers, None);
+    if id.is_empty() {
+        return Err(ApiError::BadRequest("Missing x-account-id".to_string()));
+    }
     let state = ctx.engine.runtime_state();
-    state.global_logs.lock().clear();
-    ok_empty()
+    let mut logs = state.global_logs.lock();
+    let before = logs.len();
+    logs.retain(|l| l.account_id.as_deref() != Some(id.as_str()));
+    let cleared = before.saturating_sub(logs.len());
+    ok_data(json!({ "cleared": cleared, "accountId": id }))
+}
+
+fn settings_panel_payload(account_id: &str, username: &str) -> serde_json::Value {
+    use qq_farm_core::models::store::account_config as cfg;
+    let id = if account_id.is_empty() { None } else { Some(account_id) };
+    let intervals = cfg::get_intervals(id);
+    let strategy = cfg::get_planting_strategy(id);
+    let preferred = cfg::get_preferred_seed(id);
+    let quiet = cfg::get_friend_quiet_hours(id);
+    let automation = cfg::get_automation(id);
+    let snap = cfg::get_config_snapshot(id).config;
+    let ui = qq_farm_core::models::store::global_config::get_ui();
+    let offline = qq_farm_core::models::store::global_config::get_user_offline_reminder(username)
+        .unwrap_or_else(qq_farm_core::models::store::global_config::get_offline_reminder);
+    json!({
+        "intervals": {
+            "farm": intervals.farm,
+            "farmMin": intervals.farm_min,
+            "farmMax": intervals.farm_max,
+            "helpMin": intervals.help_min,
+            "helpMax": intervals.help_max,
+            "stealMin": intervals.steal_min,
+            "stealMax": intervals.steal_max,
+        },
+        "strategy": strategy,
+        "preferredSeed": preferred,
+        "friendQuietHours": quiet,
+        "automation": automation,
+        "stealDelaySeconds": snap.steal_delay_seconds,
+        "plantOrderRandom": snap.plant_order_random,
+        "plantDelaySeconds": snap.plant_delay_seconds,
+        "fertilizerBuyOrganicCount": snap.fertilizer_buy_organic_count,
+        "fertilizerBuyOrganicThresholdHours": snap.fertilizer_buy_organic_threshold_hours,
+        "fertilizerBuyNormalCount": snap.fertilizer_buy_normal_count,
+        "fertilizerBuyNormalThresholdHours": snap.fertilizer_buy_normal_threshold_hours,
+        "fertilizerBuyCheckIntervalMinutes": snap.fertilizer_buy_check_interval_minutes,
+        "bagSeedPriority": cfg::get_bag_seed_priority(id),
+        "bagSeedFallbackStrategy": cfg::get_bag_seed_fallback_strategy(id),
+        "ui": ui,
+        "offlineReminder": offline,
+    })
 }
 
 async fn get_settings(
     State(ctx): State<Arc<AdminContext>>,
+    headers: axum::http::HeaderMap,
     Query(q): Query<AccountQuery>,
 ) -> ApiResult<serde_json::Value> {
-    let id = q.account_id.as_deref().unwrap_or("");
-    let snapshot = qq_farm_core::models::store::account_config::get_config_snapshot(Some(id));
-    let mut value = serde_json::to_value(&snapshot).unwrap_or(serde_json::Value::Null);
-    if let Some(obj) = value.as_object_mut() {
-        obj.insert("__revision".to_string(), serde_json::json!(ctx.engine.runtime_state().config_revision()));
-    }
-    Ok(Json(json!({ "ok": true, "settings": value })))
+    let id = resolve_account_id(&ctx, &headers, q.account_id.as_deref());
+    let username = current_session(&ctx, &headers)
+        .map(|s| s.username)
+        .unwrap_or_default();
+    ok_data(settings_panel_payload(&id, &username))
 }
 
 async fn save_settings(
-    State(_ctx): State<Arc<AdminContext>>,
+    State(ctx): State<Arc<AdminContext>>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<SettingsBody>,
 ) -> ApiResult<serde_json::Value> {
-    let id = body.account_id.as_deref().unwrap_or("");
+    let id = resolve_account_id(&ctx, &headers, body.account_id.as_deref());
+    if id.is_empty() {
+        return Err(ApiError::BadRequest("Missing x-account-id".to_string()));
+    }
     let _updated = qq_farm_core::models::store::account_config::apply_config_snapshot(
         body.rest,
-        Some(id),
+        Some(&id),
         true,
     );
-    ok_empty()
+    let rev = ctx.engine.runtime_state().next_config_revision();
+    let running = ctx.engine.has_worker(&id);
+    if running {
+        ctx.engine.reload_worker_config(&id);
+    }
+    let mut data = settings_panel_payload(&id, "");
+    if let Some(obj) = data.as_object_mut() {
+        obj.insert("saved".to_string(), json!(true));
+        obj.insert("configRevision".to_string(), json!(rev));
+        obj.insert("strategy".to_string(), obj.get("strategy").cloned().unwrap_or(json!(null)));
+        obj.insert("preferredSeed".to_string(), obj.get("preferredSeed").cloned().unwrap_or(json!(0)));
+        obj.insert("status".to_string(), json!(if running { "confirmed" } else { "stopped" }));
+        obj.insert("stopped".to_string(), json!(!running));
+        obj.insert("confirmed".to_string(), json!(running));
+    }
+    Ok(Json(json!({
+        "ok": true,
+        "saved": true,
+        "stopped": !running,
+        "confirmed": running,
+        "unconfirmed": false,
+        "status": if running { "confirmed" } else { "stopped" },
+        "data": data,
+    })))
 }
 
 async fn get_default_settings(
     State(_ctx): State<Arc<AdminContext>>,
 ) -> ApiResult<serde_json::Value> {
     let cfg = qq_farm_core::models::store::account_config::get_default_account_config();
-    ok(json!({ "ok": true, "default": cfg }))
+    ok_data(cfg)
 }
 
 async fn set_theme(
@@ -258,38 +559,93 @@ async fn set_theme(
 }
 
 async fn set_offline_reminder(
-    State(_ctx): State<Arc<AdminContext>>,
+    State(ctx): State<Arc<AdminContext>>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<OfflineReminderBody>,
 ) -> ApiResult<serde_json::Value> {
     let cfg: qq_farm_core::models::store::global_config::OfflineReminder =
         serde_json::from_value(body.cfg).unwrap_or_default();
-    let username = body.account_id.as_deref().unwrap_or("");
+    let username = current_session(&ctx, &headers)
+        .map(|s| s.username)
+        .unwrap_or_default();
     if username.is_empty() {
         qq_farm_core::models::store::global_config::set_offline_reminder(cfg);
     } else {
-        qq_farm_core::models::store::global_config::set_user_offline_reminder(username, cfg);
+        qq_farm_core::models::store::global_config::set_user_offline_reminder(&username, cfg);
     }
     ok_empty()
 }
 
 async fn test_offline_reminder(
-    State(_ctx): State<Arc<AdminContext>>,
+    State(ctx): State<Arc<AdminContext>>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<OfflineReminderBody>,
 ) -> ApiResult<serde_json::Value> {
-    // 占位：直接转发到 reminder service
-    let _svc = _ctx.engine.relogin_reminder();
-    let _payload = qq_farm_core::runtime::relogin_reminder::OfflineReminderPayload {
-        account_id: body.account_id.clone().unwrap_or_default(),
-        account_name: body.account_id.unwrap_or_default(),
-        reason: "test".to_string(),
-        ..Default::default()
+    let username = current_session(&ctx, &headers)
+        .map(|s| s.username)
+        .unwrap_or_default();
+    let cfg = if username.is_empty() {
+        qq_farm_core::models::store::global_config::get_offline_reminder()
+    } else {
+        qq_farm_core::models::store::global_config::get_user_offline_reminder(&username)
+            .unwrap_or_else(qq_farm_core::models::store::global_config::get_offline_reminder)
     };
-    // 真实触发：留 2B 联调（需要运行时触发）
+    let merged: qq_farm_core::models::store::global_config::OfflineReminder =
+        serde_json::from_value(body.cfg).unwrap_or(cfg);
+    let push = qq_farm_core::services::push::PushService::new();
+    let result = push
+        .send(&qq_farm_core::services::push::PushPayload {
+            channel: merged.channel.clone(),
+            endpoint: merged.endpoint.clone(),
+            token: merged.token.clone(),
+            title: if merged.title.is_empty() {
+                "离线提醒测试".to_string()
+            } else {
+                merged.title.clone()
+            },
+            content: if merged.msg.is_empty() {
+                "这是一条离线提醒测试".to_string()
+            } else {
+                merged.msg.clone()
+            },
+        })
+        .await;
+    if result.ok {
+        ok_empty()
+    } else {
+        Ok(Json(json!({ "ok": false, "error": result.msg })))
+    }
+}
+
+async fn get_announcement(
+    State(ctx): State<Arc<AdminContext>>,
+    headers: axum::http::HeaderMap,
+) -> ApiResult<serde_json::Value> {
+    let username = current_session(&ctx, &headers)
+        .map(|s| s.username)
+        .unwrap_or_default();
+    let ann = qq_farm_core::models::store::global_config::get_announcement();
+    let should_show =
+        qq_farm_core::models::store::global_config::should_show_announcement(&username);
+    let mut data = serde_json::to_value(&ann).unwrap_or(json!({}));
+    if let Some(obj) = data.as_object_mut() {
+        obj.insert("shouldShow".to_string(), json!(should_show));
+    }
+    ok_data(data)
+}
+
+async fn mark_announcement_read(
+    State(ctx): State<Arc<AdminContext>>,
+    headers: axum::http::HeaderMap,
+) -> ApiResult<serde_json::Value> {
+    if let Some(sess) = current_session(&ctx, &headers) {
+        qq_farm_core::models::store::global_config::mark_announcement_read(&sess.username);
+    }
     ok_empty()
 }
 
 #[derive(Debug, Deserialize)]
 struct AccountQuery {
-    #[serde(default)]
+    #[serde(default, alias = "accountId")]
     account_id: Option<String>,
 }

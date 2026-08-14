@@ -34,6 +34,9 @@ pub struct Account {
     pub id: String,
     /// 显示名
     pub name: String,
+    /// 游戏内昵称
+    #[serde(default)]
+    pub nick: String,
     /// 登录 code
     pub code: String,
     /// 平台 (qq/wx)
@@ -54,6 +57,7 @@ pub struct Account {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AccountsData {
     pub accounts: Vec<Account>,
+    #[serde(rename = "nextId", alias = "next_id")]
     pub next_id: i64,
 }
 
@@ -173,6 +177,14 @@ pub fn load_into_global() -> std::io::Result<usize> {
     Ok(n)
 }
 
+/// 把当前内存账号列表写回 `accounts.json`。失败只打日志，不回滚内存。
+pub fn persist_global() {
+    let data = accounts_data();
+    if let Err(e) = save_to_file(&data) {
+        tracing::error!(error = %e, "failed to persist accounts.json");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,6 +200,7 @@ mod tests {
             qq: "12345".to_string(),
             avatar: String::new(),
             username: username.to_string(),
+            nick: String::new(),
             created_at: 0,
             updated_at: 0,
         }

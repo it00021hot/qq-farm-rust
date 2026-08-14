@@ -186,7 +186,7 @@ mod tests {
     fn is_valid_version_basic() {
         assert!(is_valid_version("1.0.0"));
         assert!(is_valid_version("1.0.0-beta"));
-        assert!(is_valid_version("1.13.0.5_20260723"));
+        assert!(is_valid_version("1.13.1.6_20260723"));
         assert!(is_valid_version("v1.2.3-rc1_build42"));
     }
 
@@ -270,13 +270,13 @@ mod tests {
     #[test]
     fn ver_only_applies() {
         let h = LoginClientHints {
-            ver: Some("1.13.0.5_20260723".to_string()),
+            ver: Some("1.13.1.6_20260723".to_string()),
             ..Default::default()
         };
         let r = apply_login_client_hints_to_system_config(Some(&h));
         assert!(r.is_some());
         let cfg = r.unwrap();
-        assert_eq!(cfg.device_info.client_version, "1.13.0.5_20260723");
+        assert_eq!(cfg.device_info.client_version, "1.13.1.6_20260723");
     }
 
     #[test]

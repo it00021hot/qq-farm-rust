@@ -32,6 +32,44 @@ pub fn is_automation_on(category: &str) -> bool {
     }
 }
 
+/// 按账号读 `AccountConfig.automation`（对齐 TS worker 进程内 `isAutomationOn`）。
+///
+/// 全局 FLAGS 仍可覆盖（测试 / 面板临时开关）；未覆盖时读该账号配置。
+#[must_use]
+pub fn is_automation_on_for(account_id: &str, category: &str) -> bool {
+    {
+        let guard = flags();
+        if let Some(map) = guard.as_ref() {
+            if let Some(v) = map.get(category) {
+                return *v;
+            }
+        }
+    }
+    if account_id.is_empty() {
+        return is_automation_on(category);
+    }
+    let a = crate::models::store::account_config::get_automation(Some(account_id));
+    match category {
+        "farm" => a.farm,
+        "farm_push" => a.farm_push,
+        "land_upgrade" => a.land_upgrade,
+        "friend" => a.friend,
+        "friend_help" => a.friend_help,
+        "friend_help_exp_limit" => a.friend_help_exp_limit,
+        "friend_steal" => a.friend_steal,
+        "friend_steal_activity_only" => a.friend_steal_activity_only,
+        "friend_bad" => a.friend_bad,
+        "task" => a.task,
+        "fertilizer_gift" => a.fertilizer_gift,
+        "fertilizer_buy_organic" => a.fertilizer_buy_organic,
+        "fertilizer_buy_normal" => a.fertilizer_buy_normal,
+        "sell" => a.sell,
+        "fertilizer_multi_season" => a.fertilizer_multi_season,
+        "skip_own_weed_bug" => a.skip_own_weed_bug,
+        _ => is_automation_on(category),
+    }
+}
+
 /// 设置指定 category 的开关
 pub fn set_automation_flag(category: &str, enabled: bool) {
     let mut guard = flags_mut();

@@ -38,6 +38,7 @@ use super::warehouse::WarehouseService;
 
 /// 物品 DTO
 #[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct ItemDto {
     pub id: i64,
     pub count: i64,
@@ -52,6 +53,7 @@ pub struct ItemDto {
 
 /// 购买限制 DTO
 #[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct PurchaseLimitDto {
     #[serde(rename = "type")]
     pub kind: i64,
@@ -63,6 +65,7 @@ pub struct PurchaseLimitDto {
 
 /// 商城商品 DTO
 #[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct MallGoodsDto {
     pub id: i64,
     pub name: String,
@@ -82,6 +85,7 @@ pub struct MallGoodsDto {
 
 /// 商城目录 DTO
 #[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct MallCatalogDto {
     pub slot_type: i32,
     pub sub_slot_type: i32,
@@ -152,6 +156,7 @@ pub struct FertilizerThresholdResult {
 
 /// 化肥阈值检查双类型结果
 #[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct FertilizerBothResult {
     pub organic_bought: i32,
     pub normal_bought: i32,

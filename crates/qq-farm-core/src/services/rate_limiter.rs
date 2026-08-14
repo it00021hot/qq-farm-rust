@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::Mutex;
 use tokio::time::sleep;
 
 /// 默认配置
@@ -118,7 +118,7 @@ impl TokenBucket {
 // =====================================================================
 
 type TaskFn =
-    Box<dyn FnOnce() -> futures::future::BoxFuture<'static, anyhow::Result<serde_json::Value>> + Send>;
+    Box<dyn FnMut() -> futures::future::BoxFuture<'static, anyhow::Result<serde_json::Value>> + Send>;
 
 /// 任务条目
 pub struct TaskEntry {
@@ -143,7 +143,7 @@ impl std::fmt::Debug for TaskEntry {
 
 impl TaskEntry {
     pub fn new(
-        f: impl FnOnce() -> futures::future::BoxFuture<'static, anyhow::Result<serde_json::Value>> + Send + 'static,
+        f: impl FnMut() -> futures::future::BoxFuture<'static, anyhow::Result<serde_json::Value>> + Send + 'static,
         resolve: tokio::sync::oneshot::Sender<serde_json::Value>,
         label: String,
         priority: i32,
@@ -259,7 +259,7 @@ impl RequestQueue {
     /// 添加任务
     pub async fn add_request<F>(&self, f: F, label: &str, priority: i32) -> serde_json::Value
     where
-        F: FnOnce() -> futures::future::BoxFuture<'static, anyhow::Result<serde_json::Value>> + Send + 'static,
+        F: FnMut() -> futures::future::BoxFuture<'static, anyhow::Result<serde_json::Value>> + Send + 'static,
     {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let task = TaskEntry::new(f, tx, label.to_string(), priority, self.config.max_retries);
@@ -299,9 +299,8 @@ impl RequestQueue {
                 }
             }
 
-            // 3. 取走 fn_run 执行（fn_run 只能调用一次）
-            let fn_run = task.fn_run;
-            let result = fn_run().await;
+            // 3. 执行 fn_run（FnMut，可重试）
+            let result = (task.fn_run)().await;
             {
                 let mut bucket = self.bucket.lock().await;
                 bucket.release(1.0);
@@ -316,19 +315,17 @@ impl RequestQueue {
                     if task.attempts < task.retries {
                         task.attempts += 1;
                         tracing::info!(
-                            "[{}] 请求失败，{}次重试中... error={}",
+                            "[{}] 请求失败，第 {} 次重试中... error={}",
                             task.label,
-                            task.retries - task.attempts + 1,
+                            task.attempts,
                             e
                         );
                         let delay = self.config.retry_delay_ms * task.attempts as u64;
                         sleep(Duration::from_millis(delay)).await;
-                        // fn_run 已消耗，无法重试真正的任务
-                        // 简化：直接返回错误
-                        let _ = task.resolve.send(serde_json::json!({
-                            "error": format!("{e} (retries exhausted)"),
-                            "label": task.label,
-                        }));
+                        // 重试：把 task 重新入队（FnMut 可再次执行真正的任务）
+                        let mut q = self.queue.lock().await;
+                        let priority = task.priority;
+                        q.enqueue(task, priority);
                     } else {
                         let _ = task.resolve.send(serde_json::json!({
                             "error": e.to_string()
@@ -564,26 +561,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn request_queue_error_returns_error_payload() {
-        // fn_run 只能调用一次；当前简化实现里 retry 实际上是直接返回错误 payload
+    async fn request_queue_retries_then_returns_error() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        // FnMut 现在可重试：max_retries=2 时 fn_run 会被调用 3 次（1 次 + 2 次重试）
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_clone = calls.clone();
         let q = RequestQueue::new(RateLimiterConfig {
             max_concurrent: 1,
             min_interval_ms: 10,
             max_retries: 2,
-            retry_delay_ms: 10,
+            retry_delay_ms: 1,
             ..Default::default()
         });
         let v = q
             .add_request(
-                || Box::pin(async { Err::<serde_json::Value, _>(anyhow::anyhow!("boom")) }),
+                move || {
+                    let calls = calls_clone.clone();
+                    Box::pin(async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        Err::<serde_json::Value, _>(anyhow::anyhow!("boom"))
+                    })
+                },
                 "error-test",
                 0,
             )
             .await;
-        // 第一次失败：返回 { error, label }
+        // 重试耗尽后返回 { error }
         let obj = v.as_object().expect("object");
         assert!(obj.get("error").is_some());
-        assert_eq!(obj.get("label").and_then(|v| v.as_str()), Some("error-test"));
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
     }
 
     #[tokio::test]

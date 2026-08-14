@@ -15,14 +15,7 @@ pub async fn sleep_ms(ms: u64) {
 
 /// 范围内随机延迟（毫秒，含两端）
 pub async fn random_delay(min_ms: u64, max_ms: u64) {
-    let min = min_ms;
-    let max = max_ms.max(min);
-    let mut rng = rand::thread_rng();
-    let delay = if max == min {
-        min
-    } else {
-        rng.gen_range(min..=max)
-    };
+    let delay = random_u64(min_ms, max_ms.max(min_ms));
     sleep_ms(delay).await;
 }
 

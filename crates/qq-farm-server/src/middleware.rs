@@ -5,7 +5,7 @@
 //! ## 提供
 //!
 //! - CORS 处理
-//! - 鉴权 (`auth_required`)
+//! - 鉴权（`auth_required_strict_ext` / `admin_required_strict_ext`）
 //! - IP 提取
 
 use std::sync::Arc;
@@ -78,17 +78,6 @@ pub async fn cors_layer(
     resp
 }
 
-/// 鉴权中间件（admin token 验证；占位 — 阶段 2A 先放行）
-pub async fn auth_required(
-    State(_ctx): State<Arc<AdminContext>>,
-    req: Request,
-    next: Next,
-) -> Result<Response, crate::context::ApiError> {
-    // 简化：阶段 2A 占位鉴权；后续 commit 接 user_store::auth
-    let _ = req.headers();
-    Ok(next.run(req).await)
-}
-
 /// 真实鉴权中间件：x-admin-token → SessionStore 查 → 失败 401
 pub async fn auth_required_strict(
     State(ctx): State<Arc<AdminContext>>,
@@ -124,15 +113,6 @@ pub async fn auth_required_strict_ext(
             "invalid or expired token".to_string(),
         )),
     }
-}
-
-/// 给 from_fn_with_state 用的鉴权层（接受 ((), Request, Next)）
-pub async fn auth_required_strict_axum(
-    State(ctx): State<Arc<AdminContext>>,
-    req: Request,
-    next: Next,
-) -> Result<Response, crate::context::ApiError> {
-    auth_required_strict_ext(ctx, req, next).await
 }
 
 /// Admin-only 鉴权（要求 role=admin）
@@ -172,15 +152,6 @@ pub async fn admin_required_strict_ext(
             "invalid or expired token".to_string(),
         )),
     }
-}
-
-/// 给 from_fn_with_state 用的 admin 鉴权层（接受 ((), Request, Next)）
-pub async fn admin_required_strict_axum(
-    State(ctx): State<Arc<AdminContext>>,
-    req: Request,
-    next: Next,
-) -> Result<Response, crate::context::ApiError> {
-    admin_required_strict_ext(ctx, req, next).await
 }
 
 /// 校验账号访问权限（admin 全放行；普通用户只能访问自己的）

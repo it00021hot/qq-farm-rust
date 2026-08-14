@@ -7,6 +7,7 @@
 //!
 //! 注意：真实终端交互测试受环境限制，本文件以单元测试覆盖纯逻辑部分。
 
+use std::collections::HashMap;
 use std::io::{self, Write};
 use std::sync::Arc;
 
@@ -90,8 +91,32 @@ static STATUS_DATA: Mutex<StatusData> = Mutex::new(StatusData {
     gold: 0,
     exp: 0,
 });
+static STATUS_BY_ACCOUNT: Mutex<Option<HashMap<String, StatusData>>> = Mutex::new(None);
 static STATUS_ENABLED: Mutex<bool> = Mutex::new(false);
 static TERM_ROWS: Mutex<usize> = Mutex::new(24);
+
+fn account_map() -> parking_lot::MutexGuard<'static, Option<HashMap<String, StatusData>>> {
+    STATUS_BY_ACCOUNT.lock()
+}
+
+fn map_slot(account_id: &str) -> StatusData {
+    if account_id.is_empty() {
+        return STATUS_DATA.lock().clone();
+    }
+    let mut guard = account_map();
+    let map = guard.get_or_insert_with(HashMap::new);
+    map.get(account_id).cloned().unwrap_or_default()
+}
+
+fn write_slot(account_id: &str, data: StatusData) {
+    if account_id.is_empty() {
+        *STATUS_DATA.lock() = data;
+        return;
+    }
+    let mut guard = account_map();
+    let map = guard.get_or_insert_with(HashMap::new);
+    map.insert(account_id.to_string(), data);
+}
 
 /// 是否启用了状态栏
 #[must_use]
@@ -99,10 +124,16 @@ pub fn is_enabled() -> bool {
     *STATUS_ENABLED.lock()
 }
 
-/// 读取当前状态数据快照
+/// 读取当前状态数据快照（CLI / 单测；多账号请用 [`status_data_for`]）
 #[must_use]
 pub fn status_data() -> StatusData {
     STATUS_DATA.lock().clone()
+}
+
+/// 按账号读取状态（对齐 TS 每 worker 独立 `statusData`）
+#[must_use]
+pub fn status_data_for(account_id: &str) -> StatusData {
+    map_slot(account_id)
 }
 
 /// 检测 stdout 是否为 TTY
@@ -227,6 +258,7 @@ fn build_line1(data: &StatusData) -> String {
 pub fn update_status(data: &StatusData) {
     let mut current = STATUS_DATA.lock();
     let mut changed = false;
+    let mut gold_or_exp_changed = false;
     if current.platform != data.platform {
         current.platform = data.platform.clone();
         changed = true;
@@ -242,10 +274,12 @@ pub fn update_status(data: &StatusData) {
     if current.gold != data.gold {
         current.gold = data.gold;
         changed = true;
+        gold_or_exp_changed = true;
     }
     if current.exp != data.exp {
         current.exp = data.exp;
         changed = true;
+        gold_or_exp_changed = true;
     }
     drop(current);
 
@@ -253,7 +287,7 @@ pub fn update_status(data: &StatusData) {
         if is_enabled() {
             render_status_bar();
         }
-        let gold_or_exp_changed = data.gold != 0 || data.exp != 0;
+        // 钩子在金币/经验实际变化时触发（对齐 TS：字段被提供且变化）
         if gold_or_exp_changed {
             let hook = RECORD_HOOK.lock().clone();
             if let Some(h) = hook {
@@ -266,52 +300,129 @@ pub fn update_status(data: &StatusData) {
 
 /// 设置平台
 pub fn set_status_platform(platform: &str) {
-    let mut s = StatusData::default();
+    let mut s = STATUS_DATA.lock().clone();
     s.platform = platform.to_string();
     update_status(&s);
 }
 
+/// 按账号设置平台（对齐 TS `setStatusPlatform(CONFIG.platform)`）
+pub fn set_status_platform_for(account_id: &str, platform: &str) {
+    let mut s = map_slot(account_id);
+    s.platform = platform.to_string();
+    write_slot(account_id, s.clone());
+    if account_id.is_empty() {
+        update_status(&s);
+    }
+}
+
+fn apply_login_fields(s: &mut StatusData, basic: &serde_json::Value) {
+    let Some(obj) = basic.as_object() else {
+        return;
+    };
+    if let Some(name) = obj.get("name").and_then(|v| v.as_str()) {
+        s.name = name.to_string();
+    }
+    if let Some(level) = obj.get("level").and_then(|v| v.as_i64()) {
+        s.level = level;
+    }
+    if let Some(gold) = obj.get("gold").and_then(|v| v.as_i64()) {
+        s.gold = gold;
+    }
+    if let Some(exp) = obj.get("exp").and_then(|v| v.as_i64()) {
+        s.exp = exp;
+    }
+}
+
 /// 从登录数据更新状态
 pub fn update_status_from_login(basic: &serde_json::Value) {
-    let obj = basic.as_object();
-    let mut s = StatusData::default();
-    if let Some(obj) = obj {
-        if let Some(name) = obj.get("name").and_then(|v| v.as_str()) {
-            s.name = name.to_string();
-        } else {
-            s.name = STATUS_DATA.lock().name.clone();
-        }
-        s.level = obj
-            .get("level")
-            .and_then(|v| v.as_i64())
-            .unwrap_or_else(|| STATUS_DATA.lock().level);
-        s.gold = obj
-            .get("gold")
-            .and_then(|v| v.as_i64())
-            .unwrap_or_else(|| STATUS_DATA.lock().gold);
-        s.exp = obj
-            .get("exp")
-            .and_then(|v| v.as_i64())
-            .unwrap_or_else(|| STATUS_DATA.lock().exp);
-    }
+    let mut s = STATUS_DATA.lock().clone();
+    apply_login_fields(&mut s, basic);
     update_status(&s);
+}
+
+/// 按账号从登录数据更新状态
+pub fn update_status_from_login_for(account_id: &str, basic: &serde_json::Value) {
+    let mut s = map_slot(account_id);
+    apply_login_fields(&mut s, basic);
+    write_slot(account_id, s.clone());
+    if account_id.is_empty() {
+        update_status(&s);
+    }
 }
 
 /// 更新金币
 pub fn update_status_gold(gold: i64) {
-    let mut s = StatusData::default();
+    let mut s = STATUS_DATA.lock().clone();
     s.gold = gold;
     update_status(&s);
 }
 
+/// 按账号更新金币
+pub fn update_status_gold_for(account_id: &str, gold: i64) {
+    let mut s = map_slot(account_id);
+    s.gold = gold;
+    write_slot(account_id, s.clone());
+    if account_id.is_empty() {
+        update_status(&s);
+    }
+}
+
+/// 务农/收获回包里的奖励按增量记入金币/经验（对齐 notify 缺失时的面板效率）。
+///
+/// `FarmingResult.reward` / `HarvestReply.items` 的 count 是本次获得值，不是背包绝对值。
+pub fn apply_reward_deltas_for<'a>(
+    account_id: &str,
+    items: impl IntoIterator<Item = &'a crate::proto::generated::corepb::Item>,
+) {
+    if account_id.is_empty() {
+        return;
+    }
+    let mut gold_delta: i64 = 0;
+    let mut exp_delta: i64 = 0;
+    for item in items {
+        if item.count <= 0 {
+            continue;
+        }
+        match item.id {
+            1101 => exp_delta += item.count,
+            1 | 1001 => gold_delta += item.count,
+            _ => {}
+        }
+    }
+    if gold_delta == 0 && exp_delta == 0 {
+        return;
+    }
+    let mut s = map_slot(account_id);
+    if gold_delta != 0 {
+        s.gold = s.gold.saturating_add(gold_delta);
+    }
+    if exp_delta != 0 {
+        s.exp = s.exp.saturating_add(exp_delta);
+    }
+    write_slot(account_id, s);
+}
+
 /// 更新等级和经验
 pub fn update_status_level(level: i64, exp: Option<i64>) {
-    let mut s = StatusData::default();
+    let mut s = STATUS_DATA.lock().clone();
     s.level = level;
     if let Some(e) = exp {
         s.exp = e;
     }
     update_status(&s);
+}
+
+/// 按账号更新等级和经验
+pub fn update_status_level_for(account_id: &str, level: i64, exp: Option<i64>) {
+    let mut s = map_slot(account_id);
+    s.level = level;
+    if let Some(e) = exp {
+        s.exp = e;
+    }
+    write_slot(account_id, s.clone());
+    if account_id.is_empty() {
+        update_status(&s);
+    }
 }
 
 // =====================================================================
@@ -330,6 +441,7 @@ mod tests {
             gold: 0,
             exp: 0,
         };
+        *STATUS_BY_ACCOUNT.lock() = None;
         *STATUS_ENABLED.lock() = false;
         *RECORD_HOOK.lock() = None;
     }
@@ -384,6 +496,15 @@ mod tests {
         assert_eq!(status_data().platform, "wx");
         set_status_platform("qq");
         assert_eq!(status_data().platform, "qq");
+    }
+
+    #[test]
+    fn set_status_platform_for_isolates_accounts() {
+        reset();
+        set_status_platform_for("acc-wx", "wx");
+        set_status_platform_for("acc-qq", "qq");
+        assert_eq!(status_data_for("acc-wx").platform, "wx");
+        assert_eq!(status_data_for("acc-qq").platform, "qq");
     }
 
     #[test]
@@ -479,5 +600,23 @@ mod tests {
     fn cleanup_when_disabled_noop() {
         reset();
         cleanup_status_bar(); // 不应 panic
+    }
+
+    #[test]
+    fn apply_reward_deltas_adds_farming_exp() {
+        reset();
+        update_status_from_login_for(
+            "acc-reward",
+            &serde_json::json!({ "level": 80, "gold": 1000, "exp": 5000 }),
+        );
+        let items = vec![crate::proto::generated::corepb::Item {
+            id: 1101,
+            count: 12,
+            ..Default::default()
+        }];
+        apply_reward_deltas_for("acc-reward", &items);
+        let s = status_data_for("acc-reward");
+        assert_eq!(s.exp, 5012);
+        assert_eq!(s.gold, 1000);
     }
 }

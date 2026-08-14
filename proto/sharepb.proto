@@ -13,9 +13,9 @@ message CheckCanShareReply {
     bool can_share = 1;
 }
 
-// --- 分享上报（抓包确认：field_1=true，field_4=42） ---
+// --- 分享上报（每日礼包：field_1=1/field_4=42；青梅酿：field_1=11/field_4=215） ---
 message ReportShareRequest {
-    bool field_1 = 1;
+    int32 field_1 = 1;
     int32 field_4 = 4;
 }
 

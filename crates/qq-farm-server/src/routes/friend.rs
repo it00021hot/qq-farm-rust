@@ -12,7 +12,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::context::{ok, AdminContext, ApiError, ApiResult};
+use crate::context::{ok, ok_data, AdminContext, ApiError, ApiResult};
 
 /// 构造 friend 路由
 pub fn router() -> Router<Arc<AdminContext>> {
@@ -23,6 +23,7 @@ pub fn router() -> Router<Arc<AdminContext>> {
         .route("/api/friend/{gid}/lands", get(get_friend_lands))
         .route("/api/friend/{gid}/op", post(do_friend_op))
         .route("/api/friend-blacklist", get(get_friend_blacklist).post(toggle_friend_blacklist))
+        .route("/api/friend-blacklist/toggle", post(toggle_friend_blacklist))
         .route("/api/friend-known-gids", get(get_friend_known_gids).post(post_friend_known_gids))
         .route("/api/friend-known-gids/remove", post(remove_friend_known_gid))
         .route("/api/friend-known-gids/batch-add", post(batch_add_friend_known_gids))
@@ -31,35 +32,45 @@ pub fn router() -> Router<Arc<AdminContext>> {
 
 #[derive(Debug, Deserialize)]
 struct AccountQuery {
-    #[serde(default)]
+    #[serde(default, alias = "accountId")]
     account_id: Option<String>,
+    #[serde(default, alias = "forceSync")]
+    force_sync: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct OpBody {
+    #[serde(default, alias = "opType")]
     op: String,
-    #[serde(default)]
+    #[serde(default, alias = "accountId")]
     account_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ToggleBody {
     gid: i64,
-    #[serde(default)]
+    #[serde(default, alias = "accountId")]
     account_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct KnownGidBody {
-    gid: i64,
     #[serde(default)]
+    gid: Option<i64>,
+    #[serde(default, alias = "knownFriendGids")]
+    known_friend_gids: Option<Vec<i64>>,
+    #[serde(default, alias = "knownFriendGidSyncCooldownSec")]
+    known_friend_gid_sync_cooldown_sec: Option<i64>,
+    #[serde(default, alias = "friendsListCacheTtlSec")]
+    friends_list_cache_ttl_sec: Option<i64>,
+    #[serde(default, alias = "accountId")]
     account_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct BatchKnownGidsBody {
     gids: Vec<i64>,
-    #[serde(default)]
+    #[serde(default, alias = "accountId")]
     account_id: Option<String>,
 }
 
@@ -77,7 +88,7 @@ fn get_loop(
 ) -> Result<Arc<qq_farm_core::runtime::worker_loop::WorkerLoop>, ApiError> {
     ctx.engine
         .worker_loop(account_id)
-        .ok_or_else(|| ApiError::NotFound(format!("worker not running: {account_id}")))
+        .ok_or(ApiError::AccountNotRunning)
 }
 
 async fn get_friends(
@@ -87,11 +98,14 @@ async fn get_friends(
 ) -> ApiResult<serde_json::Value> {
     let id = resolve_account_id(&ctx, &headers, q.account_id.as_deref())?;
     let loop_ = get_loop(&ctx, &id)?;
-    let force = q.account_id.as_deref().map(|s| s == "__force__").unwrap_or(false);
-    let _ = force;
-    let friends = loop_.friend().get_friends_list(true).await;
+    let force = q
+        .force_sync
+        .as_deref()
+        .map(|s| s == "true" || s == "1")
+        .unwrap_or(false);
+    let friends = loop_.friend().get_friends_list(force).await;
     match friends {
-        Ok(f) => ok(json!({ "ok": true, "friends": f })),
+        Ok(f) => ok_data(f),
         Err(e) => Ok(Json(json!({ "ok": false, "error": e.to_string() }))),
     }
 }
@@ -118,7 +132,7 @@ async fn get_interact_records(
         .get_interact_records()
         .await;
     match records {
-        Ok(r) => ok(json!({ "ok": true, "records": r })),
+        Ok(r) => ok_data(r),
         Err(e) => Ok(Json(json!({ "ok": false, "error": e.to_string() }))),
     }
 }
@@ -133,7 +147,7 @@ async fn get_friend_lands(
     let loop_ = get_loop(&ctx, &id)?;
     let lands = loop_.friend().get_friend_lands_detail(gid).await;
     match lands {
-        Ok(l) => ok(json!({ "ok": true, "lands": l })),
+        Ok(l) => ok_data(l),
         Err(e) => Ok(Json(json!({ "ok": false, "error": e.to_string() }))),
     }
 }
@@ -150,7 +164,13 @@ async fn do_friend_op(
         .ok_or_else(|| ApiError::BadRequest(format!("unknown op: {}", body.op)))?;
     let r = loop_.friend().do_friend_operation(op, gid).await;
     match r {
-        Ok(ret) => ok(json!({ "ok": true, "result": ret })),
+        Ok(ret) => {
+            let stolen = ret.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+            if matches!(op, qq_farm_core::models::types::FriendOperation::Steal) && stolen > 0 {
+                let _ = loop_.warehouse().sell_all_fruits().await;
+            }
+            ok_data(ret)
+        }
         Err(e) => Ok(Json(json!({ "ok": false, "error": e.to_string() }))),
     }
 }
@@ -166,7 +186,7 @@ async fn get_friend_blacklist(
 ) -> ApiResult<serde_json::Value> {
     let id = resolve_account_id(&ctx, &headers, q.account_id.as_deref())?;
     let list = qq_farm_core::models::store::account_config::get_friend_blacklist(Some(&id));
-    ok(json!({ "ok": true, "blacklist": list }))
+    ok_data(list)
 }
 
 async fn toggle_friend_blacklist(
@@ -179,7 +199,15 @@ async fn toggle_friend_blacklist(
         &id,
         body.gid,
     );
-    ok(json!({ "ok": true, "blacklist": list }))
+    ok_data(list)
+}
+
+fn known_gid_settings(account_id: &str) -> serde_json::Value {
+    json!({
+        "knownFriendGids": qq_farm_core::models::store::account_config::get_known_friend_gids(Some(account_id)),
+        "knownFriendGidSyncCooldownSec": qq_farm_core::models::store::account_config::get_known_friend_gid_sync_cooldown_sec(Some(account_id)),
+        "friendsListCacheTtlSec": qq_farm_core::models::store::account_config::get_friends_list_cache_ttl_sec(Some(account_id)),
+    })
 }
 
 async fn get_friend_known_gids(
@@ -188,8 +216,7 @@ async fn get_friend_known_gids(
     Query(q): Query<AccountQuery>,
 ) -> ApiResult<serde_json::Value> {
     let id = resolve_account_id(&ctx, &headers, q.account_id.as_deref())?;
-    let list = qq_farm_core::models::store::account_config::get_known_friend_gids(Some(&id));
-    ok(json!({ "ok": true, "knownGids": list }))
+    ok_data(known_gid_settings(&id))
 }
 
 async fn post_friend_known_gids(
@@ -198,8 +225,18 @@ async fn post_friend_known_gids(
     Json(body): Json<KnownGidBody>,
 ) -> ApiResult<serde_json::Value> {
     let id = resolve_account_id(&ctx, &headers, body.account_id.as_deref())?;
-    let list = qq_farm_core::models::store::account_config::add_known_friend_gid(&id, body.gid);
-    ok(json!({ "ok": true, "knownGids": list }))
+    if let Some(gids) = body.known_friend_gids {
+        qq_farm_core::models::store::account_config::set_known_friend_gids(&id, gids);
+    } else if let Some(gid) = body.gid {
+        qq_farm_core::models::store::account_config::add_known_friend_gid(&id, gid);
+    }
+    if let Some(sec) = body.known_friend_gid_sync_cooldown_sec {
+        qq_farm_core::models::store::account_config::set_known_friend_gid_sync_cooldown_sec(&id, sec);
+    }
+    if let Some(sec) = body.friends_list_cache_ttl_sec {
+        qq_farm_core::models::store::account_config::set_friends_list_cache_ttl_sec(&id, sec);
+    }
+    ok_data(known_gid_settings(&id))
 }
 
 async fn remove_friend_known_gid(
@@ -208,8 +245,9 @@ async fn remove_friend_known_gid(
     Json(body): Json<KnownGidBody>,
 ) -> ApiResult<serde_json::Value> {
     let id = resolve_account_id(&ctx, &headers, body.account_id.as_deref())?;
-    let list = qq_farm_core::models::store::account_config::remove_known_friend_gid(&id, body.gid);
-    ok(json!({ "ok": true, "knownGids": list }))
+    let gid = body.gid.unwrap_or(0);
+    let _ = qq_farm_core::models::store::account_config::remove_known_friend_gid(&id, gid);
+    ok_data(known_gid_settings(&id))
 }
 
 async fn batch_add_friend_known_gids(
@@ -218,8 +256,8 @@ async fn batch_add_friend_known_gids(
     Json(body): Json<BatchKnownGidsBody>,
 ) -> ApiResult<serde_json::Value> {
     let id = resolve_account_id(&ctx, &headers, body.account_id.as_deref())?;
-    let list = qq_farm_core::models::store::account_config::add_known_friend_gids(&id, &body.gids);
-    ok(json!({ "ok": true, "knownGids": list }))
+    let _list = qq_farm_core::models::store::account_config::add_known_friend_gids(&id, &body.gids);
+    ok_data(known_gid_settings(&id))
 }
 
 async fn batch_remove_friend_known_gids(
@@ -228,6 +266,6 @@ async fn batch_remove_friend_known_gids(
     Json(body): Json<BatchKnownGidsBody>,
 ) -> ApiResult<serde_json::Value> {
     let id = resolve_account_id(&ctx, &headers, body.account_id.as_deref())?;
-    let list = qq_farm_core::models::store::account_config::remove_known_friend_gids(&id, &body.gids);
-    ok(json!({ "ok": true, "knownGids": list }))
+    let _list = qq_farm_core::models::store::account_config::remove_known_friend_gids(&id, &body.gids);
+    ok_data(known_gid_settings(&id))
 }

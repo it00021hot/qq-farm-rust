@@ -4,13 +4,13 @@
 //!
 //! ## 密码哈希
 //!
-//! - 新格式：`salt:hash`（PBKDF2-SHA512, 100000 iter, 64-byte key, 32-byte salt）
-//! - 老格式：纯 SHA256（用于向后兼容，`needs_rehash` 触发自动升级）
+//! - 标准格式：`$pbkdf2$<salt>$<iterations>$<hash>`（PBKDF2-SHA512，1:1 对齐原 TS `security.ts`）
+//! - 兼容格式：`salt:hash`（早期 Rust 移植格式）+ 纯 SHA256（老格式）
 //!
 //! ## 登录限流
 //!
 //! - 单 IP 60s 内最多 10 次
-//! - 单账号 5 次失败后锁定 15 分钟
+//! - 单账号 5 次失败后锁定 5 分钟（对齐 TS `lockoutDuration: 300000`）
 
 use std::collections::HashMap;
 use std::fs;
@@ -18,17 +18,16 @@ use std::path::PathBuf;
 
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha512};
 
 use crate::config::paths::get_data_file;
 
 const SALT_LENGTH: usize = 32;
 const ITERATIONS: u32 = 100_000;
 const KEY_LENGTH: usize = 64;
-const DIGEST: &str = "sha512";
 
 const MAX_LOGIN_ATTEMPTS: u32 = 5;
-const LOCKOUT_DURATION_MS: i64 = 15 * 60 * 1000;
+const LOCKOUT_DURATION_MS: i64 = 5 * 60 * 1000;
 const RATE_LIMIT_WINDOW_MS: i64 = 60 * 1000;
 const MAX_ATTEMPTS_PER_IP: u32 = 10;
 
@@ -444,7 +443,7 @@ pub fn validate_password_strength(password: &str) -> PasswordStrengthResult {
     }
 }
 
-/// 生成密码 hash（PBKDF2-SHA512）
+/// 生成密码 hash（PBKDF2-SHA512，`$pbkdf2$<salt>$<iterations>$<hash>`，对齐原 TS）
 #[must_use]
 pub fn hash_password(password: &str, salt: Option<&str>) -> String {
     let salt_owned;
@@ -459,35 +458,61 @@ pub fn hash_password(password: &str, salt: Option<&str>) -> String {
 
     let mut hasher = Pbkdf2Hasher::new(salt);
     let hash = hasher.hash(password);
-    format!("{salt}:{hash}")
+    format!("$pbkdf2${salt}${ITERATIONS}${hash}")
 }
 
 /// 验证密码
 #[must_use]
 pub fn verify_password(password: &str, stored: &str) -> bool {
+    if stored.starts_with("$pbkdf2$") {
+        // 标准格式：$pbkdf2$<salt>$<iterations>$<hash>
+        let parts: Vec<&str> = stored.split('$').collect();
+        if parts.len() != 5 {
+            return false;
+        }
+        let salt = parts[2];
+        let iterations: u32 = parts[3].parse().unwrap_or(0);
+        let expected = parts[4];
+        let mut hasher = Pbkdf2Hasher::new(salt);
+        let actual = hasher.hash_with_iterations(password, iterations);
+        return constant_time_eq(expected.as_bytes(), actual.as_bytes());
+    }
     if stored.contains(':') {
-        // 新格式：salt:hash
+        // 兼容早期 Rust 格式：salt:hash
         let mut parts = stored.splitn(2, ':');
         let salt = parts.next().unwrap_or("");
         let expected = parts.next().unwrap_or("");
         let mut hasher = Pbkdf2Hasher::new(salt);
         let actual = hasher.hash(password);
-        expected == actual
-    } else {
-        // 老格式：纯 SHA256
+        return constant_time_eq(expected.as_bytes(), actual.as_bytes());
+    }
+    // 老格式：纯 SHA256
+    if stored.len() == 64 {
         let legacy = {
             let mut h = Sha256::new();
             h.update(password.as_bytes());
             hex_encode(&h.finalize())
         };
-        stored == legacy
+        return constant_time_eq(stored.as_bytes(), legacy.as_bytes());
     }
+    false
 }
 
-/// 是否需要 rehash（升级到老 hash）
+/// 是否需要 rehash（非标准 `$pbkdf2$` 格式）
 #[must_use]
 pub fn needs_rehash(stored: &str) -> bool {
-    !stored.contains(':')
+    !stored.starts_with("$pbkdf2$")
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -507,29 +532,16 @@ impl<'a> Pbkdf2Hasher<'a> {
     fn hash(&mut self, password: &str) -> String {
         pbkdf2_sha512(password.as_bytes(), self.salt.as_bytes(), ITERATIONS, KEY_LENGTH)
     }
+
+    fn hash_with_iterations(&mut self, password: &str, iterations: u32) -> String {
+        pbkdf2_sha512(password.as_bytes(), self.salt.as_bytes(), iterations, KEY_LENGTH)
+    }
 }
 
 fn pbkdf2_sha512(password: &[u8], salt: &[u8], iterations: u32, key_len: usize) -> String {
-    use hmac::{Hmac, Mac};
-    use sha2::Sha512;
-    type HmacSha512 = Hmac<Sha512>;
-
-    let mut mac = <HmacSha512 as Mac>::new_from_slice(password).expect("hmac key");
-    mac.update(salt);
-    mac.update(&(0u32 + 1).to_be_bytes());
-    let mut u = mac.finalize().into_bytes();
-    let mut result = u.to_vec();
-
-    for _ in 1..iterations {
-        let mut mac = <HmacSha512 as Mac>::new_from_slice(password).expect("hmac key");
-        mac.update(&u);
-        u = mac.finalize().into_bytes();
-        for (i, b) in u.iter().enumerate() {
-            result[i] ^= b;
-        }
-    }
-
-    hex_encode(&result[..key_len.min(result.len())])
+    let mut okm = [0u8; 64];
+    pbkdf2::pbkdf2_hmac::<Sha512>(password, salt, iterations, &mut okm);
+    hex_encode(&okm[..key_len.min(okm.len())])
 }
 
 // =====================================================================
@@ -569,7 +581,7 @@ mod tests {
     #[test]
     fn hash_and_verify_password() {
         let h = hash_password("hello123", None);
-        assert!(h.contains(':'));
+        assert!(h.starts_with("$pbkdf2$"));
         assert!(verify_password("hello123", &h));
         assert!(!verify_password("wrong", &h));
     }
@@ -580,6 +592,16 @@ mod tests {
         let h2 = hash_password("test", Some("salt123"));
         assert_eq!(h1, h2);
         assert!(verify_password("test", &h1));
+    }
+
+    #[test]
+    fn verify_legacy_salt_colon_format() {
+        // 兼容早期 Rust 格式：salt:hash
+        let mut hasher = Pbkdf2Hasher::new("salt123");
+        let hash = hasher.hash("admin");
+        let stored = format!("salt123:{hash}");
+        assert!(verify_password("admin", &stored));
+        assert!(!verify_password("wrong", &stored));
     }
 
     #[test]

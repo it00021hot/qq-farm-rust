@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::game_config::{global as global_game_config, GameConfig};
+use crate::config::game_config::global as global_game_config;
 
 /// 解析 grow_phases 字符串求和（如 "种子:30;发芽:30;成熟:0;" → 60）
 #[must_use]
@@ -102,6 +102,7 @@ impl SortBy {
 
 /// 植物排行结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PlantRanking {
     pub id: i64,
     pub seed_id: i64,

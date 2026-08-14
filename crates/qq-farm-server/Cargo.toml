@@ -49,3 +49,4 @@ parking_lot = { workspace = true }
 futures = { workspace = true }
 uuid = { workspace = true }
 serial_test = "3"
+socketioxide = { workspace = true }

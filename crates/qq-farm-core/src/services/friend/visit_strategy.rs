@@ -17,7 +17,6 @@
 //! - gift/wish 流程
 
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex as PMutex;
@@ -343,13 +342,31 @@ pub fn set_friend_quiet_hours(cfg: Option<FriendQuietHours>) {
     *FRIEND_QUIET_HOURS.lock() = cfg;
 }
 
-/// 当前是否在好友安静时段
+/// 当前是否在好友安静时段（测试 / 未指定账号时读全局注入）
 #[must_use]
 pub fn in_friend_quiet_hours(now_hhmm: Option<(u32, u32)>) -> bool {
-    let cfg = FRIEND_QUIET_HOURS.lock().clone();
-    let cfg = match cfg {
-        Some(c) if c.enabled => c,
-        _ => return false,
+    in_friend_quiet_hours_for(None, now_hhmm)
+}
+
+/// 按账号配置判断安静时段（对齐 TS `getFriendQuietHours(accountId)`）
+#[must_use]
+pub fn in_friend_quiet_hours_for(account_id: Option<&str>, now_hhmm: Option<(u32, u32)>) -> bool {
+    let cfg = if let Some(id) = account_id {
+        let snap = crate::models::store::account_config::get_friend_quiet_hours(Some(id));
+        if !snap.enabled {
+            return false;
+        }
+        FriendQuietHours {
+            enabled: true,
+            start: snap.start,
+            end: snap.end,
+        }
+    } else {
+        let cfg = FRIEND_QUIET_HOURS.lock().clone();
+        match cfg {
+            Some(c) if c.enabled => c,
+            _ => return false,
+        }
     };
     let (h, m) = now_hhmm.unwrap_or_else(|| {
         let t = chrono::Local::now();
@@ -471,6 +488,7 @@ pub enum FriendEnterErrorKind {
 
 /// 偷菜可偷信息
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StealableInfo {
     pub land_id: i64,
     pub plant_id: i64,
@@ -479,6 +497,7 @@ pub struct StealableInfo {
 
 /// 好友土地分析结果
 #[derive(Debug, Clone, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AnalyzeResult {
     pub stealable: Vec<i64>,
     pub stealable_info: Vec<StealableInfo>,
@@ -583,24 +602,34 @@ pub enum PlantPhase {
 }
 
 impl PlantPhase {
+    /// 对齐 TS / `land_analysis` 的 proto 阶段：1 SEED、2 GERMINATION、
+    /// 3–5 生长、6 MATURE、7 DEAD。
     #[must_use]
     pub fn from_i32(v: i32) -> Self {
         match v {
-            0 => Self::Seed,
-            1 => Self::Sprout,
-            2 => Self::Growing,
-            3 => Self::Ripe,
-            4 => Self::Dead,
+            2 => Self::Sprout,
+            3 | 4 | 5 => Self::Growing,
+            6 => Self::Ripe,
+            7 => Self::Dead,
             _ => Self::Seed,
         }
     }
 }
 
-/// 获取土地当前阶段（最后一个 phase 字段）
+/// 获取土地当前阶段（按 begin_time 取当前阶段，对齐 TS `getCurrentPhase`）
 #[must_use]
 pub fn get_current_phase(land: &LandInfo) -> Option<PlantPhase> {
     let plant = land.plant.as_ref()?;
-    plant.phases.last().map(|p| PlantPhase::from_i32(p.phase))
+    if plant.phases.is_empty() {
+        return None;
+    }
+    crate::services::farm::land_analysis::PlantPhase::from_phases(&plant.phases).map(|p| match p {
+        crate::services::farm::land_analysis::PlantPhase::Seed => PlantPhase::Seed,
+        crate::services::farm::land_analysis::PlantPhase::Sprout => PlantPhase::Sprout,
+        crate::services::farm::land_analysis::PlantPhase::Growing => PlantPhase::Growing,
+        crate::services::farm::land_analysis::PlantPhase::Ripe => PlantPhase::Ripe,
+        crate::services::farm::land_analysis::PlantPhase::Dead => PlantPhase::Dead,
+    })
 }
 
 /// 是否"被占领的从地块"（共享主地块的从地）
@@ -641,7 +670,12 @@ pub fn analyze_friend_lands(
         if phase == PlantPhase::Ripe {
             if plant.stealable {
                 let plant_id = plant.id;
-                if !plant_blacklist.is_empty() && plant_blacklist.contains(&plant_id) {
+                // 蔬菜黑名单按 seed_id 过滤（1:1 对齐 TS `visit-strategy.ts`）
+                let seed_id = crate::config::game_config::global()
+                    .get_plant_by_id(plant_id)
+                    .and_then(|p| p.seed_id)
+                    .unwrap_or(0);
+                if !plant_blacklist.is_empty() && seed_id > 0 && plant_blacklist.contains(&seed_id) {
                     continue;
                 }
                 if steal_activity_only && !is_activity_plant(land) {
@@ -717,6 +751,7 @@ impl FriendsListCache {
 
 /// 好友摘要
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FriendSummary {
     pub gid: i64,
     pub name: String,
@@ -727,11 +762,38 @@ pub struct FriendSummary {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FriendPlantSummary {
     pub steal_num: i64,
     pub dry_num: i64,
     pub weed_num: i64,
     pub insect_num: i64,
+}
+
+/// 把 proto `GameFriend` 映射成面板 DTO（对齐 visit-strategy.ts）
+#[must_use]
+pub fn game_friend_to_summary(f: crate::proto::generated::gamepb::friendpb::GameFriend) -> FriendSummary {
+    let gid = f.gid;
+    let name = if !f.remark.trim().is_empty() {
+        f.remark
+    } else if !f.name.trim().is_empty() {
+        f.name
+    } else {
+        format!("GID:{gid}")
+    };
+    FriendSummary {
+        gid,
+        name,
+        avatar_url: f.avatar_url.trim().to_string(),
+        level: f.level,
+        gold: f.gold,
+        plant: f.plant.map(|p| FriendPlantSummary {
+            steal_num: p.steal_plant_num,
+            dry_num: p.dry_num,
+            weed_num: p.weed_num,
+            insect_num: p.insect_num,
+        }),
+    }
 }
 
 /// 全局好友列表缓存 state
@@ -1121,6 +1183,18 @@ pub async fn visit_friend(
             actions = ?actions,
             "完成好友拜访"
         );
+        crate::services::panel_log::log(
+            account_id,
+            "好友",
+            format!("{friend_name}: {}", actions.join("/")),
+            Some(serde_json::json!({
+                "module": "friend",
+                "event": "照顾好友",
+                "friendName": friend_name,
+                "friendGid": friend_gid,
+                "actions": actions,
+            })),
+        );
     }
 
     let _ = api.leave_farm(friend_gid).await;
@@ -1169,12 +1243,25 @@ pub async fn visit_friend_for_steal(
         });
     }
 
-    let plant_blacklist = get_plant_blacklist(account_id);
+    let plant_blacklist =
+        crate::models::store::account_config::get_plant_blacklist(Some(account_id));
+    let has_stealable_before_filter = lands.iter().any(|land| {
+        if is_occupied_slave_land(land) {
+            return false;
+        }
+        let plant = match land.plant.as_ref() {
+            Some(p) if !p.phases.is_empty() && p.stealable => p,
+            _ => return false,
+        };
+        matches!(get_current_phase(land), Some(PlantPhase::Ripe)) && {
+            let _ = plant;
+            true
+        }
+    });
     let status = analyze_friend_lands(&lands, my_gid, &plant_blacklist, false);
 
-    // 检查是否所有可偷的都被黑名单过滤
-    let has_stealable_before_filter = !status.stealable.is_empty();
     if has_stealable_before_filter && status.stealable.is_empty() {
+        let _ = api.leave_farm(friend_gid).await;
         return None;
     }
 
@@ -1190,9 +1277,43 @@ pub async fn visit_friend_for_steal(
         )
         .await;
         if steal_result.ok > 0 {
-            actions.push(format!("偷{}", steal_result.ok));
+            let plant_names: Vec<String> = steal_result
+                .stolen_infos
+                .iter()
+                .map(|i| i.name.clone())
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect();
+            let names = plant_names.join("/");
+            actions.push(if names.is_empty() {
+                format!("偷{}", steal_result.ok)
+            } else {
+                format!("偷{}({names})", steal_result.ok)
+            });
             total_actions.steal += steal_result.ok;
+            crate::services::stats::record_operation_for(
+                account_id,
+                "steal",
+                steal_result.ok as i64,
+            );
+            crate::utils::random::random_delay(500, 800).await;
         }
+    }
+
+    if !actions.is_empty() {
+        crate::services::panel_log::log(
+            account_id,
+            "好友",
+            format!("{}: {}", friend_name, actions.join("/")),
+            Some(serde_json::json!({
+                "module": "friend",
+                "event": "visit_friend",
+                "result": "ok",
+                "friendName": friend_name,
+                "friendGid": friend_gid,
+                "actions": actions,
+            })),
+        );
     }
 
     let _ = api.leave_farm(friend_gid).await;
@@ -1211,12 +1332,19 @@ pub async fn visit_friend_for_help(
     _my_gid: i64,
     _account_id: &str,
     ignore_exp_limit: bool,
+    help_auto_disabled: &std::sync::atomic::AtomicBool,
 ) -> Option<VisitResult> {
-    use crate::services::automation::is_automation_on;
     let friend_gid = friend.gid;
     let friend_name = friend.name.clone();
-
-    let stop_when_exp_limit = is_automation_on("friend_help_exp_limit") && !ignore_exp_limit;
+    let stop_when_exp_limit =
+        crate::services::automation::is_automation_on_for(_account_id, "friend_help_exp_limit")
+            && !ignore_exp_limit;
+    if stop_when_exp_limit && help_auto_disabled.load(std::sync::atomic::Ordering::Acquire) {
+        return Some(VisitResult {
+            acted: false,
+            entered: false,
+        });
+    }
 
     let enter_reply = match api.enter_farm(friend_gid).await {
         Ok(r) => r,
@@ -1260,7 +1388,8 @@ pub async fn visit_friend_for_help(
         .collect::<HashSet<i64>>()
         .into_iter()
         .collect();
-    if !all_help_ids.is_empty() && !stop_when_exp_limit {
+    if !all_help_ids.is_empty() {
+        let before_exp = crate::services::status::status_data_for(_account_id).exp;
         let outcome = run_farming_with_fallback(
             api,
             recent_help,
@@ -1273,7 +1402,45 @@ pub async fn visit_friend_for_help(
         if outcome.land_count > 0 {
             actions.push(format!("帮{}块", outcome.land_count));
             total_actions.farming += outcome.land_count;
+            crate::services::stats::record_operation_for(
+                _account_id,
+                "helpFarming",
+                outcome.land_count as i64,
+            );
+            if stop_when_exp_limit {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                let after_exp = crate::services::status::status_data_for(_account_id).exp;
+                if after_exp <= before_exp {
+                    help_auto_disabled.store(true, std::sync::atomic::Ordering::Release);
+                    crate::services::panel_log::log(
+                        _account_id,
+                        "好友",
+                        "今日帮助经验已达上限，自动停止帮忙",
+                        Some(serde_json::json!({
+                            "module": "friend",
+                            "event": "friend_cycle",
+                            "result": "ok",
+                        })),
+                    );
+                }
+            }
         }
+    }
+
+    if !actions.is_empty() {
+        crate::services::panel_log::log(
+            _account_id,
+            "好友",
+            format!("{}: {}", friend_name, actions.join("/")),
+            Some(serde_json::json!({
+                "module": "friend",
+                "event": "visit_friend",
+                "result": "ok",
+                "friendName": friend_name,
+                "friendGid": friend_gid,
+                "actions": actions,
+            })),
+        );
     }
 
     let _ = api.leave_farm(friend_gid).await;
@@ -1310,7 +1477,7 @@ pub async fn steal_lands_with_reward_log(
     let pending: Vec<i64> = land_ids.to_vec();
     let info_list: Vec<StealableInfo> = stealable_info.to_vec();
     let mut pending_ref: Vec<i64> = pending.clone();
-    let mut info_list_ref: Vec<StealableInfo> = info_list.clone();
+    let info_list_ref: Vec<StealableInfo> = info_list.clone();
 
     // 第一次尝试
     match api.steal_farm(friend_gid, pending_ref.clone()).await {
@@ -1488,7 +1655,7 @@ async fn do_farm_op(
     })
 }
 
-async fn do_bad_op(
+pub async fn do_bad_op(
     api: &FriendApi,
     friend_gid: i64,
     lands: &[LandInfo],
@@ -1526,24 +1693,17 @@ async fn do_bad_op(
 /// 上层调用便利方法：使用 GidManager + FriendApi 拉取好友列表
 pub async fn get_friends_list_via(
     api: &FriendApi,
-    gid_manager: &GidManager,
+    _gid_manager: &GidManager,
     my_gid: i64,
 ) -> Vec<FriendSummary> {
-    let gids = match api.get_friends_list().await {
+    let friends = match api.get_all_game_friends().await {
         Ok(g) => g,
         Err(_) => return Vec::new(),
     };
-    // 简化版：仅把 gid 列表 → FriendSummary（name = GID:{gid}）
-    gids.into_iter()
-        .filter(|&g| g != my_gid)
-        .map(|g| FriendSummary {
-            gid: g,
-            name: format!("GID:{g}"),
-            avatar_url: String::new(),
-            level: 0,
-            gold: 0,
-            plant: None,
-        })
+    friends
+        .into_iter()
+        .filter(|f| f.gid != my_gid && f.name != "小小农夫" && f.remark != "小小农夫")
+        .map(game_friend_to_summary)
         .collect()
 }
 
@@ -1560,6 +1720,31 @@ mod tests {
     fn make_key_format() {
         assert_eq!(RecentHelpCache::make_key(100, 1), "100:1");
         assert_eq!(RecentHelpCache::make_key(-1, 1), "-1:1");
+    }
+
+    #[test]
+    fn game_friend_dto_has_name_avatar_plant() {
+        let f = crate::proto::generated::gamepb::friendpb::GameFriend {
+            gid: 9,
+            name: "张三".into(),
+            avatar_url: "http://avatar".into(),
+            level: 10,
+            gold: 100,
+            plant: Some(crate::proto::generated::gamepb::friendpb::Plant {
+                steal_plant_num: 2,
+                dry_num: 1,
+                weed_num: 0,
+                insect_num: 3,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let v = serde_json::to_value(game_friend_to_summary(f)).unwrap();
+        assert_eq!(v["gid"], 9);
+        assert_eq!(v["name"], "张三");
+        assert_eq!(v["avatarUrl"], "http://avatar");
+        assert_eq!(v["plant"]["stealNum"], 2);
+        assert_eq!(v["plant"]["dryNum"], 1);
     }
 
     #[test]
@@ -1919,5 +2104,13 @@ mod tests {
             ..Default::default()
         };
         assert!(is_activity_plant(&land));
+    }
+
+    #[test]
+    fn plant_phase_from_proto_mature_is_ripe() {
+        assert_eq!(PlantPhase::from_i32(6), PlantPhase::Ripe);
+        assert_eq!(PlantPhase::from_i32(7), PlantPhase::Dead);
+        assert_eq!(PlantPhase::from_i32(3), PlantPhase::Growing);
+        assert_eq!(PlantPhase::from_i32(1), PlantPhase::Seed);
     }
 }

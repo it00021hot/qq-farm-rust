@@ -8,57 +8,210 @@ use prost::Message as _;
 
 use crate::error::{Error, Result};
 use crate::network::gateway::Gateway;
-use crate::proto::generated::gamepb::plantpb::LandInfo;
+use crate::proto::generated::gamepb::friendpb::{
+    GameFriend, GetAllReply, GetGameFriendsReply, GetGameFriendsRequest, SyncAllReply,
+    SyncAllRequest,
+};
+use crate::proto::generated::gamepb::plantpb::{LandInfo, OperationLimit};
 use crate::proto::generated::gamepb::visitpb::{EnterReply, EnterRequest, LeaveRequest};
 
 const DEFAULT_TIMEOUT_MS: u64 = 20_000;
+const QQ_FRIEND_LIST_BATCH_SIZE: usize = 35;
 
 /// 好友 API 客户端
 #[derive(Clone)]
 pub struct FriendApi {
     gateway: Arc<Gateway>,
+    account_id: Arc<parking_lot::Mutex<String>>,
+    on_operation_limits_update: Arc<parking_lot::Mutex<Option<crate::services::farm::api::OperationLimitsCallback>>>,
 }
 
 impl FriendApi {
     /// 创建
     #[must_use]
     pub fn new(gateway: Arc<Gateway>) -> Self {
-        Self { gateway }
+        Self {
+            gateway,
+            account_id: Arc::new(parking_lot::Mutex::new(String::new())),
+            on_operation_limits_update: Arc::new(parking_lot::Mutex::new(None)),
+        }
     }
 
-    /// 获取好友列表
-    ///
-    /// 对应原 `getFriendsList()` —— 服务 `gamepb.friendpb.FriendService.GetAll`
+    pub fn set_account_id(&self, account_id: &str) {
+        *self.account_id.lock() = account_id.to_string();
+    }
+
+    /// 设置操作限制更新回调（对齐 TS `schedulerRef().updateOperationLimits`）
+    pub fn set_operation_limits_callback(
+        &self,
+        cb: crate::services::farm::api::OperationLimitsCallback,
+    ) {
+        *self.on_operation_limits_update.lock() = Some(cb);
+    }
+
+    fn fire_operation_limits(&self, limits: Vec<OperationLimit>) {
+        if limits.is_empty() {
+            return;
+        }
+        if let Some(cb) = self.on_operation_limits_update.lock().as_ref() {
+            cb(limits);
+        }
+    }
+
+    /// 获取好友列表 GID（内部巡访用）
     pub async fn get_friends_list(&self) -> Result<Vec<i64>> {
-        let body = vec![];
+        Ok(self
+            .get_all_game_friends()
+            .await?
+            .into_iter()
+            .map(|f| f.gid)
+            .collect())
+    }
+
+    /// 完整 GameFriend 列表。WX 走 GetAll；QQ 走 GetGameFriends + 已知 GID。
+    pub async fn get_all_game_friends(&self) -> Result<Vec<GameFriend>> {
+        let platform = self.gateway.platform();
+        if platform.eq_ignore_ascii_case("qq") {
+            self.fetch_qq_friends().await
+        } else {
+            self.fetch_wx_friends().await
+        }
+    }
+
+    async fn fetch_wx_friends(&self) -> Result<Vec<GameFriend>> {
         let resp = self
             .gateway
             .request(
                 "gamepb.friendpb.FriendService",
                 "GetAll",
-                &body,
+                &[],
                 DEFAULT_TIMEOUT_MS,
             )
             .await?;
-
         if resp.is_empty() {
             return Ok(Vec::new());
         }
-
-        match crate::proto::generated::gamepb::friendpb::GetAllReply::decode(&*resp) {
-            Ok(reply) => Ok(reply.game_friends.into_iter().map(|f| f.gid).collect()),
+        match GetAllReply::decode(&*resp) {
+            Ok(reply) => Ok(reply.game_friends),
             Err(_) => Ok(Vec::new()),
         }
     }
 
-    /// 接受好友申请
+    async fn fetch_qq_friends(&self) -> Result<Vec<GameFriend>> {
+        let account_id = self.account_id.lock().clone();
+        let known = crate::models::store::account_config::get_known_friend_gids(Some(&account_id));
+        let mut all = Vec::new();
+        for chunk in known.chunks(QQ_FRIEND_LIST_BATCH_SIZE) {
+            let body = GetGameFriendsRequest {
+                gids: chunk.to_vec(),
+            }
+            .encode_to_vec();
+            match self
+                .gateway
+                .request(
+                    "gamepb.friendpb.FriendService",
+                    "GetGameFriends",
+                    &body,
+                    DEFAULT_TIMEOUT_MS,
+                )
+                .await
+            {
+                Ok(resp) => {
+                    if let Ok(reply) = GetGameFriendsReply::decode(&*resp) {
+                        all.extend(reply.game_friends);
+                    }
+                }
+                Err(e) => {
+                    crate::services::panel_log::log_warn(
+                        &account_id,
+                        "好友",
+                        format!("QQ 新好友接口分批请求失败: {e}"),
+                        Some(serde_json::json!({
+                            "module": "friend",
+                            "event": "好友列表接口",
+                            "method": "GetGameFriends",
+                        })),
+                    );
+                }
+            }
+        }
+        all = dedupe_friends_by_gid(all);
+        if !all.is_empty() {
+            return Ok(all);
+        }
+
+        let body = SyncAllRequest {
+            open_ids: Vec::new(),
+        }
+        .encode_to_vec();
+        match self
+            .gateway
+            .request(
+                "gamepb.friendpb.FriendService",
+                "SyncAll",
+                &body,
+                DEFAULT_TIMEOUT_MS,
+            )
+            .await
+        {
+            Ok(resp) => {
+                if let Ok(reply) = SyncAllReply::decode(&*resp) {
+                    all = dedupe_friends_by_gid(reply.game_friends);
+                }
+            }
+            Err(e) => {
+                if known.is_empty() {
+                    return Err(Error::Business(format!(
+                        "QQ 好友列表获取失败，请先在好友页维护已知好友 GID 列表。{e}"
+                    )));
+                }
+            }
+        }
+        if all.is_empty() && known.is_empty() {
+            crate::services::panel_log::log_warn(
+                &account_id,
+                "好友",
+                "QQ 好友列表为空；若近期接口已切到 GetGameFriends，请先在好友页维护已知好友 GID 列表",
+                Some(serde_json::json!({
+                    "module": "friend",
+                    "event": "好友列表接口",
+                    "result": "empty",
+                })),
+            );
+        }
+        Ok(all)
+    }
+
+    /// 拉取待处理好友申请（对齐 TS `getApplications`）
+    pub async fn get_applications(&self) -> Result<Vec<(i64, String)>> {
+        use crate::proto::generated::gamepb::friendpb::{GetApplicationsReply, GetApplicationsRequest};
+        let body = GetApplicationsRequest {}.encode_to_vec();
+        let resp = self
+            .gateway
+            .request(
+                "gamepb.friendpb.FriendService",
+                "GetApplications",
+                &body,
+                DEFAULT_TIMEOUT_MS,
+            )
+            .await?;
+        let reply = GetApplicationsReply::decode(&*resp)?;
+        Ok(reply
+            .applications
+            .into_iter()
+            .filter(|a| a.gid > 0)
+            .map(|a| (a.gid, a.name))
+            .collect())
+    }
+
+    /// 接受好友申请（1:1 对齐原 `acceptFriends`，RPC 方法 `AcceptFriends`）
     pub async fn accept_applications(&self, gids: Vec<i64>) -> Result<()> {
-        // 简化：用通用 sendMsg 通道发好友服务请求
-        let body = gids_to_bytes(&gids);
+        use crate::proto::generated::gamepb::friendpb::AcceptFriendsRequest;
+        let body = AcceptFriendsRequest { friend_gids: gids }.encode_to_vec();
         self.gateway
             .request(
                 "gamepb.friendpb.FriendService",
-                "AcceptApplications",
+                "AcceptFriends",
                 &body,
                 DEFAULT_TIMEOUT_MS,
             )
@@ -66,17 +219,9 @@ impl FriendApi {
         Ok(())
     }
 
-    /// 访问好友农场（占位：实际 visit_farm 已被 enter_farm/leave_farm 替代）
+    /// 访问好友农场（对齐 enter_farm）
     pub async fn visit_farm(&self, host_gid: i64) -> Result<()> {
-        let body = gids_to_bytes(&[host_gid]);
-        self.gateway
-            .request(
-                "gamepb.plantpb.PlantService",
-                "VisitFarm",
-                &body,
-                DEFAULT_TIMEOUT_MS,
-            )
-            .await?;
+        let _ = self.enter_farm(host_gid).await?;
         Ok(())
     }
 
@@ -144,7 +289,12 @@ impl FriendApi {
                 DEFAULT_TIMEOUT_MS,
             )
             .await?;
-        FarmingReply::decode(&*resp).map(|r| r.land).map_err(Error::from)
+        FarmingReply::decode(&*resp)
+            .map(|r| {
+                self.fire_operation_limits(r.operation_limits);
+                r.land
+            })
+            .map_err(Error::from)
     }
 
     /// 帮好友浇水（对应原 `helpWater`）
@@ -160,18 +310,18 @@ impl FriendApi {
                 DEFAULT_TIMEOUT_MS,
             )
             .await?;
-        // 解析响应（确认成功），即使不用也走完
-        let _ = WaterLandReply::decode(&*resp)?;
+        let reply = WaterLandReply::decode(&*resp)?;
+        self.fire_operation_limits(reply.operation_limits);
         Ok(())
     }
 
-    /// 偷好友菜（对应原 `stealHarvest`）
+    /// 偷好友菜（对应原 `stealHarvest`，`is_all: true`）
     pub async fn steal_farm(&self, host_gid: i64, land_ids: Vec<i64>) -> Result<()> {
         use crate::proto::generated::gamepb::plantpb::{HarvestReply, HarvestRequest};
         let body = HarvestRequest {
             land_ids,
             host_gid,
-            is_all: false,
+            is_all: true,
         }
         .encode_to_vec();
         let resp = self
@@ -183,7 +333,8 @@ impl FriendApi {
                 DEFAULT_TIMEOUT_MS,
             )
             .await?;
-        let _ = HarvestReply::decode(&*resp)?;
+        let reply = HarvestReply::decode(&*resp)?;
+        self.fire_operation_limits(reply.operation_limits);
         Ok(())
     }
 
@@ -212,7 +363,8 @@ impl FriendApi {
                 .await;
             match weed_resp {
                 Ok(resp) => {
-                    if PutWeedsReply::decode(&*resp).is_ok() {
+                    if let Ok(reply) = PutWeedsReply::decode(&*resp) {
+                        self.fire_operation_limits(reply.operation_limits);
                         ok += 1;
                         continue;
                     }
@@ -235,7 +387,8 @@ impl FriendApi {
                 )
                 .await
             {
-                if PutInsectsReply::decode(&*resp).is_ok() {
+                if let Ok(reply) = PutInsectsReply::decode(&*resp) {
+                    self.fire_operation_limits(reply.operation_limits);
                     ok += 1;
                 }
             }
@@ -265,28 +418,34 @@ impl FriendApi {
                 )
                 .await;
             match resp {
-                Ok(r) if PutInsectsReply::decode(&*r).is_ok() => ok += 1,
-                _ => {
-                    // 退化：发 PutWeeds
-                    let body_weed = PutWeedsRequest {
-                        host_gid,
-                        land_ids: vec![land_id],
+                Ok(r) => {
+                    if let Ok(reply) = PutInsectsReply::decode(&*r) {
+                        self.fire_operation_limits(reply.operation_limits);
+                        ok += 1;
+                        continue;
                     }
-                    .encode_to_vec();
-                    if let Ok(r) = self
-                        .gateway
-                        .request(
-                            "gamepb.plantpb.PlantService",
-                            "PutWeeds",
-                            &body_weed,
-                            DEFAULT_TIMEOUT_MS,
-                        )
-                        .await
-                    {
-                        if PutWeedsReply::decode(&*r).is_ok() {
-                            ok += 1;
-                        }
-                    }
+                }
+                _ => {}
+            }
+            // 退化：发 PutWeeds
+            let body_weed = PutWeedsRequest {
+                host_gid,
+                land_ids: vec![land_id],
+            }
+            .encode_to_vec();
+            if let Ok(r) = self
+                .gateway
+                .request(
+                    "gamepb.plantpb.PlantService",
+                    "PutWeeds",
+                    &body_weed,
+                    DEFAULT_TIMEOUT_MS,
+                )
+                .await
+            {
+                if let Ok(reply) = PutWeedsReply::decode(&*r) {
+                    self.fire_operation_limits(reply.operation_limits);
+                    ok += 1;
                 }
             }
         }
@@ -320,23 +479,12 @@ impl FriendApi {
     }
 }
 
-fn gids_to_bytes(gids: &[i64]) -> Vec<u8> {
-    // 占位编码：阶段 1D 不严格按 proto 序列化，body 用 varint 列表
-    // 真实场景下应使用对应的 Request 类型
+fn dedupe_friends_by_gid(friends: Vec<GameFriend>) -> Vec<GameFriend> {
+    let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
-    for &g in gids {
-        // varint 编码 i64（简化版，只支持小整数）
-        let mut v = g as u64;
-        loop {
-            let mut byte = (v & 0x7f) as u8;
-            v >>= 7;
-            if v != 0 {
-                byte |= 0x80;
-            }
-            out.push(byte);
-            if v == 0 {
-                break;
-            }
+    for f in friends {
+        if f.gid > 0 && seen.insert(f.gid) {
+            out.push(f);
         }
     }
     out
@@ -347,8 +495,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn gids_to_bytes_roundtrip_basic() {
-        let bytes = gids_to_bytes(&[1, 2, 100]);
-        assert!(!bytes.is_empty());
+    fn friend_api_constructs() {
+        let gw = Arc::new(crate::network::gateway::Gateway::new(
+            crate::network::gateway::GatewayConfig {
+                server_url: "ws://localhost".into(),
+                platform: "test".into(),
+                os: "linux".into(),
+                client_version: "0.1.0".into(),
+                auth_code: "x".into(),
+                headers: Default::default(),
+            },
+            Arc::new(crate::network::encryptor::NoopEncryptor),
+        ));
+        let _ = FriendApi::new(gw);
     }
 }

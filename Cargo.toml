@@ -12,7 +12,7 @@ edition = "2021"
 rust-version = "1.75"
 license = "MIT OR Apache-2.0"
 authors = ["Milo"]
-repository = "https://github.com/XyhTender/qq-farm-bot-rust"
+repository = "https://github.com/it00021hot/qq-farm-rust"
 description = "QQ 农场多账号挂机 — Rust 重写版"
 
 [workspace.lints.rust]
@@ -70,12 +70,12 @@ config = { version = "0.14", default-features = false, features = ["toml"] }
 # HTTP / Web
 axum = "0.8"
 tower = "0.5"
-tower-http = { version = "0.6", features = ["trace", "cors"] }
+tower-http = { version = "0.6", features = ["trace", "cors", "fs"] }
 hyper = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip"] }
 
-# WebSocket（与 socket.io 兼容，本阶段不引入，留位）
-# socketioxide = "0.16"
+# WebSocket / Socket.IO（对齐原 bot `/socket.io`，给 Vue 前端用）
+socketioxide = "0.18"
 
 # Protobuf
 prost = "0.13"
@@ -99,6 +99,7 @@ dotenvy = "0.15"
 # 加密 / 哈希
 sha2 = "0.10"
 hmac = "0.12"
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 # AES-GCM
 aes = "0.8"
 aes-gcm = "0.10"
@@ -124,3 +125,27 @@ panic = "abort"
 opt-level = 0
 debug = 1
 incremental = true
+
+# debug 下手写/纯 Rust 密码学极慢；登录 PBKDF2 与 TSDK 编译走优化
+[profile.dev.package.sha2]
+opt-level = 3
+[profile.dev.package.hmac]
+opt-level = 3
+[profile.dev.package.digest]
+opt-level = 3
+[profile.dev.package.pbkdf2]
+opt-level = 3
+[profile.dev.package.crypto-common]
+opt-level = 3
+[profile.dev.package.block-buffer]
+opt-level = 3
+[profile.dev.package.sha1]
+opt-level = 3
+[profile.dev.package.wasmtime]
+opt-level = 3
+[profile.dev.package.cranelift-codegen]
+opt-level = 3
+[profile.dev.package.cranelift-frontend]
+opt-level = 3
+[profile.dev.package.regalloc2]
+opt-level = 3

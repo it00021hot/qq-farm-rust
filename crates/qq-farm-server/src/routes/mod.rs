@@ -9,7 +9,6 @@ pub mod auth;
 pub mod commerce;
 pub mod farm;
 pub mod friend;
-pub mod placeholder;
 pub mod wx_login;
 
 use axum::http::HeaderMap;
@@ -57,8 +56,63 @@ pub fn resolve_account_id_required(
             "missing x-account-id".to_string(),
         ))
     } else {
+        ensure_account_access(ctx, headers, &id)?;
         Ok(id)
     }
+}
+
+/// 账号 ACL：admin 全放行；普通用户只能访问自己的账号
+pub fn account_accessible(ctx: &AdminContext, headers: &HeaderMap, account_id: &str) -> bool {
+    if account_id.is_empty() {
+        return true;
+    }
+    let Some(sess) = current_session(ctx, headers) else {
+        return false;
+    };
+    if sess.role == "admin" {
+        return true;
+    }
+    qq_farm_core::models::store::accounts::get_accounts()
+        .into_iter()
+        .any(|a| a.id == account_id && a.username == sess.username)
+}
+
+/// 无权限时 Forbidden
+pub fn ensure_account_access(
+    ctx: &AdminContext,
+    headers: &HeaderMap,
+    account_id: &str,
+) -> Result<(), crate::context::ApiError> {
+    if account_accessible(ctx, headers, account_id) {
+        Ok(())
+    } else {
+        Err(crate::context::ApiError::Forbidden(
+            "无权访问该账号".to_string(),
+        ))
+    }
+}
+
+pub fn current_session(ctx: &AdminContext, headers: &HeaderMap) -> Option<crate::sessions::SessionInfo> {
+    let token = headers
+        .get("x-admin-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if token.is_empty() {
+        return None;
+    }
+    ctx.sessions.get(token)
+}
+
+/// 当前用户名下账号 ID（含管理员；对齐 getAccessibleAccountIds）
+pub fn accessible_account_ids(ctx: &AdminContext, headers: &HeaderMap) -> Vec<String> {
+    let Some(sess) = current_session(ctx, headers) else {
+        return Vec::new();
+    };
+    qq_farm_core::models::store::accounts::get_accounts()
+        .into_iter()
+        .filter(|a| a.username == sess.username)
+        .map(|a| a.id)
+        .collect()
 }
 
 use std::sync::Arc;
@@ -105,15 +159,16 @@ pub fn build(ctx: Arc<AdminContext>) -> Router<Arc<AdminContext>> {
     let authed = Router::new()
         .merge(account::router())
         .merge(friend::router())
+        .merge(wx_login::router())
+        .merge(farm::router())
+        .merge(commerce::router())
+        .merge(activity_center::router())
         .route_layer(auth_check);
 
     Router::new()
-        .merge(farm::router())
         .merge(auth::router())
         .merge(authed)
         .merge(admin::router().route_layer(admin_check))
-        .merge(activity_center::router())
-        .merge(commerce::router())
-        .merge(wx_login::router())
+        .merge(admin::public_router())
         .route_layer(inject_layer)
 }

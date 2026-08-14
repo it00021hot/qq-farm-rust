@@ -565,21 +565,21 @@ pub fn apply_config_snapshot(
 fn apply_automation_bool(a: &mut AutomationConfig, key: &str, value: bool) {
     match key {
         "farm" => a.farm = value,
-        "farm_push" => a.farm_push = value,
-        "land_upgrade" => a.land_upgrade = value,
+        "farm_push" | "farmPush" => a.farm_push = value,
+        "land_upgrade" | "landUpgrade" => a.land_upgrade = value,
         "friend" => a.friend = value,
-        "friend_help_exp_limit" => a.friend_help_exp_limit = value,
-        "friend_steal" => a.friend_steal = value,
-        "friend_steal_activity_only" => a.friend_steal_activity_only = value,
-        "friend_help" => a.friend_help = value,
-        "friend_bad" => a.friend_bad = value,
+        "friend_help_exp_limit" | "friendHelpExpLimit" => a.friend_help_exp_limit = value,
+        "friend_steal" | "friendSteal" => a.friend_steal = value,
+        "friend_steal_activity_only" | "friendStealActivityOnly" => a.friend_steal_activity_only = value,
+        "friend_help" | "friendHelp" => a.friend_help = value,
+        "friend_bad" | "friendBad" => a.friend_bad = value,
         "task" => a.task = value,
-        "fertilizer_gift" => a.fertilizer_gift = value,
-        "fertilizer_buy_organic" => a.fertilizer_buy_organic = value,
-        "fertilizer_buy_normal" => a.fertilizer_buy_normal = value,
+        "fertilizer_gift" | "fertilizerGift" => a.fertilizer_gift = value,
+        "fertilizer_buy_organic" | "fertilizerBuyOrganic" => a.fertilizer_buy_organic = value,
+        "fertilizer_buy_normal" | "fertilizerBuyNormal" => a.fertilizer_buy_normal = value,
         "sell" => a.sell = value,
-        "fertilizer_multi_season" => a.fertilizer_multi_season = value,
-        "skip_own_weed_bug" => a.skip_own_weed_bug = value,
+        "fertilizer_multi_season" | "fertilizerMultiSeason" => a.fertilizer_multi_season = value,
+        "skip_own_weed_bug" | "skipOwnWeedBug" => a.skip_own_weed_bug = value,
         _ => {}
     }
 }

@@ -81,7 +81,7 @@ impl Default for WorkerLoopConfig {
             season_progress_interval: Duration::from_secs(300),
             heartbeat_interval: Duration::from_secs(25),
             heartbeat_timeout: Duration::from_secs(30),
-            client_version: "1.0.0".to_string(),
+            client_version: crate::config::DEFAULT_CLIENT_VERSION.to_string(),
         }
     }
 }
@@ -127,13 +127,28 @@ pub struct WorkerLoop {
     heartbeat_miss_count: Arc<Mutex<u32>>,
     /// 心跳超时回调
     on_heartbeat_timeout: Arc<Mutex<Option<Box<dyn Fn(String) + Send + Sync>>>>,
+    farm_tick_running: AtomicBool,
+    help_tick_running: AtomicBool,
+    steal_tick_running: AtomicBool,
+    /// 对齐 TS `runUnifiedTick`：farm/help/steal 串行，避免并发打满网关
+    unified_tick_running: AtomicBool,
+    /// 对齐 TS `lastPushTime`（土地推送 500ms 去抖）
+    last_lands_push_at: AtomicI64,
+    harvest_sell_running: Arc<AtomicBool>,
+    harvest_sell_pending: Arc<AtomicBool>,
+    /// 点券 / 金豆豆（对齐 TS userState.coupon / goldBean）
+    coupon: Mutex<i64>,
+    gold_bean: Mutex<i64>,
+    ace: Mutex<Option<Arc<crate::services::ace::AceShared>>>,
+    /// worker 启动时刻（对齐 TS `process.uptime()`）
+    started_at: std::time::Instant,
 }
 
 /// 心跳 miss 阈值
 const MAX_HEARTBEAT_MISS: u32 = 1;
 
 /// AtomicBool/AtomicU64
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 
 /// 下次执行时间
 #[derive(Debug, Clone, Default)]
@@ -144,7 +159,9 @@ struct NextRuns {
 }
 
 /// IP 化：worker 上报给 master 的状态数据结构
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StatusSyncPayload {
     pub account_id: String,
     pub account_name: String,
@@ -159,13 +176,16 @@ pub struct StatusSyncPayload {
     pub next_checks: NextChecks,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConnectionInfo {
     pub connected: bool,
     pub ws_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NextChecks {
     pub farm_remain_sec: i64,
     pub help_remain_sec: i64,
@@ -193,6 +213,14 @@ impl WorkerLoop {
         mystery_shop: Arc<MysteryShopService>,
         activity_center: Arc<ActivityCenterService>,
     ) -> Self {
+        farm.api().set_operation_limits_callback(Arc::new({
+            let friend = friend.clone();
+            move |limits| friend.update_operation_limits(&limits)
+        }));
+        friend.api().set_operation_limits_callback(Arc::new({
+            let friend = friend.clone();
+            move |limits| friend.update_operation_limits(&limits)
+        }));
         Self {
             account,
             config,
@@ -219,6 +247,17 @@ impl WorkerLoop {
             last_heartbeat_response: Arc::new(Mutex::new(crate::utils::time::now_ms())),
             heartbeat_miss_count: Arc::new(Mutex::new(0)),
             on_heartbeat_timeout: Arc::new(Mutex::new(None)),
+            farm_tick_running: AtomicBool::new(false),
+            help_tick_running: AtomicBool::new(false),
+            steal_tick_running: AtomicBool::new(false),
+            unified_tick_running: AtomicBool::new(false),
+            last_lands_push_at: AtomicI64::new(0),
+            harvest_sell_running: Arc::new(AtomicBool::new(false)),
+            harvest_sell_pending: Arc::new(AtomicBool::new(false)),
+            coupon: Mutex::new(0),
+            gold_bean: Mutex::new(0),
+            ace: Mutex::new(None),
+            started_at: std::time::Instant::now(),
         }
     }
 
@@ -266,56 +305,285 @@ impl WorkerLoop {
         self.is_running.store(true, Ordering::Release);
     }
 
+    fn auto_on(&self, category: &str) -> bool {
+        automation::is_automation_on_for(&self.account.id, category)
+    }
+
+    fn interval_range_ms(&self, kind: &str) -> (u64, u64) {
+        let i = crate::models::store::account_config::get_intervals(Some(&self.account.id));
+        let (min_sec, max_sec) = match kind {
+            "help" => (i.help_min, i.help_max),
+            "steal" => (i.steal_min, i.steal_max),
+            _ => (i.farm_min, i.farm_max),
+        };
+        let min_ms = (min_sec.max(1) as u64).saturating_mul(1000);
+        let max_ms = (max_sec.max(1) as u64).saturating_mul(1000);
+        (min_ms, max_ms.max(min_ms))
+    }
+
     /// 应用 config revision（idempotent guard）
     pub fn apply_config_revision(&self, rev: u64) -> bool {
         let prev = self.applied_config_revision.swap(rev, Ordering::AcqRel);
         prev != rev
     }
 
+    /// 对齐 TS `applyRuntimeConfig`：revision + 重置统一调度（external 模式下不启内部 check_loop）
+    pub fn apply_runtime_config(self: &Arc<Self>, rev: u64) {
+        self.apply_config_revision(rev);
+        if self.login_ready() {
+            self.reset_unified_schedule();
+            let intervals =
+                crate::models::store::account_config::get_intervals(Some(&self.account.id));
+            self.farm.set_check_interval(Duration::from_secs(
+                intervals.farm.max(1) as u64,
+            ));
+        }
+        self.sync_status();
+    }
+
+    /// 登录成功后的编排：邀请码、礼包、收获自动出售、启动 tick / 跨日 / 放虫放草
+    pub async fn on_login_success(self: &Arc<Self>, scheduler: &Scheduler) {
+        self.mark_login_ready();
+        let gid = *self.gid.lock();
+        self.farm.set_host_gid(gid);
+        self.friend.set_host_gid(gid);
+        self.farm.set_account_id(&self.account.id);
+        self.task.set_account_id(&self.account.id);
+        self.warehouse.set_account_id(&self.account.id);
+        self.friend.set_account_id(&self.account.id);
+        self.activity_center.set_account_id(&self.account.id);
+        self.activity_center.set_warehouse(self.warehouse.clone());
+        self.farm.set_external_scheduler(true);
+        self.friend.set_external_scheduler(true);
+
+        let mut harvest_rx = self.farm.subscribe();
+        let warehouse = self.warehouse.clone();
+        let harvest_sell_running = self.harvest_sell_running.clone();
+        let harvest_sell_pending = self.harvest_sell_pending.clone();
+        tokio::spawn(async move {
+            loop {
+                match harvest_rx.recv().await {
+                    Ok(crate::services::farm::scheduler::FarmEvent::Harvested { .. }) => {
+                        if harvest_sell_running.swap(true, Ordering::AcqRel) {
+                            harvest_sell_pending.store(true, Ordering::Release);
+                            continue;
+                        }
+                        loop {
+                            tokio::time::sleep(Duration::from_millis(800)).await;
+                            let _ = warehouse.sell_all_fruits().await;
+                            if !harvest_sell_pending.swap(false, Ordering::AcqRel) {
+                                harvest_sell_running.store(false, Ordering::Release);
+                                break;
+                            }
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+
+        // 对齐 worker.ts onLoginSuccess：先背包点券/金豆 → 统计基线 → 邀请码 → 礼包
+        if let Ok(bag) = self.warehouse.get_bag().await {
+            let items = crate::services::warehouse::get_bag_items(&bag);
+            let coupon = items
+                .iter()
+                .find(|i| i.id == 1002)
+                .map(|i| i.count)
+                .unwrap_or(0);
+            let gold_bean = items
+                .iter()
+                .find(|i| i.id == 1005)
+                .map(|i| i.count)
+                .unwrap_or(0);
+            *self.coupon.lock() = coupon.max(0);
+            if gold_bean > 0 {
+                *self.gold_bean.lock() = gold_bean;
+            }
+            let st = status_svc::status_data_for(&self.account.id);
+            crate::services::stats::init_stats_with_persistence(
+                &self.account.id,
+                st.gold,
+                st.exp,
+                coupon.max(0),
+            );
+            crate::services::stats::reset_session_gains_for(&self.account.id);
+        }
+
+        let invite = crate::services::invite::InviteService::new(self.gateway.clone());
+        let _ = invite.process_invite_codes().await;
+
+        if self.auto_on("fertilizer_gift") {
+            let _ = self.warehouse.auto_open_fertilizer_gift_packs().await;
+        }
+
+        let this = Arc::clone(self);
+        scheduler.set_timeout_task(
+            "bad_startup_once",
+            Duration::from_secs(10),
+            Arc::new(move || {
+                let this = this.clone();
+                Box::pin(async move {
+                    if let Err(e) = this.friend.run_bad_once_on_startup(&this.account.id).await {
+                        tracing::warn!(
+                            account_id = %this.account.id,
+                            error = %e,
+                            "启动时放虫放草执行失败"
+                        );
+                    }
+                })
+            }),
+        );
+
+        self.start_farm_ticks(scheduler);
+        {
+            *self.last_daily_date.lock() = get_local_date_key();
+            let this = Arc::clone(self);
+            tokio::spawn(async move {
+                this.run_daily_routines(true).await;
+            });
+        }
+        self.start_fertilizer_buy_timer(scheduler);
+        {
+            let this = Arc::clone(self);
+            scheduler.set_timeout_task(
+                "friend_check_bootstrap_applications",
+                Duration::from_secs(3),
+                Arc::new(move || {
+                    let this = this.clone();
+                    Box::pin(async move {
+                        this.friend.check_and_accept_applications().await;
+                    })
+                }),
+            );
+        }
+        self.sync_status();
+    }
+
+    /// 对齐 fetchGoldBeanFromBag：登录后立刻拉一次背包金豆
+    pub async fn fetch_gold_bean_from_bag(&self) {
+        let Ok(bag) = self.warehouse.get_bag().await else {
+            return;
+        };
+        let items = crate::services::warehouse::get_bag_items(&bag);
+        for it in items {
+            if it.id == 1005 && it.count > 0 {
+                *self.gold_bean.lock() = it.count;
+                tracing::info!(count = it.count, "金豆豆数量");
+                break;
+            }
+        }
+    }
+
+    /// 对齐 network.ts ItemNotify
+    pub fn apply_item_notify(&self, items: &[crate::network::notify::ItemChgLite]) {
+        let account_id = &self.account.id;
+        for chg in items {
+            match chg.id {
+                1101 => {
+                    let mut st = status_svc::status_data_for(account_id);
+                    if chg.count > 0 {
+                        st.exp = chg.count;
+                    } else if chg.delta != 0 {
+                        st.exp = (st.exp + chg.delta).max(0);
+                    }
+                    status_svc::update_status_level_for(account_id, st.level, Some(st.exp));
+                }
+                1 | 1001 => {
+                    let mut gold = status_svc::status_data_for(account_id).gold;
+                    if chg.count > 0 {
+                        gold = chg.count;
+                    } else if chg.delta != 0 {
+                        gold = (gold + chg.delta).max(0);
+                    }
+                    status_svc::update_status_gold_for(account_id, gold);
+                }
+                1002 => {
+                    let mut coupon = *self.coupon.lock();
+                    if chg.count > 0 {
+                        coupon = chg.count;
+                    } else if chg.delta != 0 {
+                        coupon = (coupon + chg.delta).max(0);
+                    }
+                    *self.coupon.lock() = coupon;
+                }
+                1005 => {
+                    let mut bean = *self.gold_bean.lock();
+                    if chg.count > 0 {
+                        bean = chg.count;
+                    } else if chg.delta != 0 {
+                        bean = (bean + chg.delta).max(0);
+                    }
+                    *self.gold_bean.lock() = bean;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// 对齐 network.ts BasicNotify
+    pub fn apply_basic_notify(&self, level: Option<i64>, gold: Option<i64>, exp: Option<i64>) {
+        let account_id = &self.account.id;
+        let st = status_svc::status_data_for(account_id);
+        let old_level = st.level;
+        let mut next_level = st.level;
+        let mut next_exp = st.exp;
+        if let Some(lv) = level {
+            if lv > 0 {
+                next_level = lv;
+            }
+        }
+        if let Some(e) = exp {
+            if e >= 0 {
+                next_exp = e;
+            }
+        }
+        if next_level != st.level || next_exp != st.exp {
+            status_svc::update_status_level_for(account_id, next_level, Some(next_exp));
+        }
+        if let Some(g) = gold {
+            if g >= 0 {
+                status_svc::update_status_gold_for(account_id, g);
+            }
+        }
+        if next_level != old_level {
+            crate::services::stats::record_operation_for(account_id, "levelUp", 1);
+        }
+    }
+
     /// 启动所有定时器
-    pub fn start(&self, scheduler: &Scheduler) {
-        // 状态上报
-        let acc_id = self.account.id.clone();
-        let acc_name = self.account.display_name.clone();
-        let tx = self.event_tx.clone();
+    pub fn start(self: &Arc<Self>, scheduler: &Scheduler) {
+        let this = Arc::clone(self);
         scheduler.set_interval_task(
             "status_sync",
             self.config.status_interval,
             Arc::new(move || {
-                let acc_id = acc_id.clone();
-                let acc_name = acc_name.clone();
-                let tx = tx.clone();
+                let this = this.clone();
                 Box::pin(async move {
-                    // 真实 status 在 sync_status_payload() 内部组装
-                    let _ = tx.send(WorkerEvent::Status {
-                        account_id: acc_id,
-                        account_name: acc_name,
-                        status: serde_json::json!({
-                            "phase": "online",
-                            "note": "tick",
-                        }),
-                    });
+                    this.sync_status();
                 })
             }),
         );
 
         // 每日跨日检查
-        let last = self.last_daily_date.clone();
-        let acc_id = self.account.id.clone();
+        let this = Arc::clone(self);
         scheduler.set_interval_task(
             "daily_routine_interval",
             self.config.daily_routine_interval,
             Arc::new(move || {
-                let last = last.clone();
-                let acc_id = acc_id.clone();
+                let this = this.clone();
                 Box::pin(async move {
                     let today = get_local_date_key();
-                    let mut guard = last.lock();
-                    if *guard == today {
-                        return;
+                    {
+                        let mut guard = this.last_daily_date.lock();
+                        if *guard == today {
+                            return;
+                        }
+                        *guard = today.clone();
                     }
-                    *guard = today.clone();
-                    tracing::info!(account_id = %acc_id, date = %today, "daily routines due");
+                    tracing::info!(account_id = %this.account.id, date = %today, "daily routines due");
+                    this.run_daily_routines(false).await;
                 })
             }),
         );
@@ -328,7 +596,6 @@ impl WorkerLoop {
         let hb_interval = self.config.heartbeat_interval;
         let hb_timeout = self.config.heartbeat_timeout;
         let on_hb_timeout = self.on_heartbeat_timeout.clone();
-        let client_version = self.config.client_version.clone();
         let gid = self.gid.clone();
         scheduler.set_interval_task(
             "heartbeat_interval",
@@ -339,7 +606,6 @@ impl WorkerLoop {
                 let last_resp = last_hb_resp.clone();
                 let miss = hb_miss.clone();
                 let on_timeout = on_hb_timeout.clone();
-                let cv = client_version.clone();
                 let gid_lock = gid.clone();
                 Box::pin(async move {
                     let now = crate::utils::time::now_ms();
@@ -370,7 +636,7 @@ impl WorkerLoop {
                     if current_gid == 0 {
                         return;
                     }
-                    let cv_for_req = cv.clone();
+                    let cv_for_req = crate::config::get_runtime_config().client_version;
                     let result = gateway.heartbeat(current_gid, &cv_for_req).await;
                     if let Ok(_reply) = result {
                         *last_resp.lock() = crate::utils::time::now_ms();
@@ -381,48 +647,149 @@ impl WorkerLoop {
         );
     }
 
-    /// 启动 farm / help / steal tick（随机间隔）
-    pub fn start_farm_ticks(&self, scheduler: &Scheduler) {
-        // farm tick
-        let farm_min_ms = 2000_u64;
-        let farm_max_ms = 2000_u64;
-        let next = self.next_runs.clone();
+    /// 对齐 TS `resetUnifiedSchedule`：首次执行推迟到随机间隔之后，而不是立刻打满
+    fn reset_unified_schedule(&self) {
+        let now = now_ms();
+        let (farm_min, farm_max) = self.interval_range_ms("farm");
+        let (help_min, help_max) = self.interval_range_ms("help");
+        let (steal_min, steal_max) = self.interval_range_ms("steal");
+        let mut next = self.next_runs.lock();
+        next.farm_at = now + random_interval_ms(farm_min, farm_max) as i64;
+        next.help_at = now + random_interval_ms(help_min, help_max) as i64;
+        next.steal_at = now + random_interval_ms(steal_min, steal_max) as i64;
+    }
+
+    /// 启动统一 farm / help / steal tick（对齐 TS `startUnifiedScheduler`）
+    pub fn start_farm_ticks(self: &Arc<Self>, scheduler: &Scheduler) {
+        self.reset_unified_schedule();
+        let this = Arc::clone(self);
         scheduler.set_interval_task(
-            "farm_tick",
+            "unified_tick",
             Duration::from_millis(500),
             Arc::new(move || {
-                let next = next.clone();
+                let this = this.clone();
                 Box::pin(async move {
-                    let now = now_ms();
-                    let mut guard = next.lock();
-                    if now < guard.farm_at {
-                        return;
-                    }
-                    guard.farm_at = now + random_interval_ms(farm_min_ms, farm_max_ms) as i64;
-                    // 实际 runFarmTick 在 on_login_success 中通过独立 task 调
+                    this.run_unified_tick().await;
                 })
             }),
         );
     }
 
-    /// 触发 farm tick（对外暴露给 on_login_success 启动独立 task）
-    pub async fn run_farm_tick(&self) {
+    /// 对齐 TS `startFertilizerBuyCheckTimer`
+    fn start_fertilizer_buy_timer(self: &Arc<Self>, scheduler: &Scheduler) {
+        if !self.auto_on("fertilizer_buy_organic") && !self.auto_on("fertilizer_buy_normal") {
+            scheduler.clear("fertilizer_buy_check");
+            return;
+        }
+        let snap =
+            crate::models::store::account_config::get_account_config_snapshot(Some(&self.account.id));
+        let minutes = snap.fertilizer_buy_check_interval_minutes.max(1) as u64;
+        let this = Arc::clone(self);
+        scheduler.set_interval_task(
+            "fertilizer_buy_check",
+            Duration::from_secs(minutes * 60),
+            Arc::new(move || {
+                let this = this.clone();
+                Box::pin(async move {
+                    this.check_fertilizer_buy_once().await;
+                })
+            }),
+        );
+        crate::services::panel_log::log(
+            &self.account.id,
+            "农场",
+            format!("化肥自动购买检测定时器已启动，间隔 {minutes} 分钟"),
+            Some(serde_json::json!({
+                "module": "farm",
+                "event": "购买化肥计时器",
+                "result": "start",
+                "intervalMinutes": minutes,
+            })),
+        );
+    }
+
+    async fn check_fertilizer_buy_once(&self) {
+        if !self.auto_on("fertilizer_buy_organic") && !self.auto_on("fertilizer_buy_normal") {
+            return;
+        }
+        let snap =
+            crate::models::store::account_config::get_account_config_snapshot(Some(&self.account.id));
+        let commerce = crate::services::commerce::CommerceService::new(
+            self.mall.clone(),
+            self.mystery_shop.clone(),
+            self.warehouse.clone(),
+        );
+        let opts = crate::services::commerce::FertilizerBothOptions {
+            buy_organic: snap.automation.fertilizer_buy_organic,
+            buy_normal: snap.automation.fertilizer_buy_normal,
+            organic_count: snap.fertilizer_buy_organic_count as i32,
+            organic_threshold_hours: snap.fertilizer_buy_organic_threshold_hours as f64,
+            normal_count: snap.fertilizer_buy_normal_count as i32,
+            normal_threshold_hours: snap.fertilizer_buy_normal_threshold_hours as f64,
+        };
+        let _ = commerce.check_and_buy_fertilizer_both(opts).await;
+    }
+
+    /// 对齐 TS `runUnifiedTick`：串行执行，避免并发请求过多导致超时
+    async fn run_unified_tick(&self) {
         if !self.login_ready() {
             return;
         }
-        let auto_farm = automation::is_automation_on("farm");
-        let auto_task = automation::is_automation_on("task");
-        let auto_fertilizer_gift = automation::is_automation_on("fertilizer_gift");
+        if self.unified_tick_running.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let now = now_ms();
+        let (due_farm, due_help, due_steal) = {
+            let guard = self.next_runs.lock();
+            (
+                guard.farm_at > 0 && now >= guard.farm_at,
+                guard.help_at > 0 && now >= guard.help_at,
+                guard.steal_at > 0 && now >= guard.steal_at,
+            )
+        };
+        if due_farm {
+            self.run_farm_tick().await;
+        }
+        if due_help {
+            self.run_help_tick().await;
+        }
+        if due_steal {
+            self.run_steal_tick().await;
+        }
+        self.unified_tick_running.store(false, Ordering::Release);
+    }
 
-        if auto_farm {
-            let _ = self.farm.check_farm().await;
+    /// 触发 farm tick（对外暴露给 on_login_success 启动独立 task）
+    pub async fn run_farm_tick(&self) {
+        if self.farm_tick_running.swap(true, Ordering::AcqRel) {
+            return;
         }
-        if auto_task {
-            let _ = self.task.check_and_claim_tasks().await;
+        let (min_ms, max_ms) = self.interval_range_ms("farm");
+        if self.login_ready() {
+            if crate::services::friend::visit_strategy::in_friend_quiet_hours_for(
+                Some(&self.account.id),
+                None,
+            ) {
+                self.next_runs.lock().farm_at = now_ms() + random_interval_ms(min_ms, max_ms) as i64;
+                self.farm_tick_running.store(false, Ordering::Release);
+                return;
+            }
+            if self.auto_on("farm") {
+                let _ = self.farm.check_farm().await;
+            }
+            if self.auto_on("task") {
+                let _ = self.task.check_and_claim_tasks().await;
+            }
+            if self.auto_on("email") {
+                let _ = self.email.check_and_claim_emails(false).await;
+            }
+            if self.auto_on("fertilizer_gift") {
+                let _ = self.warehouse.auto_open_fertilizer_gift_packs().await;
+            }
+            self.sync_status();
         }
-        if auto_fertilizer_gift {
-            let _ = self.warehouse.auto_open_fertilizer_gift_packs().await;
-        }
+        self.next_runs.lock().farm_at = now_ms() + random_interval_ms(min_ms, max_ms) as i64;
+        self.farm_tick_running.store(false, Ordering::Release);
     }
 
     /// 触发 help tick
@@ -430,12 +797,30 @@ impl WorkerLoop {
         if !self.login_ready() {
             return;
         }
-        let auto_help = automation::is_automation_on("friend_help");
-        if !auto_help {
+        if !self.auto_on("friend_help") {
             return;
         }
-        // 经验满不帮忙：跳过（具体判断在 friend.scheduler 内部）
-        let _ = self.friend.check_friends().await;
+        if self.help_tick_running.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let (min_ms, max_ms) = self.interval_range_ms("help");
+        if crate::services::friend::visit_strategy::in_friend_quiet_hours_for(
+            Some(&self.account.id),
+            None,
+        ) {
+            self.next_runs.lock().help_at = now_ms() + random_interval_ms(min_ms, max_ms) as i64;
+            self.help_tick_running.store(false, Ordering::Release);
+            return;
+        }
+        if self.auto_on("friend_help_exp_limit") && self.friend.is_help_exp_limit_reached() {
+            self.next_runs.lock().help_at = now_ms() + random_interval_ms(min_ms, max_ms) as i64;
+            self.help_tick_running.store(false, Ordering::Release);
+            return;
+        }
+        let _ = self.friend.check_friends_help(&self.account.id).await;
+        self.sync_status();
+        self.next_runs.lock().help_at = now_ms() + random_interval_ms(min_ms, max_ms) as i64;
+        self.help_tick_running.store(false, Ordering::Release);
     }
 
     /// 触发 steal tick
@@ -443,11 +828,29 @@ impl WorkerLoop {
         if !self.login_ready() {
             return;
         }
-        let auto_steal = automation::is_automation_on("friend_steal");
-        if !auto_steal {
+        if !self.auto_on("friend_steal") {
             return;
         }
-        let _ = self.friend.check_friends().await;
+        if self.steal_tick_running.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let (min_ms, max_ms) = self.interval_range_ms("steal");
+        if crate::services::friend::visit_strategy::in_friend_quiet_hours_for(
+            Some(&self.account.id),
+            None,
+        ) {
+            self.next_runs.lock().steal_at = now_ms() + random_interval_ms(min_ms, max_ms) as i64;
+            self.steal_tick_running.store(false, Ordering::Release);
+            return;
+        }
+        let stolen = self.friend.check_friends_steal(&self.account.id).await.unwrap_or(0);
+        if stolen > 0 {
+            tokio::time::sleep(Duration::from_millis(800)).await;
+            let _ = self.warehouse.sell_all_fruits().await;
+        }
+        self.sync_status();
+        self.next_runs.lock().steal_at = now_ms() + random_interval_ms(min_ms, max_ms) as i64;
+        self.steal_tick_running.store(false, Ordering::Release);
     }
 
     /// 跑每日任务
@@ -500,9 +903,18 @@ impl WorkerLoop {
         self.shutdown_started.store(true, Ordering::Release);
         self.is_running.store(false, Ordering::Release);
         self.login_ready.store(false, Ordering::Release);
-        // 停 farm / friend loop
         self.farm.stop_check_loop();
         self.friend.stop_check_loop();
+        if let Some(ace) = self.ace.lock().take() {
+            ace.stop(false);
+        }
+    }
+
+    /// 挂上 ACE runtime（登录成功后，断开时随 quiesce 停）
+    pub fn attach_ace(&self, ace: Arc<crate::services::ace::AceShared>) {
+        if let Some(old) = self.ace.lock().replace(ace) {
+            old.stop(false);
+        }
     }
 
     /// 重启 bot
@@ -510,46 +922,107 @@ impl WorkerLoop {
         self.shutdown_started.store(false, Ordering::Release);
         self.is_running.store(true, Ordering::Release);
         self.login_ready.store(true, Ordering::Release);
-        self.farm.start_check_loop();
-        self.friend.start_check_loop();
+        self.farm.set_external_scheduler(true);
+        self.friend.set_external_scheduler(true);
+        self.reset_unified_schedule();
     }
 
-    /// 同步状态（构造 payload + emit event）
-    pub fn sync_status(&self) {
-        let conn = ConnectionInfo {
-            connected: self.login_ready(),
-            ws_error: None,
-        };
-        let user_state = serde_json::to_value(&status_svc::status_data()).unwrap_or(serde_json::Value::Null);
-        let limits = serde_json::json!({
-            "water": { "used": 0, "max": 30 },
-            "weed": { "used": 0, "max": 30 },
-            "insecticide": { "used": 0, "max": 30 },
-            "steal": { "used": 0, "max": 30 },
+    /// 对齐 TS `onLandsChangedPush`：farm_push 开启时由土地推送触发巡田
+    pub fn on_lands_changed(self: &Arc<Self>, changed_count: usize) {
+        if !self.login_ready() || !self.auto_on("farm_push") {
+            return;
+        }
+        let now = now_ms();
+        let last = self.last_lands_push_at.load(Ordering::Acquire);
+        if now - last < 500 {
+            return;
+        }
+        self.last_lands_push_at.store(now, Ordering::Release);
+        crate::services::panel_log::log(
+            &self.account.id,
+            "农场",
+            format!("收到推送: {changed_count}块土地变化，检查中..."),
+            Some(serde_json::json!({
+                "module": "farm",
+                "event": "lands_notify",
+                "result": "trigger_check",
+                "count": changed_count,
+            })),
+        );
+        let this = Arc::clone(self);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let _ = this.farm.check_farm().await;
         });
-        let automation = serde_json::json!({});
+    }
+
+    /// 同步状态（对齐原 worker `syncStatus`：getStats + nextChecks + automation）
+    pub fn sync_status(&self) {
+        let st = status_svc::status_data_for(&self.account.id);
+        let user = serde_json::json!({
+            "name": st.name,
+            "level": st.level,
+            "gold": st.gold,
+            "exp": st.exp,
+            "platform": st.platform,
+            "coupon": *self.coupon.lock(),
+            "goldBean": *self.gold_bean.lock(),
+        });
+        let connected = self.login_ready();
+        let limits = self.friend.get_operation_limits();
+        let mut full = crate::services::stats::get_stats_for(
+            &self.account.id,
+            Some(&user),
+            Some(&user),
+            connected,
+            limits,
+        );
         let now = now_ms();
         let next = self.next_runs.lock().clone();
-        let payload = StatusSyncPayload {
+        let farm = ((next.farm_at - now) / 1000).max(0);
+        let help = ((next.help_at - now) / 1000).max(0);
+        let steal = ((next.steal_at - now) / 1000).max(0);
+        let auto = crate::models::store::account_config::get_automation(Some(&self.account.id));
+        let preferred = crate::models::store::account_config::get_preferred_seed(Some(&self.account.id));
+        let (current, needed) = crate::config::game_config::global()
+            .get_level_exp_progress(st.level, st.exp);
+        if let Some(obj) = full.as_object_mut() {
+            obj.insert(
+                "nextChecks".to_string(),
+                serde_json::json!({
+                    "farmRemainSec": farm,
+                    "helpRemainSec": help,
+                    "stealRemainSec": steal,
+                    "friendRemainSec": help.max(steal),
+                }),
+            );
+            obj.insert(
+                "automation".to_string(),
+                serde_json::to_value(&auto).unwrap_or(serde_json::json!({})),
+            );
+            obj.insert("preferredSeed".to_string(), serde_json::json!(preferred));
+            obj.insert(
+                "levelProgress".to_string(),
+                serde_json::json!({ "current": current, "needed": needed }),
+            );
+            obj.insert(
+                "configRevision".to_string(),
+                serde_json::json!(self.applied_config_revision.load(Ordering::Acquire)),
+            );
+            obj.insert("accountId".to_string(), serde_json::json!(self.account.id));
+            obj.insert(
+                "accountName".to_string(),
+                serde_json::json!(self.account.display_name),
+            );
+            obj.insert(
+                "uptime".to_string(),
+                serde_json::json!(self.started_at.elapsed().as_secs_f64()),
+            );
+        }
+        let _ = self.event_tx.send(WorkerEvent::Status {
             account_id: self.account.id.clone(),
             account_name: self.account.display_name.clone(),
-            connection: conn,
-            status: user_state,
-            operations: serde_json::json!({}),
-            limits,
-            automation,
-            preferred_seed: 0,
-            config_revision: self.applied_config_revision.load(Ordering::Acquire),
-            next_checks: NextChecks {
-                farm_remain_sec: ((next.farm_at - now) / 1000).max(0),
-                help_remain_sec: ((next.help_at - now) / 1000).max(0),
-                steal_remain_sec: ((next.steal_at - now) / 1000).max(0),
-            },
-        };
-        let _ = self.event_tx.send(WorkerEvent::Status {
-            account_id: payload.account_id.clone(),
-            account_name: payload.account_name.clone(),
-            status: serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null),
+            status: full,
         });
     }
 
@@ -706,7 +1179,7 @@ mod tests {
         Arc::new(Gateway::new(cfg, enc))
     }
 
-    fn make_loop() -> (WorkerLoop, broadcast::Sender<WorkerEvent>) {
+    fn make_loop() -> (Arc<WorkerLoop>, broadcast::Sender<WorkerEvent>) {
         let account = make_account();
         let (tx, _) = broadcast::channel(64);
         let gateway = make_gateway();
@@ -721,7 +1194,7 @@ mod tests {
         let warehouse = Arc::new(WarehouseService::new(gateway.clone()));
         let mystery_shop = Arc::new(MysteryShopService::new(gateway.clone()));
         let activity_center = Arc::new(ActivityCenterService::new(gateway.clone()));
-        let loop_ = WorkerLoop::new(
+        let loop_ = Arc::new(WorkerLoop::new(
             account,
             WorkerLoopConfig::default(),
             gateway,
@@ -737,7 +1210,7 @@ mod tests {
             warehouse,
             mystery_shop,
             activity_center,
-        );
+        ));
         (loop_, tx)
     }
 
@@ -921,6 +1394,14 @@ mod tests {
             // 至少 status_sync 任务注册了
             let snap = scheduler.snapshot();
             assert!(snap.tasks.iter().any(|t| t.name == "status_sync"));
+            loop_.start_farm_ticks(&scheduler);
+            let snap = scheduler.snapshot();
+            assert!(snap.tasks.iter().any(|t| t.name == "unified_tick"));
+            let next = loop_.next_runs.lock().clone();
+            let now = now_ms();
+            assert!(next.farm_at > now, "first farm tick must be delayed like TS resetUnifiedSchedule");
+            assert!(next.help_at > now);
+            assert!(next.steal_at > now);
             scheduler.shutdown();
         });
     }
