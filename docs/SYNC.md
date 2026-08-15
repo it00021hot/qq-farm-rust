@@ -17,7 +17,7 @@
 
 | 仓库 | Commit | 日期 | 说明 |
 |------|--------|------|------|
-| **qq-farm-rust** | `main`（本提交：parity + 心跳/调度/青梅/偷菜空转） | 2026-08-15 | 背包 UID / 出售预检 / 成长刷新 / 捣乱日限 / 全渠道推送 / 保活与统一 tick / 青梅领种 / 偷菜空转 |
+| **qq-farm-rust** | `main`（本提交：parity 总检修复） | 2026-08-15 | 默认值/门控/SEED 生命周期/封禁落盘/帮助经验/捣乱启动 + 既有心跳/统一 tick/青梅/偷菜空转 |
 | **qq-farm-bot** | `04f9d90` | 2026-08-12 | 修复果实是否可售；`core` 包版本 `20260812` |
 
 文档范围：**业务行为 + 面板 HTTP/Socket 契约**（不含改 Vue 面板本身）。
@@ -45,7 +45,7 @@
 | 2C–2G | `4e4b776`–`4aacef7` | 真实网关、种植/op、联调完善 |
 | 2H–2I | `9ee0cae`–`25dda13` | 微信扫码真接 + 扫码后启动 worker |
 | 热修 | `c5386e6`、`c19f52c` | 登录后农场调度、好友列表大包超时 |
-| parity | 本提交 | 背包 UID、出售预检、成长链刷新、捣乱日限落盘、面板 19 渠道推送、心跳/统一 tick、青梅领种、偷菜空转 |
+| parity | 本提交 | 总检修复：默认值单一源、sell/静默/email 门控、SEED/left_inorc/施肥 fail-closed、封禁落盘、帮助经验、捣乱启动、访客 GID、配置后补肥；保留偷菜空访/青梅落盘增强 |
 
 业务是否「齐」以本文矩阵为准。
 
@@ -63,10 +63,10 @@
 | 连网进游戏 | 齐 | 经 Gateway + TSDK 登录并维持心跳 | `network/*`, `crypto/tsdk.rs` |
 | QQ 小程序扫码拿码 | 齐 | 面板可走 QQ 码登录流程 | `services/qrlogin.rs` |
 | 微信扫码拿码并启动 | 齐 | 扫码 → auth_code → worker；用过的码不可重连 | `services/wx_login/*`, `routes/wx_login.rs` |
-| 本田务农循环 | 齐 | 除草除虫浇水 → 收获 → 铲除 → 种植（含多格）→ 施肥/解锁升级；策略与植物黑名单生效 | `services/farm/*`, `runtime/worker_loop.rs` |
-| 好友帮助 / 偷菜 / 捣乱 | 齐 | 列表、访问、帮助、偷菜（stealers/空访跳过）、静默、黑名单；捣乱按日限切片/落盘/`1001046` 停 | `services/friend/*` |
+| 本田务农循环 | 齐 | 除草除虫浇水 → 收获 → 铲除 → 种植（含多格）→ 施肥/解锁升级；默认策略/skip_own_weed_bug/smart 秒数对齐 bot | `services/farm/*`, `runtime/worker_loop.rs` |
+| 好友帮助 / 偷菜 / 捣乱 | 齐 | 列表、访问、帮助（经验门控）、偷菜（stealers/空访跳过）、静默、黑名单落盘；捣乱按日限/启动筛选/`1001046` 停 | `services/friend/*` |
 | 背包展示与操作 | 齐 | 按 UID 堆分行；含 `key`/`uid`/`mutantTypes`/`groupKey`；系统物品分离 | `services/warehouse.rs` |
-| 自动/手动出售果实 | 齐 | 自动跳过不可售；手动 `sell_items` 预检拒绝不可售 | `warehouse` + `game_config` |
+| 自动/手动出售果实 | 齐 | 自动受 `sell` 开关；跳过不可售；手动 `sell_items` 预检拒绝不可售 | `warehouse` + `game_config` + `worker_loop` |
 | 商城 / 神秘商店 / 月卡 / 钻石 | 齐 | 列表、购买（神秘 Buy 无回包）、月卡、充值信息 | `mall`, `mystery_shop`, `monthcard`, `pay`, `commerce` |
 | 日常领取 | 齐 | 任务（成长 claim 后刷新 TaskInfo + `currentTask`）、邮件、分享等 | `task`, `email`, `share`, … |
 | 活动中心 | 齐 | 千星游记、观星、星砂、节令、青梅（含已领幂等） | `activity_center*` |
@@ -181,3 +181,23 @@
   - 进场无可偷时按 `(gid, steal_plant_num)` 记空访标记，指标不变则跳过；有偷成功或指标变化后恢复
   - 去掉「开始批量偷菜」面板日志；进入失败补 `log_warn`（对齐 bot）
 - 能力状态：偷菜空转应对齐；需重扫码后观察不再刷开始日志，有可偷时应出现 `好友名: 偷N(...)`
+### 2026-08-15 — 业务对齐总检修复（代码侧）
+
+- 基准：rust 工作区 / bot `04f9d90`
+- 策略：业务目标一致；保留偷菜 `stealers`/空访与青梅已领落盘增强
+- 修复（意外偏离）：
+  1. **默认值**：`normalize::default_account_config` 对齐 bot；`types` Default 委托单一源（含 `skip_own_weed_bug`/`max_exp`/`steal 20–25`/`friend_help_exp_limit`/`smart=300`/`bagSeedPriority=[]`）
+  2. **worker 门控**：收获出售看 `sell`；静默不再挡住本田 tick；farm tick 不再领邮件
+  3. **本田**：SEED→growing；`left_inorc` 用 optional presence；背包失败不误购；拉地失败施肥 fail-closed
+  4. **好友**：封禁写账号黑名单落盘；失效 GID 移除+冷却；帮助经验 `canGetExp*`；`help_farm` 用 `results` + `1001057` noop；捣乱用真实 `my_gid`；启动捣乱按 idle+等级 top20 + `visit_friend`
+  5. **其它**：访客补充 known GID；配置保存后施肥模式变更立即补肥；分享 Report 失败中止 Claim；删除未接线的 season_progress 死配置
+- 能力状态：矩阵保持 **齐**（代码侧已知业务差已清）；**L1–L8 仍待真实账号实机勾选**
+### 2026-08-15 — 残留高影响差修复
+
+- 基准：bot `04f9d90`；上轮 P0–P3 已落地后对照复测
+- 修复：
+  1. **本田静默**：`check_farm` 改 `in_friend_quiet_hours_for(account_id)`，账号静默配置生效（worker 仍跑 task/补肥）
+  2. **visit_friend**：帮/偷/捣乱改 `is_automation_on_for`；增加 `can_get_exp_by_candidates`；启动捣乱传入帮助经验门控
+  3. **访客 GID 同步**：`knownFriendGidSyncCooldownSec` 进程内按账号节流；失败缩短冷却
+- 明确不改：施肥拉地失败 fail-closed（比 bot 更严，保守）
+- 能力状态：矩阵保持 **齐**；实机冒烟未见异常，**L1–L8 清单仍待逐项勾选**

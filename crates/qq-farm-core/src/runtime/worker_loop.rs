@@ -63,8 +63,6 @@ pub struct WorkerLoopConfig {
     pub status_interval: Duration,
     /// 每日跨日检查间隔
     pub daily_routine_interval: Duration,
-    /// 赛季进度刷新间隔
-    pub season_progress_interval: Duration,
     /// 心跳间隔（原 TS `CONFIG.heartbeatInterval`，默认 25s）
     pub heartbeat_interval: Duration,
     /// 心跳超时（30s 无响应则强制重连）
@@ -78,7 +76,6 @@ impl Default for WorkerLoopConfig {
         Self {
             status_interval: Duration::from_secs(3),
             daily_routine_interval: Duration::from_secs(30),
-            season_progress_interval: Duration::from_secs(300),
             heartbeat_interval: Duration::from_secs(25),
             heartbeat_timeout: Duration::from_secs(30),
             client_version: crate::config::DEFAULT_CLIENT_VERSION.to_string(),
@@ -138,6 +135,8 @@ pub struct WorkerLoop {
     last_lands_push_at: AtomicI64,
     harvest_sell_running: Arc<AtomicBool>,
     harvest_sell_pending: Arc<AtomicBool>,
+    /// 上次已应用的施肥模式（用于配置保存后立即施肥）
+    last_fertilizer_mode: Mutex<crate::models::types::FertilizerMode>,
     /// 点券 / 金豆豆（对齐 TS userState.coupon / goldBean）
     coupon: Mutex<i64>,
     gold_bean: Mutex<i64>,
@@ -273,6 +272,7 @@ impl WorkerLoop {
             last_lands_push_at: AtomicI64::new(0),
             harvest_sell_running: Arc::new(AtomicBool::new(false)),
             harvest_sell_pending: Arc::new(AtomicBool::new(false)),
+            last_fertilizer_mode: Mutex::new(crate::models::types::FertilizerMode::None),
             coupon: Mutex::new(0),
             gold_bean: Mutex::new(0),
             ace: Mutex::new(None),
@@ -346,9 +346,14 @@ impl WorkerLoop {
         prev != rev
     }
 
-    /// 对齐 TS `applyRuntimeConfig`：revision + 重置统一调度（external 模式下不启内部 check_loop）
+    /// 对齐 TS `applyRuntimeConfig`：revision + 重置统一调度 + 施肥模式变更立即补肥
     pub fn apply_runtime_config(self: &Arc<Self>, rev: u64, scheduler: &Scheduler) {
         self.apply_config_revision(rev);
+        let auto = crate::models::store::account_config::get_automation(Some(&self.account.id));
+        let next_mode = auto.fertilizer;
+        let prev_mode = *self.last_fertilizer_mode.lock();
+        *self.last_fertilizer_mode.lock() = next_mode;
+
         if self.login_ready() {
             self.reset_unified_schedule();
             let intervals =
@@ -358,6 +363,45 @@ impl WorkerLoop {
             ));
             if self.unified_scheduler_running.load(Ordering::Acquire) {
                 self.schedule_unified_next_tick(scheduler);
+            }
+
+            // 对齐 bot：施肥模式变更且目标为 both/organic/smart 时，600ms 后立即有机补肥
+            if prev_mode != next_mode
+                && matches!(
+                    next_mode,
+                    crate::models::types::FertilizerMode::Both
+                        | crate::models::types::FertilizerMode::Organic
+                        | crate::models::types::FertilizerMode::Smart
+                )
+            {
+                let this = Arc::clone(self);
+                scheduler.set_timeout_task(
+                    "fertilizer_immediate_after_save",
+                    Duration::from_millis(600),
+                    Arc::new(move || {
+                        let this = Arc::clone(&this);
+                        Box::pin(async move {
+                            if !this.login_ready() {
+                                return;
+                            }
+                            let gid = *this.gid.lock();
+                            let planting = this.farm.planting();
+                            let _ = planting
+                                .lock()
+                                .await
+                                .fertilize_by_config_ex(
+                                    &[],
+                                    gid,
+                                    &this.account.id,
+                                    crate::services::farm::planting::FertilizeOptions {
+                                        skip_normal: true,
+                                        ..Default::default()
+                                    },
+                                )
+                                .await;
+                        })
+                    }),
+                );
             }
         }
         self.sync_status();
@@ -377,15 +421,24 @@ impl WorkerLoop {
         self.activity_center.set_warehouse(self.warehouse.clone());
         self.farm.set_external_scheduler(true);
         self.friend.set_external_scheduler(true);
+        *self.last_fertilizer_mode.lock() =
+            crate::models::store::account_config::get_automation(Some(&self.account.id)).fertilizer;
 
         let mut harvest_rx = self.farm.subscribe();
         let warehouse = self.warehouse.clone();
         let harvest_sell_running = self.harvest_sell_running.clone();
         let harvest_sell_pending = self.harvest_sell_pending.clone();
+        let harvest_account_id = self.account.id.clone();
         tokio::spawn(async move {
             loop {
                 match harvest_rx.recv().await {
                     Ok(crate::services::farm::scheduler::FarmEvent::Harvested { .. }) => {
+                        if !crate::services::automation::is_automation_on_for(
+                            &harvest_account_id,
+                            "sell",
+                        ) {
+                            continue;
+                        }
                         if harvest_sell_running.swap(true, Ordering::AcqRel) {
                             harvest_sell_pending.store(true, Ordering::Release);
                             continue;
@@ -882,23 +935,14 @@ impl WorkerLoop {
         }
         let (min_ms, max_ms) = self.interval_range_ms("farm");
         if self.login_ready() {
-            if crate::services::friend::visit_strategy::in_friend_quiet_hours_for(
-                Some(&self.account.id),
-                None,
-            ) {
-                self.next_runs.lock().farm_at = now_ms() + random_interval_ms(min_ms, max_ms) as i64;
-                self.farm_tick_running.store(false, Ordering::Release);
-                return;
-            }
+            // 静默时段仅作用于好友帮助/偷菜；本田 tick 仍跑（对齐 bot worker.ts）
             if self.auto_on("farm") {
                 let _ = self.farm.check_farm().await;
             }
             if self.auto_on("task") {
                 let _ = self.task.check_and_claim_tasks().await;
             }
-            if self.auto_on("email") {
-                let _ = self.email.check_and_claim_emails(false).await;
-            }
+            // bot 无 auto.email：邮件只走日更 run_daily_routines，不在 farm tick 领取
             if self.auto_on("fertilizer_gift") {
                 let _ = self.warehouse.auto_open_fertilizer_gift_packs().await;
             }
@@ -984,11 +1028,6 @@ impl WorkerLoop {
         let _ = self.mall.buy_free_gifts(force).await;
         // qqvip
         let _ = self.qqvip.perform_daily_vip_gift(force).await;
-    }
-
-    /// 刷新赛季进度
-    pub async fn refresh_season_progress(&self) {
-        let _ = self.activity_center.refresh_season_pass().await;
     }
 
     /// 处理 kickout（用户被踢下线）
@@ -1528,6 +1567,6 @@ mod tests {
         let cfg = WorkerLoopConfig::default();
         assert_eq!(cfg.status_interval, Duration::from_secs(3));
         assert_eq!(cfg.daily_routine_interval, Duration::from_secs(30));
-        assert_eq!(cfg.season_progress_interval, Duration::from_secs(300));
+        assert_eq!(cfg.heartbeat_interval, Duration::from_secs(25));
     }
 }

@@ -14,13 +14,49 @@ use crate::proto::generated::gamepb::friendpb::{
     GameFriend, GetAllReply, GetAllRequest, GetGameFriendsReply, GetGameFriendsRequest, SyncAllReply,
     SyncAllRequest,
 };
-use crate::proto::generated::gamepb::plantpb::{LandInfo, OperationLimit};
+use crate::proto::generated::gamepb::plantpb::OperationLimit;
 use crate::proto::generated::gamepb::visitpb::{EnterReply, EnterRequest, LeaveRequest};
 
 const DEFAULT_TIMEOUT_MS: u64 = 20_000;
 const QQ_FRIEND_LIST_BATCH_SIZE: usize = 35;
 /// 同一时刻 Vue `/api/friends` 与巡查都会打 GetAll，合并 800ms 内的成功结果。
 const FRIEND_LIST_COALESCE_MS: u64 = 800;
+
+fn last_visitor_gid_sync_at() -> &'static parking_lot::Mutex<std::collections::HashMap<String, Instant>> {
+    use std::sync::OnceLock;
+    static MAP: OnceLock<parking_lot::Mutex<std::collections::HashMap<String, Instant>>> =
+        OnceLock::new();
+    MAP.get_or_init(|| parking_lot::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// 帮助 Farming 效果（对齐 bot `HelpFarmingOutcome.effect`）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelpFarmEffect {
+    Confirmed,
+    Uncertain,
+    Noop,
+}
+
+/// 帮助 Farming 结果
+#[derive(Debug, Clone)]
+pub struct HelpFarmOutcome {
+    pub effect: HelpFarmEffect,
+    pub land_ids: Vec<i64>,
+    pub operation_count: i64,
+    pub code: i64,
+}
+
+impl HelpFarmOutcome {
+    #[must_use]
+    pub fn noop() -> Self {
+        Self {
+            effect: HelpFarmEffect::Noop,
+            land_ids: vec![],
+            operation_count: 0,
+            code: 0,
+        }
+    }
+}
 
 /// 好友 API 客户端
 #[derive(Clone)]
@@ -187,7 +223,19 @@ impl FriendApi {
 
     async fn fetch_qq_friends(&self) -> Result<Vec<GameFriend>> {
         let account_id = self.account_id.lock().clone();
-        let known = crate::models::store::account_config::get_known_friend_gids(Some(&account_id));
+        let _ = self
+            .sync_known_friend_gids_from_recent_visitors(&account_id)
+            .await;
+        let known: Vec<i64> =
+            crate::models::store::account_config::get_known_friend_gids(Some(&account_id))
+                .into_iter()
+                .filter(|gid| {
+                    *gid > 0
+                        && !crate::services::friend::visit_strategy::is_known_friend_gid_invalid(
+                            *gid,
+                        )
+                })
+                .collect();
         let mut all = Vec::new();
         for chunk in known.chunks(QQ_FRIEND_LIST_BATCH_SIZE) {
             let body = GetGameFriendsRequest {
@@ -225,6 +273,10 @@ impl FriendApi {
         }
         all = dedupe_friends_by_gid(all);
         if !all.is_empty() {
+            if !account_id.is_empty() {
+                let gids: Vec<i64> = all.iter().map(|f| f.gid).filter(|g| *g > 0).collect();
+                crate::models::store::account_config::add_known_friend_gids(&account_id, &gids);
+            }
             return Ok(all);
         }
 
@@ -267,7 +319,88 @@ impl FriendApi {
                 })),
             );
         }
+        if !all.is_empty() && !account_id.is_empty() {
+            let gids: Vec<i64> = all.iter().map(|f| f.gid).filter(|g| *g > 0).collect();
+            crate::models::store::account_config::add_known_friend_gids(&account_id, &gids);
+        }
         Ok(all)
+    }
+
+    /// 对齐 bot `syncKnownFriendGidsFromRecentVisitors`（含 cooldown 节流）
+    async fn sync_known_friend_gids_from_recent_visitors(&self, account_id: &str) -> Result<()> {
+        if account_id.is_empty() {
+            return Ok(());
+        }
+        let cooldown_sec =
+            crate::models::store::account_config::get_known_friend_gid_sync_cooldown_sec(Some(
+                account_id,
+            ));
+        let cooldown = Duration::from_secs(cooldown_sec.max(0) as u64);
+        {
+            let map = last_visitor_gid_sync_at().lock();
+            if let Some(at) = map.get(account_id) {
+                if cooldown > Duration::ZERO && at.elapsed() < cooldown {
+                    return Ok(());
+                }
+            }
+        }
+        let interact = crate::services::interact::InteractService::new(self.gateway.clone());
+        let records = match interact.get_interact_records().await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("同步最近访客 GID 失败: {e}");
+                // 对齐 bot：失败时缩短冷却，允许更快重试
+                let retry = if cooldown > Duration::ZERO {
+                    cooldown / 2
+                } else {
+                    Duration::from_secs(30)
+                };
+                let adjusted = Instant::now()
+                    .checked_sub(cooldown.saturating_sub(retry))
+                    .unwrap_or_else(Instant::now);
+                last_visitor_gid_sync_at()
+                    .lock()
+                    .insert(account_id.to_string(), adjusted);
+                return Ok(());
+            }
+        };
+        last_visitor_gid_sync_at()
+            .lock()
+            .insert(account_id.to_string(), Instant::now());
+        let visitor_gids: Vec<i64> = records
+            .iter()
+            .map(|r| r.visitor_gid)
+            .filter(|gid| {
+                *gid > 0
+                    && !crate::services::friend::visit_strategy::is_known_friend_gid_invalid(*gid)
+            })
+            .collect();
+        if visitor_gids.is_empty() {
+            return Ok(());
+        }
+        let before =
+            crate::models::store::account_config::get_known_friend_gids(Some(account_id)).len();
+        let merged =
+            crate::models::store::account_config::add_known_friend_gids(account_id, &visitor_gids);
+        let added = merged.len().saturating_sub(before);
+        if added > 0 {
+            crate::services::panel_log::log(
+                account_id,
+                "好友",
+                format!(
+                    "已从最近访客自动补充 {added} 个 GID，当前已知好友 GID 共 {} 个",
+                    merged.len()
+                ),
+                Some(serde_json::json!({
+                    "module": "friend",
+                    "event": "访客补充好友GID",
+                    "result": "ok",
+                    "addedFromVisitors": added,
+                    "totalKnownGids": merged.len(),
+                })),
+            );
+        }
+        Ok(())
     }
 
     /// 拉取待处理好友申请（对齐 TS `getApplications`）
@@ -361,16 +494,27 @@ impl FriendApi {
     /// 帮好友锄草（对应原 `helpFarming`）
     ///
     /// FarmingRequest 字段：land_ids + host_gid + field_3(0) + field_4(2=帮)
-    pub async fn help_farm(&self, host_gid: i64, land_ids: Vec<i64>) -> Result<Vec<LandInfo>> {
+    /// 成功以 `results` 为准（对齐 bot）；`1001057` 视为 noop。
+    pub async fn help_farm(&self, host_gid: i64, land_ids: Vec<i64>) -> Result<HelpFarmOutcome> {
         use crate::proto::generated::gamepb::plantpb::{FarmingReply, FarmingRequest};
+        let target: Vec<i64> = {
+            let mut seen = std::collections::HashSet::new();
+            land_ids
+                .into_iter()
+                .filter(|id| *id > 0 && seen.insert(*id))
+                .collect()
+        };
+        if target.is_empty() {
+            return Ok(HelpFarmOutcome::noop());
+        }
         let body = FarmingRequest {
-            land_ids,
+            land_ids: target,
             host_gid,
             field_3: 0,
             field_4: 2,
         }
         .encode_to_vec();
-        let resp = self
+        let resp = match self
             .gateway
             .request(
                 "gamepb.plantpb.PlantService",
@@ -378,13 +522,40 @@ impl FriendApi {
                 &body,
                 DEFAULT_TIMEOUT_MS,
             )
-            .await?;
-        FarmingReply::decode(&*resp)
-            .map(|r| {
-                self.fire_operation_limits(r.operation_limits);
-                r.land
-            })
-            .map_err(Error::from)
+            .await
+        {
+            Ok(r) => r,
+            Err(crate::network::error::NetworkError::Gateway { code: 1_001_057, .. }) => {
+                return Ok(HelpFarmOutcome {
+                    effect: HelpFarmEffect::Noop,
+                    land_ids: vec![],
+                    operation_count: 0,
+                    code: 1_001_057,
+                });
+            }
+            Err(e) => return Err(e.into()),
+        };
+        let reply = FarmingReply::decode(&*resp).map_err(Error::from)?;
+        self.fire_operation_limits(reply.operation_limits);
+        let confirmed: Vec<i64> = {
+            let mut seen = std::collections::HashSet::new();
+            reply
+                .results
+                .iter()
+                .map(|r| r.land_id)
+                .filter(|id| *id > 0 && seen.insert(*id))
+                .collect()
+        };
+        Ok(HelpFarmOutcome {
+            effect: if confirmed.is_empty() {
+                HelpFarmEffect::Uncertain
+            } else {
+                HelpFarmEffect::Confirmed
+            },
+            operation_count: reply.results.len() as i64,
+            land_ids: confirmed,
+            code: 0,
+        })
     }
 
     /// 帮好友浇水（对应原 `helpWater`）

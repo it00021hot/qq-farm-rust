@@ -409,6 +409,25 @@ impl FriendService {
         &self.api
     }
 
+    /// 对齐 TS `canGetExp`
+    #[must_use]
+    pub fn can_get_exp(&self, op_id: i64) -> bool {
+        let map = self.operation_limits.lock();
+        let Some(limit) = map.get(&op_id) else {
+            return false; // 没有限制信息，保守起见不帮助
+        };
+        if limit.day_exp_times_limit <= 0 {
+            return true;
+        }
+        limit.day_exp_times < limit.day_exp_times_limit
+    }
+
+    /// 对齐 TS `canGetExpByCandidates`
+    #[must_use]
+    pub fn can_get_exp_by_candidates(&self, op_ids: &[i64]) -> bool {
+        op_ids.iter().any(|id| self.can_get_exp(*id))
+    }
+
     /// 对齐 TS `isHelpExpLimitReached`
     #[must_use]
     pub fn is_help_exp_limit_reached(&self) -> bool {
@@ -578,7 +597,11 @@ impl FriendService {
             if f.gid == my_gid || f.gid <= 0 || !seen.insert(f.gid) {
                 continue;
             }
-            if cfg_blacklist.contains(&f.gid) || self.strategy.is_blacklisted(f.gid) {
+            if cfg_blacklist.contains(&f.gid)
+                || self.strategy.is_blacklisted(f.gid)
+                || crate::services::friend::visit_strategy::is_friend_blacklisted(account_id, f.gid)
+                || crate::services::friend::visit_strategy::is_known_friend_gid_invalid(f.gid)
+            {
                 continue;
             }
             let summary =
@@ -699,6 +722,7 @@ impl FriendService {
                         "friendName": friend.name,
                     })),
                 );
+                let can_exp = self.can_get_exp_by_candidates(&[10005, 10006, 10007]);
                 let _ = crate::services::friend::visit_strategy::visit_friend_for_help(
                     &self.api,
                     recent,
@@ -708,6 +732,7 @@ impl FriendService {
                     account_id,
                     false,
                     &self.help_auto_disabled,
+                    can_exp,
                 )
                 .await;
                 crate::utils::random::random_delay(500, 800).await;
@@ -764,9 +789,46 @@ impl FriendService {
         if my_gid == 0 {
             return Ok(0);
         }
-        let friends = self.api.get_friends_list().await.unwrap_or_default();
-        let mut acted = 0usize;
-        for &fg in friends.iter().take(20) {
+        let friends = match self.api.get_all_game_friends().await {
+            Ok(f) => f,
+            Err(_) => return Ok(0),
+        };
+        let blacklist =
+            crate::models::store::account_config::get_friend_blacklist(Some(account_id));
+        let mut bad_friends: Vec<crate::services::friend::visit_strategy::FriendSummary> =
+            Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for f in friends {
+            let summary =
+                crate::services::friend::visit_strategy::game_friend_to_summary(f);
+            if summary.gid == my_gid || summary.gid <= 0 || !seen.insert(summary.gid) {
+                continue;
+            }
+            if blacklist.contains(&summary.gid)
+                || self.strategy.is_blacklisted(summary.gid)
+                || crate::services::friend::visit_strategy::is_friend_blacklisted(
+                    account_id,
+                    summary.gid,
+                )
+            {
+                continue;
+            }
+            let idle = summary
+                .plant
+                .as_ref()
+                .map(|p| p.steal_num == 0 && p.dry_num == 0 && p.weed_num == 0 && p.insect_num == 0)
+                .unwrap_or(true);
+            if idle {
+                bad_friends.push(summary);
+            }
+        }
+        bad_friends.sort_by(|a, b| b.level.cmp(&a.level));
+        bad_friends.truncate(20);
+
+        let recent = self.strategy.recent_help();
+        let mut total = crate::services::friend::visit_strategy::TotalActions::default();
+        let mut processed = 0usize;
+        for friend in &bad_friends {
             if self.is_bad_operation_limit_reached() {
                 break;
             }
@@ -774,22 +836,21 @@ impl FriendService {
                 self.mark_bad_operation_limit_reached("operation_limit");
                 break;
             }
-            if fg == my_gid || self.strategy.is_blacklisted(fg) {
-                continue;
-            }
-            let enter = match self.api.enter_farm(fg).await {
-                Ok(r) => r,
-                Err(_) => continue,
-            };
-            let result =
-                crate::services::friend::visit_strategy::do_bad_op(&self.api, fg, &enter.lands)
-                    .await;
-            let _ = self.api.leave_farm(fg).await;
-            if result.get("count").and_then(|v| v.as_u64()).unwrap_or(0) > 0 {
-                acted += 1;
-            }
+            let can_exp = self.can_get_exp_by_candidates(&[10005, 10006, 10007]);
+            let _ = crate::services::friend::visit_strategy::visit_friend(
+                &self.api,
+                recent,
+                friend,
+                &mut total,
+                my_gid,
+                account_id,
+                can_exp,
+            )
+            .await;
+            processed += 1;
+            crate::utils::random::random_delay(2000, 3500).await;
         }
-        Ok(acted)
+        Ok(processed)
     }
 
     /// 启动巡访循环
@@ -949,18 +1010,18 @@ impl FriendService {
             // 3d. 帮（锄草）
             if !to_help.is_empty() {
                 match api.help_farm(friend_gid, to_help.clone()).await {
-                    Ok(confirmed_lands) => {
-                        let confirmed_ids: Vec<i64> =
-                            confirmed_lands.iter().map(|l| l.id).collect();
+                    Ok(outcome) => {
                         strategy.recent_help().mark(
                             friend_gid,
-                            &confirmed_ids,
+                            &outcome.land_ids,
                             HelpState::Confirmed,
                             HELP_RESULT_TTL_MS,
                             &snapshot_key,
                             now,
                         );
-                        helped += 1;
+                        if !outcome.land_ids.is_empty() {
+                            helped += 1;
+                        }
                     }
                     Err(e) => {
                         let msg = format!("{e}");
@@ -1141,11 +1202,15 @@ impl FriendService {
         op: crate::models::types::FriendOperation,
         gid: i64,
     ) -> Result<serde_json::Value> {
+        let my_gid = *self.host_gid.lock();
+        let account_id = self.account_id.lock().clone();
         Ok(crate::services::friend::visit_strategy::do_friend_operation(
             &self.api,
             self.strategy.recent_help(),
             gid,
             op,
+            my_gid,
+            &account_id,
         )
         .await)
     }

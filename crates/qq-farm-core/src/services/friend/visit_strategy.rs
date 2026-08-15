@@ -1,20 +1,8 @@
 //! 拜访好友策略 —— 1:1 翻译原 `core/src/services/friend/visit-strategy.ts`。
 //!
-//! 核心：避免重复帮同一块地（recent help 去重）+ 错误分类。
+//! 核心：避免重复帮同一块地（recent help 去重）+ 错误分类 + 帮助/偷菜/捣乱。
 //!
-//! ## 阶段 1D 范围（本文件）
-//!
-//! - [`RecentHelp`] 状态机：in_flight / confirmed / noop
-//! - [`prune_recent_help`] 清理过期 + LRU 限流（`HELP_CACHE_MAX = 2048`）
-//! - [`get_help_snapshot_key`] 土地快照（用于检测"土地状态变化"）
-//! - [`filter_recent_help`] 过滤掉已帮过的（除非快照变了）
-//! - [`mark_recent_help`] / [`release_recent_help`]
-//! - 错误检测（`is_enter_farm_banned_error` / `is_transient_network_error` / `parse_rpc_error_code`）
-//!
-//! ## 阶段 1D.2 范围（待办）
-//!
-//! - 完整策略（安静时段、好友 / 植物黑名单、选访问目标）
-//! - gift/wish 流程
+//! 含：RecentHelp 状态机、安静时段、好友/植物黑名单、空访跳过、stealers 过滤。
 
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -401,40 +389,125 @@ pub fn friend_blacklist() -> &'static PMutex<std::collections::HashMap<i64, Stri
     BLACKLIST.get_or_init(|| PMutex::new(std::collections::HashMap::new()))
 }
 
-/// 加入好友黑名单
-pub fn add_friend_to_blacklist(friend_gid: i64, friend_name: &str, reason: &str) -> bool {
+/// 加入好友黑名单（持久化到账号配置，对齐 bot `postToMaster(friend_blacklist_add)`）
+pub fn add_friend_to_blacklist(
+    account_id: &str,
+    friend_gid: i64,
+    friend_name: &str,
+    reason: &str,
+) -> bool {
     if friend_gid == 0 {
         return false;
     }
-    let mut map = friend_blacklist().lock();
-    if map.contains_key(&friend_gid) {
+    let added = if account_id.is_empty() {
+        // 无账号上下文时仅写进程内（测试 / 遗留路径）
+        let mut map = friend_blacklist().lock();
+        if map.contains_key(&friend_gid) {
+            return false;
+        }
+        map.insert(friend_gid, reason.to_string());
+        true
+    } else {
+        crate::models::store::account_config::add_friend_to_blacklist(account_id, friend_gid)
+    };
+    if !added {
         return false;
     }
-    map.insert(friend_gid, reason.to_string());
+    // 同步内存加速表
+    friend_blacklist()
+        .lock()
+        .insert(friend_gid, reason.to_string());
     tracing::warn!(
         friend_gid,
         friend_name = %friend_name,
         reason = %reason,
+        account_id = %account_id,
         "好友已加入黑名单"
     );
     true
 }
 
-/// 移除黑名单
+/// 移除黑名单（进程内表；持久化请走 account_config）
 pub fn remove_from_blacklist(friend_gid: i64) -> bool {
     friend_blacklist().lock().remove(&friend_gid).is_some()
 }
 
-/// 是否在黑名单
+/// 是否在黑名单（进程内表 ∪ 若提供 account_id 则含账号配置）
 #[must_use]
 pub fn is_in_blacklist(friend_gid: i64) -> bool {
     friend_blacklist().lock().contains_key(&friend_gid)
+}
+
+/// 是否在账号黑名单（配置落盘源）
+#[must_use]
+pub fn is_friend_blacklisted(account_id: &str, friend_gid: i64) -> bool {
+    if friend_gid <= 0 {
+        return false;
+    }
+    if is_in_blacklist(friend_gid) {
+        return true;
+    }
+    if account_id.is_empty() {
+        return false;
+    }
+    crate::models::store::account_config::get_friend_blacklist(Some(account_id)).contains(&friend_gid)
 }
 
 /// 黑名单大小
 #[must_use]
 pub fn blacklist_size() -> usize {
     friend_blacklist().lock().len()
+}
+
+const INVALID_KNOWN_FRIEND_GID_COOLDOWN_MS: u64 = 24 * 60 * 60 * 1000;
+
+fn invalid_known_friend_gid_cooldown() -> &'static PMutex<HashMap<i64, u64>> {
+    use std::sync::OnceLock;
+    static MAP: OnceLock<PMutex<HashMap<i64, u64>>> = OnceLock::new();
+    MAP.get_or_init(|| PMutex::new(HashMap::new()))
+}
+
+/// 标记失效 known GID（24h 冷却，对齐 bot `markKnownFriendGidInvalid`）
+pub fn mark_known_friend_gid_invalid(friend_gid: i64) {
+    if friend_gid <= 0 {
+        return;
+    }
+    let until = now_ms().saturating_add(INVALID_KNOWN_FRIEND_GID_COOLDOWN_MS);
+    invalid_known_friend_gid_cooldown()
+        .lock()
+        .insert(friend_gid, until);
+}
+
+/// 是否在失效冷却期
+#[must_use]
+pub fn is_known_friend_gid_invalid(friend_gid: i64) -> bool {
+    let now = now_ms();
+    let mut map = invalid_known_friend_gid_cooldown().lock();
+    map.retain(|_, until| *until > now);
+    map.contains_key(&friend_gid)
+}
+
+/// 移除失效好友 GID（对齐 bot `removeKnownFriendGid`）
+pub fn remove_invalid_known_friend_gid(
+    account_id: &str,
+    friend_gid: i64,
+    friend_name: &str,
+    reason: &str,
+) -> bool {
+    if friend_gid <= 0 {
+        return false;
+    }
+    mark_known_friend_gid_invalid(friend_gid);
+    if !account_id.is_empty() {
+        crate::models::store::account_config::remove_known_friend_gid(account_id, friend_gid);
+    }
+    tracing::warn!(
+        friend_gid,
+        friend_name = %friend_name,
+        reason = %reason,
+        "检测到失效好友 GID，已自动移除"
+    );
+    true
 }
 
 /// 检测"好友关系失效"错误（无效 / 不存在 / 删除 / 关系 / not found / invalid）
@@ -460,15 +533,17 @@ pub fn is_invalid_friend_access_error(error_message: &str) -> bool {
 /// 返回 `{ handled, kind }`：`blacklist` / `invalid_removed` / `error`
 #[must_use]
 pub fn handle_friend_enter_error(
+    account_id: &str,
     friend_gid: i64,
     friend_name: &str,
     error_message: &str,
 ) -> FriendEnterErrorKind {
     if is_enter_farm_banned_error(error_message) {
-        add_friend_to_blacklist(friend_gid, friend_name, error_message);
+        add_friend_to_blacklist(account_id, friend_gid, friend_name, error_message);
         return FriendEnterErrorKind::Blacklist;
     }
     if is_invalid_friend_access_error(error_message) {
+        remove_invalid_known_friend_gid(account_id, friend_gid, friend_name, error_message);
         return FriendEnterErrorKind::InvalidRemoved;
     }
     FriendEnterErrorKind::Error
@@ -555,41 +630,57 @@ pub fn plant_blacklist() -> &'static PMutex<std::collections::HashMap<String, Ve
     MAP.get_or_init(|| PMutex::new(std::collections::HashMap::new()))
 }
 
-/// 设置植物黑名单
+/// 设置植物黑名单（内存镜像 + 账号配置落盘）
 pub fn set_plant_blacklist(account_id: &str, seeds: Vec<i64>) {
-    plant_blacklist().lock().insert(account_id.to_string(), seeds);
-}
-
-/// 获取植物黑名单
-#[must_use]
-pub fn get_plant_blacklist(account_id: &str) -> Vec<i64> {
     plant_blacklist()
         .lock()
-        .get(account_id)
-        .cloned()
-        .unwrap_or_default()
+        .insert(account_id.to_string(), seeds.clone());
+    if !account_id.is_empty() {
+        let _ = crate::models::store::account_config::set_plant_blacklist(account_id, seeds);
+    }
 }
 
-/// 好友黑名单（按 account_id 隔离）
+/// 获取植物黑名单（账号配置落盘源）
+#[must_use]
+pub fn get_plant_blacklist(account_id: &str) -> Vec<i64> {
+    if account_id.is_empty() {
+        return plant_blacklist()
+            .lock()
+            .get(account_id)
+            .cloned()
+            .unwrap_or_default();
+    }
+    crate::models::store::account_config::get_plant_blacklist(Some(account_id))
+}
+
+/// 好友黑名单（按 account_id 隔离）—— 兼容旧内存表；生产路径读账号配置
 pub fn account_friend_blacklist() -> &'static PMutex<std::collections::HashMap<String, Vec<i64>>> {
     use std::sync::OnceLock;
     static MAP: OnceLock<PMutex<std::collections::HashMap<String, Vec<i64>>>> = OnceLock::new();
     MAP.get_or_init(|| PMutex::new(std::collections::HashMap::new()))
 }
 
-/// 设置好友黑名单
+/// 设置好友黑名单（内存镜像 + 账号配置落盘）
 pub fn set_account_friend_blacklist(account_id: &str, gids: Vec<i64>) {
-    account_friend_blacklist().lock().insert(account_id.to_string(), gids);
-}
-
-/// 获取好友黑名单
-#[must_use]
-pub fn get_account_friend_blacklist(account_id: &str) -> Vec<i64> {
     account_friend_blacklist()
         .lock()
-        .get(account_id)
-        .cloned()
-        .unwrap_or_default()
+        .insert(account_id.to_string(), gids.clone());
+    if !account_id.is_empty() {
+        let _ = crate::models::store::account_config::set_friend_blacklist(account_id, gids);
+    }
+}
+
+/// 获取好友黑名单（账号配置落盘源）
+#[must_use]
+pub fn get_account_friend_blacklist(account_id: &str) -> Vec<i64> {
+    if account_id.is_empty() {
+        return account_friend_blacklist()
+            .lock()
+            .get(account_id)
+            .cloned()
+            .unwrap_or_default();
+    }
+    crate::models::store::account_config::get_friend_blacklist(Some(account_id))
 }
 
 /// 阶段枚举（与原 TS PlantPhase 对齐）
@@ -990,6 +1081,7 @@ pub async fn run_farming_with_fallback(
     _stop_when_exp_limit: bool,
     snapshot_key: &str,
 ) -> FarmingOutcome {
+    use crate::services::friend::api::{HelpFarmEffect, HelpFarmOutcome};
     let target = recent_help.filter(host_gid, ids, snapshot_key, now_ms());
     if target.is_empty() {
         return empty_farming_outcome(FarmingEffect::Noop);
@@ -1003,8 +1095,12 @@ pub async fn run_farming_with_fallback(
         now_ms(),
     );
     match api.help_farm(host_gid, target.clone()).await {
-        Ok(confirmed_lands) => {
-            let confirmed_ids: Vec<i64> = confirmed_lands.iter().map(|l| l.id).collect();
+        Ok(outcome) if outcome.effect == HelpFarmEffect::Noop => {
+            recent_help.release(host_gid, &target);
+            empty_farming_outcome(FarmingEffect::Noop)
+        }
+        Ok(outcome) => {
+            let confirmed_ids = outcome.land_ids.clone();
             recent_help.mark(
                 host_gid,
                 &confirmed_ids,
@@ -1013,7 +1109,6 @@ pub async fn run_farming_with_fallback(
                 snapshot_key,
                 now_ms(),
             );
-            // 释放未确认的
             let unconfirmed: Vec<i64> = target
                 .iter()
                 .copied()
@@ -1021,12 +1116,16 @@ pub async fn run_farming_with_fallback(
                 .collect();
             recent_help.release(host_gid, &unconfirmed);
             FarmingOutcome {
-                effect: FarmingEffect::Confirmed,
-                operation_count: confirmed_ids.len() as i64,
+                effect: if confirmed_ids.is_empty() {
+                    FarmingEffect::Uncertain
+                } else {
+                    FarmingEffect::Confirmed
+                },
+                operation_count: outcome.operation_count,
                 land_count: confirmed_ids.len(),
                 land_ids: confirmed_ids,
                 operation_limits: Vec::new(),
-                code: 0,
+                code: outcome.code as i32,
             }
         }
         Err(_) => {
@@ -1042,14 +1141,35 @@ pub async fn run_farming_with_fallback(
                     now_ms(),
                 );
                 let outcome = match api.help_farm(host_gid, vec![land_id]).await {
-                    Ok(land) => FarmingOutcome {
-                        effect: FarmingEffect::Confirmed,
-                        operation_count: land.len() as i64,
-                        land_count: land.len(),
-                        land_ids: land.iter().map(|l| l.id).collect(),
-                        operation_limits: Vec::new(),
-                        code: 0,
-                    },
+                    Ok(HelpFarmOutcome {
+                        effect: HelpFarmEffect::Noop,
+                        ..
+                    }) => {
+                        recent_help.release(host_gid, &[land_id]);
+                        empty_farming_outcome(FarmingEffect::Noop)
+                    }
+                    Ok(o) => {
+                        recent_help.mark(
+                            host_gid,
+                            &o.land_ids,
+                            HelpState::Confirmed,
+                            HELP_RESULT_TTL_MS,
+                            snapshot_key,
+                            now_ms(),
+                        );
+                        FarmingOutcome {
+                            effect: if o.land_ids.is_empty() {
+                                FarmingEffect::Uncertain
+                            } else {
+                                FarmingEffect::Confirmed
+                            },
+                            operation_count: o.operation_count,
+                            land_count: o.land_ids.len(),
+                            land_ids: o.land_ids,
+                            operation_limits: Vec::new(),
+                            code: o.code as i32,
+                        }
+                    }
                     Err(_) => {
                         recent_help.release(host_gid, &[land_id]);
                         empty_farming_outcome(FarmingEffect::Uncertain)
@@ -1065,7 +1185,7 @@ pub async fn run_farming_with_fallback(
 
 // ============ 拜访好友主流程 ============
 
-/// 拜访好友（帮 + 偷 + 捣乱，按 automation flag 分派）
+/// 拜访好友（帮 + 偷 + 捣乱，按账号 automation 分派）
 pub async fn visit_friend(
     api: &FriendApi,
     recent_help: &RecentHelpCache,
@@ -1073,8 +1193,9 @@ pub async fn visit_friend(
     total_actions: &mut TotalActions,
     my_gid: i64,
     account_id: &str,
+    can_get_exp_by_candidates: bool,
 ) -> VisitResult {
-    use crate::services::automation::is_automation_on;
+    use crate::services::automation::is_automation_on_for;
     let friend_gid = friend.gid;
     let friend_name = friend.name.clone();
 
@@ -1083,7 +1204,7 @@ pub async fn visit_friend(
         Ok(r) => r,
         Err(e) => {
             let msg = format!("{e}");
-            let kind = handle_friend_enter_error(friend_gid, &friend_name, &msg);
+            let kind = handle_friend_enter_error(account_id, friend_gid, &friend_name, &msg);
             if kind != FriendEnterErrorKind::Error {
                 return VisitResult {
                     acted: false,
@@ -1124,8 +1245,11 @@ pub async fn visit_friend(
     let mut actions: Vec<String> = Vec::new();
 
     // 1. 帮助操作（锄草/除虫/浇水）
-    let help_enabled = is_automation_on("friend_help");
-    if help_enabled {
+    let help_enabled = is_automation_on_for(account_id, "friend_help");
+    let stop_when_exp_limit =
+        is_automation_on_for(account_id, "friend_help_exp_limit");
+    let allow_by_exp = !stop_when_exp_limit || can_get_exp_by_candidates;
+    if help_enabled && allow_by_exp {
         let all_help_ids: Vec<i64> = status
             .need_weed
             .iter()
@@ -1141,7 +1265,7 @@ pub async fn visit_friend(
                 recent_help,
                 friend_gid,
                 &all_help_ids,
-                false,
+                stop_when_exp_limit,
                 &snapshot_key,
             )
             .await;
@@ -1168,7 +1292,7 @@ pub async fn visit_friend(
     }
 
     // 2. 偷菜操作
-    if is_automation_on("friend_steal") && !status.stealable.is_empty() {
+    if is_automation_on_for(account_id, "friend_steal") && !status.stealable.is_empty() {
         let steal_result = steal_lands_with_reward_log(
             api,
             recent_help,
@@ -1212,7 +1336,7 @@ pub async fn visit_friend(
     }
 
     // 3. 捣乱（放草 + 放虫）—— 按剩余次数切片，对齐 bot visitFriend
-    if is_automation_on("friend_bad")
+    if is_automation_on_for(account_id, "friend_bad")
         && api.remaining_bad_times() > 0
         && (!status.can_put_weed.is_empty() || !status.can_put_bug.is_empty())
     {
@@ -1293,7 +1417,7 @@ pub async fn visit_friend_for_steal(
         Ok(r) => r,
         Err(e) => {
             let msg = format!("{e}");
-            let kind = handle_friend_enter_error(friend_gid, &friend_name, &msg);
+            let kind = handle_friend_enter_error(account_id, friend_gid, &friend_name, &msg);
             if kind != FriendEnterErrorKind::Error {
                 return Some(VisitResult {
                     acted: false,
@@ -1414,17 +1538,20 @@ pub async fn visit_friend_for_help(
     recent_help: &RecentHelpCache,
     friend: &FriendSummary,
     total_actions: &mut TotalActions,
-    _my_gid: i64,
-    _account_id: &str,
+    my_gid: i64,
+    account_id: &str,
     ignore_exp_limit: bool,
     help_auto_disabled: &std::sync::atomic::AtomicBool,
+    can_get_exp_by_candidates: bool,
 ) -> Option<VisitResult> {
     let friend_gid = friend.gid;
     let friend_name = friend.name.clone();
     let stop_when_exp_limit =
-        crate::services::automation::is_automation_on_for(_account_id, "friend_help_exp_limit")
+        crate::services::automation::is_automation_on_for(account_id, "friend_help_exp_limit")
             && !ignore_exp_limit;
-    if stop_when_exp_limit && help_auto_disabled.load(std::sync::atomic::Ordering::Acquire) {
+    if !stop_when_exp_limit {
+        help_auto_disabled.store(false, std::sync::atomic::Ordering::Release);
+    } else if help_auto_disabled.load(std::sync::atomic::Ordering::Acquire) {
         return Some(VisitResult {
             acted: false,
             entered: false,
@@ -1435,7 +1562,7 @@ pub async fn visit_friend_for_help(
         Ok(r) => r,
         Err(e) => {
             let msg = format!("{e}");
-            let kind = handle_friend_enter_error(friend_gid, &friend_name, &msg);
+            let kind = handle_friend_enter_error(account_id, friend_gid, &friend_name, &msg);
             if kind != FriendEnterErrorKind::Error {
                 return Some(VisitResult {
                     acted: false,
@@ -1458,7 +1585,7 @@ pub async fn visit_friend_for_help(
         });
     }
 
-    let status = analyze_friend_lands(&lands, _my_gid, &[], false);
+    let status = analyze_friend_lands(&lands, my_gid, &[], false);
     let snapshot_key = RecentHelpCache::make_snapshot_key(
         &lands.iter().map(LandSnapshot::from_land).collect::<Vec<_>>(),
     );
@@ -1473,8 +1600,10 @@ pub async fn visit_friend_for_help(
         .collect::<HashSet<i64>>()
         .into_iter()
         .collect();
-    if !all_help_ids.is_empty() {
-        let before_exp = crate::services::status::status_data_for(_account_id).exp;
+    // 对齐 bot：缺限额信息时 canGetExpByCandidates=false → 不帮
+    let allow_by_exp = !stop_when_exp_limit || can_get_exp_by_candidates;
+    if !all_help_ids.is_empty() && allow_by_exp {
+        let before_exp = crate::services::status::status_data_for(account_id).exp;
         let outcome = run_farming_with_fallback(
             api,
             recent_help,
@@ -1488,17 +1617,17 @@ pub async fn visit_friend_for_help(
             actions.push(format!("帮{}块", outcome.land_count));
             total_actions.farming += outcome.land_count;
             crate::services::stats::record_operation_for(
-                _account_id,
+                account_id,
                 "helpFarming",
                 outcome.land_count as i64,
             );
             if stop_when_exp_limit {
                 tokio::time::sleep(Duration::from_millis(200)).await;
-                let after_exp = crate::services::status::status_data_for(_account_id).exp;
+                let after_exp = crate::services::status::status_data_for(account_id).exp;
                 if after_exp <= before_exp {
                     help_auto_disabled.store(true, std::sync::atomic::Ordering::Release);
                     crate::services::panel_log::log(
-                        _account_id,
+                        account_id,
                         "好友",
                         "今日帮助经验已达上限，自动停止帮忙",
                         Some(serde_json::json!({
@@ -1514,7 +1643,7 @@ pub async fn visit_friend_for_help(
 
     if !actions.is_empty() {
         crate::services::panel_log::log(
-            _account_id,
+            account_id,
             "好友",
             format!("{}: {}", friend_name, actions.join("/")),
             Some(serde_json::json!({
@@ -1604,6 +1733,8 @@ pub async fn do_friend_operation(
     recent_help: &RecentHelpCache,
     friend_gid: i64,
     op: crate::models::types::FriendOperation,
+    my_gid: i64,
+    account_id: &str,
 ) -> serde_json::Value {
     if friend_gid == 0 {
         return serde_json::json!({"ok": false, "message": "无效好友ID", "opType": op.as_str()});
@@ -1616,7 +1747,7 @@ pub async fn do_friend_operation(
         Ok(r) => r,
         Err(e) => {
             let msg = format!("{e}");
-            let kind = handle_friend_enter_error(friend_gid, &format!("GID:{friend_gid}"), &msg);
+            let kind = handle_friend_enter_error(account_id, friend_gid, &format!("GID:{friend_gid}"), &msg);
             match kind {
                 FriendEnterErrorKind::Blacklist => {
                     return serde_json::json!({"ok": true, "opType": op_str, "count": 0, "message": "好友已自动加入黑名单"});
@@ -1633,7 +1764,7 @@ pub async fn do_friend_operation(
 
     let result = match op {
         crate::models::types::FriendOperation::Steal => {
-            do_steal_op(api, recent_help, friend_gid, &enter_reply.lands).await
+            do_steal_op(api, recent_help, friend_gid, &enter_reply.lands, my_gid).await
         }
         crate::models::types::FriendOperation::Farming
         | crate::models::types::FriendOperation::Water
@@ -1645,11 +1776,12 @@ pub async fn do_friend_operation(
                 friend_gid,
                 op,
                 &enter_reply.lands,
+                my_gid,
             )
             .await
         }
         crate::models::types::FriendOperation::Bad => {
-            do_bad_op(api, friend_gid, &enter_reply.lands).await
+            do_bad_op(api, friend_gid, &enter_reply.lands, my_gid).await
         }
         crate::models::types::FriendOperation::Fertilize => {
             // 暂未对接 Fertilize 单地操作
@@ -1665,8 +1797,9 @@ async fn do_steal_op(
     recent_help: &RecentHelpCache,
     friend_gid: i64,
     lands: &[LandInfo],
+    my_gid: i64,
 ) -> serde_json::Value {
-    let status = analyze_friend_lands(lands, 0, &[], false);
+    let status = analyze_friend_lands(lands, my_gid, &[], false);
     if status.stealable.is_empty() {
         return serde_json::json!({"ok": true, "opType": "steal", "count": 0, "message": "没有可偷取土地"});
     }
@@ -1698,8 +1831,9 @@ async fn do_farm_op(
     friend_gid: i64,
     op: crate::models::types::FriendOperation,
     lands: &[LandInfo],
+    my_gid: i64,
 ) -> serde_json::Value {
-    let status = analyze_friend_lands(lands, 0, &[], false);
+    let status = analyze_friend_lands(lands, my_gid, &[], false);
     let land_ids: Vec<i64> = match op {
         crate::models::types::FriendOperation::Farming => status
             .need_weed
@@ -1744,11 +1878,12 @@ pub async fn do_bad_op(
     api: &FriendApi,
     friend_gid: i64,
     lands: &[LandInfo],
+    my_gid: i64,
 ) -> serde_json::Value {
     if api.remaining_bad_times() <= 0 {
         return serde_json::json!({"ok": true, "opType": "bad", "count": 0, "bugCount": 0, "weedCount": 0, "message": "今日捣乱次数已达上限", "limitReached": true});
     }
-    let status = analyze_friend_lands(lands, 0, &[], false);
+    let status = analyze_friend_lands(lands, my_gid, &[], false);
     if status.can_put_bug.is_empty() && status.can_put_weed.is_empty() {
         return serde_json::json!({"ok": true, "opType": "bad", "count": 0, "bugCount": 0, "weedCount": 0, "message": "没有可捣乱土地"});
     }
@@ -2027,11 +2162,11 @@ mod tests {
 
     #[test]
     fn blacklist_add_and_remove() {
-        add_friend_to_blacklist(100, "alice", "test");
+        add_friend_to_blacklist("", 100, "alice", "test");
         assert!(is_in_blacklist(100));
         assert_eq!(blacklist_size(), 1);
         // 重复 add 不会增加
-        add_friend_to_blacklist(100, "alice", "test");
+        add_friend_to_blacklist("", 100, "alice", "test");
         assert_eq!(blacklist_size(), 1);
         assert!(remove_from_blacklist(100));
         assert!(!is_in_blacklist(100));
@@ -2039,7 +2174,7 @@ mod tests {
 
     #[test]
     fn blacklist_add_zero_returns_false() {
-        assert!(!add_friend_to_blacklist(0, "zero", ""));
+        assert!(!add_friend_to_blacklist("", 0, "zero", ""));
     }
 
     #[test]
@@ -2056,14 +2191,15 @@ mod tests {
     #[test]
     fn handle_friend_enter_error_classifies() {
         // 1002003 → blacklist
-        let k = handle_friend_enter_error(200, "bob", "code=1002003");
+        let k = handle_friend_enter_error("", 200, "bob", "code=1002003");
         assert_eq!(k, FriendEnterErrorKind::Blacklist);
         assert!(is_in_blacklist(200));
+        let _ = remove_from_blacklist(200);
         // invalid → InvalidRemoved
-        let k2 = handle_friend_enter_error(300, "carol", "code=42 invalid friend");
+        let k2 = handle_friend_enter_error("", 300, "carol", "code=42 invalid friend");
         assert_eq!(k2, FriendEnterErrorKind::InvalidRemoved);
         // 普通 → Error
-        let k3 = handle_friend_enter_error(400, "dave", "连接未打开");
+        let k3 = handle_friend_enter_error("", 400, "dave", "连接未打开");
         assert_eq!(k3, FriendEnterErrorKind::Error);
     }
 
@@ -2151,20 +2287,40 @@ mod tests {
 
     #[test]
     fn plant_blacklist_per_account() {
-        set_plant_blacklist("acc1", vec![100, 200]);
-        set_plant_blacklist("acc2", vec![300]);
-        assert_eq!(get_plant_blacklist("acc1"), vec![100, 200]);
-        assert_eq!(get_plant_blacklist("acc2"), vec![300]);
-        assert_eq!(get_plant_blacklist("acc3"), Vec::<i64>::new());
+        let a1 = "vs_plant_bl_acc1";
+        let a2 = "vs_plant_bl_acc2";
+        let a3 = "vs_plant_bl_acc3";
+        let _ = crate::models::store::account_config::remove_account_config(a1);
+        let _ = crate::models::store::account_config::remove_account_config(a2);
+        let _ = crate::models::store::account_config::remove_account_config(a3);
+        set_plant_blacklist(a1, vec![100, 200]);
+        set_plant_blacklist(a2, vec![300]);
+        assert_eq!(get_plant_blacklist(a1), vec![100, 200]);
+        assert_eq!(get_plant_blacklist(a2), vec![300]);
+        // 未写入账号走 default_account_config（含默认植物黑名单）
+        assert_eq!(
+            get_plant_blacklist(a3),
+            crate::models::store::normalize::default_account_config().plant_blacklist
+        );
+        let _ = crate::models::store::account_config::remove_account_config(a1);
+        let _ = crate::models::store::account_config::remove_account_config(a2);
     }
 
     #[test]
     fn account_friend_blacklist_per_account() {
-        set_account_friend_blacklist("acc1", vec![11, 22]);
-        set_account_friend_blacklist("acc2", vec![33]);
-        assert_eq!(get_account_friend_blacklist("acc1"), vec![11, 22]);
-        assert_eq!(get_account_friend_blacklist("acc2"), vec![33]);
-        assert_eq!(get_account_friend_blacklist("acc3"), Vec::<i64>::new());
+        let a1 = "vs_friend_bl_acc1";
+        let a2 = "vs_friend_bl_acc2";
+        let a3 = "vs_friend_bl_acc3";
+        let _ = crate::models::store::account_config::remove_account_config(a1);
+        let _ = crate::models::store::account_config::remove_account_config(a2);
+        let _ = crate::models::store::account_config::remove_account_config(a3);
+        set_account_friend_blacklist(a1, vec![11, 22]);
+        set_account_friend_blacklist(a2, vec![33]);
+        assert_eq!(get_account_friend_blacklist(a1), vec![11, 22]);
+        assert_eq!(get_account_friend_blacklist(a2), vec![33]);
+        assert_eq!(get_account_friend_blacklist(a3), Vec::<i64>::new());
+        let _ = crate::models::store::account_config::remove_account_config(a1);
+        let _ = crate::models::store::account_config::remove_account_config(a2);
     }
 
     #[test]

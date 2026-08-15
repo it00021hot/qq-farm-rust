@@ -17,8 +17,8 @@ pub const INTERVAL_MAX_SEC: i64 = 86_400;
 pub const DEFAULT_KNOWN_FRIEND_GID_SYNC_COOLDOWN_SEC: i64 = 300;
 /// 好友列表缓存 TTL 默认
 pub const DEFAULT_FRIENDS_LIST_CACHE_TTL_SEC: i64 = 60;
-/// 上一版默认 client version（用于 migration 检测）
-pub const PREVIOUS_DEFAULT_CLIENT_VERSION: &str = "1.12.5.29_20260721";
+/// 上一版默认 client version（用于 migration 检测；对齐 bot shared-state.ts）
+pub const PREVIOUS_DEFAULT_CLIENT_VERSION: &str = "1.13.0.5_20260723";
 
 /// 允许的种植策略
 pub const ALLOWED_PLANTING_STRATEGIES: [PlantingStrategy; 7] = [
@@ -62,8 +62,8 @@ pub const DEFAULT_PLANT_BLACKLIST: &[i64] = &[
     20_002, 20_003, 20_059, 20_065, 20_064, 20_060, 20_061,
 ];
 
-/// 默认 bag seed priority
-pub const DEFAULT_BAG_SEED_PRIORITY: &[i64] = &[20_329, 21_037, 26_032, 29_003];
+/// 默认 bag seed priority（对齐 bot：空列表）
+pub const DEFAULT_BAG_SEED_PRIORITY: &[i64] = &[];
 
 /// 规范化已知 GID 列表
 pub fn normalize_known_friend_gids(input: impl Into<Option<Vec<i64>>>, fallback: &[i64]) -> Vec<i64> {
@@ -184,7 +184,7 @@ pub fn normalize_intervals(intervals: IntervalConfig) -> IntervalConfig {
     }
 }
 
-/// 默认 AccountConfig
+/// 默认 AccountConfig（对齐 bot `DEFAULT_ACCOUNT_CONFIG`）
 #[must_use]
 pub fn default_account_config() -> AccountConfig {
     AccountConfig {
@@ -193,7 +193,7 @@ pub fn default_account_config() -> AccountConfig {
             farm_push: true,
             land_upgrade: true,
             friend: true,
-            friend_help_exp_limit: false,
+            friend_help_exp_limit: true,
             friend_steal: true,
             friend_steal_activity_only: false,
             friend_help: true,
@@ -206,10 +206,10 @@ pub fn default_account_config() -> AccountConfig {
             fertilizer: crate::models::types::FertilizerMode::Smart,
             fertilizer_multi_season: true,
             fertilizer_land_types: DEFAULT_FERTILIZER_LAND_TYPES.to_vec(),
-            fertilizer_smart_seconds: 360,
-            skip_own_weed_bug: false,
+            fertilizer_smart_seconds: 300,
+            skip_own_weed_bug: true,
         },
-        planting_strategy: PlantingStrategy::Preferred,
+        planting_strategy: PlantingStrategy::MaxExp,
         preferred_seed_id: 0,
         intervals: IntervalConfig {
             farm: 2,
@@ -217,8 +217,8 @@ pub fn default_account_config() -> AccountConfig {
             farm_max: 25,
             help_min: 20,
             help_max: 25,
-            steal_min: 10,
-            steal_max: 15,
+            steal_min: 20,
+            steal_max: 25,
             extra: Default::default(),
         },
         friend_quiet_hours: QuietHoursConfig {
@@ -318,10 +318,17 @@ mod tests {
     #[test]
     fn default_account_config_valid() {
         let cfg = default_account_config();
-        assert_eq!(cfg.planting_strategy, PlantingStrategy::Preferred);
+        assert_eq!(cfg.planting_strategy, PlantingStrategy::MaxExp);
         assert_eq!(cfg.automation.fertilizer_land_types.len(), 5);
         assert!(cfg.automation.farm);
+        assert!(cfg.automation.friend_help_exp_limit);
+        assert!(cfg.automation.skip_own_weed_bug);
+        assert_eq!(cfg.automation.fertilizer_smart_seconds, 300);
+        assert_eq!(cfg.intervals.steal_min, 20);
+        assert_eq!(cfg.intervals.steal_max, 25);
+        assert!(cfg.bag_seed_priority.is_empty());
         assert_eq!(cfg.fertilizer_buy_organic_threshold_hours, 10);
+        assert_eq!(PREVIOUS_DEFAULT_CLIENT_VERSION, "1.13.0.5_20260723");
     }
 
     #[test]
@@ -332,8 +339,7 @@ mod tests {
 
     #[test]
     fn bag_seed_priority_default() {
-        assert!(!DEFAULT_BAG_SEED_PRIORITY.is_empty());
-        assert_eq!(DEFAULT_BAG_SEED_PRIORITY[0], 20_329);
+        assert!(DEFAULT_BAG_SEED_PRIORITY.is_empty());
     }
 
     #[test]

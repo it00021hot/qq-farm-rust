@@ -292,7 +292,8 @@ pub fn get_organic_fertilizer_targets_from_lands(lands: &[LandInfo]) -> Vec<i64>
         if matches!(current_phase(land), PlantPhase::Dead) {
             continue;
         }
-        if plant.left_inorc_fert_times <= 0 {
+        // 服务端有该字段时，<=0 说明不能再施有机肥；未下发（None）则视为可施（对齐 bot hasOwnProperty）
+        if plant.left_inorc_fert_times.is_some_and(|n| n <= 0) {
             continue;
         }
         targets.push(land.id);
@@ -355,7 +356,7 @@ pub fn get_fast_mature_lands(lands: &[LandInfo], threshold_secs: i64) -> Vec<i64
         if time_to_mature > threshold || time_to_mature < 0 {
             continue;
         }
-        if plant.left_inorc_fert_times <= 0 {
+        if plant.left_inorc_fert_times.is_some_and(|n| n <= 0) {
             continue;
         }
         out.push(land.id);
@@ -749,7 +750,8 @@ pub fn get_land_lifecycle_state(land: Option<&LandInfo>) -> &'static str {
     }
     match PlantPhase::from_phases(&plant.phases) {
         Some(PlantPhase::Dead) => "dead",
-        Some(PlantPhase::Seed) => "empty",
+        // 对齐 bot：SEED..MATURE 视为 growing（多季作物收获后仍为 SEED 阶段，需保留而非铲除）
+        Some(PlantPhase::Seed) => "growing",
         Some(_) => "growing",
         None => "empty",
     }
@@ -1365,5 +1367,35 @@ mod tests {
         assert!(occupied.contains(&1));
         assert!(occupied.contains(&2));
         assert!(occupied.contains(&3));
+    }
+
+    #[test]
+    fn land_lifecycle_seed_is_growing() {
+        // 对齐 bot：SEED 阶段视为 growing（多季收获后仍为 SEED，不可当 empty 铲除）
+        let land = make_land(1, true, Some(PlantPhase::Seed));
+        assert_eq!(get_land_lifecycle_state(Some(&land)), "growing");
+        assert_eq!(get_land_lifecycle_state(Some(&make_land(2, true, None))), "empty");
+        assert_eq!(
+            get_land_lifecycle_state(Some(&make_land(3, true, Some(PlantPhase::Dead)))),
+            "dead"
+        );
+    }
+
+    #[test]
+    fn organic_targets_skip_only_when_left_inorc_present_and_zero() {
+        let mut allow = make_land(1, true, Some(PlantPhase::Growing));
+        if let Some(p) = allow.plant.as_mut() {
+            p.left_inorc_fert_times = None;
+        }
+        let mut deny = make_land(2, true, Some(PlantPhase::Growing));
+        if let Some(p) = deny.plant.as_mut() {
+            p.left_inorc_fert_times = Some(0);
+        }
+        let mut ok = make_land(3, true, Some(PlantPhase::Growing));
+        if let Some(p) = ok.plant.as_mut() {
+            p.left_inorc_fert_times = Some(2);
+        }
+        let targets = get_organic_fertilizer_targets_from_lands(&[allow, deny, ok]);
+        assert_eq!(targets, vec![1, 3]);
     }
 }

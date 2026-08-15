@@ -558,14 +558,12 @@ impl PlantingEngine {
             .await
             .map(|r| r.lands)
             .unwrap_or_default();
-        if latest_lands.is_empty() && selected.len() != ALL_FERTILIZER_LAND_TYPES.len() {
+        // 拉地失败/空列表时 fail-closed：无法确认土地类型则跳过本轮施肥（对齐 bot）
+        if latest_lands.is_empty() {
             return Ok(FertilizeResult::default());
         }
 
-        let mut normal_targets = planted.clone();
-        if !latest_lands.is_empty() {
-            normal_targets = filter_ids_by_land_types(&planted, &latest_lands, &selected);
-        }
+        let normal_targets = filter_ids_by_land_types(&planted, &latest_lands, &selected);
 
         let mut result = FertililzeResultBuilder::default();
         if !options.skip_normal
@@ -692,7 +690,19 @@ impl PlantingEngine {
 
         let strategy = crate::models::store::account_config::get_planting_strategy(Some(account_id));
         if strategy == crate::models::types::PlantingStrategy::BagPriority {
-            let bag = self.plant_from_bag_seeds(&lands_to_plant, host_gid, account_id).await?;
+            let bag = match self
+                .plant_from_bag_seeds(&lands_to_plant, host_gid, account_id)
+                .await
+            {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "读取背包种子失败，本轮跳过第二优先策略以避免误购"
+                    );
+                    return Ok(AutoPlantResult::default());
+                }
+            };
             let mut planted = bag.planted_land_ids.clone();
             if bag.fallback_allowed && !bag.remaining_land_ids.is_empty() {
                 let fallback =
@@ -762,7 +772,7 @@ impl PlantingEngine {
         }
         let warehouse =
             crate::services::warehouse::WarehouseService::new(self.api.gateway().clone());
-        let bag_seeds = warehouse.get_bag_seeds().await.unwrap_or_default();
+        let bag_seeds = warehouse.get_bag_seeds().await?;
         let state_level = crate::services::status::status_data_for(account_id).level;
         let mapped: Vec<BagSeedWithLevel> = bag_seeds
             .iter()

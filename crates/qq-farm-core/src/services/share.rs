@@ -189,6 +189,7 @@ impl ShareService {
 
                 if let Err(e) = self.report_share().await {
                     tracing::warn!("[分享] ReportShare 失败: {e}");
+                    return false;
                 }
 
                 match self.claim_share_reward().await {

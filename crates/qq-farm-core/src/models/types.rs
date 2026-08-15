@@ -325,27 +325,7 @@ pub struct AutomationConfig {
 
 impl Default for AutomationConfig {
     fn default() -> Self {
-        Self {
-            farm: true,
-            farm_push: false,
-            land_upgrade: false,
-            friend: true,
-            friend_help_exp_limit: false,
-            friend_steal: true,
-            friend_steal_activity_only: false,
-            friend_help: true,
-            friend_bad: true,
-            task: true,
-            fertilizer_gift: true,
-            fertilizer_buy_organic: false,
-            fertilizer_buy_normal: false,
-            sell: false,
-            fertilizer: FertilizerMode::None,
-            fertilizer_multi_season: false,
-            fertilizer_land_types: vec![],
-            fertilizer_smart_seconds: 0,
-            skip_own_weed_bug: false,
-        }
+        crate::models::store::normalize::default_account_config().automation
     }
 }
 
@@ -366,16 +346,7 @@ pub struct IntervalConfig {
 
 impl Default for IntervalConfig {
     fn default() -> Self {
-        Self {
-            farm: 60,
-            farm_min: 50,
-            farm_max: 80,
-            help_min: 30,
-            help_max: 60,
-            steal_min: 20,
-            steal_max: 40,
-            extra: HashMap::new(),
-        }
+        crate::models::store::normalize::default_account_config().intervals
     }
 }
 
@@ -416,28 +387,8 @@ pub struct AccountConfig {
 
 impl Default for AccountConfig {
     fn default() -> Self {
-        Self {
-            automation: AutomationConfig::default(),
-            planting_strategy: PlantingStrategy::default(),
-            preferred_seed_id: 0,
-            intervals: IntervalConfig::default(),
-            friend_quiet_hours: QuietHoursConfig::default(),
-            known_friend_gids: vec![],
-            known_friend_gid_sync_cooldown_sec: 300,
-            friends_list_cache_ttl_sec: 60,
-            friend_blacklist: vec![],
-            plant_blacklist: vec![],
-            steal_delay_seconds: 5,
-            plant_order_random: false,
-            plant_delay_seconds: 3,
-            fertilizer_buy_organic_count: 5,
-            fertilizer_buy_organic_threshold_hours: 24,
-            fertilizer_buy_normal_count: 20,
-            fertilizer_buy_normal_threshold_hours: 48,
-            fertilizer_buy_check_interval_minutes: 30,
-            bag_seed_priority: vec![],
-            bag_seed_fallback_strategy: PlantingStrategy::Level,
-        }
+        // 单一权威源：与 bot DEFAULT_ACCOUNT_CONFIG / normalize::default_account_config 一致
+        crate::models::store::normalize::default_account_config()
     }
 }
 
@@ -535,9 +486,15 @@ mod tests {
         let cfg = AccountConfig::default();
         let json = serde_json::to_string(&cfg).unwrap();
         let back: AccountConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.planting_strategy, PlantingStrategy::Level);
-        assert_eq!(back.intervals.farm, 60);
+        assert_eq!(back.planting_strategy, PlantingStrategy::MaxExp);
+        assert_eq!(back.intervals.farm, 2);
+        assert_eq!(back.intervals.steal_min, 20);
         assert!(back.automation.farm);
+        assert!(back.automation.sell);
+        assert!(back.automation.skip_own_weed_bug);
+        assert!(back.automation.friend_help_exp_limit);
+        assert_eq!(back.automation.fertilizer_smart_seconds, 300);
+        assert!(back.bag_seed_priority.is_empty());
     }
 
     #[test]

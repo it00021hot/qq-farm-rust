@@ -216,7 +216,8 @@ impl FarmService {
         if gid == 0 || !crate::services::automation::is_automation_on_for(&acc, "farm") {
             return Ok(LandSummary::default());
         }
-        if crate::services::friend::visit_strategy::in_friend_quiet_hours(None) {
+        // 对齐 bot checkFarm：静默时段跳过本田务农（读账号配置）
+        if crate::services::friend::visit_strategy::in_friend_quiet_hours_for(Some(&acc), None) {
             return Ok(LandSummary::default());
         }
         if self.is_checking.swap(true, Ordering::AcqRel) {

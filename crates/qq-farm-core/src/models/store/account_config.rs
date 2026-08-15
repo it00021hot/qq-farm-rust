@@ -603,7 +603,7 @@ mod tests {
         reset();
         // FARM_ACCOUNT_ID not set
         let s = get_account_config_snapshot(None);
-        assert_eq!(s.planting_strategy, PlantingStrategy::Preferred);
+        assert_eq!(s.planting_strategy, PlantingStrategy::MaxExp);
     }
 
     #[test]
@@ -625,7 +625,7 @@ mod tests {
     fn ensure_creates_default() {
         reset();
         let cfg = ensure_account_config("acc2").expect("ensure");
-        assert_eq!(cfg.planting_strategy, PlantingStrategy::Preferred);
+        assert_eq!(cfg.planting_strategy, PlantingStrategy::MaxExp);
         // 第二次调用应返回已存在的
         let cfg2 = ensure_account_config("acc2").expect("ensure2");
         assert_eq!(cfg.preferred_seed_id, cfg2.preferred_seed_id);
