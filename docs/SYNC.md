@@ -209,3 +209,13 @@
 - 代码：好友列表拉取时对 gid=10001 / 名称含「小果」打诊断日志（`人机头像诊断`）
 - 前端（bot web）：好友/访客头像补 `referrerpolicy=no-referrer`，并规范化 `//` 协议相对 URL（利于微信 http 头像）
 - 能力状态：矩阵仍 **齐**；人机本地头像映射 **未做**（待后续从游戏包导出或 CDN 映射）
+### 2026-08-15 — 企业级质量治理（分层重构，业务目标不变）
+
+- 范围：全 workspace + GPUI 预留；**不改**面板契约与游戏协议语义
+- 分层：
+  - `qq-farm-core`：`constants/`、`infra/`、业务域聚合；拆分 `activity_center` / `visit_strategy`
+  - `qq-farm-app`：UI 无关门面（ACL、start/stop、daily gifts、AppEvent）
+  - `qq-farm-server`：ACL 补齐、`/ws` 鉴权、`ServerConfig`、farm 路由拆分；会话明确内存-only
+  - `qq-farm-desktop`：占位 crate（无 GPUI UI）
+- 质量：AccountRecord/AccountSession 命名；rate_limiter 改用 `core::Error`；Friend/automation 按账号隔离；CLI mock 去重
+- 能力状态：矩阵保持 **齐**（重构不引入已知业务差）；实机 L 清单仍待勾选

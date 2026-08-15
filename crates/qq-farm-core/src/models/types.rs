@@ -11,7 +11,8 @@
 //!
 //! ## 保留本地的类型
 //!
-//! - `Account` (models/account.rs)：只有 models 用
+//! - `AccountSession` (models/account.rs)：运行时 worker 会话
+//! - `AccountRecord` (models/store/accounts.rs)：持久化 store 记录
 //! - `WorkerMessage` / `WorkerState` (runtime/)：只有 runtime 用
 //! - `IPCPayload` / `IPCResponse` (controllers/)：只有 controllers 用
 //! - `DeviceInfo`：原 TS 类型，实际数据走 proto

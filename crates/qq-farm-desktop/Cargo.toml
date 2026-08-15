@@ -1,0 +1,18 @@
+[package]
+name = "qq-farm-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "QQ 农场 GPUI 桌面端（占位）"
+
+[[bin]]
+name = "qq-farm-desktop"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+qq-farm-app = { workspace = true }

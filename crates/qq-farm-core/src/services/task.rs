@@ -46,7 +46,7 @@ use crate::proto::generated::gamepb::taskpb::{
     Task, TaskInfo, TaskInfoReply, TaskInfoRequest,
 };
 
-use super::automation::{category, is_automation_on};
+use super::automation::{category, is_automation_on_for};
 use super::stats::record_operation_for;
 use super::warehouse::{get_bag_items, WarehouseService};
 
@@ -244,7 +244,7 @@ impl TaskService {
         if *self.checking.lock() {
             return;
         }
-        if !is_automation_on(category::TASK) {
+        if !is_automation_on_for(&self.account_id.lock(), category::TASK) {
             return;
         }
         *self.checking.lock() = true;
@@ -456,7 +456,7 @@ impl TaskService {
 
     /// 处理来自 WS 推送的 `TaskInfoNotify`
     pub async fn on_task_info_notify(&self, task_info: &TaskInfo) {
-        if !is_automation_on(category::TASK) {
+        if !is_automation_on_for(&self.account_id.lock(), category::TASK) {
             return;
         }
         let normalized = normalize_task_info(task_info);

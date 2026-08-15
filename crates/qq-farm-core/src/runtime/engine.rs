@@ -26,7 +26,7 @@ use tokio::sync::broadcast;
 
 use crate::error::Result;
 use crate::models::store::accounts as accounts_store;
-use crate::models::Account;
+use crate::models::AccountSession;
 use crate::network::gateway::GatewayConfig;
 use crate::runtime::events::WorkerEvent;
 use crate::runtime::relogin_reminder::{
@@ -550,7 +550,7 @@ impl RuntimeEngine {
     }
 
     /// 启动一个 worker
-    pub fn start_worker(self: &Arc<Self>, account: Account) -> Result<()> {
+    pub fn start_worker(self: &Arc<Self>, account: AccountSession) -> Result<()> {
         let max = self.config.max_workers;
         {
             let mut workers = self.workers.write();
@@ -612,7 +612,7 @@ impl RuntimeEngine {
     }
 
     /// 每个 worker 用账号自己的 platform/code 拼网关（对齐 TS `CONFIG.platform = platform || 'qq'`）。
-    fn gateway_config_for(&self, account: &Account) -> GatewayConfig {
+    fn gateway_config_for(&self, account: &AccountSession) -> GatewayConfig {
         let rt = crate::config::get_runtime_config();
         let platform = if !account.platform.trim().is_empty() {
             account.platform.trim().to_string()
@@ -669,7 +669,7 @@ impl RuntimeEngine {
     }
 
     /// 重启一个 worker
-    pub fn restart_worker(self: &Arc<Self>, account: Account) -> Result<()> {
+    pub fn restart_worker(self: &Arc<Self>, account: AccountSession) -> Result<()> {
         self.stop_worker(&account.id);
         self.start_worker(account)
     }
@@ -689,7 +689,7 @@ impl RuntimeEngine {
         );
         for acc in accounts {
             let name = acc.name.clone();
-            let account = Account::from_store(&acc);
+            let account = AccountSession::from_store(&acc);
             if let Err(e) = self.start_worker(account) {
                 self.runtime_state.log(
                     "错误",
@@ -776,9 +776,9 @@ pub struct EngineWorkerControls {
 }
 
 impl WorkerControls for EngineWorkerControls {
-    fn start_worker(&self, account: &crate::models::store::accounts::Account) -> Option<()> {
+    fn start_worker(&self, account: &crate::models::store::accounts::AccountRecord) -> Option<()> {
         let id = account.id.clone();
-        let a = Account::from_store(account);
+        let a = AccountSession::from_store(account);
         if let Err(e) = self.engine.start_worker(a) {
             tracing::warn!(account_id = %id, "start_worker failed: {e}");
             return None;
@@ -786,9 +786,9 @@ impl WorkerControls for EngineWorkerControls {
         Some(())
     }
 
-    fn restart_worker(&self, account: &crate::models::store::accounts::Account) -> Option<()> {
+    fn restart_worker(&self, account: &crate::models::store::accounts::AccountRecord) -> Option<()> {
         let id = account.id.clone();
-        let a = Account::from_store(account);
+        let a = AccountSession::from_store(account);
         if let Err(e) = self.engine.restart_worker(a) {
             tracing::warn!(account_id = %id, "restart_worker failed: {e}");
             return None;
@@ -903,7 +903,7 @@ mod tests {
         rt.block_on(async {
             let engine = make_engine();
             let controls = engine.worker_controls();
-            let acc = crate::models::store::accounts::Account {
+            let acc = crate::models::store::accounts::AccountRecord {
                 id: "test-acc".to_string(),
                 name: "Test".to_string(),
                 code: "code123".to_string(),
@@ -933,7 +933,7 @@ mod tests {
     #[test]
     fn gateway_config_uses_account_wx_platform_and_code() {
         let engine = make_engine();
-        let mut acc = Account::new("a1", "openid-fallback", "n");
+        let mut acc = AccountSession::new("a1", "openid-fallback", "n");
         acc.platform = "wx".into();
         acc.code = "wx-one-time".into();
         let gw = engine.gateway_config_for(&acc);
@@ -953,10 +953,10 @@ mod tests {
                 ..Default::default()
             }));
             for i in 0..2 {
-                let acc = Account::new(format!("a{i}"), format!("c{i}"), format!("n{i}"));
+                let acc = AccountSession::new(format!("a{i}"), format!("c{i}"), format!("n{i}"));
                 engine.start_worker(acc).unwrap();
             }
-            let acc = Account::new("overflow", "c", "n");
+            let acc = AccountSession::new("overflow", "c", "n");
             let r = engine.start_worker(acc);
             assert!(r.is_err());
         });
@@ -970,7 +970,7 @@ mod tests {
             .unwrap();
         rt.block_on(async {
             let engine = make_engine();
-            let acc = Account::new("a1", "c", "n");
+            let acc = AccountSession::new("a1", "c", "n");
             engine.start_worker(acc).unwrap();
             assert_eq!(engine.worker_count(), 1);
             engine.stop_worker("a1");
@@ -987,7 +987,7 @@ mod tests {
         rt.block_on(async {
             let engine = make_engine();
             for i in 0..3 {
-                let acc = Account::new(format!("a{i}"), format!("c{i}"), format!("n{i}"));
+                let acc = AccountSession::new(format!("a{i}"), format!("c{i}"), format!("n{i}"));
                 engine.start_worker(acc).unwrap();
             }
             assert_eq!(engine.worker_count(), 3);

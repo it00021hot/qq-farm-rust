@@ -10,7 +10,8 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::context::{ok_data, AdminContext, ApiError, ApiResult};
+use crate::context::{ok_data, AdminContext, ApiResult};
+use crate::routes::{get_loop, resolve_account_id_required as resolve_account_id};
 
 /// 构造 activity-center 路由
 pub fn router() -> Router<Arc<AdminContext>> {
@@ -54,23 +55,6 @@ struct QingMeiStartBody {
     ingredients: Option<Value>,
     #[serde(default)]
     count: Option<Value>,
-}
-
-fn get_loop(
-    ctx: &AdminContext,
-    account_id: &str,
-) -> Result<Arc<qq_farm_core::runtime::worker_loop::WorkerLoop>, ApiError> {
-    ctx.engine
-        .worker_loop(account_id)
-        .ok_or(ApiError::AccountNotRunning)
-}
-
-fn resolve_account_id(
-    ctx: &AdminContext,
-    headers: &axum::http::HeaderMap,
-    query_id: Option<&str>,
-) -> Result<String, ApiError> {
-    crate::routes::resolve_account_id_required(ctx, headers, query_id)
 }
 
 fn json_to_text(value: &Value) -> String {

@@ -1197,7 +1197,8 @@ impl FriendService {
         self.api.invalidate_list_cache();
         *self.friends_list_cache.lock() = None;
         self.steal_noop_markers.lock().clear();
-        crate::services::friend::visit_strategy::clear_friends_list_cache();
+        let account_id = self.account_id.lock().clone();
+        crate::services::friend::visit_strategy::clear_friends_list_cache(&account_id);
     }
 
     /// 获取好友土地详情（1:1 对齐原 TS `getFriendLandsDetail`）

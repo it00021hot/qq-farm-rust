@@ -1,0 +1,22 @@
+[package]
+name = "qq-farm-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "QQ 农场应用门面 — UI 无关的 Account / Farm / Friend 编排层"
+
+[lints]
+workspace = true
+
+[dependencies]
+qq-farm-core = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+parking_lot = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }

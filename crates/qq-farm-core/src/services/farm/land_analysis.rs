@@ -774,10 +774,7 @@ pub fn classify_harvested_lands_by_map(
     out
 }
 
-const PHASE_NAMES: [&str; 8] = ["未知", "种子", "发芽", "小叶", "大叶", "开花", "成熟", "枯死"];
-const PHASE_MATURE: i32 = 6;
-const PHASE_DEAD: i32 = 7;
-const PHASE_UNKNOWN: i32 = 0;
+use crate::constants::{PHASE_DEAD, PHASE_MATURE, PHASE_NAMES, PHASE_UNKNOWN};
 
 /// 面板土地汇总（对齐 TS `summarizeLandDetails`）
 #[derive(Debug, Clone, Default, serde::Serialize)]

@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::sleep;
 
-use crate::models::store::accounts::{self, Account};
+use crate::models::store::accounts::{self, AccountRecord};
 use crate::models::store::global_config::{self, OfflineReminder};
 use crate::services::push::{PushPayload, PushResult, PushService};
 use crate::services::qrlogin::{MiniProgramLoginSession, MpStatus, MpStatusResult};
@@ -68,9 +68,9 @@ pub struct OfflineReminderPayload {
 /// 1:1 对应原 TS `resolveWorkerControls()` 返回的 `{ startWorker, restartWorker }`。
 pub trait WorkerControls: Send + Sync {
     /// 启动 worker
-    fn start_worker(&self, account: &Account) -> Option<()>;
+    fn start_worker(&self, account: &AccountRecord) -> Option<()>;
     /// 重启 worker
-    fn restart_worker(&self, account: &Account) -> Option<()>;
+    fn restart_worker(&self, account: &AccountRecord) -> Option<()>;
 }
 
 /// 简单 Noop 实现（单元测试 / 离线部署用）
@@ -78,10 +78,10 @@ pub trait WorkerControls: Send + Sync {
 pub struct NoopWorkerControls;
 
 impl WorkerControls for NoopWorkerControls {
-    fn start_worker(&self, _account: &Account) -> Option<()> {
+    fn start_worker(&self, _account: &AccountRecord) -> Option<()> {
         None
     }
-    fn restart_worker(&self, _account: &Account) -> Option<()> {
+    fn restart_worker(&self, _account: &AccountRecord) -> Option<()> {
         None
     }
 }
@@ -190,7 +190,7 @@ impl ReloginReminderService {
 
         if let Some(found_acc) = found {
             // 更新已有账号
-            let new_acc = Account {
+            let new_acc = AccountRecord {
                 code: code.to_string(),
                 qq: if !uin.is_empty() { uin.to_string() } else { found_acc.qq.clone() },
                 uin: if !uin.is_empty() { uin.to_string() } else { found_acc.uin.clone() },
@@ -222,7 +222,7 @@ impl ReloginReminderService {
         } else {
             "重登录账号".to_string()
         };
-        let new_acc = Account {
+        let new_acc = AccountRecord {
             id: String::new(), // 会被 add_or_update_account 分配 next_id
             name,
             code: code.to_string(),
@@ -608,11 +608,11 @@ mod tests {
         restarts: AtomicUsize,
     }
     impl WorkerControls for CountingControls {
-        fn start_worker(&self, _account: &Account) -> Option<()> {
+        fn start_worker(&self, _account: &AccountRecord) -> Option<()> {
             self.starts.fetch_add(1, Ordering::SeqCst);
             Some(())
         }
-        fn restart_worker(&self, _account: &Account) -> Option<()> {
+        fn restart_worker(&self, _account: &AccountRecord) -> Option<()> {
             self.restarts.fetch_add(1, Ordering::SeqCst);
             Some(())
         }
@@ -854,7 +854,7 @@ mod tests {
     #[test]
     fn noop_worker_controls_returns_none() {
         let c = NoopWorkerControls;
-        let acc = Account {
+        let acc = AccountRecord {
             id: "a".to_string(),
             name: "n".to_string(),
             code: "c".to_string(),

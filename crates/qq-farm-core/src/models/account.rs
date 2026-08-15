@@ -1,4 +1,4 @@
-//! 账号领域模型。
+//! 账号领域模型（运行时登录会话）。
 
 use serde::{Deserialize, Serialize};
 
@@ -17,9 +17,9 @@ pub enum AccountStatus {
     Stopped,
 }
 
-/// 账号实体。
+/// 运行时账号会话（worker / engine 使用）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Account {
+pub struct AccountSession {
     /// 账号唯一 ID
     pub id: String,
     /// 登录用 openid（游戏会话）
@@ -54,7 +54,11 @@ pub struct Account {
     pub updated_at: i64,
 }
 
-impl Account {
+/// 兼容旧名；请改用 [`AccountSession`]。
+#[deprecated(note = "use AccountSession")]
+pub type Account = AccountSession;
+
+impl AccountSession {
     /// 创建新账号
     #[must_use]
     pub fn new(id: impl Into<String>, open_id: impl Into<String>, display_name: impl Into<String>) -> Self {
@@ -76,7 +80,7 @@ impl Account {
 
     /// 从持久化账号构造运行时账号，保留 platform / code（对齐 TS worker `platform: account.platform`）。
     #[must_use]
-    pub fn from_store(acc: &crate::models::store::accounts::Account) -> Self {
+    pub fn from_store(acc: &crate::models::store::accounts::AccountRecord) -> Self {
         let code = acc.code.clone();
         let display_name = if acc.name.trim().is_empty() {
             acc.nick.clone()
@@ -103,11 +107,11 @@ impl Account {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::store::accounts::Account as StoreAccount;
+    use crate::models::store::accounts::AccountRecord;
 
     #[test]
     fn from_store_keeps_wx_platform_and_code() {
-        let store = StoreAccount {
+        let store = AccountRecord {
             id: "2".into(),
             name: "账号2".into(),
             nick: String::new(),
@@ -120,7 +124,7 @@ mod tests {
             created_at: 1,
             updated_at: 2,
         };
-        let acc = Account::from_store(&store);
+        let acc = AccountSession::from_store(&store);
         assert_eq!(acc.platform, "wx");
         assert_eq!(acc.code, "wx-one-time");
         assert_eq!(acc.open_id, "wx-one-time");

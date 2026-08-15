@@ -37,6 +37,12 @@ impl AdminContext {
         }
     }
 
+    /// 转为 qq-farm-app 上下文。
+    #[must_use]
+    pub fn app_context(&self) -> qq_farm_app::AppContext {
+        qq_farm_app::AppContext::new(self.engine.clone())
+    }
+
     /// 构造 context（带 sessions）
     #[must_use]
     pub fn with_sessions(engine: Arc<RuntimeEngine>, sessions: SessionStore) -> Self {
@@ -117,6 +123,30 @@ impl axum::response::IntoResponse for ApiError {
             }),
         )
             .into_response()
+    }
+}
+
+impl From<qq_farm_core::Error> for ApiError {
+    fn from(e: qq_farm_core::Error) -> Self {
+        match e {
+            qq_farm_core::Error::NotFound(m) => Self::NotFound(m),
+            qq_farm_core::Error::Business(m) => Self::BadRequest(m),
+            qq_farm_core::Error::Network(n) => Self::BadGateway(n.to_string()),
+            other => Self::Internal(other.to_string()),
+        }
+    }
+}
+
+impl From<qq_farm_app::AppError> for ApiError {
+    fn from(e: qq_farm_app::AppError) -> Self {
+        match e {
+            qq_farm_app::AppError::NotFound(m) => Self::NotFound(m),
+            qq_farm_app::AppError::BadRequest(m) => Self::BadRequest(m),
+            qq_farm_app::AppError::Forbidden(m) => Self::Forbidden(m),
+            qq_farm_app::AppError::Internal(m) => Self::Internal(m),
+            qq_farm_app::AppError::AccountNotRunning => Self::AccountNotRunning,
+            qq_farm_app::AppError::Core(core) => Self::Internal(core.to_string()),
+        }
     }
 }
 

@@ -10,11 +10,15 @@ QQ 农场多账号挂机的 Rust 重写。协议、调度和 HTTP/Socket.IO 合�
 qq-farm-rust/
 ├── crates/
 │   ├── qq-farm-core/      # 网关、登录、农场/好友调度、活动中心、统计
+│   ├── qq-farm-app/       # UI 无关应用门面（server / desktop 共用）
 │   ├── qq-farm-server/    # HTTP API + Socket.IO（默认 3007）
+│   ├── qq-farm-desktop/   # GPUI 桌面端（预留）
 │   └── qq-farm-cli/       # 调试命令（crypto / farm / friend / wx-code）
 ├── proto/                 # 游戏 protobuf
 ├── assets/activity-data/  # 活动静态数据
 ├── scripts/               # 辅助脚本
+├── docs/ARCHITECTURE.md   # 多前端拓扑
+├── docs/CODING_STANDARDS.md
 └── .env.example
 ```
 
@@ -88,6 +92,8 @@ pnpm dev
 安静时段、好友总开关、蔬菜黑名单与原版配置项一致。
 
 ## CLI
+
+`qq-farm-cli` 里的 demo 子命令（`demo-crypto`、`worker-demo`、`farm-demo`、`friend-demo`）仅用于本地开发与阶段验证，依赖 mock WebSocket，**不是生产入口**。生产请用 `qq-farm-server`；`qq-farm-desktop` 仍为占位 crate。
 
 ```bash
 cargo run -p qq-farm-cli -- farm-demo

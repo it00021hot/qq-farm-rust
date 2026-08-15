@@ -472,6 +472,130 @@ async fn e2e_account_creation_returns_account_id() {
     assert_eq!(user_obj["role"], "user");
 }
 
+#[tokio::test]
+#[serial_test::serial(e2e)]
+async fn e2e_account_acl_blocks_cross_user_mutate() {
+    let app = build_test_app(TestApp::default()).await;
+    let pid = std::process::id();
+    let user_a = format!("acl_a_{pid}");
+    let user_b = format!("acl_b_{pid}");
+    let password = "Pass123!";
+
+    // 注册并登录 A
+    let resp = app
+        .clone()
+        .oneshot(register_req(&user_a, password, &mint_test_card("ACLA")))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let resp = app.clone().oneshot(login_req(&user_a, password)).await.unwrap();
+    let v: Value = serde_json::from_slice(&to_bytes(resp.into_body(), 4096).await.unwrap()).unwrap();
+    let token_a = v["data"]["token"].as_str().unwrap().to_string();
+
+    // A 创建账号
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/accounts")
+                .header("content-type", "application/json")
+                .header("x-admin-token", &token_a)
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "name": "acl-owned-a",
+                        "code": "acl_code_a",
+                        "platform": "wx",
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let v: Value = serde_json::from_slice(&to_bytes(resp.into_body(), 8192).await.unwrap()).unwrap();
+    assert_eq!(v["ok"], true, "A create account: {v}");
+    let account_id = v["data"]["accounts"]
+        .as_array()
+        .and_then(|arr| arr.iter().rev().find(|a| a["name"] == "acl-owned-a"))
+        .and_then(|a| a["id"].as_str())
+        .expect("account id")
+        .to_string();
+
+    // 注册并登录 B
+    let resp = app
+        .clone()
+        .oneshot(register_req(&user_b, password, &mint_test_card("ACLB")))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let resp = app.clone().oneshot(login_req(&user_b, password)).await.unwrap();
+    let v: Value = serde_json::from_slice(&to_bytes(resp.into_body(), 4096).await.unwrap()).unwrap();
+    let token_b = v["data"]["token"].as_str().unwrap().to_string();
+
+    // B 不能 remark A 的账号
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/account/remark")
+                .header("content-type", "application/json")
+                .header("x-admin-token", &token_b)
+                .body(Body::from(
+                    serde_json::to_vec(&json!({ "id": account_id, "name": "hacked" })).unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // B 不能 stop A 的账号
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/accounts/{account_id}/stop"))
+                .header("x-admin-token", &token_b)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // B 不能 delete A 的账号
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/accounts/{account_id}"))
+                .header("x-admin-token", &token_b)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // 无 token 访问 /ws 应 401（不带 Upgrade，避免 extractor 先返回 426）
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/ws")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
 // ===== helpers =====
 
 fn register_req(username: &str, password: &str, card_code: &str) -> Request<Body> {

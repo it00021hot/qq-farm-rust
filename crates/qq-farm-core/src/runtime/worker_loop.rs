@@ -38,7 +38,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 use tokio::sync::broadcast;
 
-use crate::models::Account;
+use crate::models::AccountSession;
 use crate::network::gateway::Gateway;
 use crate::runtime::events::WorkerEvent;
 use crate::runtime::scheduler::Scheduler;
@@ -85,7 +85,7 @@ impl Default for WorkerLoopConfig {
 
 /// Worker 编排器
 pub struct WorkerLoop {
-    account: Account,
+    account: AccountSession,
     config: WorkerLoopConfig,
     gateway: Arc<Gateway>,
     /// event_tx 用于上报状态 / 错误 / 停止
@@ -198,7 +198,7 @@ impl WorkerLoop {
     #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn new(
-        account: Account,
+        account: AccountSession,
         config: WorkerLoopConfig,
         gateway: Arc<Gateway>,
         event_tx: broadcast::Sender<WorkerEvent>,
@@ -1311,12 +1311,12 @@ pub fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::Account;
+    use crate::models::AccountSession;
     use crate::network::gateway::{Gateway, GatewayConfig};
     use crate::services::activity_center::ActivityCenterService;
 
-    fn make_account() -> Account {
-        Account::new("acc-1", "code-1", "Test")
+    fn make_account() -> AccountSession {
+        AccountSession::new("acc-1", "code-1", "Test")
     }
 
     fn make_gateway() -> Arc<Gateway> {

@@ -7,13 +7,24 @@ pub mod activity_center;
 pub mod admin;
 pub mod auth;
 pub mod commerce;
+pub mod daily_gifts;
 pub mod farm;
 pub mod friend;
+pub mod game_config;
 pub mod wx_login;
 
 use axum::http::HeaderMap;
 
+use qq_farm_app::accounts::AclPolicy;
 use qq_farm_core::services::account_resolver::normalize_account_ref;
+
+/// 从面板会话构造 ACL 策略。
+pub fn acl_policy_from_session(sess: &crate::sessions::SessionInfo) -> AclPolicy {
+    AclPolicy::PanelUser {
+        username: sess.username.clone(),
+        role: sess.role.clone(),
+    }
+}
 
 /// 共享 helper：解析 account_id（query > header > env fallback）
 ///
@@ -40,6 +51,33 @@ pub fn resolve_account_id(
     }
     // fallback：FARM_ACCOUNT_ID env
     std::env::var("FARM_ACCOUNT_ID").unwrap_or_default()
+}
+
+/// 解析 account_id 并校验 ACL（允许空 id，供 farm 等路由自行处理缺失场景）。
+pub fn resolve_id(
+    ctx: &AdminContext,
+    headers: &HeaderMap,
+    query_id: Option<&str>,
+) -> Result<String, crate::context::ApiError> {
+    let id = resolve_account_id(ctx, headers, query_id);
+    ensure_account_access(ctx, headers, &id)?;
+    Ok(id)
+}
+
+/// 获取某账号的 WorkerLoop（cloned Arc，handler 异步安全）。
+pub fn get_loop(
+    ctx: &AdminContext,
+    account_id: &str,
+) -> Result<std::sync::Arc<qq_farm_core::runtime::worker_loop::WorkerLoop>, crate::context::ApiError> {
+    qq_farm_app::farm::require_worker_loop(&ctx.app_context(), account_id).map_err(Into::into)
+}
+
+/// 同 [`get_loop`]，语义别名。
+pub fn require_worker_loop(
+    ctx: &AdminContext,
+    account_id: &str,
+) -> Result<std::sync::Arc<qq_farm_core::runtime::worker_loop::WorkerLoop>, crate::context::ApiError> {
+    get_loop(ctx, account_id)
 }
 
 /// 严格版：缺失时返回 `BadRequest`
@@ -69,12 +107,7 @@ pub fn account_accessible(ctx: &AdminContext, headers: &HeaderMap, account_id: &
     let Some(sess) = current_session(ctx, headers) else {
         return false;
     };
-    if sess.role == "admin" {
-        return true;
-    }
-    qq_farm_core::models::store::accounts::get_accounts()
-        .into_iter()
-        .any(|a| a.id == account_id && a.username == sess.username)
+    qq_farm_app::accounts::account_accessible(&acl_policy_from_session(&sess), account_id)
 }
 
 /// 无权限时 Forbidden
@@ -83,13 +116,13 @@ pub fn ensure_account_access(
     headers: &HeaderMap,
     account_id: &str,
 ) -> Result<(), crate::context::ApiError> {
-    if account_accessible(ctx, headers, account_id) {
-        Ok(())
-    } else {
-        Err(crate::context::ApiError::Forbidden(
+    let Some(sess) = current_session(ctx, headers) else {
+        return Err(crate::context::ApiError::Forbidden(
             "无权访问该账号".to_string(),
-        ))
-    }
+        ));
+    };
+    qq_farm_app::accounts::ensure_account_access(&acl_policy_from_session(&sess), account_id)
+        .map_err(Into::into)
 }
 
 pub fn current_session(ctx: &AdminContext, headers: &HeaderMap) -> Option<crate::sessions::SessionInfo> {
@@ -103,16 +136,15 @@ pub fn current_session(ctx: &AdminContext, headers: &HeaderMap) -> Option<crate:
     ctx.sessions.get(token)
 }
 
-/// 当前用户名下账号 ID（含管理员；对齐 getAccessibleAccountIds）
+/// 当前会话可访问的账号 ID。
+///
+/// - admin：全部账号
+/// - 普通用户：仅 `username` 匹配自己的账号
 pub fn accessible_account_ids(ctx: &AdminContext, headers: &HeaderMap) -> Vec<String> {
     let Some(sess) = current_session(ctx, headers) else {
         return Vec::new();
     };
-    qq_farm_core::models::store::accounts::get_accounts()
-        .into_iter()
-        .filter(|a| a.username == sess.username)
-        .map(|a| a.id)
-        .collect()
+    qq_farm_app::accounts::accessible_account_ids(&acl_policy_from_session(&sess))
 }
 
 use std::sync::Arc;
@@ -152,15 +184,16 @@ pub fn build(ctx: Arc<AdminContext>) -> Router<Arc<AdminContext>> {
         }
     });
 
-    // auth 路由不挂 auth_check（login/register 公开）
-    // admin 挂 admin_check
-    // account / friend 挂 auth_check
-    // 其余挂 inject（不需要登录）
+    // auth：login/register 等公开（部分 handler 自行校验 token）
+    // admin：admin_check
+    // account / farm / friend / commerce / activity / wx_login：auth_check
     let authed = Router::new()
         .merge(account::router())
         .merge(friend::router())
         .merge(wx_login::router())
         .merge(farm::router())
+        .merge(daily_gifts::router())
+        .merge(game_config::router())
         .merge(commerce::router())
         .merge(activity_center::router())
         .route_layer(auth_check);

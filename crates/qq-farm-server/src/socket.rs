@@ -10,11 +10,13 @@
 use std::sync::Arc;
 
 use axum::{
+    body::Body,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        State,
+        FromRequest, FromRequestParts, Query, State,
     },
-    response::Response,
+    http::{request::Parts, Request, StatusCode},
+    response::{IntoResponse, Response},
 };
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -75,7 +77,10 @@ pub fn setup_socketio(ctx: Arc<AdminContext>) -> (socketioxide::layer::SocketIoL
     (layer, io)
 }
 
-/// 把 runtime 事件转到 Socket.IO 房间（对齐 emitRealtimeStatus / Log / AccountLog）
+/// 把 runtime 事件转到 Socket.IO 房间（对齐 emitRealtimeStatus / Log / AccountLog）。
+///
+/// 订阅 `RuntimeEngine::runtime_state().subscribe()` 的 broadcast 通道。
+/// GPUI / desktop 客户端应改用 `qq_farm_app::AppContext::subscribe_events` 并包装为 [`AppEvent`](qq_farm_app::events::AppEvent)。
 pub fn spawn_socket_forwarder(io: SocketIo, ctx: Arc<AdminContext>) {
     let mut rx = ctx.engine.runtime_state().subscribe();
     tokio::spawn(async move {
@@ -246,12 +251,51 @@ fn push_snapshots(
     let _ = socket.emit("account-logs:snapshot", &account_logs_payload);
 }
 
-/// 兼容旧 `/ws`（E2E / 调试）
+/// 兼容旧 `/ws`（E2E / 调试）。须带 `?token=` 或 `x-admin-token`，与 Socket.IO 鉴权对齐。
+///
+/// 鉴权在 `WebSocketUpgrade` 提取之前完成，避免无 Upgrade 头时直接 426。
 pub async fn ws_handler(
-    ws: WebSocketUpgrade,
     State(ctx): State<Arc<AdminContext>>,
+    req: Request<Body>,
 ) -> Response {
-    ws.on_upgrade(move |socket| handle_socket(socket, ctx))
+    let (mut parts, body) = req.into_parts();
+    let token = match extract_ws_token(&mut parts).await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    if ctx.sessions.get(&token).is_none() {
+        return (StatusCode::UNAUTHORIZED, "invalid or expired token").into_response();
+    }
+    let req = Request::from_parts(parts, body);
+    match WebSocketUpgrade::from_request(req, &mut ()).await {
+        Ok(ws) => ws.on_upgrade(move |socket| handle_socket(socket, ctx, token)),
+        Err(rej) => rej.into_response(),
+    }
+}
+
+async fn extract_ws_token(parts: &mut Parts) -> Result<String, Response> {
+    let q = Query::<WsAuthQuery>::from_request_parts(parts, &mut ())
+        .await
+        .map_err(|_| (StatusCode::BAD_REQUEST, "bad query").into_response())?;
+    let token = q
+        .token
+        .clone()
+        .filter(|t| !t.is_empty())
+        .or_else(|| {
+            parts
+                .headers
+                .get("x-admin-token")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string)
+                .filter(|t| !t.is_empty())
+        });
+    token.ok_or_else(|| (StatusCode::UNAUTHORIZED, "missing token").into_response())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WsAuthQuery {
+    #[serde(default)]
+    pub token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -262,7 +306,7 @@ struct SubscribeMsg {
     account_id: Option<String>,
 }
 
-async fn handle_socket(socket: WebSocket, ctx: Arc<AdminContext>) {
+async fn handle_socket(socket: WebSocket, ctx: Arc<AdminContext>, token: String) {
     let (mut sender, mut receiver) = socket.split();
     let mut event_rx = ctx.engine.runtime_state().subscribe();
     let subscribed_account: Arc<parking_lot::Mutex<Option<String>>> =
@@ -314,8 +358,16 @@ async fn handle_socket(socket: WebSocket, ctx: Arc<AdminContext>) {
                 let incoming = parsed.account_id.unwrap_or_default();
                 let normalized = if incoming.is_empty() || incoming == "all" {
                     None
-                } else {
+                } else if account_id_allowed(&ctx, &token, &incoming) {
                     Some(incoming)
+                } else {
+                    let text = serde_json::to_string(&json!({
+                        "type": "error",
+                        "error": "无权订阅该账号"
+                    }))
+                    .unwrap_or_default();
+                    let _ = tx.send(text).await;
+                    continue;
                 };
                 let ack_account = normalized.clone().unwrap_or_else(|| "all".to_string());
                 *subscribed_account.lock() = normalized;
@@ -336,6 +388,18 @@ async fn handle_socket(socket: WebSocket, ctx: Arc<AdminContext>) {
 
     forward_task.abort();
     event_task.abort();
+}
+
+fn account_id_allowed(ctx: &AdminContext, token: &str, account_id: &str) -> bool {
+    let Some(info) = ctx.sessions.get(token) else {
+        return false;
+    };
+    if info.role == "admin" {
+        return true;
+    }
+    qq_farm_core::models::store::accounts::get_accounts()
+        .into_iter()
+        .any(|a| a.id == account_id && a.username == info.username)
 }
 
 fn event_account_id(event: &RuntimeEvent) -> Option<String> {

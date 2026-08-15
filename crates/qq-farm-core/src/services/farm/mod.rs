@@ -2,7 +2,7 @@
 //!
 //! - [`api`] — 底层农场/商店 API（protobuf 请求 + 解码响应）
 //! - [`land_analysis`] — 土地状态分析（地块映射、阶段判断、布局）
-//! - [`scheduler`] — 调度循环（定时检查 + 触发操作）
+//! - [`scheduler`] — 调度循环（定时检查 + 触发操作）；[`FarmService`] 定义于此
 //! - [`planting`] — 种植引擎（选种子、拖动种植、按配置施肥）
 //!
 //! 阶段 1C.1 范围：api + 框架骨架 + 最小可工作测试。
@@ -13,3 +13,5 @@ pub mod api;
 pub mod land_analysis;
 pub mod planting;
 pub mod scheduler;
+
+pub use scheduler::FarmService;

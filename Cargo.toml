@@ -2,8 +2,10 @@
 resolver = "2"
 members = [
     "crates/qq-farm-core",
+    "crates/qq-farm-app",
     "crates/qq-farm-server",
     "crates/qq-farm-cli",
+    "crates/qq-farm-desktop",
 ]
 
 [workspace.package]
@@ -113,6 +115,7 @@ clap = { version = "4", features = ["derive", "env"] }
 
 # 进程内 crate
 qq-farm-core = { path = "crates/qq-farm-core" }
+qq-farm-app = { path = "crates/qq-farm-app" }
 
 [profile.release]
 opt-level = 3

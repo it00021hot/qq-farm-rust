@@ -118,7 +118,7 @@ impl TokenBucket {
 // =====================================================================
 
 type TaskFn =
-    Box<dyn FnMut() -> futures::future::BoxFuture<'static, anyhow::Result<serde_json::Value>> + Send>;
+    Box<dyn FnMut() -> futures::future::BoxFuture<'static, crate::error::Result<serde_json::Value>> + Send>;
 
 /// 任务条目
 pub struct TaskEntry {
@@ -143,7 +143,7 @@ impl std::fmt::Debug for TaskEntry {
 
 impl TaskEntry {
     pub fn new(
-        f: impl FnMut() -> futures::future::BoxFuture<'static, anyhow::Result<serde_json::Value>> + Send + 'static,
+        f: impl FnMut() -> futures::future::BoxFuture<'static, crate::error::Result<serde_json::Value>> + Send + 'static,
         resolve: tokio::sync::oneshot::Sender<serde_json::Value>,
         label: String,
         priority: i32,
@@ -259,7 +259,7 @@ impl RequestQueue {
     /// 添加任务
     pub async fn add_request<F>(&self, f: F, label: &str, priority: i32) -> serde_json::Value
     where
-        F: FnMut() -> futures::future::BoxFuture<'static, anyhow::Result<serde_json::Value>> + Send + 'static,
+        F: FnMut() -> futures::future::BoxFuture<'static, crate::error::Result<serde_json::Value>> + Send + 'static,
     {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let task = TaskEntry::new(f, tx, label.to_string(), priority, self.config.max_retries);
@@ -579,7 +579,7 @@ mod tests {
                     let calls = calls_clone.clone();
                     Box::pin(async move {
                         calls.fetch_add(1, Ordering::SeqCst);
-                        Err::<serde_json::Value, _>(anyhow::anyhow!("boom"))
+                        Err(crate::error::Error::internal("boom"))
                     })
                 },
                 "error-test",

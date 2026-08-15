@@ -20,6 +20,9 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
+use crate::constants::{
+    FERTILIZER_CONTAINER_LIMIT_HOURS, NORMAL_CONTAINER_ID, ORGANIC_CONTAINER_ID, SELL_BATCH_SIZE,
+};
 use crate::error::Result;
 use crate::network::gateway::Gateway;
 use crate::proto::generated::corepb::Item as CoreItem;
@@ -27,11 +30,6 @@ use crate::proto::generated::gamepb::itempb::{
     BagReply, BagRequest, BatchUseReply, BatchUseRequest, SellReply, SellRequest, UseReply,
     UseRequest,
 };
-
-const SELL_BATCH_SIZE: usize = 15;
-const FERTILIZER_CONTAINER_LIMIT_HOURS: i64 = 990;
-const NORMAL_CONTAINER_ID: i64 = 1011;
-const ORGANIC_CONTAINER_ID: i64 = 1012;
 
 const FERTILIZER_RELATED_IDS: &[i64] = &[
     100_003, 100_004, 80_001, 80_002, 80_003, 80_004, 80_011, 80_012, 80_013, 80_014,

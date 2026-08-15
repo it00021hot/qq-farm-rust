@@ -9,6 +9,7 @@
 
 use anyhow::{Context, Result};
 use clap::Args as ClapArgs;
+use qq_farm_core::constants::WX_MINI_APP_ID;
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
@@ -17,7 +18,7 @@ pub struct Args {
     pub login_buffer: String,
 
     /// 目标小程序 app_id
-    #[arg(long, default_value = "wx5306c5978fdb76e4")]
+    #[arg(long, default_value = WX_MINI_APP_ID)]
     pub app_id: String,
 }
 

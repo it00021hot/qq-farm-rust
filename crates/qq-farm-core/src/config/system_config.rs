@@ -46,8 +46,8 @@ pub enum PlantPhase {
     Dead = 7,
 }
 
-/// 阶段中文名
-pub const PHASE_NAMES: [&str; 8] = ["未知", "种子", "发芽", "小叶", "大叶", "开花", "成熟", "枯死"];
+/// 阶段中文名（转发自 [`crate::constants::PHASE_NAMES`]）
+pub use crate::constants::PHASE_NAMES;
 
 impl PlantPhase {
     /// 从 i32 转换（容错）

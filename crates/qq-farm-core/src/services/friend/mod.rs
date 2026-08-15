@@ -8,4 +8,7 @@
 pub mod api;
 pub mod gid_manager;
 pub mod scheduler;
+pub mod runtime_state;
 pub mod visit_strategy;
+
+pub use runtime_state::{FriendQuietHours, FriendRuntimeState, FriendsListCache};

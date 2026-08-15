@@ -12,13 +12,20 @@ use std::time::Instant;
 
 use anyhow::{anyhow, Context, Result};
 use clap::Args as ClapArgs;
+use qq_farm_core::config::get_resource_path;
 use qq_farm_core::crypto::tsdk::TsdkRuntime;
+
+fn default_wasm_path() -> PathBuf {
+    std::env::var("TSDK_WASM_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| get_resource_path(&["assets", "tsdk.wasm"]))
+}
 
 #[derive(Debug, ClapArgs)]
 pub struct CryptoArgs {
-    /// 自定义 wasm 路径（默认 `assets/tsdk.wasm`，相对当前目录）
-    #[arg(long, default_value = "assets/tsdk.wasm")]
-    pub wasm: PathBuf,
+    /// 自定义 wasm 路径（默认 workspace `assets/tsdk.wasm`）
+    #[arg(long)]
+    pub wasm: Option<PathBuf>,
 
     /// 自定义明文（十六进制字符串；默认用一段中文）
     #[arg(long)]
@@ -34,8 +41,8 @@ pub struct CryptoArgs {
 }
 
 pub fn execute(args: CryptoArgs) -> Result<()> {
-    // 1. 定位 wasm
-    let wasm_path = locate_wasm(&args.wasm)?;
+    let wasm_candidate = args.wasm.unwrap_or_else(default_wasm_path);
+    let wasm_path = locate_wasm(&wasm_candidate)?;
     println!("[demo] wasm path: {}", wasm_path.display());
 
     // 2. 加载 + 初始化
@@ -105,21 +112,14 @@ fn locate_wasm(custom: &std::path::Path) -> Result<PathBuf> {
     if custom.exists() {
         return Ok(custom.to_path_buf());
     }
-    // 尝试相对工作目录往上找
-    let candidates = [
-        custom.to_path_buf(),
-        PathBuf::from(format!("../{}", custom.display())),
-        PathBuf::from(format!("../../{}", custom.display())),
-        PathBuf::from(format!("../../../{}", custom.display())),
-    ];
-    for c in &candidates {
-        if c.exists() {
-            return Ok(c.clone());
-        }
+    let fallback = get_resource_path(&["assets", "tsdk.wasm"]);
+    if fallback.exists() {
+        return Ok(fallback);
     }
     Err(anyhow!(
-        "找不到 tsdk.wasm：试过 {}",
-        candidates.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
+        "找不到 tsdk.wasm：试过 {} 和 {}",
+        custom.display(),
+        fallback.display()
     ))
 }
 

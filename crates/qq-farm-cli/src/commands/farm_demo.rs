@@ -8,23 +8,23 @@
 //! 5. 输出事件 + 统计
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::Args as ClapArgs;
-use futures::{SinkExt, StreamExt};
-use qq_farm_core::models::Account;
+use prost::Message as _;
+use qq_farm_core::models::AccountSession;
+use qq_farm_core::network::encryptor::{Encryptor, NoopEncryptor};
 use qq_farm_core::network::gateway::{Gateway, GatewayConfig};
-use qq_farm_core::network::encryptor::{Encryptor, TsdkEncryptor};
+use qq_farm_core::proto::generated::gamepb::plantpb::{
+    AllLandsReply, LandInfo, PlantInfo, PlantPhaseInfo,
+};
 use qq_farm_core::runtime::engine::{EngineConfig, GatewayConfigTemplate, RuntimeEngine};
 use qq_farm_core::runtime::events::WorkerEvent;
-use qq_farm_core::runtime::worker_message::WorkerMessage;
 use qq_farm_core::services::farm::scheduler::{FarmEvent, FarmService};
-use std::sync::Arc;
-use tokio::net::TcpListener;
-use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
-use tokio_tungstenite::accept_async;
+
+use crate::commands::mock_ws;
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
@@ -47,14 +47,11 @@ pub fn execute(args: Args) -> Result<()> {
 
 async fn run_demo(args: Args) -> Result<()> {
     println!("[farm-demo] 启动 mock WS server（返回固定 lands）...");
-    let (port, _server_handle) = start_mock_ws_server().await;
+    let (port, _server_handle) = mock_ws::start_gate_mock_ws_server(Box::new(farm_gate_handler)).await;
     let mock_url = format!("ws://127.0.0.1:{port}/");
     println!("[farm-demo] mock URL: {mock_url}");
 
-    // 构造引擎
-    let wasm_path = std::env::var("TSDK_WASM_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("assets/tsdk.wasm"));
+    let engine_defaults = EngineConfig::default();
     let data_root = std::env::temp_dir().join("qq-farm-rust-farm-demo");
 
     let gateway_template = GatewayConfigTemplate {
@@ -68,16 +65,15 @@ async fn run_demo(args: Args) -> Result<()> {
     let engine = Arc::new(RuntimeEngine::assemble(EngineConfig {
         max_workers: 4,
         status_interval: Duration::from_secs(1),
-        tsdk_wasm_path: wasm_path,
+        tsdk_wasm_path: engine_defaults.tsdk_wasm_path,
         data_root,
         gateway_template,
     }));
 
-    let account = Account::new("acc-farm", "demo-openid", "DemoAccount");
+    let account = AccountSession::new("acc-farm", "demo-openid", "DemoAccount");
     engine.start_worker(account.clone())?;
     println!("[farm-demo] worker 启动: account_id={}", account.id);
 
-    // 订阅 worker 事件
     let mut worker_events = engine.subscribe_events();
     let worker_task = tokio::spawn(async move {
         while let Ok(event) = worker_events.recv().await {
@@ -96,26 +92,21 @@ async fn run_demo(args: Args) -> Result<()> {
         }
     });
 
-    // 等待 TSDK 加载
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // 构造 FarmService 直接调（简化：跳过 login 流程）
-    // —— 实际应该从 worker 内部触发，但阶段 1C demo 直接演示逻辑
     println!("[farm-demo] 构造 FarmService + 跑一次完整操作...");
     let gateway = Arc::new(construct_gateway_for_demo(&mock_url)?);
-    // 先连接 + 标记 online（demo 简化：跳过完整 login 流程）
     gateway.connect().await.context("connect")?;
     gateway.mark_online();
     println!("[farm-demo] gateway connected + marked online");
     let farm = FarmService::new(gateway.clone());
     farm.set_host_gid(args.host_gid);
 
-    // 设置测试用 preferred_seed_id（demo 用真实种子 ID 1001）
     {
         let planting = farm.planting();
         let mut engine = planting.lock().await;
         let mut config = engine.config().clone();
-        config.preferred_seed_id = 1001; // 假设是某个种子 ID
+        config.preferred_seed_id = 1001;
         engine.set_config(config);
     }
     let mut farm_events = farm.subscribe();
@@ -138,17 +129,13 @@ async fn run_demo(args: Args) -> Result<()> {
         }
     });
 
-    // 跑一次操作循环
-    if let Err(e) = farm.run_farm_operation().await {
-        println!("[farm-demo] run_farm_operation 失败: {e}");
-    } else {
-        println!("[farm-demo] run_farm_operation 完成 ✓");
-    }
+    farm.run_farm_operation()
+        .await
+        .context("run_farm_operation")?;
+    println!("[farm-demo] run_farm_operation 完成 ✓");
 
-    // 持续跑 N 秒
     tokio::time::sleep(Duration::from_secs(args.duration_secs)).await;
 
-    // 关闭
     println!("[farm-demo] shutdown...");
     engine.shutdown();
     farm.shutdown();
@@ -159,9 +146,7 @@ async fn run_demo(args: Args) -> Result<()> {
     Ok(())
 }
 
-/// 构造 Gateway 用 mock URL（不通过 worker 加载 TSDK，直接拿一个）
 fn construct_gateway_for_demo(mock_url: &str) -> Result<Gateway> {
-    // 阶段 1C demo 用 NoopEncryptor（明文透传），避免 mock server 也要跑 TSDK
     let encryptor: Arc<dyn Encryptor> = Arc::new(NoopEncryptor);
     Ok(Gateway::new(
         GatewayConfig {
@@ -176,100 +161,60 @@ fn construct_gateway_for_demo(mock_url: &str) -> Result<Gateway> {
     ))
 }
 
-/// Noop 加密器（明文透传，用于 mock 测试）
-struct NoopEncryptor;
-impl Encryptor for NoopEncryptor {
-    fn encrypt(&self, plaintext: &[u8]) -> qq_farm_core::error::Result<Vec<u8>> {
-        Ok(plaintext.to_vec())
-    }
-    fn decrypt(&self, ciphertext: &[u8]) -> qq_farm_core::error::Result<Vec<u8>> {
-        Ok(ciphertext.to_vec())
-    }
-}
-
-/// Mock WS server：收到 "AllLands" → 返回 mock lands 响应；其他 echo
-async fn start_mock_ws_server() -> (u16, tokio::task::JoinHandle<()>) {
-    use prost::Message as _;
-    use qq_farm_core::proto::generated::gatepb::{Message as GateMessage, Meta};
-    use qq_farm_core::proto::generated::gamepb::plantpb::{AllLandsReply, LandInfo, PlantInfo, PlantPhaseInfo};
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let handle = tokio::spawn(async move {
-        if let Ok((stream, _)) = listener.accept().await {
-            if let Ok(mut ws) = accept_async(stream).await {
-                while let Some(msg) = ws.next().await {
-                    let msg = match msg {
-                        Ok(m) => m,
-                        Err(_) => break,
-                    };
-                    if let WsMessage::Binary(data) = msg {
-                        // 解析请求
-                        if let Ok(req) = GateMessage::decode(&data[..]) {
-                            let method = req.meta.as_ref().map(|m| m.method_name.clone()).unwrap_or_default();
-                            let client_seq = req.meta.as_ref().map(|m| m.client_seq).unwrap_or(0);
-
-                            // 构造 mock 响应
-                            let body = if method == "AllLands" {
-                                // 返回 4 块地：2 个 Seed（可种）+ 1 个 Ripe（可收）+ 1 个 Growing
-                                let lands = vec![
-                                    LandInfo {
-                                        id: 1, unlocked: true, level: 1, plant: None, ..Default::default()
-                                    },
-                                    LandInfo {
-                                        id: 2, unlocked: true, level: 1, plant: None, ..Default::default()
-                                    },
-                                    LandInfo {
-                                        id: 3, unlocked: true, level: 3,
-                                        plant: Some(PlantInfo {
-                                            id: 1, name: "carrot".into(),
-                                            phases: vec![PlantPhaseInfo { phase: 3, ..Default::default() }],
-                                            ..Default::default()
-                                        }),
-                                        ..Default::default()
-                                    },
-                                    LandInfo {
-                                        id: 4, unlocked: true, level: 2,
-                                        plant: Some(PlantInfo {
-                                            id: 1, name: "carrot".into(),
-                                            phases: vec![PlantPhaseInfo { phase: 2, ..Default::default() }],
-                                            ..Default::default()
-                                        }),
-                                        ..Default::default()
-                                    },
-                                ];
-                                AllLandsReply { lands, ..Default::default() }.encode_to_vec()
-                            } else if method == "Harvest" {
-                                AllLandsReply::default().encode_to_vec()
-                            } else {
-                                AllLandsReply::default().encode_to_vec()
-                            };
-
-                            // 构造响应 frame
-                            let resp_meta = Meta {
-                                service_name: req.meta.as_ref().map(|m| m.service_name.clone()).unwrap_or_default(),
-                                method_name: method.clone(),
-                                message_type: 2, // Response
-                                client_seq,
-                                server_seq: 0,
-                                error_code: 0,
-                                error_message: String::new(),
-                                ..Default::default()
-                            };
-                            let resp = GateMessage {
-                                meta: Some(resp_meta),
-                                body: body.into(),
-                                token: String::new(),
-                            };
-                            let resp_bytes = resp.encode_to_vec();
-                            let _ = ws.send(WsMessage::Binary(resp_bytes)).await;
-                        }
-                    } else if matches!(msg, WsMessage::Close(_)) {
-                        break;
-                    }
-                }
-            }
+fn farm_gate_handler(method: &str) -> Vec<u8> {
+    if method == "AllLands" {
+        let lands = vec![
+            LandInfo {
+                id: 1,
+                unlocked: true,
+                level: 1,
+                plant: None,
+                ..Default::default()
+            },
+            LandInfo {
+                id: 2,
+                unlocked: true,
+                level: 1,
+                plant: None,
+                ..Default::default()
+            },
+            LandInfo {
+                id: 3,
+                unlocked: true,
+                level: 3,
+                plant: Some(PlantInfo {
+                    id: 1,
+                    name: "carrot".into(),
+                    phases: vec![PlantPhaseInfo {
+                        phase: 3,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            LandInfo {
+                id: 4,
+                unlocked: true,
+                level: 2,
+                plant: Some(PlantInfo {
+                    id: 1,
+                    name: "carrot".into(),
+                    phases: vec![PlantPhaseInfo {
+                        phase: 2,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        ];
+        AllLandsReply {
+            lands,
+            ..Default::default()
         }
-    });
-    (port, handle)
+        .encode_to_vec()
+    } else {
+        AllLandsReply::default().encode_to_vec()
+    }
 }

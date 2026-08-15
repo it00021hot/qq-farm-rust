@@ -15,12 +15,13 @@ use qq_farm_core::config::{
 use qq_farm_core::runtime::engine::{EngineConfig, GatewayConfigTemplate, RuntimeEngine};
 use tracing::info;
 
-use qq_farm_server::{context::AdminContext, middleware, routes, socket};
+use qq_farm_server::{config::ServerConfig, context::AdminContext, middleware, routes, socket};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     qq_farm_core::utils::logger::init();
     dotenvy::dotenv().ok();
+    let server_cfg = ServerConfig::from_env();
 
     // 先加载持久化状态，再 assemble（gateway 要用 system_config）
     let _ = qq_farm_core::models::store::accounts::load_into_global();
@@ -70,7 +71,7 @@ async fn main() -> Result<()> {
             .insert("User-Agent".to_string(), ua);
         gateway_template.headers.insert(
             "Origin".to_string(),
-            "https://gate-obt.nqf.qq.com".to_string(),
+            server_cfg.gateway_origin.clone(),
         );
     }
     info!(
@@ -81,7 +82,7 @@ async fn main() -> Result<()> {
     );
 
     let engine = Arc::new(RuntimeEngine::assemble(EngineConfig {
-        max_workers: 16,
+        max_workers: server_cfg.max_workers,
         gateway_template,
         tsdk_wasm_path: std::env::var("TSDK_WASM_PATH")
             .map(std::path::PathBuf::from)
@@ -104,7 +105,7 @@ async fn main() -> Result<()> {
             if acc.code.trim().is_empty() {
                 continue;
             }
-            let models_acc = qq_farm_core::models::Account::from_store(&acc);
+            let models_acc = qq_farm_core::models::AccountSession::from_store(&acc);
             if let Err(e) = ctx.engine.start_worker(models_acc) {
                 tracing::warn!(account_id = %acc.id, "启动 worker 失败: {e}");
             }
@@ -123,10 +124,7 @@ async fn main() -> Result<()> {
         .layer(sio_layer)
         .layer(axum::middleware::from_fn(middleware::cors_layer));
 
-    let port: u16 = std::env::var("ADMIN_PORT")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(3007);
+    let port = server_cfg.admin_port;
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     info!(%addr, "qq-farm-server 启动");
 

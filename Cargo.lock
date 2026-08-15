@@ -2525,6 +2525,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "qq-farm-app"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "parking_lot",
+ "qq-farm-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "qq-farm-cli"
 version = "0.1.0"
 dependencies = [
@@ -2586,6 +2601,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "qq-farm-desktop"
+version = "0.1.0"
+dependencies = [
+ "qq-farm-app",
+]
+
+[[package]]
 name = "qq-farm-server"
 version = "0.1.0"
 dependencies = [
@@ -2595,6 +2617,7 @@ dependencies = [
  "dotenvy",
  "futures",
  "parking_lot",
+ "qq-farm-app",
  "qq-farm-core",
  "serde",
  "serde_json",

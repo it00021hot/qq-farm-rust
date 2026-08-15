@@ -13,8 +13,11 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::context::{ok_data, ok_empty, AdminContext, ApiError, ApiResult};
-use crate::routes::{accessible_account_ids, current_session, resolve_account_id};
+use crate::context::{ok, ok_data, ok_empty, AdminContext, ApiError, ApiResult};
+use crate::routes::{
+    accessible_account_ids, acl_policy_from_session, current_session, ensure_account_access,
+    resolve_account_id,
+};
 
 fn accounts_list_payload(ctx: &AdminContext, username: Option<&str>) -> serde_json::Value {
     let running: HashSet<String> = ctx
@@ -69,6 +72,8 @@ fn username_from_headers(ctx: &AdminContext, headers: &axum::http::HeaderMap) ->
 pub fn router() -> Router<Arc<AdminContext>> {
     Router::new()
         .route("/api/accounts", get(list_accounts).post(create_account))
+        .route("/api/accounts/{id}/start", post(post_account_start))
+        .route("/api/accounts/{id}/stop", post(post_account_stop))
         .route("/api/account/remark", post(remark_account))
         .route("/api/accounts/{id}", delete(delete_account))
         .route("/api/account-logs", get(get_account_logs))
@@ -244,7 +249,7 @@ async fn create_account(
                 return Err(ApiError::Forbidden("无权访问此账号".to_string()));
             }
         }
-        let updated = qq_farm_core::models::store::accounts::Account {
+        let updated = qq_farm_core::models::store::accounts::AccountRecord {
             name: if name.is_empty() { existing.name.clone() } else { name.clone() },
             code: if code.is_empty() { existing.code.clone() } else { code.clone() },
             platform: if platform_set { platform.clone() } else { existing.platform.clone() },
@@ -256,7 +261,7 @@ async fn create_account(
         };
         qq_farm_core::models::store::accounts::add_or_update_account(updated)
     } else {
-        let acc = qq_farm_core::models::store::accounts::Account {
+        let acc = qq_farm_core::models::store::accounts::AccountRecord {
             id: String::new(),
             name: name.clone(),
             code: code.clone(),
@@ -295,7 +300,7 @@ async fn create_account(
             None,
         );
         if !saved.code.is_empty() {
-            let models_acc = qq_farm_core::models::Account::from_store(&saved);
+            let models_acc = qq_farm_core::models::AccountSession::from_store(&saved);
             if let Err(e) = ctx.engine.start_worker(models_acc) {
                 tracing::warn!(account_id = %saved.id, "自动启动 worker 失败: {e}");
             }
@@ -309,7 +314,7 @@ async fn create_account(
         let was_running = ctx.engine.has_worker(&saved.id);
         let should_restart = remark_relogin || (was_running && !only_remark);
         if should_restart && !saved.code.is_empty() {
-            let models_acc = qq_farm_core::models::Account::from_store(&saved);
+            let models_acc = qq_farm_core::models::AccountSession::from_store(&saved);
             if let Err(e) = ctx.engine.restart_worker(models_acc) {
                 tracing::warn!(account_id = %saved.id, "更新后重启 worker 失败: {e}");
             }
@@ -333,30 +338,74 @@ async fn create_account(
 
 async fn remark_account(
     State(ctx): State<Arc<AdminContext>>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<RemarkBody>,
 ) -> ApiResult<serde_json::Value> {
+    ensure_account_access(&ctx, &headers, &body.id)?;
     let accounts = qq_farm_core::models::store::accounts::get_accounts();
     let acc = accounts
         .into_iter()
         .find(|a| a.id == body.id)
         .ok_or_else(|| ApiError::NotFound(format!("account not found: {}", body.id)))?;
-    let updated = qq_farm_core::models::store::accounts::Account {
+    let updated = qq_farm_core::models::store::accounts::AccountRecord {
         name: body.name,
         ..acc
     };
     let _saved = qq_farm_core::models::store::accounts::add_or_update_account(updated);
     persist_accounts();
-    ok_data(accounts_list_payload(&ctx, None))
+    let list_filter = current_session(&ctx, &headers).and_then(|s| {
+        if s.role == "admin" {
+            None
+        } else {
+            Some(s.username)
+        }
+    });
+    ok_data(accounts_list_payload(&ctx, list_filter.as_deref()))
 }
 
 async fn delete_account(
     State(ctx): State<Arc<AdminContext>>,
+    headers: axum::http::HeaderMap,
     Path(id): Path<String>,
 ) -> ApiResult<serde_json::Value> {
+    ensure_account_access(&ctx, &headers, &id)?;
     ctx.engine.stop_worker(&id);
     let _ = qq_farm_core::models::store::accounts::delete_account(&id);
     persist_accounts();
-    ok_data(accounts_list_payload(&ctx, None))
+    let list_filter = current_session(&ctx, &headers).and_then(|s| {
+        if s.role == "admin" {
+            None
+        } else {
+            Some(s.username)
+        }
+    });
+    ok_data(accounts_list_payload(&ctx, list_filter.as_deref()))
+}
+
+async fn post_account_start(
+    State(ctx): State<Arc<AdminContext>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult<serde_json::Value> {
+    let sess = current_session(&ctx, &headers).ok_or_else(|| {
+        ApiError::Forbidden("无权访问该账号".to_string())
+    })?;
+    let policy = acl_policy_from_session(&sess);
+    let acc = qq_farm_app::accounts::start_account(&ctx.app_context(), &policy, &id)?;
+    ok(json!({ "ok": true, "accountId": acc.id, "started": true }))
+}
+
+async fn post_account_stop(
+    State(ctx): State<Arc<AdminContext>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult<serde_json::Value> {
+    let sess = current_session(&ctx, &headers).ok_or_else(|| {
+        ApiError::Forbidden("无权访问该账号".to_string())
+    })?;
+    let policy = acl_policy_from_session(&sess);
+    qq_farm_app::accounts::stop_account(&ctx.app_context(), &policy, &id)?;
+    ok(json!({ "ok": true, "accountId": id, "stopped": true }))
 }
 
 async fn get_account_logs(

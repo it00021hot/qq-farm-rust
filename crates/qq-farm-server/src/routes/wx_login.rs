@@ -73,9 +73,9 @@ impl Default for WxLoginState {
 }
 
 /// 原 bot 强制使用 `wx5306c5978fdb76e4`（前端 AccountModal 写死）
-pub const TARGET_APP_ID: &str = "wx5306c5978fdb76e4";
+pub const TARGET_APP_ID: &str = qq_farm_core::constants::WX_MINI_APP_ID;
 /// Task TTL（毫秒）— 与原 bot 一致
-pub const TASK_TTL_MS: i64 = 110_000;
+pub const TASK_TTL_MS: i64 = qq_farm_core::constants::WX_LOGIN_TASK_TTL_MS as i64;
 
 fn now_ms_i64() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};

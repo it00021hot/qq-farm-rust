@@ -27,9 +27,9 @@ pub fn accounts_file() -> PathBuf {
     get_data_file("accounts.json")
 }
 
-/// 账号（store 形态，与 types/account 略有不同）
+/// 账号持久化记录（store 形态，与 runtime [`AccountSession`](crate::models::account::AccountSession) 分离）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Account {
+pub struct AccountRecord {
     /// 账号唯一 ID
     pub id: String,
     /// 显示名
@@ -53,10 +53,14 @@ pub struct Account {
     pub updated_at: i64,
 }
 
+/// 兼容旧名；请改用 [`AccountRecord`]。
+#[deprecated(note = "use AccountRecord")]
+pub type Account = AccountRecord;
+
 /// 账号数据文件结构
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AccountsData {
-    pub accounts: Vec<Account>,
+    pub accounts: Vec<AccountRecord>,
     #[serde(rename = "nextId", alias = "next_id")]
     pub next_id: i64,
 }
@@ -81,14 +85,14 @@ pub fn set_accounts_data(data: AccountsData) {
 
 /// 全部账号
 #[must_use]
-pub fn get_accounts() -> Vec<Account> {
+pub fn get_accounts() -> Vec<AccountRecord> {
     ACCOUNTS.read().accounts.clone()
 }
 
 /// 按用户聚合账号
 #[must_use]
-pub fn get_accounts_by_user() -> HashMap<String, Vec<Account>> {
-    let mut out: HashMap<String, Vec<Account>> = HashMap::new();
+pub fn get_accounts_by_user() -> HashMap<String, Vec<AccountRecord>> {
+    let mut out: HashMap<String, Vec<AccountRecord>> = HashMap::new();
     for a in ACCOUNTS.read().accounts.iter() {
         out.entry(a.username.clone()).or_default().push(a.clone());
     }
@@ -96,7 +100,7 @@ pub fn get_accounts_by_user() -> HashMap<String, Vec<Account>> {
 }
 
 /// 添加或更新账号
-pub fn add_or_update_account(acc: Account) -> Account {
+pub fn add_or_update_account(acc: AccountRecord) -> AccountRecord {
     let mut guard = ACCOUNTS.write();
     let now = crate::utils::time::now_secs();
     let mut acc = acc;
@@ -190,8 +194,8 @@ mod tests {
     use super::*;
     use serial_test::serial;
 
-    fn make_account(id: &str, name: &str, username: &str) -> Account {
-        Account {
+    fn make_account(id: &str, name: &str, username: &str) -> AccountRecord {
+        AccountRecord {
             id: id.to_string(),
             name: name.to_string(),
             code: "code123".to_string(),

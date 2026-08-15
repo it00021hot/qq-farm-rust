@@ -10,12 +10,14 @@ use axum::{routing::get, Json, Router};
 use tower_http::services::ServeDir;
 use serde_json::json;
 
+pub mod config;
 pub mod context;
 pub mod middleware;
 pub mod routes;
 pub mod sessions;
 pub mod socket;
 
+pub use config::ServerConfig;
 pub use context::AdminContext;
 
 /// 测试用上下文配置

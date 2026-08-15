@@ -17,27 +17,23 @@ use axum::{
     response::Response,
 };
 
+use crate::config::ServerConfig;
 use crate::context::AdminContext;
 use crate::sessions::SessionStore;
 
-/// 注入 CORS headers
+/// 注入 CORS headers（允许列表来自 [`ServerConfig`]，缺省走 Default）
 pub async fn cors_layer(
     headers_in: HeaderMap,
     mut req: Request,
     next: Next,
 ) -> Response {
-    // 取 origin
+    let cfg = ServerConfig::from_env();
     let origin = headers_in
         .get(header::ORIGIN)
         .and_then(|v| v.to_str().ok())
         .map(String::from);
-    let allowed = [
-        "http://localhost:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:5173",
-    ];
     let allow_origin = match &origin {
-        Some(o) if allowed.contains(&o.as_str()) => o.clone(),
+        Some(o) if cfg.allows_origin(o) => o.clone(),
         None => "*".to_string(),
         Some(_) => String::new(),
     };

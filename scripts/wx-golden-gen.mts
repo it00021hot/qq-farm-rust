@@ -1,23 +1,35 @@
 // 生成微信原生协议的 golden 向量（hex），供 Rust 单元测试逐字节比对。
 //
-// 用法（需 tsx，参考项目自带）：
-//   cd /Users/milo/Projects/qq-farm-rust
-//   node ../qq-farm-bot/core/node_modules/tsx/dist/cli.mjs scripts/wx-golden-gen.ts
+// 用法（需 tsx）：
+//   REF=/path/to/qq-farm-bot/core/src/services/wx-login/native-protocol.ts \
+//     node ../qq-farm-bot/core/node_modules/tsx/dist/cli.mjs scripts/wx-golden-gen.mts
+//
+// 或设置 QQ_FARM_BOT_ROOT 指向 qq-farm-bot 仓库根目录。
 //
 // 原理：把参考实现 `core/src/services/wx-login/native-protocol.ts` 里的纯函数
 // （不依赖真实 TCP 网络的部分）用「确定性 randomBytes + 固定 Date.now」stub 后
 // 求值，输出 hex。这些函数仅依赖 node:crypto / node:net。
-//
-// 参考实现路径通过环境变量 REF 指定，默认：
-//   /Users/milo/Projects/qq-farm-bot/core/src/services/wx-login/native-protocol.ts
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import crypto from 'node:crypto';
 import net from 'node:net';
 
-const REF = process.env.REF
-  || '/Users/milo/Projects/qq-farm-bot/core/src/services/wx-login/native-protocol.ts';
+const REF =
+  process.env.REF ??
+  (process.env.QQ_FARM_BOT_ROOT
+    ? join(
+        process.env.QQ_FARM_BOT_ROOT,
+        'core/src/services/wx-login/native-protocol.ts',
+      )
+    : undefined);
+
+if (!REF) {
+  console.error(
+    'Set REF (path to native-protocol.ts) or QQ_FARM_BOT_ROOT (qq-farm-bot repo root).',
+  );
+  process.exit(1);
+}
 
 let src = readFileSync(REF, 'utf8');
 

@@ -6,7 +6,7 @@
 //! - `find_account_by_ref(accounts, raw_ref)`：在账号列表中按多 key 匹配
 //! - `resolve_account_id(accounts, raw_ref)`：find + 归一化的组合
 
-use crate::models::Account;
+use crate::models::AccountSession;
 
 /// 把任意输入归一化为字符串
 ///
@@ -33,7 +33,7 @@ pub fn normalize_account_ref(raw_ref: Option<&serde_json::Value>) -> String {
 }
 
 /// 构造账号的 key 集合（id/uin/qq 都算"自身"）
-pub fn build_account_keys(account: &Account) -> std::collections::HashSet<String> {
+pub fn build_account_keys(account: &AccountSession) -> std::collections::HashSet<String> {
     let mut keys = std::collections::HashSet::new();
     for v in [&account.id, &account.uin, &account.qq] {
         let s = v.trim();
@@ -45,7 +45,7 @@ pub fn build_account_keys(account: &Account) -> std::collections::HashSet<String
 }
 
 /// 在账号列表中按多 key 匹配
-pub fn find_account_by_ref(accounts: &[Account], raw_ref: Option<&serde_json::Value>) -> Option<Account> {
+pub fn find_account_by_ref(accounts: &[AccountSession], raw_ref: Option<&serde_json::Value>) -> Option<AccountSession> {
     let key = normalize_account_ref(raw_ref);
     if key.is_empty() {
         return None;
@@ -59,7 +59,7 @@ pub fn find_account_by_ref(accounts: &[Account], raw_ref: Option<&serde_json::Va
 }
 
 /// 组合：find + 归一化返回 id
-pub fn resolve_account_id(accounts: &[Account], raw_ref: Option<&serde_json::Value>) -> String {
+pub fn resolve_account_id(accounts: &[AccountSession], raw_ref: Option<&serde_json::Value>) -> String {
     find_account_by_ref(accounts, raw_ref)
         .map(|a| normalize_account_ref(Some(&serde_json::Value::String(a.id.clone()))))
         .unwrap_or_default()
@@ -68,10 +68,10 @@ pub fn resolve_account_id(accounts: &[Account], raw_ref: Option<&serde_json::Val
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::Account;
+    use crate::models::AccountSession;
 
-    fn acc_with(id: &str, uin: &str, qq: &str) -> Account {
-        let mut a = Account::new(id.to_string(), "openid-1".to_string(), "name-1".to_string());
+    fn acc_with(id: &str, uin: &str, qq: &str) -> AccountSession {
+        let mut a = AccountSession::new(id.to_string(), "openid-1".to_string(), "name-1".to_string());
         a.uin = uin.to_string();
         a.qq = qq.to_string();
         a

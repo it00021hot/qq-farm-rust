@@ -10,7 +10,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::models::Account;
+use crate::models::AccountSession;
 use crate::network::gateway::{Gateway, GatewayConfig};
 use crate::network::encryptor::Encryptor;
 use crate::proto::generated::gamepb::userpb::{DeviceInfo, ReportData};
@@ -34,7 +34,7 @@ pub struct WorkerConfig {
 
 /// Worker —— 单账号的运行时
 pub struct Worker {
-    account: Account,
+    account: AccountSession,
     config: WorkerConfig,
     scheduler: Scheduler,
     cancel: CancellationToken,
@@ -46,7 +46,7 @@ pub struct Worker {
 impl Worker {
     /// 创建 Worker
     pub fn new(
-        account: Account,
+        account: AccountSession,
         config: WorkerConfig,
         event_tx: tokio::sync::broadcast::Sender<WorkerEvent>,
     ) -> Self {
@@ -429,7 +429,7 @@ struct WorkerExit {
 
 /// Worker 主循环
 async fn run_worker_loop(
-    account: Account,
+    account: AccountSession,
     config: WorkerConfig,
     scheduler: Scheduler,
     mut msg_rx: mpsc::Receiver<WorkerMessage>,

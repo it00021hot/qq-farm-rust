@@ -13,6 +13,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::context::{ok, ok_data, AdminContext, ApiError, ApiResult};
+use crate::routes::{get_loop, resolve_account_id_required as resolve_account_id};
 
 /// 构造 friend 路由
 pub fn router() -> Router<Arc<AdminContext>> {
@@ -72,23 +73,6 @@ struct BatchKnownGidsBody {
     gids: Vec<i64>,
     #[serde(default, alias = "accountId")]
     account_id: Option<String>,
-}
-
-fn resolve_account_id(
-    ctx: &AdminContext,
-    headers: &axum::http::HeaderMap,
-    query_id: Option<&str>,
-) -> Result<String, ApiError> {
-    crate::routes::resolve_account_id_required(ctx, headers, query_id)
-}
-
-fn get_loop(
-    ctx: &AdminContext,
-    account_id: &str,
-) -> Result<Arc<qq_farm_core::runtime::worker_loop::WorkerLoop>, ApiError> {
-    ctx.engine
-        .worker_loop(account_id)
-        .ok_or(ApiError::AccountNotRunning)
 }
 
 async fn get_friends(

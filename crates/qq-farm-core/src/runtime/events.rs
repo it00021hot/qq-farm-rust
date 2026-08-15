@@ -2,7 +2,7 @@
 //!
 //! 通过 tokio 的 `broadcast::channel` 分发给所有订阅者（admin server / Socket.io 等）。
 
-use crate::models::Account;
+use crate::models::AccountSession;
 use crate::runtime::scheduler::SchedulerSnapshot;
 use serde::Serialize;
 
@@ -61,7 +61,7 @@ impl WorkerEvent {
     }
 }
 
-impl Account {
+impl AccountSession {
     /// 便捷构造（如果还没有在 models 里）
     pub fn _dummy() -> Self {
         Self::new("_dummy", "_dummy", "_dummy")
