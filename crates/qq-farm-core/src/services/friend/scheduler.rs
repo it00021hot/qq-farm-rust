@@ -1157,6 +1157,36 @@ impl FriendService {
             .into_iter()
             .filter_map(|f| serde_json::to_value(f).ok())
             .collect();
+        // 诊断：人机「小果」GID 10001 头像是否由游戏下发
+        if let Some(npc) = json.iter().find(|f| {
+            f.get("gid").and_then(|v| v.as_i64()) == Some(10001)
+                || f.get("name")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|n| n.contains("小果"))
+        }) {
+            let gid = npc.get("gid").and_then(|v| v.as_i64()).unwrap_or(0);
+            let name = npc.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let avatar = npc
+                .get("avatarUrl")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            crate::services::panel_log::log(
+                &account_id,
+                "好友",
+                format!(
+                    "人机头像诊断: name={name} gid={gid} avatarUrl={}",
+                    if avatar.is_empty() { "<empty>" } else { avatar }
+                ),
+                Some(serde_json::json!({
+                    "module": "friend",
+                    "event": "人机头像诊断",
+                    "gid": gid,
+                    "name": name,
+                    "avatarUrl": avatar,
+                    "avatarEmpty": avatar.is_empty(),
+                })),
+            );
+        }
         *self.friends_list_cache.lock() = Some((now, json.clone()));
         Ok(json)
     }

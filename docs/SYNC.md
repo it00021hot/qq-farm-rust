@@ -201,3 +201,11 @@
   3. **访客 GID 同步**：`knownFriendGidSyncCooldownSec` 进程内按账号节流；失败缩短冷却
 - 明确不改：施肥拉地失败 fail-closed（比 bot 更严，保守）
 - 能力状态：矩阵保持 **齐**；实机冒烟未见异常，**L1–L8 清单仍待逐项勾选**
+### 2026-08-15 — 人机「小果」头像结论（暂缓落地）
+
+- 实机（账号3 wx）：真·人机 `gid=10001` 名称「小果」；另有同名真人 `gid=1226150960`
+- 游戏下发 `avatarUrl=gui/texture/common/img_botHead5/spriteFrame`（Cocos 包内路径，非 http）→ 面板无法直接显示
+- 仓库静态资源无 `img_botHead5`；手机解包提取暂缓
+- 代码：好友列表拉取时对 gid=10001 / 名称含「小果」打诊断日志（`人机头像诊断`）
+- 前端（bot web）：好友/访客头像补 `referrerpolicy=no-referrer`，并规范化 `//` 协议相对 URL（利于微信 http 头像）
+- 能力状态：矩阵仍 **齐**；人机本地头像映射 **未做**（待后续从游戏包导出或 CDN 映射）
