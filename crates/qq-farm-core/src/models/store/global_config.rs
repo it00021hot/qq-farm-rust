@@ -373,21 +373,25 @@ pub fn load_global_config() -> std::io::Result<()> {
     }
     set_state(new_global);
 
-    // 加载 account configs
+    // 加载 account configs。默认/回退始终用代码里的 DefaultAccountConfig，
+    // 避免 store.json 里旧的 defaultAccountConfig 把帮忙/捣乱又打开。
     if let Some(map) = data.get("accountConfigs").and_then(|v| v.as_object()) {
         let mut new_acc = crate::models::store::account_config::AccountConfigState::new();
+        let mut migrated = false;
         for (k, v) in map {
-            if let Ok(parsed) = serde_json::from_value::<crate::models::types::AccountConfig>(v.clone()) {
+            if let Ok(mut parsed) = serde_json::from_value::<crate::models::types::AccountConfig>(v.clone()) {
+                if crate::models::store::normalize::migrate_legacy_bot_automation_defaults(
+                    &mut parsed.automation,
+                ) {
+                    migrated = true;
+                }
                 new_acc.account_configs.insert(k.clone(), parsed);
             }
         }
-        if let Some(default) = data.get("defaultAccountConfig") {
-            if let Ok(parsed) = serde_json::from_value::<crate::models::types::AccountConfig>(default.clone()) {
-                new_acc.default_account_config = parsed.clone();
-                new_acc.account_fallback_config = parsed;
-            }
-        }
         crate::models::store::account_config::set_state(new_acc);
+        if migrated {
+            let _ = save_global_config();
+        }
     }
 
     Ok(())

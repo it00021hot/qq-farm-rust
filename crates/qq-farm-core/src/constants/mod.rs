@@ -4,11 +4,13 @@
 //! 进程部署配置（端口、CORS）不属于本模块。
 
 pub mod game_ids;
+pub mod panel_events;
 pub mod plant;
 pub mod rpc;
 pub mod timing;
 
 pub use game_ids::*;
+pub use panel_events::*;
 pub use plant::*;
 pub use rpc::*;
 pub use timing::*;

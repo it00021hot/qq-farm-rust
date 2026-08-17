@@ -65,6 +65,9 @@ pub const DEFAULT_PLANT_BLACKLIST: &[i64] = &[
 /// 默认 bag seed priority（对齐 bot：空列表）
 pub const DEFAULT_BAG_SEED_PRIORITY: &[i64] = &[];
 
+/// 智能施肥秒数（对齐 Go `DefaultAccountConfig` / 面板默认 360）
+pub const DEFAULT_FERTILIZER_SMART_SECONDS: i64 = 360;
+
 /// 规范化已知 GID 列表
 pub fn normalize_known_friend_gids(input: impl Into<Option<Vec<i64>>>, fallback: &[i64]) -> Vec<i64> {
     let source = input.into().unwrap_or_else(|| fallback.to_vec());
@@ -184,7 +187,7 @@ pub fn normalize_intervals(intervals: IntervalConfig) -> IntervalConfig {
     }
 }
 
-/// 默认 AccountConfig（对齐 bot `DEFAULT_ACCOUNT_CONFIG`）
+/// 默认 AccountConfig（自动化开关对齐 Go `DefaultAccountConfig` / 面板截图）
 #[must_use]
 pub fn default_account_config() -> AccountConfig {
     AccountConfig {
@@ -193,20 +196,20 @@ pub fn default_account_config() -> AccountConfig {
             farm_push: true,
             land_upgrade: true,
             friend: true,
-            friend_help_exp_limit: true,
+            friend_help_exp_limit: false,
             friend_steal: true,
             friend_steal_activity_only: false,
-            friend_help: true,
-            friend_bad: true,
+            friend_help: false,
+            friend_bad: false,
             task: true,
-            fertilizer_gift: false,
+            fertilizer_gift: true,
             fertilizer_buy_organic: false,
             fertilizer_buy_normal: false,
             sell: true,
             fertilizer: crate::models::types::FertilizerMode::Smart,
             fertilizer_multi_season: true,
             fertilizer_land_types: DEFAULT_FERTILIZER_LAND_TYPES.to_vec(),
-            fertilizer_smart_seconds: 300,
+            fertilizer_smart_seconds: DEFAULT_FERTILIZER_SMART_SECONDS,
             skip_own_weed_bug: true,
         },
         planting_strategy: PlantingStrategy::MaxExp,
@@ -242,6 +245,23 @@ pub fn default_account_config() -> AccountConfig {
         bag_seed_priority: DEFAULT_BAG_SEED_PRIORITY.to_vec(),
         bag_seed_fallback_strategy: BagSeedFallbackStrategy::Level,
     }
+}
+
+/// 旧 rust 默认（对齐 bot）把帮忙/捣乱/经验满打开、填充化肥关掉，和 Go/面板不一致。
+/// 仅当整组仍是旧默认时改写，避免覆盖用户手动保存过的组合。
+pub fn migrate_legacy_bot_automation_defaults(a: &mut AutomationConfig) -> bool {
+    let is_legacy = a.friend_help && a.friend_bad && a.friend_help_exp_limit && !a.fertilizer_gift;
+    if !is_legacy {
+        return false;
+    }
+    a.friend_help = false;
+    a.friend_bad = false;
+    a.friend_help_exp_limit = false;
+    a.fertilizer_gift = true;
+    if a.fertilizer_smart_seconds == 300 {
+        a.fertilizer_smart_seconds = DEFAULT_FERTILIZER_SMART_SECONDS;
+    }
+    true
 }
 
 /// 规范化 QuietHours
@@ -321,14 +341,42 @@ mod tests {
         assert_eq!(cfg.planting_strategy, PlantingStrategy::MaxExp);
         assert_eq!(cfg.automation.fertilizer_land_types.len(), 5);
         assert!(cfg.automation.farm);
-        assert!(cfg.automation.friend_help_exp_limit);
+        assert!(cfg.automation.friend);
+        assert!(cfg.automation.friend_steal);
+        assert!(!cfg.automation.friend_help);
+        assert!(!cfg.automation.friend_bad);
+        assert!(!cfg.automation.friend_help_exp_limit);
+        assert!(cfg.automation.fertilizer_gift);
+        assert!(!cfg.automation.fertilizer_buy_organic);
+        assert!(!cfg.automation.fertilizer_buy_normal);
         assert!(cfg.automation.skip_own_weed_bug);
-        assert_eq!(cfg.automation.fertilizer_smart_seconds, 300);
+        assert_eq!(cfg.automation.fertilizer_smart_seconds, 360);
         assert_eq!(cfg.intervals.steal_min, 20);
         assert_eq!(cfg.intervals.steal_max, 25);
         assert!(cfg.bag_seed_priority.is_empty());
         assert_eq!(cfg.fertilizer_buy_organic_threshold_hours, 10);
         assert_eq!(PREVIOUS_DEFAULT_CLIENT_VERSION, "1.13.0.5_20260723");
+    }
+
+    #[test]
+    fn migrate_legacy_bot_automation_only_when_whole_group_matches() {
+        let mut a = default_account_config().automation;
+        a.friend_help = true;
+        a.friend_bad = true;
+        a.friend_help_exp_limit = true;
+        a.fertilizer_gift = false;
+        a.fertilizer_smart_seconds = 300;
+        assert!(migrate_legacy_bot_automation_defaults(&mut a));
+        assert!(!a.friend_help);
+        assert!(!a.friend_bad);
+        assert!(!a.friend_help_exp_limit);
+        assert!(a.fertilizer_gift);
+        assert_eq!(a.fertilizer_smart_seconds, 360);
+
+        let mut custom = default_account_config().automation;
+        custom.friend_help = true;
+        assert!(!migrate_legacy_bot_automation_defaults(&mut custom));
+        assert!(custom.friend_help);
     }
 
     #[test]

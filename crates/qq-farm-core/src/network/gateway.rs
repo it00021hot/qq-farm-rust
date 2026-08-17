@@ -168,6 +168,8 @@ struct Inner {
     session_end: watch::Sender<bool>,
     /// 会话结束原因（心跳超时 / kickout / ws_close 等），供 worker 日志对齐 TS source
     disconnect_reason: parking_lot::Mutex<Option<String>>,
+    /// 最近一次收到任意 WS 帧的时间（ms）。大包 GetAll 下载期间心跳 RPC 可能超时，但连接仍活。
+    last_rx_ms: AtomicI64,
 }
 
 impl Gateway {
@@ -187,6 +189,7 @@ impl Gateway {
                 ws_sender: parking_lot::Mutex::new(None),
                 session_end,
                 disconnect_reason: parking_lot::Mutex::new(None),
+                last_rx_ms: AtomicI64::new(0),
             }),
         }
     }
@@ -215,8 +218,15 @@ impl Gateway {
 
         let _ = self.inner.session_end.send(false);
         *self.inner.disconnect_reason.lock() = None;
+        self.inner.last_rx_ms.store(0, Ordering::Release);
 
         let url = self.inner.config.build_ws_url();
+        tracing::info!(
+            platform = %self.inner.config.platform,
+            os = %self.inner.config.os,
+            ver = %self.inner.config.client_version,
+            "farm gateway dial"
+        );
         let mut options = ConnectOptions::default();
         for (k, v) in &self.inner.config.headers {
             options.headers.insert(k.clone(), v.clone());
@@ -397,9 +407,10 @@ impl Gateway {
             let phase = *self.inner.phase.read();
             rpc_phase_ok(phase, require_online)?;
         }
-        if require_online {
+        let is_heartbeat = method.eq_ignore_ascii_case("Heartbeat");
+        if require_online && !is_heartbeat {
             let pending = self.inner.requests.pending_count();
-            if pending >= 5 {
+            if pending >= crate::constants::MAX_PENDING_RPC {
                 return Err(NetworkError::QueueFull { pending });
             }
         }
@@ -440,6 +451,12 @@ impl Gateway {
     #[must_use]
     pub fn pending_count(&self) -> usize {
         self.inner.requests.pending_count()
+    }
+
+    /// 最近一次入站帧时间（ms）。0 表示本会话尚未收到帧。
+    #[must_use]
+    pub fn last_rx_ms(&self) -> i64 {
+        self.inner.last_rx_ms.load(Ordering::Acquire)
     }
 
     /// 订阅 Notify 事件
@@ -578,6 +595,9 @@ impl Gateway {
 /// 接收 dispatch loop
 async fn dispatch_loop(mut rx: mpsc::Receiver<crate::network::client::ReceivedFrame>, inner: Arc<Inner>) {
     while let Some(frame) = rx.recv().await {
+        inner
+            .last_rx_ms
+            .store(crate::utils::time::now_ms(), Ordering::Release);
         // 1. 解析外层 GateMessage
         let parsed = match FrameParser::parse(&frame.bytes) {
             Ok(p) => p,

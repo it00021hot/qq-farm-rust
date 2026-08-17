@@ -12,15 +12,13 @@ use qq_farm_core::runtime::engine::{EngineConfig, GatewayConfigTemplate, Runtime
 
 use crate::session::AppContext;
 
-/// 加载本地持久化状态（账号、用户、卡密、全局配置等）。
+/// 加载本地持久化状态（账号、用户、全局配置等）。
 pub fn load_persisted_stores() {
     let _ = qq_farm_core::models::store::accounts::load_into_global();
     let _ = qq_farm_core::models::user_store::auth::load_login_attempts();
     let _ = qq_farm_core::models::user_store::auth::load_login_logs();
     let _ = qq_farm_core::models::user_store::users::load_users();
-    let _ = qq_farm_core::models::user_store::users::load_cards();
     let _ = qq_farm_core::models::store::global_config::load_global_config();
-    let _ = qq_farm_core::models::user_store::card_claim::load_card_claim_records();
     qq_farm_core::models::user_store::init();
 }
 

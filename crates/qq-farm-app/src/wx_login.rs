@@ -15,6 +15,8 @@ struct WxLoginTask {
     qr_jpeg: Vec<u8>,
     created_at: AtomicI64,
     app_id: String,
+    /// HTTP 面板任务归属；桌面端可为空。
+    owner: String,
 }
 
 /// 进程内微信扫码任务仓库。
@@ -84,7 +86,7 @@ fn status_name(s: ScanStatus) -> &'static str {
     }
 }
 
-fn find_task(hub: &WxLoginHub, task_id: &str) -> AppResult<Arc<WxLoginTask>> {
+fn find_task(hub: &WxLoginHub, task_id: &str, owner: Option<&str>) -> AppResult<Arc<WxLoginTask>> {
     let task = hub
         .tasks
         .lock()
@@ -92,7 +94,10 @@ fn find_task(hub: &WxLoginHub, task_id: &str) -> AppResult<Arc<WxLoginTask>> {
         .cloned()
         .ok_or_else(|| AppError::NotFound("Login task not found or expired".into()))?;
     let expired = now_ms() - task.created_at.load(Ordering::Relaxed) > WX_LOGIN_TASK_TTL_MS as i64;
-    if expired {
+    let owner_mismatch = owner
+        .filter(|o| !o.is_empty())
+        .is_some_and(|o| task.owner != o);
+    if expired || owner_mismatch {
         let _ = hub.tasks.lock().remove(task_id);
         return Err(AppError::NotFound("Login task not found or expired".into()));
     }
@@ -101,6 +106,11 @@ fn find_task(hub: &WxLoginHub, task_id: &str) -> AppResult<Arc<WxLoginTask>> {
 
 /// 创建扫码任务并返回 JPEG 二维码。
 pub async fn create_task(hub: &WxLoginHub) -> AppResult<WxCreateResult> {
+    create_task_for(hub, "").await
+}
+
+/// 创建扫码任务（HTTP 面板带 owner，防越权）。
+pub async fn create_task_for(hub: &WxLoginHub, owner: &str) -> AppResult<WxCreateResult> {
     let (session, qr_jpeg) = hub
         .service
         .create_qr_session()
@@ -117,6 +127,7 @@ pub async fn create_task(hub: &WxLoginHub) -> AppResult<WxCreateResult> {
         qr_jpeg: qr_jpeg.clone(),
         created_at: AtomicI64::new(created_at),
         app_id: WX_MINI_APP_ID.to_string(),
+        owner: owner.to_string(),
     });
     hub.tasks.lock().insert(task_id.clone(), task);
     Ok(WxCreateResult {
@@ -128,9 +139,22 @@ pub async fn create_task(hub: &WxLoginHub) -> AppResult<WxCreateResult> {
     })
 }
 
+/// 读取任务二维码 JPEG。
+pub fn qr_jpeg(hub: &WxLoginHub, task_id: &str, owner: Option<&str>) -> AppResult<Vec<u8>> {
+    Ok(find_task(hub, task_id, owner)?.qr_jpeg.clone())
+}
+
 /// 轮询扫码状态。
 pub async fn poll_status(hub: &WxLoginHub, task_id: &str) -> AppResult<WxStatusResult> {
-    let task = find_task(hub, task_id)?;
+    poll_status_for(hub, task_id, None).await
+}
+
+pub async fn poll_status_for(
+    hub: &WxLoginHub,
+    task_id: &str,
+    owner: Option<&str>,
+) -> AppResult<WxStatusResult> {
+    let task = find_task(hub, task_id, owner)?;
     let mut session = task.session.lock().await;
     let status = hub
         .service
@@ -152,7 +176,15 @@ pub async fn poll_status(hub: &WxLoginHub, task_id: &str) -> AppResult<WxStatusR
 
 /// 确认授权（建立 login_buffer）。
 pub async fn confirm(hub: &WxLoginHub, task_id: &str) -> AppResult<WxStatusResult> {
-    let task = find_task(hub, task_id)?;
+    confirm_for(hub, task_id, None).await
+}
+
+pub async fn confirm_for(
+    hub: &WxLoginHub,
+    task_id: &str,
+    owner: Option<&str>,
+) -> AppResult<WxStatusResult> {
+    let task = find_task(hub, task_id, owner)?;
     let mut session = task.session.lock().await;
     hub.service
         .confirm(&mut *session)
@@ -170,7 +202,15 @@ pub async fn confirm(hub: &WxLoginHub, task_id: &str) -> AppResult<WxStatusResul
 
 /// 换取 wx.login code（会销毁任务）。
 pub async fn issue_code(hub: &WxLoginHub, task_id: &str) -> AppResult<WxCodeResult> {
-    let task = find_task(hub, task_id)?;
+    issue_code_for(hub, task_id, None).await
+}
+
+pub async fn issue_code_for(
+    hub: &WxLoginHub,
+    task_id: &str,
+    owner: Option<&str>,
+) -> AppResult<WxCodeResult> {
+    let task = find_task(hub, task_id, owner)?;
     let session = task.session.lock().await;
     let code = hub
         .service
@@ -190,6 +230,20 @@ pub async fn issue_code(hub: &WxLoginHub, task_id: &str) -> AppResult<WxCodeResu
 
 /// 取消 / 清理任务。
 pub fn destroy_task(hub: &WxLoginHub, task_id: &str) {
+    destroy_task_for(hub, task_id, None);
+}
+
+pub fn destroy_task_for(hub: &WxLoginHub, task_id: &str, owner: Option<&str>) {
+    let task = hub.tasks.lock().get(task_id).cloned();
+    let Some(t) = task else {
+        return;
+    };
+    if owner
+        .filter(|o| !o.is_empty())
+        .is_some_and(|o| t.owner != o)
+    {
+        return;
+    }
     let removed = hub.tasks.lock().remove(task_id);
     if let Some(t) = removed {
         if let Ok(mut session) = t.session.try_lock() {

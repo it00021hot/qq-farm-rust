@@ -99,6 +99,8 @@ pub fn get_share_file_path() -> PathBuf {
 }
 
 /// 面板 `/game-config` 静态目录（对齐原 `express.static(gameConfig)`）。
+///
+/// 默认只用本仓 `assets/game_config`；可用 `FARM_GAME_CONFIG_DIR` 覆盖。
 #[must_use]
 pub fn game_config_static_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("FARM_GAME_CONFIG_DIR") {
@@ -106,21 +108,7 @@ pub fn game_config_static_dir() -> PathBuf {
             return PathBuf::from(dir);
         }
     }
-    let rust_dir = get_resource_path(&["assets", "game_config"]);
-    if rust_dir.join("seed_images_named").is_dir() {
-        return rust_dir;
-    }
-    if let Some(parent) = get_resource_root().parent() {
-        let bot_dir = parent
-            .join("qq-farm-bot")
-            .join("core")
-            .join("src")
-            .join("gameConfig");
-        if bot_dir.join("seed_images_named").is_dir() || bot_dir.is_dir() {
-            return bot_dir;
-        }
-    }
-    rust_dir
+    get_resource_path(&["assets", "game_config"])
 }
 
 // =====================================================================
@@ -145,17 +133,20 @@ mod tests {
 
     #[test]
     fn ensure_data_dir_creates() {
-        // 测试：先删后建
-        let dir = get_data_dir();
-        if dir.exists() {
-            let _ = fs::remove_dir_all(&dir);
-        }
+        let tmp = std::env::temp_dir().join(format!("qq-farm-ensure-data-{}", std::process::id()));
+        let prev = std::env::var("FARM_DATA_DIR").ok();
+        std::env::set_var("FARM_DATA_DIR", &tmp);
+        let _ = fs::remove_dir_all(&tmp);
         let created = ensure_data_dir().expect("ensure");
         assert!(created.exists());
         assert!(created.is_dir());
-        // 再次调用应幂等
         let again = ensure_data_dir().expect("ensure again");
         assert_eq!(again, created);
+        let _ = fs::remove_dir_all(&tmp);
+        match prev {
+            Some(v) => std::env::set_var("FARM_DATA_DIR", v),
+            None => std::env::remove_var("FARM_DATA_DIR"),
+        }
     }
 
     #[test]
@@ -179,6 +170,10 @@ mod tests {
     #[test]
     fn game_config_static_dir_resolves() {
         let p = game_config_static_dir();
-        assert!(!p.as_os_str().is_empty());
+        assert!(p.ends_with("assets/game_config") || p.ends_with("assets\\game_config"));
+        assert!(
+            p.join("seed_images_named").is_dir(),
+            "seed_images_named should be vendored in-repo"
+        );
     }
 }

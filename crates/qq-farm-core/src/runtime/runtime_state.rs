@@ -145,7 +145,7 @@ pub struct BasicStatus {
 }
 
 /// 经验进度
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExpProgress {
     pub current: i64,
     pub needed: i64,

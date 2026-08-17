@@ -15,6 +15,7 @@ pub mod auth;
 pub mod bootstrap;
 pub mod commerce;
 pub mod config;
+pub mod dto;
 pub mod error;
 pub mod events;
 pub mod farm;

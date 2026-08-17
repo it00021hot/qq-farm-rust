@@ -1,6 +1,4 @@
-//! Commerce 路由 — 4 端点。
-//!
-//! 1:1 对应原 `controllers/admin/commerce-routes.ts`（68 行）。
+//! Commerce 路由 — 鉴权后转发 [`qq_farm_app::commerce`]。
 
 use std::sync::Arc;
 
@@ -12,8 +10,8 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::context::{ok, ok_data, AdminContext, ApiResult};
-use crate::routes::{get_loop, resolve_account_id_required as resolve_account_id};
+use crate::context::{ok_data, AdminContext, ApiResult};
+use crate::routes::resolve_account_id_required as resolve_account_id;
 
 /// 构造 commerce 路由
 pub fn router() -> Router<Arc<AdminContext>> {
@@ -51,21 +49,21 @@ struct PurchaseMysteryBody {
     account_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct AccountQuery {
+    #[serde(default)]
+    account_id: Option<String>,
+}
+
 async fn get_mall(
     State(ctx): State<Arc<AdminContext>>,
     headers: axum::http::HeaderMap,
     Query(q): Query<MallQuery>,
 ) -> ApiResult<serde_json::Value> {
     let id = resolve_account_id(&ctx, &headers, q.account_id.as_deref())?;
-    let loop_ = get_loop(&ctx, &id)?;
-    let mystery = qq_farm_core::services::mystery_shop::MysteryShopService::new(loop_.gateway().clone());
-    let commerce = qq_farm_core::services::commerce::CommerceService::new(
-        loop_.mall().clone(),
-        Arc::new(mystery),
-        loop_.warehouse().clone(),
-    );
-    let r = commerce.get_mall_catalog(q.slot_type, q.sub_slot_type).await;
-    match r {
+    match qq_farm_app::commerce::mall_catalog(&ctx.app_context(), &id, q.slot_type, q.sub_slot_type)
+        .await
+    {
         Ok(dto) => ok_data(dto),
         Err(e) => Ok(Json(json!({ "ok": false, "error": e.to_string() }))),
     }
@@ -77,15 +75,9 @@ async fn purchase_mall(
     Json(body): Json<PurchaseMallBody>,
 ) -> ApiResult<serde_json::Value> {
     let id = resolve_account_id(&ctx, &headers, body.account_id.as_deref())?;
-    let loop_ = get_loop(&ctx, &id)?;
-    let mystery = qq_farm_core::services::mystery_shop::MysteryShopService::new(loop_.gateway().clone());
-    let commerce = qq_farm_core::services::commerce::CommerceService::new(
-        loop_.mall().clone(),
-        Arc::new(mystery),
-        loop_.warehouse().clone(),
-    );
-    let r = commerce.purchase_mall_product(&body.goods_id.to_string(), &body.count.to_string()).await;
-    match r {
+    match qq_farm_app::commerce::purchase_mall(&ctx.app_context(), &id, body.goods_id, body.count)
+        .await
+    {
         Ok(dto) => ok_data(dto),
         Err(e) => Ok(Json(json!({ "ok": false, "error": e.to_string() }))),
     }
@@ -97,15 +89,7 @@ async fn get_mystery_shop(
     Query(q): Query<AccountQuery>,
 ) -> ApiResult<serde_json::Value> {
     let id = resolve_account_id(&ctx, &headers, q.account_id.as_deref())?;
-    let loop_ = get_loop(&ctx, &id)?;
-    let mystery = qq_farm_core::services::mystery_shop::MysteryShopService::new(loop_.gateway().clone());
-    let commerce = qq_farm_core::services::commerce::CommerceService::new(
-        loop_.mall().clone(),
-        Arc::new(mystery),
-        loop_.warehouse().clone(),
-    );
-    let r = commerce.get_mystery_shop().await;
-    match r {
+    match qq_farm_app::commerce::mystery_shop(&ctx.app_context(), &id).await {
         Ok(dto) => ok_data(dto),
         Err(e) => Ok(Json(json!({ "ok": false, "error": e.to_string() }))),
     }
@@ -117,26 +101,12 @@ async fn purchase_mystery(
     Json(body): Json<PurchaseMysteryBody>,
 ) -> ApiResult<serde_json::Value> {
     let id = resolve_account_id(&ctx, &headers, body.account_id.as_deref())?;
-    let loop_ = get_loop(&ctx, &id)?;
-    let mystery = qq_farm_core::services::mystery_shop::MysteryShopService::new(loop_.gateway().clone());
-    let commerce = qq_farm_core::services::commerce::CommerceService::new(
-        loop_.mall().clone(),
-        Arc::new(mystery),
-        loop_.warehouse().clone(),
-    );
     let offer = match &body.offer_id {
         serde_json::Value::String(s) => s.clone(),
         other => other.to_string(),
     };
-    let r = commerce.purchase_mystery_offer(&offer).await;
-    match r {
+    match qq_farm_app::commerce::purchase_mystery(&ctx.app_context(), &id, &offer).await {
         Ok(dto) => ok_data(dto),
         Err(e) => Ok(Json(json!({ "ok": false, "error": e.to_string() }))),
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct AccountQuery {
-    #[serde(default)]
-    account_id: Option<String>,
 }

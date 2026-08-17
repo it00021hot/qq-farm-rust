@@ -6,9 +6,8 @@
   "build": {
     "beforeDevCommand": {
       "cwd": "../../desktop-ui",
-      "script": "pnpm dev"
+      "script": "pnpm build"
     },
-    "devUrl": "http://localhost:9527",
     "beforeBuildCommand": {
       "cwd": "../../desktop-ui",
       "script": "pnpm build"
@@ -22,7 +21,15 @@
         "width": 1280,
         "height": 800,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "decorations": true,
+        "transparent": false,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": {
+          "x": 14,
+          "y": 18
+        }
       }
     ],
     "security": {
@@ -36,6 +43,8 @@
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/henry.w@example.net",
+      "icons/icon.icns",
+      "icons/icon.ico",
       "icons/icon.png"
     ]
   },

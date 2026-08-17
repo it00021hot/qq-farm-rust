@@ -218,7 +218,7 @@ pub fn upsert_account(
                 .count() as i64;
             if count >= limit {
                 return Err(AppError::Forbidden(format!(
-                    "账号数量已达上限（{limit}个），请购买额度卡密增加额度"
+                    "账号数量已达上限（{limit}个）"
                 )));
             }
         }
@@ -232,11 +232,16 @@ pub fn upsert_account(
     let qq_set = req.qq.is_some();
     let uin_set = req.uin.is_some();
     let avatar_set = req.avatar.is_some();
+    let code_provided = !code.trim().is_empty();
+    let mut code_changed = false;
     let saved = if is_update {
         let existing = accounts::get_accounts()
             .into_iter()
             .find(|a| a.id == update_id)
             .ok_or_else(|| AppError::NotFound(format!("account not found: {update_id}")))?;
+        if code_provided {
+            code_changed = code.trim() != existing.code.trim();
+        }
         let updated = AccountRecord {
             name: if name.is_empty() {
                 existing.name.clone()
@@ -288,21 +293,26 @@ pub fn upsert_account(
     accounts::persist_global();
 
     if is_update {
-        let only_remark = req.code.as_deref().unwrap_or("").is_empty()
+        let only_remark = !code_provided
             && !platform_set
             && !qq_set
             && !uin_set
             && !avatar_set;
         let was_running = ctx.engine.has_worker(&saved.id);
-        let should_restart = remark_relogin || (was_running && !only_remark);
+        // Align Go: refreshing login code implies reconnect — start/restart even if previously stopped.
+        let should_restart =
+            remark_relogin || code_changed || (was_running && !only_remark);
         if should_restart && !saved.code.is_empty() {
             let models_acc = qq_farm_core::models::AccountSession::from_store(&saved);
             if let Err(e) = ctx.engine.restart_worker(models_acc) {
                 tracing::warn!(account_id = %saved.id, "更新后重启 worker 失败: {e}");
+                return Err(AppError::Internal(format!(
+                    "账号已更新，自动启动失败: {e}"
+                )));
             }
         }
-        let msg = if remark_relogin {
-            format!("通过备注重新登录账号: {}", saved.name)
+        let msg = if remark_relogin || code_changed {
+            format!("通过登录凭证重新登录账号: {}", saved.name)
         } else {
             format!("更新账号: {}", saved.name)
         };

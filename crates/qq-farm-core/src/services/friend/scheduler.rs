@@ -154,6 +154,8 @@ pub struct FriendService {
     /// 列表仍报「有可偷」但我进场无可偷时，避免每个 steal tick 空转重入。
     /// steal_plant_num 变化（新成熟/他人偷完）后自动解除。
     steal_noop_markers: Mutex<HashMap<i64, i64>>,
+    /// 偷菜成功后暂清零可偷气泡，直到游戏 GetAll 追上。
+    steal_cleared_gids: Mutex<HashSet<i64>>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -219,6 +221,7 @@ impl FriendService {
             external_scheduler: AtomicBool::new(false),
             friends_list_cache: Mutex::new(None),
             steal_noop_markers: Mutex::new(HashMap::new()),
+            steal_cleared_gids: Mutex::new(HashSet::new()),
         }
     }
 
@@ -267,9 +270,8 @@ impl FriendService {
                 &acc,
                 "好友",
                 "新的一天已开始，自动恢复帮忙操作功能",
-                Some(serde_json::json!({
-                    "module": "friend",
-                    "event": "好友巡查循环",
+                crate::constants::PanelEvent::FriendCycle, Some(serde_json::json!({
+                    "module": "friend", 
                     "result": "ok",
                 })),
             );
@@ -327,9 +329,8 @@ impl FriendService {
             &acc,
             "好友",
             "今日放虫/放草次数已达上限，停止两类操作",
-            Some(serde_json::json!({
-                "module": "friend",
-                "event": "放虫放草次数上限",
+            crate::constants::PanelEvent::BadActionLimit, Some(serde_json::json!({
+                "module": "friend", 
                 "result": "limit",
                 "code": 1001046,
                 "method": method,
@@ -444,9 +445,8 @@ impl FriendService {
             &acc,
             "好友",
             "今日帮助经验已达上限，自动停止帮忙",
-            Some(serde_json::json!({
-                "module": "friend",
-                "event": "friend_cycle",
+            crate::constants::PanelEvent::FriendCycle, Some(serde_json::json!({
+                "module": "friend", 
                 "result": "ok",
             })),
         );
@@ -463,7 +463,7 @@ impl FriendService {
                 &acc,
                 "申请",
                 format!("收到 {} 个好友申请: {}", names.len(), names.join(", ")),
-                Some(serde_json::json!({ "module": "friend", "event": "好友申请" })),
+                crate::constants::PanelEvent::FriendRequest, Some(serde_json::json!({ "module": "friend"})),
             );
         }
         match self.api.accept_applications(gids).await {
@@ -471,13 +471,14 @@ impl FriendService {
                 &acc,
                 "申请",
                 "已同意好友申请",
-                Some(serde_json::json!({ "module": "friend", "event": "同意好友申请" })),
+                crate::constants::PanelEvent::AcceptFriendRequest,
+                Some(serde_json::json!({ "module": "friend"})),
             ),
             Err(e) => crate::services::panel_log::log_warn(
                 &acc,
                 "申请",
                 format!("同意失败: {e}"),
-                Some(serde_json::json!({ "module": "friend", "event": "同意好友申请" })),
+                crate::constants::PanelEvent::AcceptFriendRequest, Some(serde_json::json!({ "module": "friend", "event": "同意好友申请" })),
             ),
         }
     }
@@ -506,7 +507,7 @@ impl FriendService {
             &acc,
             "申请",
             format!("发现 {} 个待处理申请: {}", names.len(), names.join(", ")),
-            Some(serde_json::json!({ "module": "friend", "event": "待处理申请" })),
+            crate::constants::PanelEvent::PendingFriendRequest, Some(serde_json::json!({ "module": "friend"})),
         );
         self.accept_friend_applications(gids, &[]).await;
     }
@@ -561,9 +562,8 @@ impl FriendService {
                     account_id,
                     "好友",
                     format!("巡查异常: {msg}"),
-                    Some(serde_json::json!({
-                        "module": "friend",
-                        "event": "friend_cycle",
+                    crate::constants::PanelEvent::FriendCycle, Some(serde_json::json!({
+                        "module": "friend", 
                         "result": "error",
                     })),
                 );
@@ -577,9 +577,8 @@ impl FriendService {
                 account_id,
                 "好友",
                 "没有好友",
-                Some(serde_json::json!({
-                    "module": "friend",
-                    "event": "好友扫描",
+                crate::constants::PanelEvent::FriendScan, Some(serde_json::json!({
+                    "module": "friend", 
                     "result": "empty",
                 })),
             );
@@ -658,6 +657,7 @@ impl FriendService {
                 match visit {
                     Some(r) if r.acted => {
                         self.steal_noop_markers.lock().remove(&friend.gid);
+                        self.mark_friend_steal_cleared(friend.gid);
                     }
                     // 已进场但无可偷 / 偷失败，或黑名单滤光（None）：记下当前列表指标，避免每 tick 重入
                     Some(r) if r.entered && !r.acted => {
@@ -681,9 +681,8 @@ impl FriendService {
                 account_id,
                 "好友",
                 format!("开始批量帮助，共 {} 个好友需要帮助", help_friends.len()),
-                Some(serde_json::json!({
-                    "module": "friend",
-                    "event": "visit_friend",
+                crate::constants::PanelEvent::VisitFriend, Some(serde_json::json!({
+                    "module": "friend", 
                     "count": help_friends.len(),
                 })),
             );
@@ -697,9 +696,8 @@ impl FriendService {
                         account_id,
                         "好友",
                         "批量帮助中断：经验已达上限",
-                        Some(serde_json::json!({
-                            "module": "friend",
-                            "event": "friend_cycle",
+                        crate::constants::PanelEvent::FriendCycle, Some(serde_json::json!({
+                            "module": "friend", 
                             "reason": "exp_limit",
                         })),
                     );
@@ -714,9 +712,8 @@ impl FriendService {
                         help_friends.len(),
                         friend.name
                     ),
-                    Some(serde_json::json!({
-                        "module": "friend",
-                        "event": "visit_friend",
+                    crate::constants::PanelEvent::VisitFriend, Some(serde_json::json!({
+                        "module": "friend", 
                         "index": i + 1,
                         "total": help_friends.len(),
                         "friendName": friend.name,
@@ -757,9 +754,8 @@ impl FriendService {
                 account_id,
                 "好友",
                 format!("巡查完成 → {}", summary.join("/")),
-                Some(serde_json::json!({
-                    "module": "friend",
-                    "event": "friend_cycle",
+                crate::constants::PanelEvent::FriendCycle, Some(serde_json::json!({
+                    "module": "friend", 
                     "result": "ok",
                     "visited": steal_friends.len() + help_friends.len(),
                     "summary": summary,
@@ -960,7 +956,7 @@ impl FriendService {
                 account_id,
                 "好友",
                 "没有好友",
-                Some(serde_json::json!({ "module": "friend", "event": "好友扫描", "result": "empty" })),
+                crate::constants::PanelEvent::FriendScan, Some(serde_json::json!({ "module": "friend",  "result": "empty" })),
             );
             return Ok((0, 0, 0, 0));
         }
@@ -1041,6 +1037,7 @@ impl FriendService {
                 host_gid,
                 &[],
                 false,
+                account_id,
             );
             if !status.stealable.is_empty() {
                 let summary = FriendSummary {
@@ -1076,9 +1073,8 @@ impl FriendService {
             account_id,
             "好友",
             format!("巡查完成 → 帮{helped}/偷{stolen}/封{banned}"),
-            Some(serde_json::json!({
-                "module": "friend",
-                "event": "巡查完成",
+            crate::constants::PanelEvent::PatrolDone, Some(serde_json::json!({
+                "module": "friend", 
                 "helped": helped,
                 "stolen": stolen,
                 "banned": banned,
@@ -1109,7 +1105,9 @@ impl FriendService {
         if !force {
             if let Some((cached_at, cached)) = self.friends_list_cache.lock().as_ref() {
                 if now.saturating_sub(*cached_at) < ttl_ms {
-                    return Ok(cached.clone());
+                    let mut list = cached.clone();
+                    self.apply_steal_cleared_overrides(&mut list);
+                    return Ok(list);
                 }
             }
         }
@@ -1117,7 +1115,7 @@ impl FriendService {
             &account_id,
             "好友",
             "开始获取好友列表",
-            Some(serde_json::json!({ "module": "friend", "event": "获取好友列表" })),
+            crate::constants::PanelEvent::GetFriendList, Some(serde_json::json!({ "module": "friend"})),
         );
         let friends = match self.api.get_all_game_friends().await {
             Ok(f) => f,
@@ -1128,8 +1126,14 @@ impl FriendService {
                     &account_id,
                     "好友",
                     format!("获取好友列表失败: {msg}"),
-                    Some(serde_json::json!({ "module": "friend", "event": "获取好友列表", "result": "error" })),
+                    crate::constants::PanelEvent::GetFriendList, Some(serde_json::json!({ "module": "friend",  "result": "error" })),
                 );
+                // 对齐 Go List：直播失败仍返回已有列表，不把面板点开变成空表/掉线。
+                if let Some((_, cached)) = self.friends_list_cache.lock().as_ref() {
+                    let mut list = cached.clone();
+                    self.apply_steal_cleared_overrides(&mut list);
+                    return Ok(list);
+                }
                 return Ok(Vec::new());
             }
         };
@@ -1146,14 +1150,13 @@ impl FriendService {
             &account_id,
             "好友",
             format!("获取好友列表成功，共 {} 位好友", result.len()),
-            Some(serde_json::json!({
-                "module": "friend",
-                "event": "获取好友列表",
+            crate::constants::PanelEvent::GetFriendList, Some(serde_json::json!({
+                "module": "friend", 
                 "result": "ok",
                 "count": result.len(),
             })),
         );
-        let json: Vec<serde_json::Value> = result
+        let mut json: Vec<serde_json::Value> = result
             .into_iter()
             .filter_map(|f| serde_json::to_value(f).ok())
             .collect();
@@ -1177,9 +1180,8 @@ impl FriendService {
                     "人机头像诊断: name={name} gid={gid} avatarUrl={}",
                     if avatar.is_empty() { "<empty>" } else { avatar }
                 ),
-                Some(serde_json::json!({
-                    "module": "friend",
-                    "event": "人机头像诊断",
+                crate::constants::PanelEvent::AvatarProbe, Some(serde_json::json!({
+                    "module": "friend", 
                     "gid": gid,
                     "name": name,
                     "avatarUrl": avatar,
@@ -1187,6 +1189,7 @@ impl FriendService {
                 })),
             );
         }
+        self.apply_steal_cleared_overrides(&mut json);
         *self.friends_list_cache.lock() = Some((now, json.clone()));
         Ok(json)
     }
@@ -1201,29 +1204,92 @@ impl FriendService {
         crate::services::friend::visit_strategy::clear_friends_list_cache(&account_id);
     }
 
+    /// 偷菜成功后把该好友的可偷数清零（游戏 GetAll 常滞后，避免面板仍显示「可偷」）。
+    pub fn mark_friend_steal_cleared(&self, gid: i64) {
+        if gid <= 0 {
+            return;
+        }
+        self.steal_noop_markers.lock().remove(&gid);
+        self.steal_cleared_gids.lock().insert(gid);
+        self.apply_steal_cleared_to_list();
+    }
+
+    fn apply_steal_cleared_to_list(&self) {
+        let cleared: HashSet<i64> = self.steal_cleared_gids.lock().clone();
+        if cleared.is_empty() {
+            return;
+        }
+        let mut guard = self.friends_list_cache.lock();
+        let Some((_, list)) = guard.as_mut() else {
+            return;
+        };
+        Self::zero_steal_num_in_json_list(list, &cleared);
+    }
+
+    fn apply_steal_cleared_overrides(&self, list: &mut [serde_json::Value]) {
+        let mut cleared = self.steal_cleared_gids.lock();
+        if cleared.is_empty() {
+            return;
+        }
+        let mut caught_up = Vec::new();
+        for item in list.iter_mut() {
+            let Some(obj) = item.as_object_mut() else {
+                continue;
+            };
+            let gid = obj.get("gid").and_then(|v| v.as_i64()).unwrap_or(0);
+            if gid <= 0 || !cleared.contains(&gid) {
+                continue;
+            }
+            let live_steal = obj
+                .get("plant")
+                .and_then(|p| p.get("stealNum").or_else(|| p.get("steal_num")))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            if live_steal == 0 {
+                caught_up.push(gid);
+                continue;
+            }
+            if let Some(plant) = obj.get_mut("plant").and_then(|p| p.as_object_mut()) {
+                plant.insert("stealNum".into(), serde_json::json!(0));
+                plant.insert("steal_num".into(), serde_json::json!(0));
+            } else {
+                obj.insert(
+                    "plant".into(),
+                    serde_json::json!({ "stealNum": 0, "dryNum": 0, "weedNum": 0, "insectNum": 0 }),
+                );
+            }
+        }
+        for gid in caught_up {
+            cleared.remove(&gid);
+        }
+    }
+
+    fn zero_steal_num_in_json_list(list: &mut [serde_json::Value], cleared: &HashSet<i64>) {
+        for item in list.iter_mut() {
+            let Some(obj) = item.as_object_mut() else {
+                continue;
+            };
+            let gid = obj.get("gid").and_then(|v| v.as_i64()).unwrap_or(0);
+            if !cleared.contains(&gid) {
+                continue;
+            }
+            if let Some(plant) = obj.get_mut("plant").and_then(|p| p.as_object_mut()) {
+                plant.insert("stealNum".into(), serde_json::json!(0));
+                plant.insert("steal_num".into(), serde_json::json!(0));
+            }
+        }
+    }
+
     /// 获取好友土地详情（1:1 对齐原 TS `getFriendLandsDetail`）
     pub async fn get_friend_lands_detail(&self, gid: i64) -> Result<serde_json::Value> {
         let enter_reply = self.api.enter_farm(gid).await?;
-        let my_gid = *self.host_gid.lock();
-        let account_id = self.account_id.lock().clone();
-        let blacklist = crate::models::store::account_config::get_plant_blacklist(
-            if account_id.is_empty() {
-                None
-            } else {
-                Some(account_id.as_str())
-            },
-        );
-        let analyzed = crate::services::friend::visit_strategy::analyze_friend_lands(
-            &enter_reply.lands,
-            my_gid,
-            &blacklist,
-            false,
-        );
-        let lands = crate::services::farm::land_analysis::friend_lands_detail(&enter_reply.lands);
+        let (lands, summary) =
+            crate::services::farm::land_analysis::friend_lands_detail(&enter_reply.lands);
         let _ = self.api.leave_farm(gid).await;
+        // Align Go `FormatFriendLandsResponse`: summary is land counts, not AnalyzeResult.
         Ok(serde_json::json!({
             "lands": lands,
-            "summary": analyzed,
+            "summary": summary,
         }))
     }
 
@@ -1235,7 +1301,7 @@ impl FriendService {
     ) -> Result<serde_json::Value> {
         let my_gid = *self.host_gid.lock();
         let account_id = self.account_id.lock().clone();
-        Ok(crate::services::friend::visit_strategy::do_friend_operation(
+        let ret = crate::services::friend::visit_strategy::do_friend_operation(
             &self.api,
             self.strategy.recent_help(),
             gid,
@@ -1243,7 +1309,14 @@ impl FriendService {
             my_gid,
             &account_id,
         )
-        .await)
+        .await;
+        if matches!(op, crate::models::types::FriendOperation::Steal) {
+            let stolen = ret.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+            if stolen > 0 {
+                self.mark_friend_steal_cleared(gid);
+            }
+        }
+        Ok(ret)
     }
 }
 

@@ -34,10 +34,9 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
-use qq_farm_core::services::analytics::SortBy;
 
 use crate::context::{ok, ok_data, ok_empty, AdminContext, ApiError, ApiResult};
-use crate::routes::{get_loop, resolve_id};
+use crate::routes::resolve_id;
 
 /// 构造 farm 路由
 pub fn router() -> Router<Arc<AdminContext>> {
@@ -172,15 +171,9 @@ async fn get_diamond(
     Query(q): Query<AccountQuery>,
 ) -> ApiResult<serde_json::Value> {
     let id = resolve_id(&ctx, &headers, q.account_id.as_deref())?;
-    let loop_ = get_loop(&ctx, &id)?;
-    let gw = loop_.gateway();
-    let result: Result<i64, String> = qq_farm_core::services::pay::PayService::new(gw.clone())
-        .get_diamond_balance()
-        .await
-        .map_err(|e| e.to_string());
-    match result {
+    match qq_farm_app::farm::diamond_balance(&ctx.app_context(), &id).await {
         Ok(balance) => ok_data(json!({ "diamond": balance.max(0) })),
-        Err(e) => Ok(Json(json!({ "ok": false, "error": e }))),
+        Err(e) => Ok(Json(json!({ "ok": false, "error": e.to_string() }))),
     }
 }
 
@@ -193,21 +186,15 @@ async fn post_automation(
     if id.is_empty() {
         return Err(ApiError::BadRequest("Missing x-account-id".to_string()));
     }
-    let mut auto = serde_json::Map::new();
-    if !body.key.is_empty() {
-        auto.insert(body.key, body.value);
-    }
-    for (k, v) in body.rest {
-        if k == "accountId" || k == "account_id" {
-            continue;
-        }
-        auto.insert(k, v);
-    }
-    let snapshot = json!({ "automation": auto });
-    qq_farm_core::models::store::account_config::apply_config_snapshot(snapshot, Some(&id), true);
-    ctx.engine.reload_worker_config(&id);
-    let cur = qq_farm_core::models::store::account_config::get_automation(Some(&id));
-    ok_data(cur)
+    let extra = serde_json::Value::Object(body.rest);
+    let data = qq_farm_app::farm::set_automation(
+        &ctx.app_context(),
+        &id,
+        &body.key,
+        body.value,
+        extra,
+    )?;
+    ok_data(data)
 }
 
 async fn post_fertilizer_buy(
@@ -216,15 +203,14 @@ async fn post_fertilizer_buy(
     Json(body): Json<FertilizerBuyBody>,
 ) -> ApiResult<serde_json::Value> {
     let id = resolve_id(&ctx, &headers, body.account_id.as_deref())?;
-    let loop_ = get_loop(&ctx, &id)?;
-    let mall = loop_.mall();
-    let count = body.count as i32;
-    let kind = match body.fertilizer_type.as_deref().unwrap_or("organic") {
-        "normal" => qq_farm_core::services::mall::MallFertilizerKind::Normal,
-        _ => qq_farm_core::services::mall::MallFertilizerKind::Organic,
-    };
-    let result = mall.auto_buy_fertilizer(true, kind, count).await;
-    ok(json!({ "ok": true, "bought": result }))
+    let bought = qq_farm_app::farm::fertilizer_buy(
+        &ctx.app_context(),
+        &id,
+        body.fertilizer_type.as_deref().unwrap_or("organic"),
+        body.count as i32,
+    )
+    .await?;
+    ok(json!({ "ok": true, "bought": bought }))
 }
 
 async fn post_fertilizer_check_and_buy(
@@ -233,31 +219,15 @@ async fn post_fertilizer_check_and_buy(
     Json(body): Json<FertilizerCheckBuyBody>,
 ) -> ApiResult<serde_json::Value> {
     let id = resolve_id(&ctx, &headers, body.account_id.as_deref())?;
-    let loop_ = get_loop(&ctx, &id)?;
-    let mystery = qq_farm_core::services::mystery_shop::MysteryShopService::new(loop_.gateway().clone());
-    let commerce = qq_farm_core::services::commerce::CommerceService::new(
-        loop_.mall().clone(),
-        Arc::new(mystery),
-        loop_.warehouse().clone(),
-    );
-    let opts = qq_farm_core::services::commerce::FertilizerBothOptions {
-        buy_organic: true,
-        buy_normal: true,
-        organic_count: 0,
-        organic_threshold_hours: 0.0,
-        normal_count: 0,
-        normal_threshold_hours: 0.0,
-    };
-    let summary = commerce.check_and_buy_fertilizer_both(opts).await;
     let _ = body.force;
-    let _ = id;
+    let summary = qq_farm_app::farm::fertilizer_check_and_buy(&ctx.app_context(), &id).await?;
     Ok(Json(json!({
         "ok": true,
-        "organicBought": summary.organic_bought,
-        "normalBought": summary.normal_bought,
-        "organicCurrentHours": summary.organic_current_hours,
-        "normalCurrentHours": summary.normal_current_hours,
-        "error": summary.error,
+        "organicBought": summary["organicBought"],
+        "normalBought": summary["normalBought"],
+        "organicCurrentHours": summary["organicCurrentHours"],
+        "normalCurrentHours": summary["normalCurrentHours"],
+        "error": summary["error"],
     })))
 }
 
@@ -267,13 +237,8 @@ async fn get_lands(
     Query(q): Query<AccountQuery>,
 ) -> ApiResult<serde_json::Value> {
     let id = resolve_id(&ctx, &headers, q.account_id.as_deref())?;
-    let loop_ = get_loop(&ctx, &id)?;
-    let result = loop_.farm().get_lands_detail().await;
-    match result {
-        Ok((lands, summary)) => ok_data(json!({
-            "lands": lands,
-            "summary": summary,
-        })),
+    match qq_farm_app::farm::lands(&ctx.app_context(), &id).await {
+        Ok(data) => ok_data(data),
         Err(e) => Ok(Json(json!({ "ok": false, "error": e.to_string() }))),
     }
 }
@@ -284,8 +249,7 @@ async fn get_plant_blacklist(
     Query(q): Query<AccountQuery>,
 ) -> ApiResult<serde_json::Value> {
     let id = resolve_id(&ctx, &headers, q.account_id.as_deref())?;
-    let list = qq_farm_core::models::store::account_config::get_plant_blacklist(Some(id.as_str()).filter(|s| !s.is_empty()));
-    ok_data(list)
+    ok_data(qq_farm_app::farm::plant_blacklist(&id))
 }
 
 async fn post_plant_blacklist(
@@ -294,12 +258,7 @@ async fn post_plant_blacklist(
     Json(body): Json<BlacklistBody>,
 ) -> ApiResult<serde_json::Value> {
     let id = resolve_id(&ctx, &headers, body.account_id.as_deref())?;
-    let mut current = qq_farm_core::models::store::account_config::get_plant_blacklist(Some(&id));
-    if !current.contains(&body.seed_id) {
-        current.push(body.seed_id);
-    }
-    let list = qq_farm_core::models::store::account_config::set_plant_blacklist(&id, current);
-    ok_data(list)
+    ok_data(qq_farm_app::farm::add_plant_blacklist(&id, body.seed_id))
 }
 
 async fn post_plant_blacklist_batch(
@@ -308,8 +267,7 @@ async fn post_plant_blacklist_batch(
     Json(body): Json<BlacklistBatchBody>,
 ) -> ApiResult<serde_json::Value> {
     let id = resolve_id(&ctx, &headers, body.account_id.as_deref())?;
-    let list = qq_farm_core::models::store::account_config::set_plant_blacklist(&id, body.seed_ids);
-    ok_data(list)
+    ok_data(qq_farm_app::farm::set_plant_blacklist(&id, body.seed_ids))
 }
 
 async fn delete_plant_blacklist_seed(
@@ -317,19 +275,16 @@ async fn delete_plant_blacklist_seed(
     headers: axum::http::HeaderMap,
     Path(seed_id): Path<i64>,
 ) -> ApiResult<serde_json::Value> {
-    let _id = resolve_id(&ctx, &headers, None)?;
-    let cur = qq_farm_core::models::store::account_config::get_plant_blacklist(Some(_id.as_str()));
-    let next: Vec<i64> = cur.into_iter().filter(|x| *x != seed_id).collect();
-    let list = qq_farm_core::models::store::account_config::set_plant_blacklist(&_id, next);
-    ok_data(list)
+    let id = resolve_id(&ctx, &headers, None)?;
+    ok_data(qq_farm_app::farm::remove_plant_blacklist(&id, seed_id))
 }
 
 async fn delete_plant_blacklist(
     State(ctx): State<Arc<AdminContext>>,
     headers: axum::http::HeaderMap,
 ) -> ApiResult<serde_json::Value> {
-    let _id = resolve_id(&ctx, &headers, None)?;
-    let _ = qq_farm_core::models::store::account_config::set_plant_blacklist(&_id, vec![]);
+    let id = resolve_id(&ctx, &headers, None)?;
+    let _ = qq_farm_app::farm::set_plant_blacklist(&id, vec![]);
     ok_empty()
 }
 
@@ -339,25 +294,8 @@ async fn get_seeds(
     Query(q): Query<AccountQuery>,
 ) -> ApiResult<serde_json::Value> {
     let _id = resolve_id(&ctx, &headers, q.account_id.as_deref())?;
-    let cfg = qq_farm_core::config::game_config::global();
-    let seeds: Vec<serde_json::Value> = cfg
-        .get_all_plants()
-        .into_iter()
-        .filter_map(|p| {
-            p.seed_id.map(|sid| {
-                serde_json::json!({
-                    "seed_id": sid,
-                    "name": p.name,
-                    "plant_id": p.id,
-                    "land_level_need": p.land_level_need,
-                    "seasons": p.seasons,
-                    "grow_phases": p.grow_phases,
-                })
-            })
-        })
-        .collect();
     let _ = ctx;
-    ok_data(seeds)
+    ok_data(qq_farm_app::farm::seeds_catalog())
 }
 
 async fn get_bag(
@@ -366,9 +304,7 @@ async fn get_bag(
     Query(q): Query<AccountQuery>,
 ) -> ApiResult<serde_json::Value> {
     let id = resolve_id(&ctx, &headers, q.account_id.as_deref())?;
-    let loop_ = get_loop(&ctx, &id)?;
-    let detail = loop_.warehouse().get_bag_detail().await;
-    match detail {
+    match qq_farm_app::farm::bag(&ctx.app_context(), &id).await {
         Ok(d) => ok_data(d),
         Err(e) => Ok(Json(json!({ "ok": false, "error": e.to_string() }))),
     }
@@ -380,13 +316,10 @@ async fn post_bag_use(
     Json(body): Json<BagUseBody>,
 ) -> ApiResult<serde_json::Value> {
     let id = resolve_id(&ctx, &headers, body.account_id.as_deref())?;
-    let loop_ = get_loop(&ctx, &id)?;
-    let r = loop_
-        .warehouse()
-        .use_item(body.item_id, body.count.max(1), body.uid)
-        .await;
-    match r {
-        Ok(_reply) => ok(json!({ "ok": true })),
+    match qq_farm_app::farm::bag_use(&ctx.app_context(), &id, body.item_id, body.count.max(1), body.uid)
+        .await
+    {
+        Ok(()) => ok(json!({ "ok": true })),
         Err(e) => Ok(Json(json!({ "ok": false, "error": e.to_string() }))),
     }
 }
@@ -397,11 +330,9 @@ async fn post_bag_sell(
     Json(body): Json<BagSellBody>,
 ) -> ApiResult<serde_json::Value> {
     let id = resolve_id(&ctx, &headers, body.account_id.as_deref())?;
-    let loop_ = get_loop(&ctx, &id)?;
     let sell: Vec<(i64, i64, i64)> = body.items.iter().map(|i| (i.id, i.count, i.uid)).collect();
-    let r = loop_.warehouse().sell_items(&sell).await;
-    match r {
-        Ok(_reply) => ok(json!({ "ok": true })),
+    match qq_farm_app::farm::bag_sell(&ctx.app_context(), &id, &sell).await {
+        Ok(()) => ok(json!({ "ok": true })),
         Err(e) => Ok(Json(json!({ "ok": false, "error": e.to_string() }))),
     }
 }
@@ -412,9 +343,7 @@ async fn get_bag_seeds(
     Query(q): Query<AccountQuery>,
 ) -> ApiResult<serde_json::Value> {
     let id = resolve_id(&ctx, &headers, q.account_id.as_deref())?;
-    let loop_ = get_loop(&ctx, &id)?;
-    let seeds = loop_.warehouse().get_bag_seeds().await;
-    match seeds {
+    match qq_farm_app::farm::bag_seeds(&ctx.app_context(), &id).await {
         Ok(seeds) => ok_data(seeds),
         Err(e) => Ok(Json(json!({ "ok": false, "error": e.to_string() }))),
     }
@@ -426,55 +355,8 @@ async fn post_farm_operate(
     Json(body): Json<FarmOperateBody>,
 ) -> ApiResult<serde_json::Value> {
     let id = resolve_id(&ctx, &headers, body.account_id.as_deref())?;
-    let loop_ = get_loop(&ctx, &id)?;
-    let farm = loop_.farm();
     let op = body.op.to_lowercase();
-    let result: Result<serde_json::Value, qq_farm_core::error::Error> = match op.as_str() {
-        "harvest" => farm
-            .op_harvest()
-            .await
-            .map(|n| json!({ "ok": true, "op": "harvest", "count": n })),
-        "water" => farm
-            .op_water()
-            .await
-            .map(|n| json!({ "ok": true, "op": "water", "count": n })),
-        "weed" => farm
-            .op_weed()
-            .await
-            .map(|n| json!({ "ok": true, "op": "weed", "count": n })),
-        "insecticide" | "bug" => farm
-            .op_insecticide()
-            .await
-            .map(|n| json!({ "ok": true, "op": "insecticide", "count": n })),
-        "fertilize" => farm
-            .op_fertilize()
-            .await
-            .map(|r| json!({ "ok": true, "op": "fertilize", "normal": r.normal, "organic": r.organic })),
-        "plant" => farm
-            .op_plant()
-            .await
-            .map(|n| json!({ "ok": true, "op": "plant", "count": n })),
-        "remove" => farm
-            .op_remove()
-            .await
-            .map(|n| json!({ "ok": true, "op": "remove", "count": n })),
-        "upgrade" => farm
-            .op_upgrade()
-            .await
-            .map(|id| json!({ "ok": true, "op": "upgrade", "land_id": id })),
-        "unlock" => farm
-            .op_unlock(false)
-            .await
-            .map(|id| json!({ "ok": true, "op": "unlock", "land_id": id })),
-        "cycle" | "all" => farm
-            .run_farm_operation()
-            .await
-            .map(|()| json!({ "ok": true, "op": "cycle" })),
-        other => Err(qq_farm_core::error::Error::Protocol(format!(
-            "unknown op: {other}"
-        ))),
-    };
-    match result {
+    match qq_farm_app::farm::operate(&ctx.app_context(), &id, &op).await {
         Ok(v) => Ok(Json(v)),
         Err(e) => Ok(Json(json!({ "ok": false, "op": op, "error": e.to_string() }))),
     }
@@ -484,7 +366,5 @@ async fn get_analytics(
     State(_ctx): State<Arc<AdminContext>>,
     Query(q): Query<AnalyticsQuery>,
 ) -> ApiResult<serde_json::Value> {
-    let sort_by = q.sort_by.as_deref().map_or(SortBy::Exp, SortBy::from_str_opt);
-    let rankings = qq_farm_core::services::analytics::get_plant_rankings(sort_by);
-    ok_data(rankings)
+    ok_data(qq_farm_app::farm::analytics(q.sort_by.as_deref()))
 }

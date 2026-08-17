@@ -119,15 +119,21 @@ export function getGlobalMenusByAuthRoutes(routes: ElegantConstRoute[]) {
   const menus: App.Global.Menu[] = [];
 
   routes.forEach(route => {
-    if (!route.meta?.hideInMenu) {
-      const menu = getGlobalMenuByBaseRoute(route);
-
-      if (route.children?.some(child => !child.meta?.hideInMenu)) {
-        menu.children = getGlobalMenusByAuthRoutes(route.children);
+    // Hidden parent (e.g. farm layout shell): hoist visible children for a flat sidebar
+    if (route.meta?.hideInMenu) {
+      if (route.children?.length) {
+        menus.push(...getGlobalMenusByAuthRoutes(route.children));
       }
-
-      menus.push(menu);
+      return;
     }
+
+    const menu = getGlobalMenuByBaseRoute(route);
+
+    if (route.children?.some(child => !child.meta?.hideInMenu)) {
+      menu.children = getGlobalMenusByAuthRoutes(route.children);
+    }
+
+    menus.push(menu);
   });
 
   return menus;

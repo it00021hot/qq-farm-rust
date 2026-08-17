@@ -34,11 +34,11 @@
 | 位置 | 问题 |
 |------|------|
 | `friend/visit_strategy.rs` `FRIENDS_LIST_CACHE` / `FRIEND_QUIET_HOURS` | 多账号串缓存 |
-| `friend/visit_strategy.rs` 多个 OnceLock Map | 黑名单/冷却/活动植物 |
+| `friend/visit_strategy` 冷却 / 活动植物 | 失效 GID 冷却仍按 gid；活动植物已按 account_id 分槽 |
 | `friend/api.rs` coalesce MAP | 请求合并全局 |
-| `services/automation.rs` FLAGS | 跨账号开关串味 |
-| `services/stats.rs` CURRENT_ACCOUNT_ID + 隐式槽 | 隐式当前账号 |
-| `services/status.rs` STATUS_DATA | 终端/单槽状态 |
+| `services/automation.rs` FLAGS | 已按 account 分 key；空 id 走默认 |
+| `services/stats.rs` SLOTS | 按账号分槽；CLI/单测走 `"_"` 兼容槽，无「当前账号」 |
+| `services/status.rs` STATUS_BY_ACCOUNT | 按账号 HashMap；CLI 读 `""` 槽 |
 | `services/rate_limiter.rs` SERVICE_QUEUES | 进程级队列（可接受为 L2.5，但需文档化） |
 | `services/panel_log.rs` HOOKS | 按账号 hook，结构尚可 |
 
@@ -47,7 +47,7 @@
 | 位置 | 级别 | 说明 |
 |------|------|------|
 | `sessions::SessionStore` | L2 | 内存会话；持久化 API 须接线或删除 |
-| `wx_login::WxLoginState` | L2 | 扫码任务内存表 |
+| `wx_login::WxLoginHub` | L2 | 扫码任务内存表（server/desktop 共用） |
 | `auth::STARTED_AT` | L1 | 进程启动时间 |
 
 ## 治理原则

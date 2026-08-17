@@ -48,6 +48,8 @@ pub fn settings_panel(account_id: &str, username: &str) -> Value {
         "fertilizerBuyCheckIntervalMinutes": snap.fertilizer_buy_check_interval_minutes,
         "bagSeedPriority": cfg::get_bag_seed_priority(id),
         "bagSeedFallbackStrategy": cfg::get_bag_seed_fallback_strategy(id),
+        "friendBlacklist": cfg::get_friend_blacklist(id),
+        "plantBlacklist": cfg::get_plant_blacklist(id),
         "ui": ui,
         "offlineReminder": offline,
     })

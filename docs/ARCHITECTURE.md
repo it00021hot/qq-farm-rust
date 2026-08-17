@@ -18,6 +18,18 @@ CLI / demo ───────────────────────
 
 ## 桌面嵌入模式（默认）
 
+**产品定位**：个人免费开源客户端；**无登录、无用户/权限管理、无卡密**；只处理多农场账号业务。ACL 固定 `AclPolicy::LocalOwner`。
+
+```text
+开窗即进 /home（无登录门闸）
+desktop-ui 农场页（10 项侧栏）
+        │ invoke
+        ▼
+qq-farm-desktop（LocalOwner）
+        ▼
+qq-farm-app → core（多农场账号）
+```
+
 ```text
 Tauri App (qq-farm-desktop)
   └─ DesktopState / commands   (IPC 适配)
@@ -26,6 +38,8 @@ Tauri App (qq-farm-desktop)
 ```
 
 前端不走 localhost HTTP / Socket.IO；实时推送由 `subscribe_events` → `emit("app-event")`。
+
+侧栏菜单对齐 `qq-farm-web` 农场项（去掉 `/system/admin`）：home、personal、friends、activity、analytics、game-mall、mystery-shop、settings、game-config、account。
 
 ## 事件流
 

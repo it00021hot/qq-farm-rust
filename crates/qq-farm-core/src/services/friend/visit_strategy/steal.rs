@@ -52,27 +52,43 @@ pub fn get_plant_name(plant_id: i64) -> Option<String> {
     }
 }
 
-static ACTIVITY_PLANTS: std::sync::OnceLock<StdMutex<std::collections::HashSet<i64>>> =
-    std::sync::OnceLock::new();
+static ACTIVITY_PLANTS: std::sync::OnceLock<
+    StdMutex<std::collections::HashMap<String, std::collections::HashSet<i64>>>,
+> = std::sync::OnceLock::new();
 
-#[allow(dead_code)]
-fn activity_plants() -> &'static StdMutex<std::collections::HashSet<i64>> {
-    ACTIVITY_PLANTS.get_or_init(|| StdMutex::new(std::collections::HashSet::new()))
+fn activity_plants() -> &'static StdMutex<std::collections::HashMap<String, std::collections::HashSet<i64>>>
+{
+    ACTIVITY_PLANTS.get_or_init(|| StdMutex::new(std::collections::HashMap::new()))
 }
 
-/// 是否活动植物（用于"仅偷活动植物"）
+/// 是否活动植物（用于"仅偷活动植物"；按账号隔离）
 #[must_use]
-pub fn is_activity_plant(land: &LandInfo) -> bool {
+pub fn is_activity_plant(account_id: &str, land: &LandInfo) -> bool {
+    if account_id.is_empty() {
+        return false;
+    }
     let plant_id = match land.plant.as_ref() {
         Some(p) => p.id,
         None => return false,
     };
-    activity_plants().lock().unwrap().contains(&plant_id)
+    activity_plants()
+        .lock()
+        .unwrap()
+        .get(account_id)
+        .is_some_and(|set| set.contains(&plant_id))
 }
 
 /// 标记活动植物（在偷到带活动积分的植物时调用）
-pub fn mark_activity_plant(plant_id: i64) {
-    activity_plants().lock().unwrap().insert(plant_id);
+pub fn mark_activity_plant(account_id: &str, plant_id: i64) {
+    if account_id.is_empty() {
+        return;
+    }
+    activity_plants()
+        .lock()
+        .unwrap()
+        .entry(account_id.to_string())
+        .or_default()
+        .insert(plant_id);
 }
 
 /// 阶段枚举（与原 TS PlantPhase 对齐）
@@ -181,6 +197,7 @@ pub fn analyze_friend_lands(
     my_gid: i64,
     plant_blacklist: &[i64],
     steal_activity_only: bool,
+    account_id: &str,
 ) -> AnalyzeResult {
     let mut result = AnalyzeResult::default();
     let lands_map = crate::services::farm::land_analysis::build_land_map(lands);
@@ -212,7 +229,7 @@ pub fn analyze_friend_lands(
                 if !plant_blacklist.is_empty() && seed_id > 0 && plant_blacklist.contains(&seed_id) {
                     continue;
                 }
-                if steal_activity_only && !is_activity_plant(land) {
+                if steal_activity_only && !is_activity_plant(account_id, land) {
                     continue;
                 }
                 result.stealable.push(id);
@@ -329,9 +346,8 @@ pub async fn visit_friend_for_steal(
                 account_id,
                 "好友",
                 format!("进入 {friend_name} 农场失败: {msg}"),
-                Some(serde_json::json!({
-                    "module": "friend",
-                    "event": "进入农场",
+                crate::constants::PanelEvent::EnterFarm, Some(serde_json::json!({
+                    "module": "friend", 
                     "result": "error",
                     "friendName": friend_name,
                     "friendGid": friend_gid,
@@ -367,7 +383,7 @@ pub async fn visit_friend_for_steal(
         matches!(get_current_phase(land), Some(PlantPhase::Ripe))
             && can_i_still_steal_plant(plant, my_gid)
     });
-    let status = analyze_friend_lands(&lands, my_gid, &plant_blacklist, false);
+    let status = analyze_friend_lands(&lands, my_gid, &plant_blacklist, false, account_id);
 
     if has_stealable_before_filter && status.stealable.is_empty() {
         let _ = api.leave_farm(friend_gid).await;
@@ -414,9 +430,8 @@ pub async fn visit_friend_for_steal(
             account_id,
             "好友",
             format!("{}: {}", friend_name, actions.join("/")),
-            Some(serde_json::json!({
-                "module": "friend",
-                "event": "visit_friend",
+            crate::constants::PanelEvent::VisitFriend, Some(serde_json::json!({
+                "module": "friend", 
                 "result": "ok",
                 "friendName": friend_name,
                 "friendGid": friend_gid,
@@ -439,7 +454,7 @@ pub(crate) async fn do_steal_op(
     lands: &[LandInfo],
     my_gid: i64,
 ) -> serde_json::Value {
-    let status = analyze_friend_lands(lands, my_gid, &[], false);
+    let status = analyze_friend_lands(lands, my_gid, &[], false, "");
     if status.stealable.is_empty() {
         return serde_json::json!({"ok": true, "opType": "steal", "count": 0, "message": "没有可偷取土地"});
     }

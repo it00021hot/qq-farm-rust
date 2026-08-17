@@ -21,6 +21,8 @@ async-trait = { workspace = true }
 futures = { workspace = true }
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "native-tls-vendored"] }
 tungstenite = "0.24"
+native-tls = { version = "0.2", features = ["vendored"] }
+tokio-native-tls = "0.3"
 tokio-stream = { version = "0.1", features = ["sync"] }
 
 # HTTP 客户端（仅 push service 使用）

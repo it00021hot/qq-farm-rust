@@ -8,6 +8,9 @@ use std::time::{Duration, Instant};
 use prost::Message as _;
 use tokio::sync::Mutex as AsyncMutex;
 
+use crate::constants::{
+    DEFAULT_TIMEOUT_MS, FRIEND_GET_ALL_TIMEOUT_MS, FRIEND_LIST_COALESCE_MS, QQ_FRIEND_LIST_BATCH_SIZE,
+};
 use crate::error::{Error, Result};
 use crate::network::gateway::Gateway;
 use crate::proto::generated::gamepb::friendpb::{
@@ -16,11 +19,6 @@ use crate::proto::generated::gamepb::friendpb::{
 };
 use crate::proto::generated::gamepb::plantpb::OperationLimit;
 use crate::proto::generated::gamepb::visitpb::{EnterReply, EnterRequest, LeaveRequest};
-
-const DEFAULT_TIMEOUT_MS: u64 = 20_000;
-const QQ_FRIEND_LIST_BATCH_SIZE: usize = 35;
-/// 同一时刻 Vue `/api/friends` 与巡查都会打 GetAll，合并 800ms 内的成功结果。
-const FRIEND_LIST_COALESCE_MS: u64 = 800;
 
 fn last_visitor_gid_sync_at() -> &'static parking_lot::Mutex<std::collections::HashMap<String, Instant>> {
     use std::sync::OnceLock;
@@ -187,55 +185,40 @@ impl FriendApi {
                 "gamepb.friendpb.FriendService",
                 "GetAll",
                 &body,
-                DEFAULT_TIMEOUT_MS,
+                FRIEND_GET_ALL_TIMEOUT_MS,
             )
             .await
         {
             Ok(resp) => Ok(decode_get_all_friends(&resp)),
             Err(e) => {
-                // 对齐 gid-manager 的 GetAll 失败兜底：空 open_ids 的 SyncAll
-                let fallback = SyncAllRequest {
-                    open_ids: Vec::new(),
+                // 对齐 Go loadFriends(wx)：GetAll 失败后用已知 GID 走 GetGameFriends，不要 SyncAll。
+                // GetAll 超时后回包往往还在路上，再打 SyncAll 会把心跳和后续 RPC 全部堵死。
+                let account_id = self.account_id.lock().clone();
+                let known: Vec<i64> =
+                    crate::models::store::account_config::get_known_friend_gids(Some(&account_id))
+                        .into_iter()
+                        .filter(|gid| {
+                            *gid > 0
+                                && !crate::services::friend::visit_strategy::is_known_friend_gid_invalid(
+                                    *gid,
+                                )
+                        })
+                        .collect();
+                if known.is_empty() {
+                    return Err(e.into());
                 }
-                .encode_to_vec();
-                match self
-                    .gateway
-                    .request(
-                        "gamepb.friendpb.FriendService",
-                        "SyncAll",
-                        &fallback,
-                        DEFAULT_TIMEOUT_MS,
-                    )
-                    .await
-                {
-                    Ok(resp) => {
-                        if let Ok(reply) = SyncAllReply::decode(&*resp) {
-                            Ok(dedupe_friends_by_gid(reply.game_friends))
-                        } else {
-                            Ok(Vec::new())
-                        }
-                    }
-                    Err(_) => Err(e.into()),
+                let fallback = self.fetch_game_friends_by_gids(&known).await;
+                if fallback.is_empty() {
+                    Err(e.into())
+                } else {
+                    Ok(fallback)
                 }
             }
         }
     }
 
-    async fn fetch_qq_friends(&self) -> Result<Vec<GameFriend>> {
+    async fn fetch_game_friends_by_gids(&self, known: &[i64]) -> Vec<GameFriend> {
         let account_id = self.account_id.lock().clone();
-        let _ = self
-            .sync_known_friend_gids_from_recent_visitors(&account_id)
-            .await;
-        let known: Vec<i64> =
-            crate::models::store::account_config::get_known_friend_gids(Some(&account_id))
-                .into_iter()
-                .filter(|gid| {
-                    *gid > 0
-                        && !crate::services::friend::visit_strategy::is_known_friend_gid_invalid(
-                            *gid,
-                        )
-                })
-                .collect();
         let mut all = Vec::new();
         for chunk in known.chunks(QQ_FRIEND_LIST_BATCH_SIZE) {
             let body = GetGameFriendsRequest {
@@ -257,21 +240,39 @@ impl FriendApi {
                         all.extend(reply.game_friends);
                     }
                 }
-                Err(e) => {
+                Err(err) => {
                     crate::services::panel_log::log_warn(
                         &account_id,
                         "好友",
-                        format!("QQ 新好友接口分批请求失败: {e}"),
+                        format!("GetGameFriends 分批请求失败: {err}"),
+                        crate::constants::PanelEvent::FriendListApi,
                         Some(serde_json::json!({
                             "module": "friend",
-                            "event": "好友列表接口",
                             "method": "GetGameFriends",
                         })),
                     );
                 }
             }
         }
-        all = dedupe_friends_by_gid(all);
+        dedupe_friends_by_gid(all)
+    }
+
+    async fn fetch_qq_friends(&self) -> Result<Vec<GameFriend>> {
+        let account_id = self.account_id.lock().clone();
+        let _ = self
+            .sync_known_friend_gids_from_recent_visitors(&account_id)
+            .await;
+        let known: Vec<i64> =
+            crate::models::store::account_config::get_known_friend_gids(Some(&account_id))
+                .into_iter()
+                .filter(|gid| {
+                    *gid > 0
+                        && !crate::services::friend::visit_strategy::is_known_friend_gid_invalid(
+                            *gid,
+                        )
+                })
+                .collect();
+        let mut all = self.fetch_game_friends_by_gids(&known).await;
         if !all.is_empty() {
             if !account_id.is_empty() {
                 let gids: Vec<i64> = all.iter().map(|f| f.gid).filter(|g| *g > 0).collect();
@@ -312,9 +313,8 @@ impl FriendApi {
                 &account_id,
                 "好友",
                 "QQ 好友列表为空；若近期接口已切到 GetGameFriends，请先在好友页维护已知好友 GID 列表",
-                Some(serde_json::json!({
-                    "module": "friend",
-                    "event": "好友列表接口",
+                crate::constants::PanelEvent::FriendListApi, Some(serde_json::json!({
+                    "module": "friend", 
                     "result": "empty",
                 })),
             );
@@ -391,9 +391,8 @@ impl FriendApi {
                     "已从最近访客自动补充 {added} 个 GID，当前已知好友 GID 共 {} 个",
                     merged.len()
                 ),
-                Some(serde_json::json!({
-                    "module": "friend",
-                    "event": "访客补充好友GID",
+                crate::constants::PanelEvent::VisitorGidBackfill, Some(serde_json::json!({
+                    "module": "friend", 
                     "result": "ok",
                     "addedFromVisitors": added,
                     "totalKnownGids": merged.len(),
@@ -818,7 +817,7 @@ fn decode_get_all_friends(resp: &[u8]) -> Vec<GameFriend> {
         return Vec::new();
     }
     GetAllReply::decode(resp)
-        .map(|reply| reply.game_friends)
+        .map(|reply| dedupe_friends_by_gid(reply.game_friends))
         .unwrap_or_default()
 }
 

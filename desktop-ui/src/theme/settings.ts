@@ -52,14 +52,14 @@ export const themeSettings: App.Theme.ThemeSetting = {
     autoSelectFirstMenu: false
   },
   footer: {
-    visible: true,
+    visible: false,
     fixed: false,
     height: 48,
     right: true
   },
   watermark: {
     visible: false,
-    text: 'SoybeanAdmin',
+    text: 'QQ农场智能助手',
     enableUserName: false,
     enableTime: false,
     timeFormat: 'YYYY-MM-DD HH:mm'

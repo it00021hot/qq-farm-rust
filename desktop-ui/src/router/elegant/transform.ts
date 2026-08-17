@@ -166,10 +166,20 @@ const routeMap: RouteMap = {
   "403": "/403",
   "404": "/404",
   "500": "/500",
+  "farm": "/farm",
+  "farm_account": "/farm/account",
+  "farm_activity": "/farm/activity",
+  "farm_analytics": "/farm/analytics",
+  "farm_dashboard": "/farm/dashboard",
+  "farm_friends": "/farm/friends",
+  "farm_game-config": "/farm/game-config",
+  "farm_game-mall": "/farm/game-mall",
+  "farm_mystery-shop": "/farm/mystery-shop",
+  "farm_personal": "/farm/personal",
+  "farm_settings": "/farm/settings",
   "home": "/home",
   "iframe-page": "/iframe-page/:url",
-  "login": "/login/:module(pwd-login|code-login|register|reset-pwd|bind-wechat)?",
-  "settings": "/settings"
+  "login": "/login/:module(pwd-login|code-login|register|reset-pwd|bind-wechat)?"
 };
 
 /**

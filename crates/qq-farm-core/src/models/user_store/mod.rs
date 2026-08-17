@@ -1,10 +1,8 @@
-//! 用户系统（注册 / 登录 / 卡密 / 鉴权 / 限流）。
+//! 用户系统（注册 / 登录 / 鉴权 / 限流）。
 //!
-//! 1:1 翻译原 `core/src/models/user-store/` 下 4 个文件：
-//!
-//! - [`auth`] — 密码哈希（PBKDF2-SHA512 + legacy SHA256）、登录限流、登录日志
-//! - [`users`] — 用户 CRUD、卡密管理、注册 / 续费
-//! - [`card_claim`] — 按 UA 限流领取卡密（24h 内限一次）
+//! - [`auth`] — 密码哈希、登录限流、登录日志
+//! - [`users`] — 用户 CRUD、注册 / 登录校验
+//! - [`card_claim`] — 遗留卡密领取（面板已不再暴露）
 
 pub mod auth;
 pub mod card_claim;

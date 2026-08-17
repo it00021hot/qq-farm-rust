@@ -12,8 +12,8 @@ use std::sync::Arc;
 use axum::Json;
 use qq_farm_core::runtime::engine::RuntimeEngine;
 
-use crate::routes::wx_login::WxLoginState;
 use crate::sessions::SessionStore;
+use qq_farm_app::wx_login::WxLoginHub;
 
 /// Admin 共享上下文
 #[derive(Clone)]
@@ -22,8 +22,8 @@ pub struct AdminContext {
     pub engine: Arc<RuntimeEngine>,
     /// Session 存储（token → user）
     pub sessions: SessionStore,
-    /// 微信扫码登录 state
-    pub wx: WxLoginState,
+    /// 微信扫码登录（与 desktop 共用 [`WxLoginHub`]）
+    pub wx: Arc<WxLoginHub>,
 }
 
 impl AdminContext {
@@ -33,14 +33,24 @@ impl AdminContext {
         Self {
             engine,
             sessions: SessionStore::new(),
-            wx: WxLoginState::new(),
+            wx: Arc::new(WxLoginHub::new()),
         }
     }
 
-    /// 转为 qq-farm-app 上下文。
+    /// 从已组装的 [`qq_farm_app::AppContext`] 构造（共享引擎 + 扫码 hub）。
+    #[must_use]
+    pub fn from_app(app: qq_farm_app::AppContext) -> Self {
+        Self {
+            engine: app.engine.clone(),
+            sessions: SessionStore::new(),
+            wx: app.wx_login,
+        }
+    }
+
+    /// 转为 qq-farm-app 上下文（共用同一 WxLoginHub）。
     #[must_use]
     pub fn app_context(&self) -> qq_farm_app::AppContext {
-        qq_farm_app::AppContext::new(self.engine.clone())
+        qq_farm_app::AppContext::with_wx_login(self.engine.clone(), self.wx.clone())
     }
 
     /// 构造 context（带 sessions）
@@ -49,7 +59,7 @@ impl AdminContext {
         Self {
             engine,
             sessions,
-            wx: WxLoginState::new(),
+            wx: Arc::new(WxLoginHub::new()),
         }
     }
 }
@@ -69,7 +79,7 @@ impl AdminContext {
                 qq_farm_core::runtime::engine::EngineConfig::default(),
             )),
             sessions: crate::sessions::SessionStore::new(),
-            wx: WxLoginState::new(),
+            wx: Arc::new(qq_farm_app::wx_login::WxLoginHub::new()),
         })
     }
 }

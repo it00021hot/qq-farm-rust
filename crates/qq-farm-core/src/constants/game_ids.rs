@@ -29,6 +29,15 @@ pub const SELL_BATCH_SIZE: usize = 15;
 pub const FERTILIZER_CONTAINER_LIMIT_HOURS: i64 = 990;
 pub const NORMAL_CONTAINER_ID: i64 = 1011;
 pub const ORGANIC_CONTAINER_ID: i64 = 1012;
+pub const COLLECTION_NORMAL_ID: i64 = 3001;
+pub const COLLECTION_RARE_ID: i64 = 3002;
+
+/// 背包货币（与商城 goodsId 命名空间不同）
+pub const COUPON_ITEM_ID: i64 = 1002;
+pub const GOLD_BEAN_ITEM_ID: i64 = 1005;
+
+/// 商城商品：有机肥（数字碰巧与点券 1002 相同，但是不同域）
+pub const MALL_ORGANIC_FERTILIZER_GOODS_ID: i32 = 1002;
 
 /// 微信开放平台 / 桌面与扫码共用的小程序 AppId（面板 wx 登录另有 TARGET）
 pub const WX_MINI_APP_ID: &str = "wx5306c5978fdb76e4";

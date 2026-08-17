@@ -6,6 +6,7 @@ use qq_farm_core::runtime::worker_loop::WorkerLoop;
 use qq_farm_core::services::analytics::SortBy;
 use serde_json::{json, Value};
 
+use crate::dto::{LandsPayload, PanelStatus};
 use crate::error::{AppError, AppResult};
 use crate::session::AppContext;
 
@@ -19,9 +20,9 @@ pub fn require_worker_loop(ctx: &AppContext, account_id: &str) -> AppResult<Arc<
         .ok_or(AppError::AccountNotRunning)
 }
 
-/// 面板状态 + 等级进度。
+/// 面板状态 + 等级进度（扁平 DTO）。
 #[must_use]
-pub fn panel_status_with_progress(ctx: &AppContext, account_id: &str) -> Value {
+pub fn panel_status_with_progress(ctx: &AppContext, account_id: &str) -> PanelStatus {
     let mut data = ctx.engine.panel_status(account_id);
     if let Some(status) = data.get("status") {
         let level = status.get("level").and_then(|v| v.as_i64()).unwrap_or(0);
@@ -31,11 +32,11 @@ pub fn panel_status_with_progress(ctx: &AppContext, account_id: &str) -> Value {
         if let Some(obj) = data.as_object_mut() {
             obj.insert(
                 "levelProgress".to_string(),
-                json!({ "current": current, "needed": needed }),
+                json!({ "current": current, "needed": needed, "level": level }),
             );
         }
     }
-    data
+    PanelStatus::from_engine_value(&data, account_id, ctx.engine.has_worker(account_id))
 }
 
 /// 钻石余额。
@@ -85,25 +86,27 @@ pub fn set_automation(
 }
 
 /// 地块详情。
-pub async fn lands(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
+pub async fn lands(ctx: &AppContext, account_id: &str) -> AppResult<LandsPayload> {
     let loop_ = require_worker_loop(ctx, account_id)?;
     let (lands, summary) = loop_
         .farm()
         .get_lands_detail()
         .await
         .map_err(AppError::from_core)?;
-    Ok(json!({ "lands": lands, "summary": summary }))
+    Ok(LandsPayload::from_values(lands, summary))
 }
 
 /// 背包详情。
-pub async fn bag(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
+pub async fn bag(
+    ctx: &AppContext,
+    account_id: &str,
+) -> AppResult<qq_farm_core::services::warehouse::BagDetail> {
     let loop_ = require_worker_loop(ctx, account_id)?;
-    let detail = loop_
+    loop_
         .warehouse()
         .get_bag_detail()
         .await
-        .map_err(AppError::from_core)?;
-    serde_json::to_value(detail).map_err(|e| AppError::Internal(e.to_string()))
+        .map_err(AppError::from_core)
 }
 
 /// 使用背包物品。
@@ -386,7 +389,11 @@ pub async fn daily_gift_overview(ctx: &AppContext, account_id: &str) -> AppResul
 
 /// 从引擎读取全局日志（最近 limit 条，新→旧）。
 #[must_use]
-pub fn engine_global_logs(ctx: &AppContext, account_id: Option<&str>, limit: usize) -> Value {
+pub fn engine_global_logs(
+    ctx: &AppContext,
+    account_id: Option<&str>,
+    limit: usize,
+) -> Vec<qq_farm_core::runtime::runtime_state::LogEntry> {
     let state = ctx.engine.runtime_state();
     let logs = state.global_logs.lock().clone();
     let mut filtered: Vec<_> = if let Some(id) = account_id.filter(|s| !s.is_empty()) {
@@ -398,7 +405,7 @@ pub fn engine_global_logs(ctx: &AppContext, account_id: Option<&str>, limit: usi
     };
     filtered.sort_by(|a, b| b.ts.cmp(&a.ts));
     filtered.truncate(limit.max(1));
-    json!(filtered)
+    filtered
 }
 
 /// 账号日志。

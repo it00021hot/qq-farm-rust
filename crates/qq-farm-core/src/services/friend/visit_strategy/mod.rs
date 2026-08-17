@@ -252,18 +252,21 @@ mod tests {
 
     #[test]
     fn blacklist_add_and_remove() {
-        add_friend_to_blacklist("", 100, "alice", "test");
-        assert!(is_in_blacklist(100));
-        assert_eq!(blacklist_size(), 1);
-        add_friend_to_blacklist("", 100, "alice", "test");
-        assert_eq!(blacklist_size(), 1);
-        assert!(remove_from_blacklist(100));
-        assert!(!is_in_blacklist(100));
+        let aid = "test-bl-add-remove";
+        let _ = crate::models::store::account_config::remove_account_config(aid);
+        add_friend_to_blacklist(aid, 100, "alice", "test");
+        assert!(is_in_blacklist(aid, 100));
+        assert_eq!(blacklist_size(aid), 1);
+        add_friend_to_blacklist(aid, 100, "alice", "test");
+        assert_eq!(blacklist_size(aid), 1);
+        assert!(remove_from_blacklist(aid, 100));
+        assert!(!is_in_blacklist(aid, 100));
+        let _ = crate::models::store::account_config::remove_account_config(aid);
     }
 
     #[test]
     fn blacklist_add_zero_returns_false() {
-        assert!(!add_friend_to_blacklist("", 0, "zero", ""));
+        assert!(!add_friend_to_blacklist("test-bl-zero", 0, "zero", ""));
     }
 
     #[test]
@@ -276,14 +279,17 @@ mod tests {
 
     #[test]
     fn handle_friend_enter_error_classifies() {
-        let k = handle_friend_enter_error("", 200, "bob", "code=1002003");
+        let aid = "test-bl-enter";
+        let _ = crate::models::store::account_config::remove_account_config(aid);
+        let k = handle_friend_enter_error(aid, 200, "bob", "code=1002003");
         assert_eq!(k, FriendEnterErrorKind::Blacklist);
-        assert!(is_in_blacklist(200));
-        let _ = remove_from_blacklist(200);
-        let k2 = handle_friend_enter_error("", 300, "carol", "code=42 invalid friend");
+        assert!(is_in_blacklist(aid, 200));
+        let _ = remove_from_blacklist(aid, 200);
+        let k2 = handle_friend_enter_error(aid, 300, "carol", "code=42 invalid friend");
         assert_eq!(k2, FriendEnterErrorKind::InvalidRemoved);
-        let k3 = handle_friend_enter_error("", 400, "dave", "连接未打开");
+        let k3 = handle_friend_enter_error(aid, 400, "dave", "连接未打开");
         assert_eq!(k3, FriendEnterErrorKind::Error);
+        let _ = crate::models::store::account_config::remove_account_config(aid);
     }
 
     #[test]
@@ -423,13 +429,13 @@ mod tests {
             }),
             ..Default::default()
         };
-        assert!(!is_activity_plant(&land));
+        assert!(!is_activity_plant("acc-act", &land));
     }
 
     #[test]
     fn mark_activity_plant_makes_it_active() {
         use crate::proto::generated::gamepb::plantpb::PlantInfo;
-        mark_activity_plant(8888);
+        mark_activity_plant("acc-act", 8888);
         let land = LandInfo {
             id: 1,
             plant: Some(PlantInfo {
@@ -438,7 +444,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        assert!(is_activity_plant(&land));
+        assert!(is_activity_plant("acc-act", &land));
     }
 
     #[test]

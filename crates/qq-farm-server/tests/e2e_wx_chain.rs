@@ -259,7 +259,6 @@ async fn e2e_delete_account_removes() {
 #[serial_test::serial(e2e_chain)]
 async fn e2e_wx_login_state_module_exports() {
     use qq_farm_server::routes::wx_login::WxLoginState;
-    // 模块导出验证 — 构造不 panic 即可（字段是 private）
     let _wx = WxLoginState::new();
     assert!(true);
 }

@@ -92,7 +92,10 @@ cd crates/qq-farm-desktop && cargo tauri dev
 
 ## Desktop (Tauri) notes
 
+- **定位**：个人免费开源；无面板登录 / RBAC / 用户管理 / 卡密；仅多农场账号 + 农场业务。
 - Crate：`crates/qq-farm-desktop`；只依赖 `qq-farm-app` + Tauri；前端 `desktop-ui/`。
+- ACL：进程内固定 `AclPolicy::LocalOwner`；不暴露 users / login / cards IPC。
+- 菜单：10 项（home + 9 个 farm_*），对齐 qq-farm-web 农场页；无 `/system/*`、无登录门闸。
 - 订阅状态：`AppContext::subscribe_events` → `emit("app-event")`，不要复制 Socket.IO。
-- Scaffold 命令：`desktop_ready` / `get_snapshot` / `list_accounts` / `get_settings`。
-- UI：沿用 Soybean 主题与组件；新增页走 `views/*/modules` + `service/tauri`。
+- IPC：按域 `account` / `farm` / `friend` / `activity` / `commerce` / `settings` / `config` / `snapshot`（含 wx_login）。
+- UI：沿用 Soybean 主题与组件；`service/api` → `invoke`；views 来自 web 农场页改接 Tauri。

@@ -76,8 +76,8 @@ impl Default for WorkerLoopConfig {
         Self {
             status_interval: Duration::from_secs(3),
             daily_routine_interval: Duration::from_secs(30),
-            heartbeat_interval: Duration::from_secs(25),
-            heartbeat_timeout: Duration::from_secs(30),
+            heartbeat_interval: Duration::from_millis(crate::constants::HEARTBEAT_INTERVAL_MS),
+            heartbeat_timeout: Duration::from_millis(crate::constants::HEARTBEAT_SILENCE_MS),
             client_version: crate::config::DEFAULT_CLIENT_VERSION.to_string(),
         }
     }
@@ -364,6 +364,7 @@ impl WorkerLoop {
             if self.unified_scheduler_running.load(Ordering::Acquire) {
                 self.schedule_unified_next_tick(scheduler);
             }
+            self.start_fertilizer_buy_timer(scheduler);
 
             // 对齐 bot：施肥模式变更且目标为 both/organic/smart 时，600ms 后立即有机补肥
             if prev_mode != next_mode
@@ -690,15 +691,18 @@ impl WorkerLoop {
                         return;
                     }
                     let now = crate::utils::time::now_ms();
-                    let last = *last_resp.lock();
+                    let last_hb = *last_resp.lock();
+                    let last_rx = gateway.last_rx_ms();
+                    let last = last_hb.max(last_rx);
                     let elapsed = now - last;
-                    if elapsed > hb_timeout.as_millis() as i64 {
+                    let pending = gateway.pending_count();
+                    // Go：Bare RPC timeout 不是 socket 已死。GetAll 大包在路上时心跳回包会被堵住。
+                    if elapsed > hb_timeout.as_millis() as i64 && pending == 0 {
                         let miss_n = {
                             let mut g = miss.lock();
                             *g += 1;
                             *g
                         };
-                        let pending = gateway.pending_count();
                         tracing::warn!(
                             account_id = %acc_id,
                             elapsed_ms = elapsed,
@@ -713,7 +717,7 @@ impl WorkerLoop {
                                 "连接可能已断开 ({}s 无响应, pending={pending})",
                                 elapsed / 1000
                             ),
-                            Some(serde_json::json!({
+                            crate::constants::PanelEvent::HeartbeatTimeout, Some(serde_json::json!({
                                 "module": "heartbeat",
                                 "isWarn": true,
                                 "elapsedMs": elapsed,
@@ -726,10 +730,9 @@ impl WorkerLoop {
                                 &acc_id,
                                 "心跳",
                                 "心跳超时，账号将停止运行...",
-                                Some(serde_json::json!({
+                                crate::constants::PanelEvent::HeartbeatTimeout, Some(serde_json::json!({
                                     "module": "heartbeat",
-                                    "isWarn": true,
-                                    "event": "heartbeat_timeout",
+                                    "isWarn": true
                                 })),
                             );
                             if let Some(cb) = on_timeout.lock().as_ref() {
@@ -765,7 +768,7 @@ impl WorkerLoop {
                                     &acc_id,
                                     "心跳",
                                     format!("Heartbeat 失败: {e}"),
-                                    Some(serde_json::json!({
+                                    crate::constants::PanelEvent::HeartbeatTimeout, Some(serde_json::json!({
                                         "module": "heartbeat",
                                         "isWarn": true,
                                         "error": e.to_string(),
@@ -868,9 +871,8 @@ impl WorkerLoop {
             &self.account.id,
             "农场",
             format!("化肥自动购买检测定时器已启动，间隔 {minutes} 分钟"),
-            Some(serde_json::json!({
-                "module": "farm",
-                "event": "购买化肥计时器",
+            crate::constants::PanelEvent::FertilizerBuyTimer, Some(serde_json::json!({
+                "module": "farm", 
                 "result": "start",
                 "intervalMinutes": minutes,
             })),
@@ -958,6 +960,8 @@ impl WorkerLoop {
             return;
         }
         if !self.auto_on("friend_help") {
+            let (min_ms, max_ms) = self.interval_range_ms("help");
+            self.next_runs.lock().help_at = now_ms() + random_interval_ms(min_ms, max_ms) as i64;
             return;
         }
         if self.help_tick_running.swap(true, Ordering::AcqRel) {
@@ -989,6 +993,8 @@ impl WorkerLoop {
             return;
         }
         if !self.auto_on("friend_steal") {
+            let (min_ms, max_ms) = self.interval_range_ms("steal");
+            self.next_runs.lock().steal_at = now_ms() + random_interval_ms(min_ms, max_ms) as i64;
             return;
         }
         if self.steal_tick_running.swap(true, Ordering::AcqRel) {
@@ -1097,9 +1103,8 @@ impl WorkerLoop {
             &self.account.id,
             "农场",
             format!("收到推送: {changed_count}块土地变化，检查中..."),
-            Some(serde_json::json!({
-                "module": "farm",
-                "event": "lands_notify",
+            crate::constants::PanelEvent::LandsNotify, Some(serde_json::json!({
+                "module": "farm", 
                 "result": "trigger_check",
                 "count": changed_count,
             })),

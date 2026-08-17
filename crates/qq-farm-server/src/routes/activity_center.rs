@@ -11,7 +11,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::context::{ok_data, AdminContext, ApiResult};
-use crate::routes::{get_loop, resolve_account_id_required as resolve_account_id};
+use crate::routes::resolve_account_id_required as resolve_account_id;
 
 /// 构造 activity-center 路由
 pub fn router() -> Router<Arc<AdminContext>> {
@@ -57,12 +57,16 @@ struct QingMeiStartBody {
     count: Option<Value>,
 }
 
-fn json_to_text(value: &Value) -> String {
-    match value {
-        Value::String(s) => s.clone(),
-        Value::Number(n) => n.to_string(),
-        _ => String::new(),
+fn activity_app_result(result: qq_farm_app::AppResult<Value>) -> ApiResult<Value> {
+    match result {
+        Ok(s) => ok_data(s),
+        Err(qq_farm_app::AppError::Core(e)) => Ok(Json(activity_error_json(&e))),
+        Err(e) => Ok(Json(activity_error_json_from_app(&e))),
     }
+}
+
+fn activity_error_json_from_app(err: &qq_farm_app::AppError) -> Value {
+    activity_error_json(&qq_farm_core::error::Error::Protocol(err.to_string()))
 }
 
 async fn get_snapshot(
@@ -71,11 +75,7 @@ async fn get_snapshot(
     Query(q): Query<AccountQuery>,
 ) -> ApiResult<Value> {
     let id = resolve_account_id(&ctx, &headers, q.account_id.as_deref())?;
-    let loop_ = get_loop(&ctx, &id)?;
-    match loop_.activity_center().get_activity_center_snapshot().await {
-        Ok(s) => ok_data(s),
-        Err(e) => Ok(Json(activity_error_json(&e))),
-    }
+    activity_app_result(qq_farm_app::activity::snapshot(&ctx.app_context(), &id).await)
 }
 
 async fn get_season(
@@ -84,11 +84,7 @@ async fn get_season(
     Query(q): Query<AccountQuery>,
 ) -> ApiResult<Value> {
     let id = resolve_account_id(&ctx, &headers, q.account_id.as_deref())?;
-    let loop_ = get_loop(&ctx, &id)?;
-    match loop_.activity_center().get_current_season_event().await {
-        Ok(s) => ok_data(s),
-        Err(e) => Ok(Json(activity_error_json(&e))),
-    }
+    activity_app_result(qq_farm_app::activity::season(&ctx.app_context(), &id).await)
 }
 
 async fn claim_battle_pass(
@@ -96,11 +92,7 @@ async fn claim_battle_pass(
     headers: axum::http::HeaderMap,
 ) -> ApiResult<Value> {
     let id = resolve_account_id(&ctx, &headers, None)?;
-    let loop_ = get_loop(&ctx, &id)?;
-    match loop_.activity_center().claim_battle_pass_rewards().await {
-        Ok(s) => ok_data(s),
-        Err(e) => Ok(Json(activity_error_json(&e))),
-    }
+    activity_app_result(qq_farm_app::activity::claim_battle_pass(&ctx.app_context(), &id).await)
 }
 
 async fn light_constellation(
@@ -108,11 +100,7 @@ async fn light_constellation(
     headers: axum::http::HeaderMap,
 ) -> ApiResult<Value> {
     let id = resolve_account_id(&ctx, &headers, None)?;
-    let loop_ = get_loop(&ctx, &id)?;
-    match loop_.activity_center().light_constellation().await {
-        Ok(s) => ok_data(s),
-        Err(e) => Ok(Json(activity_error_json(&e))),
-    }
+    activity_app_result(qq_farm_app::activity::light_constellation(&ctx.app_context(), &id).await)
 }
 
 async fn exchange_star_sand(
@@ -121,17 +109,15 @@ async fn exchange_star_sand(
     Json(body): Json<ExchangeBody>,
 ) -> ApiResult<Value> {
     let id = resolve_account_id(&ctx, &headers, body.account_id.as_deref())?;
-    let loop_ = get_loop(&ctx, &id)?;
-    let goods_id = json_to_text(&body.goods_id);
-    let count = json_to_text(&body.count);
-    match loop_
-        .activity_center()
-        .exchange_star_sand_goods(loop_.warehouse().as_ref(), &goods_id, &count)
-        .await
-    {
-        Ok(s) => ok_data(s),
-        Err(e) => Ok(Json(activity_error_json(&e))),
-    }
+    activity_app_result(
+        qq_farm_app::activity::exchange_star_sand(
+            &ctx.app_context(),
+            &id,
+            &body.goods_id,
+            &body.count,
+        )
+        .await,
+    )
 }
 
 async fn claim_solar_term(
@@ -140,11 +126,9 @@ async fn claim_solar_term(
     Path(term_id): Path<String>,
 ) -> ApiResult<Value> {
     let id = resolve_account_id(&ctx, &headers, None)?;
-    let loop_ = get_loop(&ctx, &id)?;
-    match loop_.activity_center().claim_solar_term(&term_id).await {
-        Ok(s) => ok_data(s),
-        Err(e) => Ok(Json(activity_error_json(&e))),
-    }
+    activity_app_result(
+        qq_farm_app::activity::claim_solar_term(&ctx.app_context(), &id, &term_id).await,
+    )
 }
 
 fn activity_error_json(err: &qq_farm_core::error::Error) -> Value {
@@ -297,15 +281,7 @@ async fn get_shop(
     Query(q): Query<AccountQuery>,
 ) -> ApiResult<Value> {
     let id = resolve_account_id(&ctx, &headers, q.account_id.as_deref())?;
-    let loop_ = get_loop(&ctx, &id)?;
-    match loop_
-        .activity_center()
-        .get_current_star_sand_shop(Some(loop_.warehouse().as_ref()))
-        .await
-    {
-        Ok(s) => ok_data(s),
-        Err(e) => Ok(Json(activity_error_json(&e))),
-    }
+    activity_app_result(qq_farm_app::activity::shop(&ctx.app_context(), &id).await)
 }
 
 async fn get_solar_terms(
@@ -314,11 +290,7 @@ async fn get_solar_terms(
     Query(q): Query<AccountQuery>,
 ) -> ApiResult<Value> {
     let id = resolve_account_id(&ctx, &headers, q.account_id.as_deref())?;
-    let loop_ = get_loop(&ctx, &id)?;
-    match loop_.activity_center().get_current_solar_terms().await {
-        Ok(s) => ok_data(s),
-        Err(e) => Ok(Json(activity_error_json(&e))),
-    }
+    activity_app_result(qq_farm_app::activity::solar_terms(&ctx.app_context(), &id).await)
 }
 
 async fn get_qingmei(
@@ -327,11 +299,7 @@ async fn get_qingmei(
     Query(q): Query<AccountQuery>,
 ) -> ApiResult<Value> {
     let id = resolve_account_id(&ctx, &headers, q.account_id.as_deref())?;
-    let loop_ = get_loop(&ctx, &id)?;
-    match loop_.activity_center().get_current_qingmei_activity().await {
-        Ok(s) => ok_data(s),
-        Err(e) => Ok(Json(activity_error_json(&e))),
-    }
+    activity_app_result(qq_farm_app::activity::qingmei(&ctx.app_context(), &id).await)
 }
 
 async fn claim_qingmei_seed(
@@ -339,11 +307,7 @@ async fn claim_qingmei_seed(
     headers: axum::http::HeaderMap,
 ) -> ApiResult<Value> {
     let id = resolve_account_id(&ctx, &headers, None)?;
-    let loop_ = get_loop(&ctx, &id)?;
-    match loop_.activity_center().claim_qingmei_daily_seed().await {
-        Ok(s) => ok_data(s),
-        Err(e) => Ok(Json(activity_error_json(&e))),
-    }
+    activity_app_result(qq_farm_app::activity::claim_qingmei_seed(&ctx.app_context(), &id).await)
 }
 
 async fn start_qingmei_brew(
@@ -352,15 +316,8 @@ async fn start_qingmei_brew(
     Json(body): Json<QingMeiStartBody>,
 ) -> ApiResult<Value> {
     let id = resolve_account_id(&ctx, &headers, None)?;
-    let loop_ = get_loop(&ctx, &id)?;
-    let input = body
-        .ingredients
-        .or(body.count)
-        .unwrap_or(Value::Null);
-    match loop_.activity_center().start_qingmei_brew(input).await {
-        Ok(s) => ok_data(s),
-        Err(e) => Ok(Json(activity_error_json(&e))),
-    }
+    let input = body.ingredients.or(body.count).unwrap_or(Value::Null);
+    activity_app_result(qq_farm_app::activity::start_qingmei_brew(&ctx.app_context(), &id, input).await)
 }
 
 async fn continue_qingmei_brew(
@@ -368,11 +325,7 @@ async fn continue_qingmei_brew(
     headers: axum::http::HeaderMap,
 ) -> ApiResult<Value> {
     let id = resolve_account_id(&ctx, &headers, None)?;
-    let loop_ = get_loop(&ctx, &id)?;
-    match loop_.activity_center().continue_qingmei_brew().await {
-        Ok(s) => ok_data(s),
-        Err(e) => Ok(Json(activity_error_json(&e))),
-    }
+    activity_app_result(qq_farm_app::activity::continue_qingmei_brew(&ctx.app_context(), &id).await)
 }
 
 async fn settle_qingmei_brew(
@@ -380,9 +333,5 @@ async fn settle_qingmei_brew(
     headers: axum::http::HeaderMap,
 ) -> ApiResult<Value> {
     let id = resolve_account_id(&ctx, &headers, None)?;
-    let loop_ = get_loop(&ctx, &id)?;
-    match loop_.activity_center().settle_qingmei_brew().await {
-        Ok(s) => ok_data(s),
-        Err(e) => Ok(Json(activity_error_json(&e))),
-    }
+    activity_app_result(qq_farm_app::activity::settle_qingmei_brew(&ctx.app_context(), &id).await)
 }

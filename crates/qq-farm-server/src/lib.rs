@@ -66,15 +66,11 @@ pub async fn build_test_app(cfg: TestApp) -> Router {
     let _ = qq_farm_core::models::user_store::auth::load_login_attempts();
     let _ = qq_farm_core::models::user_store::auth::load_login_logs();
     let _ = qq_farm_core::models::user_store::users::load_users();
-    let _ = qq_farm_core::models::user_store::users::load_cards();
-    let _ = qq_farm_core::models::user_store::card_claim::load_card_claim_records();
     // 初始化默认 admin 账号（admin/admin）—— 但只在内存中无 admin 时
     qq_farm_core::models::user_store::init();
 
     // 重置所有登录尝试：避免多测试用例间 127.0.0.1 rate limit 互相干扰
     qq_farm_core::models::user_store::auth::reset_all_login_attempts();
-
-    // 注意：测试用卡密由各测试通过 `qq_farm_core::models::user_store::users::create_card` 自助生成（mint_test_card helper）。
 
     Router::new()
         .route("/health", get(health))

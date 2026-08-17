@@ -109,38 +109,12 @@ pub struct PersistedStats {
 // 全局状态
 // =====================================================================
 
-static OPERATIONS: Mutex<OperationsMap> = Mutex::new(OperationsMap {
-    harvest: 0,
-    farming: 0,
-    fertilize: 0,
-    plant: 0,
-    steal: 0,
-    help_farming: 0,
-    task_claim: 0,
-    sell: 0,
-    upgrade: 0,
-    level_up: 0,
-});
-static LAST_STATE: Mutex<LastState> = Mutex::new(LastState {
-    gold: -1,
-    exp: -1,
-    coupon: -1,
-});
-static INITIAL_STATE: Mutex<InitialState> = Mutex::new(InitialState {
-    gold: None,
-    exp: None,
-    coupon: None,
-});
-static SESSION: Mutex<SessionData> = Mutex::new(SessionData {
-    gold_gained: 0,
-    exp_gained: 0,
-    coupon_gained: 0,
-    last_exp_gain: 0,
-    last_gold_gain: 0,
-    last_exp_time: None,
-});
-static CURRENT_DATE_KEY: Mutex<Option<String>> = Mutex::new(None);
-static CURRENT_ACCOUNT_ID: Mutex<Option<String>> = Mutex::new(None);
+// =====================================================================
+// 全局状态（全部按 account_id 分槽；CLI/单测走 LEGACY_SLOT）
+// =====================================================================
+
+/// 无账号上下文时的兼容槽（不再表示「当前登录账号」）
+const LEGACY_SLOT: &str = "_";
 
 #[derive(Clone)]
 struct StatsSlot {
@@ -242,50 +216,30 @@ pub fn get_today_key() -> String {
 
 /// 检查跨天并重置
 pub fn check_and_reset_daily_stats() {
-    let account = CURRENT_ACCOUNT_ID.lock().clone();
-    if account.is_none() {
-        return;
-    }
     let today = get_today_key();
-    let mut current = CURRENT_DATE_KEY.lock();
-    if let Some(prev) = current.as_ref() {
-        if prev != &today {
-            tracing::warn!("[统计] 检测到跨天，重置每日统计 ({prev} -> {today})");
-            OPERATIONS.lock().reset();
+    let mut slots = SLOTS.lock();
+    for slot in slots.values_mut() {
+        if let Some(prev) = slot.date_key.as_ref() {
+            if prev != &today {
+                slot.operations.reset();
+                slot.date_key = Some(today.clone());
+            }
         }
     }
-    *current = Some(today);
 }
 
 // =====================================================================
 // 公共 API
 // =====================================================================
 
-/// 记录一次操作
+/// 记录一次操作（CLI / 单测兼容槽）
 pub fn record_operation(op_type: &str, count: i64) {
-    check_and_reset_daily_stats();
-    let mut ops = OPERATIONS.lock();
-    match op_type {
-        "harvest" => ops.harvest += count,
-        "farming" => ops.farming += count,
-        "fertilize" => ops.fertilize += count,
-        "plant" => ops.plant += count,
-        "steal" => ops.steal += count,
-        "helpFarming" => ops.help_farming += count,
-        "taskClaim" => ops.task_claim += count,
-        "sell" => ops.sell += count,
-        "upgrade" => ops.upgrade += count,
-        "levelUp" => ops.level_up += count,
-        _ => return,
-    }
-    drop(ops);
-    schedule_save();
+    record_operation_for(LEGACY_SLOT, op_type, count);
 }
 
 /// 按账号记录操作（多 worker 隔离）
 pub fn record_operation_for(account_id: &str, op_type: &str, count: i64) {
     if account_id.is_empty() {
-        record_operation(op_type, count);
         return;
     }
     let mut slot = slot_for(account_id);
@@ -313,107 +267,94 @@ pub fn record_operation_for(account_id: &str, op_type: &str, count: i64) {
         }
     }
     put_slot(account_id, slot);
-    *CURRENT_ACCOUNT_ID.lock() = Some(account_id.to_string());
-    schedule_save();
+    schedule_save(account_id.to_string());
 }
 
-/// 初始化（不持久化）
+/// 初始化（不持久化；写入兼容槽）
 pub fn init_stats(gold: i64, exp: i64, coupon: i64) {
-    let g = gold; // i64 always finite
-    let e = exp;
-    let c = coupon;
-    let mut last = LAST_STATE.lock();
-    last.gold = g;
-    last.exp = e;
-    last.coupon = c;
-    drop(last);
-    let mut init = INITIAL_STATE.lock();
-    init.gold = Some(g);
-    init.exp = Some(e);
-    init.coupon = Some(c);
+    let mut slot = slot_for(LEGACY_SLOT);
+    slot.last.gold = gold;
+    slot.last.exp = exp;
+    slot.last.coupon = coupon;
+    slot.initial.gold = Some(gold);
+    slot.initial.exp = Some(exp);
+    slot.initial.coupon = Some(coupon);
+    put_slot(LEGACY_SLOT, slot);
 }
 
 /// 初始化 + 加载持久化数据
 pub fn init_stats_with_persistence(account_id: &str, gold: i64, exp: i64, coupon: i64) {
-    *CURRENT_ACCOUNT_ID.lock() = Some(account_id.to_string());
+    if account_id.is_empty() {
+        return;
+    }
     let today = get_today_key();
-    *CURRENT_DATE_KEY.lock() = Some(today.clone());
+    let mut slot = slot_for(account_id);
 
     if let Some(saved) = load_persisted_stats(account_id) {
         if saved.date == today {
-            // 恢复
-            let mut ops = OPERATIONS.lock();
-            ops.harvest = saved.operations.harvest;
-            ops.farming = saved.operations.farming;
-            ops.fertilize = saved.operations.fertilize;
-            ops.plant = saved.operations.plant;
-            ops.steal = saved.operations.steal;
-            ops.help_farming = saved.operations.help_farming;
-            ops.task_claim = saved.operations.task_claim;
-            ops.sell = saved.operations.sell;
-            ops.upgrade = saved.operations.upgrade;
-            ops.level_up = saved.operations.level_up;
-            drop(ops);
+            slot.operations = saved.operations.clone();
             tracing::warn!(
                 "[统计] 已恢复今日统计数据: {}",
                 serde_json::to_string(&saved.operations).unwrap_or_default()
             );
         } else {
-            OPERATIONS.lock().reset();
+            slot.operations.reset();
             tracing::warn!("[统计] 日期已变更，重置统计 ({} -> {today})", saved.date);
         }
     } else {
-        OPERATIONS.lock().reset();
+        slot.operations.reset();
     }
 
-    init_stats(gold, exp, coupon);
-    let mut slot = slot_for(account_id);
-    slot.operations = OPERATIONS.lock().clone();
-    slot.last = LAST_STATE.lock().clone();
-    slot.initial = INITIAL_STATE.lock().clone();
-    slot.session = SESSION.lock().clone();
-    slot.date_key = CURRENT_DATE_KEY.lock().clone();
+    slot.last.gold = gold;
+    slot.last.exp = exp;
+    slot.last.coupon = coupon;
+    slot.initial.gold = Some(gold);
+    slot.initial.exp = Some(exp);
+    slot.initial.coupon = Some(coupon);
+    slot.date_key = Some(today);
     put_slot(account_id, slot);
+}
+
+fn apply_update_stats(slot: &mut StatsSlot, current_gold: i64, current_exp: i64) {
+    if slot.last.gold == -1 {
+        slot.last.gold = current_gold;
+    }
+    if slot.last.exp == -1 {
+        slot.last.exp = current_exp;
+    }
+
+    if current_gold > slot.last.gold {
+        slot.session.last_gold_gain = current_gold - slot.last.gold;
+    } else if current_gold < slot.last.gold {
+        slot.session.last_gold_gain = 0;
+    }
+    slot.last.gold = current_gold;
+
+    if current_exp > slot.last.exp {
+        let delta = current_exp - slot.last.exp;
+        let now = crate::utils::time::now_ms();
+        if delta == slot.session.last_exp_gain
+            && slot
+                .session
+                .last_exp_time
+                .is_some_and(|t| now - t < 1000)
+        {
+            // 忽略重复经验增量
+        } else {
+            slot.session.last_exp_gain = delta;
+            slot.session.last_exp_time = Some(now);
+        }
+    } else {
+        slot.session.last_exp_gain = 0;
+    }
+    slot.last.exp = current_exp;
 }
 
 /// 更新最后状态（用于 session 计算）
 pub fn update_stats(current_gold: i64, current_exp: i64) {
-    let mut last = LAST_STATE.lock();
-    if last.gold == -1 {
-        last.gold = current_gold;
-    }
-    if last.exp == -1 {
-        last.exp = current_exp;
-    }
-
-    if current_gold > last.gold {
-        let delta = current_gold - last.gold;
-        SESSION.lock().last_gold_gain = delta;
-    } else if current_gold < last.gold {
-        SESSION.lock().last_gold_gain = 0;
-    }
-    last.gold = current_gold;
-
-    if current_exp > last.exp {
-        let delta = current_exp - last.exp;
-        let now = crate::utils::time::now_ms();
-        let session = SESSION.lock();
-        if delta == session.last_exp_gain
-            && session
-                .last_exp_time
-                .map_or(false, |t| now - t < 1000)
-        {
-            // 忽略重复经验增量
-        } else {
-            drop(session);
-            let mut s = SESSION.lock();
-            s.last_exp_gain = delta;
-            s.last_exp_time = Some(now);
-        }
-    } else {
-        SESSION.lock().last_exp_gain = 0;
-    }
-    last.exp = current_exp;
+    let mut slot = slot_for(LEGACY_SLOT);
+    apply_update_stats(&mut slot, current_gold, current_exp);
+    put_slot(LEGACY_SLOT, slot);
 }
 
 /// 记录金/经验
@@ -423,18 +364,11 @@ pub fn record_gold_exp(gold: i64, exp: i64) {
 
 /// 重置 session 增量
 pub fn reset_session_gains() {
-    let mut s = SESSION.lock();
-    s.gold_gained = 0;
-    s.exp_gained = 0;
-    s.coupon_gained = 0;
-    s.last_gold_gain = 0;
-    s.last_exp_gain = 0;
-    s.last_exp_time = None;
+    reset_session_gains_for(LEGACY_SLOT);
 }
 
 /// 按账号重置 session 增量（登录基线之后调用，对齐 TS `resetSessionGains`）
 pub fn reset_session_gains_for(account_id: &str) {
-    reset_session_gains();
     if account_id.is_empty() {
         return;
     }
@@ -458,21 +392,19 @@ fn json_i64(value: Option<&serde_json::Value>) -> Option<i64> {
 
 /// 重算 session 增量
 pub fn recompute_session_totals(current_gold: i64, current_exp: i64, current_coupon: i64) {
-    let mut init = INITIAL_STATE.lock();
-    if init.gold.is_none() || init.exp.is_none() || init.coupon.is_none() {
-        init.gold = Some(current_gold);
-        init.exp = Some(current_exp);
-        init.coupon = Some(current_coupon);
+    let mut slot = slot_for(LEGACY_SLOT);
+    if slot.initial.gold.is_none() || slot.initial.exp.is_none() || slot.initial.coupon.is_none() {
+        slot.initial.gold = Some(current_gold);
+        slot.initial.exp = Some(current_exp);
+        slot.initial.coupon = Some(current_coupon);
     }
-    let init_gold = init.gold.unwrap_or(0);
-    let init_exp = init.exp.unwrap_or(0);
-    let init_coupon = init.coupon.unwrap_or(0);
-    drop(init);
-
-    let mut s = SESSION.lock();
-    s.gold_gained = current_gold - init_gold;
-    s.exp_gained = current_exp - init_exp;
-    s.coupon_gained = current_coupon - init_coupon;
+    let init_gold = slot.initial.gold.unwrap_or(0);
+    let init_exp = slot.initial.exp.unwrap_or(0);
+    let init_coupon = slot.initial.coupon.unwrap_or(0);
+    slot.session.gold_gained = current_gold - init_gold;
+    slot.session.exp_gained = current_exp - init_exp;
+    slot.session.coupon_gained = current_coupon - init_coupon;
+    put_slot(LEGACY_SLOT, slot);
 }
 
 /// 获取完整状态快照
@@ -483,96 +415,7 @@ pub fn get_stats(
     connected: bool,
     limits: serde_json::Value,
 ) -> serde_json::Value {
-    check_and_reset_daily_stats();
-    let status_obj = status_data
-        .and_then(|v| v.as_object())
-        .cloned()
-        .unwrap_or_default();
-    let user_obj = user_state
-        .and_then(|v| v.as_object())
-        .cloned()
-        .unwrap_or_default();
-
-    let raw_gold = user_obj
-        .get("gold")
-        .and_then(|v| if v.is_null() { None } else { Some(v) })
-        .or_else(|| status_obj.get("gold"))
-        .cloned()
-        .unwrap_or(serde_json::json!(0));
-    let raw_exp = user_obj
-        .get("exp")
-        .and_then(|v| if v.is_null() { None } else { Some(v) })
-        .or_else(|| status_obj.get("exp"))
-        .cloned()
-        .unwrap_or(serde_json::json!(0));
-    let raw_coupon = user_obj
-        .get("coupon")
-        .and_then(|v| if v.is_null() { None } else { Some(v) })
-        .or_else(|| status_obj.get("coupon"))
-        .cloned()
-        .unwrap_or(serde_json::json!(0));
-    let raw_gold_bean = user_obj
-        .get("goldBean")
-        .and_then(|v| if v.is_null() { None } else { Some(v) })
-        .or_else(|| status_obj.get("goldBean"))
-        .cloned()
-        .unwrap_or(serde_json::json!(0));
-
-    let current_gold = raw_gold.as_f64().unwrap_or(0.0) as i64;
-    let current_exp = raw_exp.as_f64().unwrap_or(0.0) as i64;
-    let current_coupon = raw_coupon.as_f64().unwrap_or(0.0) as i64;
-    let current_gold_bean = raw_gold_bean.as_f64().unwrap_or(0.0) as i64;
-
-    if connected {
-        update_stats(current_gold, current_exp);
-        recompute_session_totals(current_gold, current_exp, current_coupon);
-    }
-
-    let operations_snapshot = OPERATIONS.lock().clone();
-    let session = SESSION.lock().clone();
-    let user_coupon = user_obj
-        .get("coupon")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.0) as i64;
-    let name = user_obj
-        .get("name")
-        .and_then(|v| v.as_str())
-        .or_else(|| status_obj.get("name").and_then(|v| v.as_str()))
-        .unwrap_or("")
-        .to_string();
-    let level = status_obj
-        .get("level")
-        .and_then(|v| v.as_i64())
-        .or_else(|| user_obj.get("level").and_then(|v| v.as_i64()))
-        .unwrap_or(0);
-    let platform = status_obj
-        .get("platform")
-        .and_then(|v| v.as_str())
-        .or_else(|| user_obj.get("platform").and_then(|v| v.as_str()))
-        .unwrap_or("qq")
-        .to_string();
-
-    serde_json::json!({
-        "connection": { "connected": connected },
-        "status": {
-            "name": name,
-            "level": level,
-            "gold": current_gold,
-            "coupon": user_coupon,
-            "goldBean": current_gold_bean,
-            "exp": current_exp,
-            "platform": platform,
-            "travelPass": null,
-        },
-        "uptime": 0,  // 上层注入
-        "operations": operations_snapshot,
-        "sessionExpGained": session.exp_gained,
-        "sessionGoldGained": session.gold_gained,
-        "sessionCouponGained": session.coupon_gained,
-        "lastExpGain": session.last_exp_gain,
-        "lastGoldGain": session.last_gold_gain,
-        "limits": limits,
-    })
+    get_stats_for(LEGACY_SLOT, status_data, user_state, connected, limits)
 }
 
 /// 按账号取统计快照
@@ -584,9 +427,11 @@ pub fn get_stats_for(
     connected: bool,
     limits: serde_json::Value,
 ) -> serde_json::Value {
-    if account_id.is_empty() {
-        return get_stats(status_data, user_state, connected, limits);
-    }
+    let account_id = if account_id.is_empty() {
+        LEGACY_SLOT
+    } else {
+        account_id
+    };
     let mut slot = slot_for(account_id);
     let today = get_today_key();
     if let Some(prev) = slot.date_key.as_ref() {
@@ -690,64 +535,54 @@ pub fn get_stats_for(
     })
 }
 
-/// 立即保存
-pub fn save_stats() {
-    let account = CURRENT_ACCOUNT_ID.lock().clone();
-    let Some(account) = account else { return };
+/// 立即保存指定账号
+pub fn save_stats_for(account_id: &str) {
+    if account_id.is_empty() {
+        return;
+    }
+    let slot = slot_for(account_id);
     let today = get_today_key();
-    let ops = OPERATIONS.lock().clone();
-    let init = INITIAL_STATE.lock().clone();
     let data = PersistedStats {
         date: today,
-        operations: ops,
-        initial_state: init,
-        // 累计偷菜数：当前累计 = 持久化累计 + session 增量（运行时已加进 ops.steal）
-        // 简化：跨日累加，跨日从上次 saved 拿
-        total_steal: load_persisted_stats(&account)
+        operations: slot.operations,
+        initial_state: slot.initial,
+        total_steal: load_persisted_stats(account_id)
             .map(|p| p.total_steal)
             .unwrap_or(0),
         saved_at: crate::utils::time::now_ms(),
     };
-    save_persisted_stats(&account, &data);
+    save_persisted_stats(account_id, &data);
 }
 
-// 简单的延迟保存（debounce 2 秒）
+/// 立即保存（兼容旧测试：保存所有 slot）
+pub fn save_stats() {
+    let ids: Vec<String> = SLOTS.lock().keys().cloned().collect();
+    for id in ids {
+        save_stats_for(&id);
+    }
+}
+
 use std::sync::OnceLock;
 use tokio::sync::Notify;
 
 static SAVE_NOTIFY: OnceLock<Notify> = OnceLock::new();
 
-fn schedule_save() {
-    // 简化：直接 spawn 一个 task 延迟 2 秒保存
+fn schedule_save(account_id: String) {
     let _ = SAVE_NOTIFY.get_or_init(Notify::new);
-    let account = CURRENT_ACCOUNT_ID.lock().clone();
-    if account.is_none() {
+    if account_id.is_empty() {
         return;
     }
-    tokio::spawn(async {
+    if tokio::runtime::Handle::try_current().is_err() {
+        return;
+    }
+    tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
-        save_stats();
+        save_stats_for(&account_id);
     });
-}
-
-/// 获取当前账号 ID
-#[must_use]
-pub fn current_account_id() -> Option<String> {
-    CURRENT_ACCOUNT_ID.lock().clone()
 }
 
 /// 重置所有状态（测试用）
 pub fn reset_for_test() {
-    OPERATIONS.lock().reset();
-    let mut last = LAST_STATE.lock();
-    last.gold = -1;
-    last.exp = -1;
-    last.coupon = -1;
-    drop(last);
-    *INITIAL_STATE.lock() = InitialState::default();
-    *SESSION.lock() = SessionData::default();
-    *CURRENT_DATE_KEY.lock() = None;
-    *CURRENT_ACCOUNT_ID.lock() = None;
     SLOTS.lock().clear();
 }
 
@@ -783,10 +618,10 @@ mod tests {
     #[serial(stats)]
     fn record_operation_increments() {
         reset_for_test();
-        record_operation("harvest", 1);
-        record_operation("harvest", 2);
-        record_operation("fertilize", 5);
-        let ops = OPERATIONS.lock();
+        record_operation_for("t", "harvest", 1);
+        record_operation_for("t", "harvest", 2);
+        record_operation_for("t", "fertilize", 5);
+        let ops = slot_for("t").operations;
         assert_eq!(ops.harvest, 3);
         assert_eq!(ops.fertilize, 5);
         assert_eq!(ops.plant, 0);
@@ -796,9 +631,9 @@ mod tests {
     #[serial(stats)]
     fn record_operation_unknown_ignored() {
         reset_for_test();
-        record_operation("unknown_op", 1);
+        record_operation_for("t", "unknown_op", 1);
         // 不应 panic，状态不变
-        let ops = OPERATIONS.lock();
+        let ops = slot_for("t").operations;
         assert_eq!(ops.harvest, 0);
     }
 
@@ -807,12 +642,11 @@ mod tests {
     fn init_stats_normalizes() {
         reset_for_test();
         init_stats(100, 50, 5);
-        let last = LAST_STATE.lock();
+        let last = slot_for(LEGACY_SLOT).last;
         assert_eq!(last.gold, 100);
         assert_eq!(last.exp, 50);
         assert_eq!(last.coupon, 5);
-        drop(last);
-        let init = INITIAL_STATE.lock();
+        let init = slot_for(LEGACY_SLOT).initial;
         assert_eq!(init.gold, Some(100));
     }
 
@@ -822,7 +656,7 @@ mod tests {
         reset_for_test();
         init_stats(100, 50, 0);
         update_stats(150, 80);
-        let s = SESSION.lock();
+        let s = slot_for(LEGACY_SLOT).session;
         assert_eq!(s.last_gold_gain, 50);
         assert_eq!(s.last_exp_gain, 30);
     }
@@ -834,7 +668,7 @@ mod tests {
         init_stats(100, 50, 0);
         update_stats(100, 50);
         update_stats(80, 40); // loss
-        let s = SESSION.lock();
+        let s = slot_for(LEGACY_SLOT).session;
         assert_eq!(s.last_gold_gain, 0);
         assert_eq!(s.last_exp_gain, 0);
     }
@@ -845,7 +679,7 @@ mod tests {
         reset_for_test();
         init_stats(100, 50, 5);
         recompute_session_totals(150, 80, 10);
-        let s = SESSION.lock();
+        let s = slot_for(LEGACY_SLOT).session;
         assert_eq!(s.gold_gained, 50);
         assert_eq!(s.exp_gained, 30);
         assert_eq!(s.coupon_gained, 5);
@@ -859,7 +693,7 @@ mod tests {
         recompute_session_totals(150, 80, 10);
         // 再次调用，应基于 INITIAL_STATE (100/50/5)
         recompute_session_totals(200, 100, 20);
-        let s = SESSION.lock();
+        let s = slot_for(LEGACY_SLOT).session;
         assert_eq!(s.gold_gained, 100);
         assert_eq!(s.exp_gained, 50);
         assert_eq!(s.coupon_gained, 15);
@@ -872,7 +706,7 @@ mod tests {
         init_stats(100, 50, 0);
         update_stats(150, 80);
         super::reset_session_gains();
-        let s = SESSION.lock();
+        let s = slot_for(LEGACY_SLOT).session;
         assert_eq!(s.gold_gained, 0);
         assert_eq!(s.exp_gained, 0);
     }

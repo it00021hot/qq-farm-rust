@@ -523,11 +523,12 @@ impl RuntimeEngine {
                                 .map(|a| a.username)
                                 .unwrap_or_default();
                             let reminder = engine.relogin_reminder();
+                            let reason_clean = reason.strip_prefix("disconnect:").unwrap_or(&reason);
                             let payload = crate::runtime::relogin_reminder::OfflineReminderPayload {
                                 account_id: account_id.clone(),
                                 account_name: display.clone(),
                                 username,
-                                reason: format!("disconnect:{reason}"),
+                                reason: format!("disconnect:{reason_clean}"),
                                 offline_ms: 0,
                             };
                             tokio::spawn(async move {
@@ -708,11 +709,20 @@ impl RuntimeEngine {
         }
     }
 
-    /// 通知单个 worker 应用已持久化的配置
+    /// 通知单个 worker 应用已持久化的配置（热更新，不停账号）
     pub fn reload_worker_config(&self, account_id: &str) {
         use crate::runtime::worker_message::WorkerMessage;
-        if let Some(h) = self.workers.read().get(account_id) {
-            let _ = h.try_send(WorkerMessage::ReloadConfig);
+        if let Some(h) = self.workers.read().get(account_id).cloned() {
+            if h.try_send(WorkerMessage::ReloadConfig).is_err() {
+                if let Ok(rt) = tokio::runtime::Handle::try_current() {
+                    rt.spawn(async move {
+                        let _ = h.send(WorkerMessage::ReloadConfig).await;
+                    });
+                }
+            }
+        }
+        if let Some(wl) = self.worker_loop(account_id) {
+            wl.sync_status();
         }
     }
 

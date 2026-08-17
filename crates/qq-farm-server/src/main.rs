@@ -1,18 +1,12 @@
 //! `qq-farm-server` —— HTTP + Socket.IO 服务入口。
 //!
-//! 对齐原 bot `runtime-engine.start()`：
-//! 加载 store / system_config → assemble engine → Socket.IO → 自动启动全部账号。
+//! 通过 `qq_farm_app::bootstrap::assemble_app_context` 组装引擎，再挂 HTTP / Socket。
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::Result;
 use axum::{routing::get, Router};
-use qq_farm_core::config::{
-    get_runtime_config, sanitize_gateway_url, update_runtime_config, DEFAULT_CLIENT_VERSION,
-    DEFAULT_GATEWAY_URL,
-};
-use qq_farm_core::runtime::engine::{EngineConfig, GatewayConfigTemplate, RuntimeEngine};
 use tracing::info;
 
 use qq_farm_server::{config::ServerConfig, context::AdminContext, middleware, routes, socket};
@@ -23,76 +17,11 @@ async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
     let server_cfg = ServerConfig::from_env();
 
-    // 先加载持久化状态，再 assemble（gateway 要用 system_config）
-    let _ = qq_farm_core::models::store::accounts::load_into_global();
-    let _ = qq_farm_core::models::user_store::auth::load_login_attempts();
-    let _ = qq_farm_core::models::user_store::auth::load_login_logs();
-    let _ = qq_farm_core::models::user_store::users::load_users();
-    let _ = qq_farm_core::models::user_store::users::load_cards();
-    let _ = qq_farm_core::models::store::global_config::load_global_config();
-    let _ = qq_farm_core::models::user_store::card_claim::load_card_claim_records();
-    qq_farm_core::models::user_store::init();
-
-    let mut gateway_template = GatewayConfigTemplate {
-        server_url: std::env::var("FARM_SERVER_URL")
-            .unwrap_or_else(|_| DEFAULT_GATEWAY_URL.to_string()),
-        platform: std::env::var("FARM_PLATFORM").unwrap_or_else(|_| "qq".to_string()),
-        os: std::env::var("FARM_OS").unwrap_or_else(|_| "Windows".to_string()),
-        client_version: std::env::var("FARM_CLIENT_VERSION")
-            .unwrap_or_else(|_| DEFAULT_CLIENT_VERSION.to_string()),
-        headers: std::collections::HashMap::new(),
-    };
-    if let Some(sys) = qq_farm_core::models::store::global_config::get_system_config() {
-        update_runtime_config(&sys);
-        if !sys.server_url.is_empty() {
-            gateway_template.server_url = sys.server_url;
-        }
-        if !sys.platform.is_empty() {
-            gateway_template.platform = sys.platform;
-        }
-        if !sys.os.is_empty() {
-            gateway_template.os = sys.os;
-        }
-        if !sys.client_version.is_empty() {
-            gateway_template.client_version = sys.client_version;
-        }
-    }
-
-    gateway_template.server_url = sanitize_gateway_url(&gateway_template.server_url);
-    let rt = get_runtime_config();
-    if gateway_template.headers.is_empty() {
-        let ua = if rt.device_info.user_agent.is_empty() {
-            qq_farm_core::config::DeviceInfo::windows_pc().user_agent
-        } else {
-            rt.device_info.user_agent.clone()
-        };
-        gateway_template
-            .headers
-            .insert("User-Agent".to_string(), ua);
-        gateway_template.headers.insert(
-            "Origin".to_string(),
-            server_cfg.gateway_origin.clone(),
-        );
-    }
-    info!(
-        server_url = %gateway_template.server_url,
-        client_version = %gateway_template.client_version,
-        platform = %gateway_template.platform,
-        "网关配置"
+    let app_ctx = qq_farm_app::bootstrap::assemble_app_context(
+        server_cfg.max_workers,
+        &server_cfg.gateway_origin,
     );
-
-    let engine = Arc::new(RuntimeEngine::assemble(EngineConfig {
-        max_workers: server_cfg.max_workers,
-        gateway_template,
-        tsdk_wasm_path: std::env::var("TSDK_WASM_PATH")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| qq_farm_core::config::get_resource_path(&["assets", "tsdk.wasm"])),
-        data_root: qq_farm_core::config::get_data_dir(),
-        ..Default::default()
-    }));
-    engine.spawn_event_bridge();
-
-    let ctx = Arc::new(AdminContext::new(engine));
+    let ctx = Arc::new(AdminContext::from_app(app_ctx));
     let (sio_layer, io) = socket::setup_socketio(ctx.clone());
     socket::spawn_socket_forwarder(io, ctx.clone());
 

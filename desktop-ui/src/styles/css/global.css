@@ -1,6 +1,7 @@
 @import './reset.css';
 @import './nprogress.css';
 @import './transition.css';
+@import './farm-land.css';
 
 html,
 body,
@@ -12,4 +13,20 @@ body,
 html {
   overflow-x: hidden;
   color: rgb(var(--base-text-color));
+}
+
+/* Tauri / frameless: drag / no-drag regions (align qq-farm-desktop) */
+.desktop-drag-region {
+  -webkit-app-region: drag;
+}
+
+.desktop-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Mac: empty top strip under traffic lights (logo lives at sider bottom). */
+html.desktop-mac .desktop-mac-traffic-spacer {
+  box-sizing: border-box;
+  /* Leave click-through room for system traffic lights on the left. */
+  padding-left: 76px;
 }

@@ -14,6 +14,8 @@ declare namespace StorageType {
     lang: App.I18n.LangType;
     /** The token */
     token: string;
+    /** Selected farm account id for desktop */
+    farmAccountId: string;
     /** Fixed sider with mix-menu */
     mixSiderFixed: CommonType.YesOrNo;
     /** The refresh token */

@@ -10,6 +10,7 @@ use parking_lot::RwLock;
 use serde_json::Value;
 use tokio::sync::broadcast;
 
+use crate::constants::PanelEvent;
 use crate::runtime::events::WorkerEvent;
 use crate::runtime::runtime_state::RuntimeState;
 
@@ -67,17 +68,36 @@ pub fn unregister(account_id: &str) {
     hooks().write().remove(account_id);
 }
 
-/// 对齐原 `log(tag, msg, meta)`。
-pub fn log(account_id: &str, tag: &str, msg: impl AsRef<str>, extra: Option<Value>) {
-    emit(account_id, tag, msg.as_ref(), false, extra);
+/// 对齐原 `log(tag, msg, meta)`。`event` 必须是 [`PanelEvent`]（存储英文 snake_case）。
+pub fn log(
+    account_id: &str,
+    tag: &str,
+    msg: impl AsRef<str>,
+    event: PanelEvent,
+    extra: Option<Value>,
+) {
+    emit(account_id, tag, msg.as_ref(), false, event, extra);
 }
 
 /// 对齐原 `logWarn(tag, msg, meta)`。
-pub fn log_warn(account_id: &str, tag: &str, msg: impl AsRef<str>, extra: Option<Value>) {
-    emit(account_id, tag, msg.as_ref(), true, extra);
+pub fn log_warn(
+    account_id: &str,
+    tag: &str,
+    msg: impl AsRef<str>,
+    event: PanelEvent,
+    extra: Option<Value>,
+) {
+    emit(account_id, tag, msg.as_ref(), true, event, extra);
 }
 
-fn emit(account_id: &str, tag: &str, msg: &str, is_warn: bool, extra: Option<Value>) {
+fn emit(
+    account_id: &str,
+    tag: &str,
+    msg: &str,
+    is_warn: bool,
+    event: PanelEvent,
+    extra: Option<Value>,
+) {
     if account_id.is_empty() {
         return;
     }
@@ -89,15 +109,15 @@ fn emit(account_id: &str, tag: &str, msg: &str, is_warn: bool, extra: Option<Val
         .and_then(|v| v.get("module"))
         .and_then(Value::as_str)
         .map(str::to_string)
-        .unwrap_or_else(|| infer_module(tag).to_string());
+        .unwrap_or_else(|| event.module().to_string());
     let mut meta = extra.unwrap_or_else(|| serde_json::json!({}));
     if let Some(obj) = meta.as_object_mut() {
         obj.entry("accountId".to_string())
             .or_insert_with(|| serde_json::json!(hook.account_id));
         obj.entry("accountName".to_string())
             .or_insert_with(|| serde_json::json!(hook.account_name));
-        obj.entry("module".to_string())
-            .or_insert_with(|| serde_json::json!(module));
+        obj.insert("module".to_string(), serde_json::json!(module));
+        obj.insert("event".to_string(), serde_json::json!(event.as_str()));
         obj.insert("isWarn".to_string(), serde_json::json!(is_warn));
     }
     if let Some(state) = &hook.state {
@@ -119,16 +139,6 @@ fn emit(account_id: &str, tag: &str, msg: &str, is_warn: bool, extra: Option<Val
     }
 }
 
-fn infer_module(tag: &str) -> &'static str {
-    match tag.trim() {
-        "农场" | "种植" | "收获" | "施肥" | "解锁" | "升级" | "铲除" | "巡田" => "farm",
-        "好友" | "申请" => "friend",
-        "仓库" | "商店" | "购买" => "warehouse",
-        "任务" | "活跃" => "task",
-        _ => "system",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,7 +151,8 @@ mod tests {
             "acc-log",
             "农场",
             "收获完成 2 块土地",
-            Some(serde_json::json!({ "module": "farm", "event": "harvest_crop" })),
+            PanelEvent::HarvestCrop,
+            Some(serde_json::json!({ "module": "farm" })),
         );
         let ev = rx.try_recv().expect("log event");
         match ev {
@@ -158,7 +169,7 @@ mod tests {
             other => panic!("expected Log, got {other:?}"),
         }
         unregister("acc-log");
-        log("acc-log", "农场", "should drop", None);
+        log("acc-log", "农场", "should drop", PanelEvent::FarmCycle, None);
         assert!(rx.try_recv().is_err());
     }
 }

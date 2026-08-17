@@ -8,15 +8,15 @@ QQ Farm 桌面前端，基于 [SoybeanAdmin](https://github.com/soybeanjs/soybea
 
 ```bash
 pnpm i
-pnpm dev          # 仅 Vite（无 IPC 时可进登录壳）
-# 完整桌面：在仓库根或 crates/qq-farm-desktop 执行 cargo tauri dev
+# 完整桌面：cargo tauri dev 会先 pnpm build，WebView 直接加载 dist（无开发端口）
+# 仅浏览器预览（无 IPC）：pnpm dev
 ```
 
 ## 分层约定
 
 - `typings/desktop.d.ts` — IPC DTO
 - `service/tauri/` — invoke / listen
-- `store/modules/desktop/` — Pinia
-- `views/home|settings` — 页面 + `modules/*`
+- `store/modules/farm-account/` — Pinia
+- `views/farm/*` — 页面 + `modules/*`
 
 主题与组件优先用 Soybean / Naive UI，禁止私自主题皮肤。

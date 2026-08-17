@@ -3,7 +3,7 @@
 //! 真实起 axum router + AdminContext，调完整 HTTP 流程：
 //! 1. 注册 → 登录 → 验证 token
 //! 2. 改密码 + 旧 token 失效
-//! 3. admin 登录 + 改 role + 看 login logs
+//! 3. admin 登录 + 看 login logs
 //! 4. /api/ping + /api/game-version
 //! 5. health + 静态 404 路径
 //!
@@ -16,18 +16,7 @@ use axum::http::{Request, StatusCode};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
-use qq_farm_core::models::user_store::users::create_card_with_code;
 use qq_farm_server::{build_test_app, TestApp};
-
-/// 生成一张 unique 卡密（基于 process id + 测试名 + counter）并返回 code
-fn mint_test_card(label: &str) -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let code = format!("E2E-{}-{}-{}", std::process::id(), label, n);
-    create_card_with_code(&code, "e2e-test", 30, "time");
-    code
-}
 
 #[tokio::test]
 #[serial_test::serial(e2e)]
@@ -35,13 +24,11 @@ async fn e2e_register_login_validate_flow() {
     let app = build_test_app(TestApp::default()).await;
     let username = format!("user_e2e_{}", std::process::id());
     let password = "TestPass123!";
-    let card_code = mint_test_card("E2E");
 
     // 1. 注册
     let body = json!({
         "username": username,
         "password": password,
-        "cardCode": card_code,
     });
     let resp = app
         .clone()
@@ -127,7 +114,6 @@ async fn e2e_login_wrong_password_returns_401() {
     let app = build_test_app(TestApp::default()).await;
     let username = format!("user_wrong_{}", std::process::id());
     let password = "RightPass123!";
-    let card_code = mint_test_card("WP");
 
     // 先注册
     let _ = app
@@ -141,7 +127,6 @@ async fn e2e_login_wrong_password_returns_401() {
                     serde_json::to_vec(&json!({
                         "username": username,
                         "password": password,
-                        "cardCode": card_code,
                     }))
                     .unwrap(),
                 ))
@@ -266,12 +251,11 @@ async fn e2e_change_password_invalidates_old_token() {
     let app = build_test_app(TestApp::default()).await;
     let username = format!("user_pwchange_{}", std::process::id());
     let password = "OldPass123!";
-    let card_code = mint_test_card("PWC");
 
     // 注册 + 登录
     let _ = app
         .clone()
-        .oneshot(register_req(&username, password, &card_code))
+        .oneshot(register_req(&username, password))
         .await
         .unwrap();
     let login_resp = app.clone().oneshot(login_req(&username, password)).await.unwrap();
@@ -330,26 +314,24 @@ async fn e2e_change_password_invalidates_old_token() {
 async fn e2e_register_duplicate_username() {
     let app = build_test_app(TestApp::default()).await;
     let username = format!("user_dup_{}", std::process::id());
-    let card1 = mint_test_card("DUP1");
 
     let r1 = app
         .clone()
-        .oneshot(register_req(&username, "p1", &card1))
+        .oneshot(register_req(&username, "Pass123!"))
         .await
         .unwrap();
     assert_eq!(r1.status(), StatusCode::OK);
 
-    // 重复注册 → 失败（无需有效卡密，username 已存在直接拒）
+    // 重复注册 → 失败
     let r2 = app
         .clone()
-        .oneshot(register_req(&username, "p2", "INVALID_CARD"))
+        .oneshot(register_req(&username, "Pass456!"))
         .await
         .unwrap();
     assert_eq!(r2.status(), StatusCode::OK, "duplicate 应该 200 但 ok=false");
     let bytes = to_bytes(r2.into_body(), 1024).await.unwrap();
     let v: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(v["ok"], false, "duplicate 应该 ok=false: {v}");
-    // 不严格断言 error 内容（Rust 端 Err 直接转字符串，error 字段是 String）
     assert!(v["error"].is_string(), "error 字段应存在: {v}");
 }
 
@@ -358,11 +340,10 @@ async fn e2e_register_duplicate_username() {
 async fn e2e_logout_invalidates_token() {
     let app = build_test_app(TestApp::default()).await;
     let username = format!("user_lo_{}", std::process::id());
-    let card_code = mint_test_card("LO");
 
     let reg_resp = app
         .clone()
-        .oneshot(register_req(&username, "Pass123!", &card_code))
+        .oneshot(register_req(&username, "Pass123!"))
         .await
         .unwrap();
     let reg_body = to_bytes(reg_resp.into_body(), 1024).await.unwrap();
@@ -455,17 +436,15 @@ async fn e2e_account_creation_returns_account_id() {
     let app = build_test_app(TestApp::default()).await;
     let username = format!("user_acc_{}", std::process::id());
     let password = "Pass123!";
-    let card_code = mint_test_card("ACC");
 
     let resp = app
         .clone()
-        .oneshot(register_req(&username, password, &card_code))
+        .oneshot(register_req(&username, password))
         .await
         .unwrap();
     let body = to_bytes(resp.into_body(), 1024).await.unwrap();
     let v: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(v["ok"], true, "register 应成功: {v}");
-    // 注册成功体在 data 下（ok_data），含 username/role/card
     assert!(v["data"].is_object(), "data 字段应存在: {v}");
     let user_obj = &v["data"];
     assert_eq!(user_obj["username"], username);
@@ -484,7 +463,7 @@ async fn e2e_account_acl_blocks_cross_user_mutate() {
     // 注册并登录 A
     let resp = app
         .clone()
-        .oneshot(register_req(&user_a, password, &mint_test_card("ACLA")))
+        .oneshot(register_req(&user_a, password))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -525,7 +504,7 @@ async fn e2e_account_acl_blocks_cross_user_mutate() {
     // 注册并登录 B
     let resp = app
         .clone()
-        .oneshot(register_req(&user_b, password, &mint_test_card("ACLB")))
+        .oneshot(register_req(&user_b, password))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -598,7 +577,7 @@ async fn e2e_account_acl_blocks_cross_user_mutate() {
 
 // ===== helpers =====
 
-fn register_req(username: &str, password: &str, card_code: &str) -> Request<Body> {
+fn register_req(username: &str, password: &str) -> Request<Body> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, Ordering::SeqCst);
@@ -613,7 +592,6 @@ fn register_req(username: &str, password: &str, card_code: &str) -> Request<Body
             serde_json::to_vec(&json!({
                 "username": username,
                 "password": password,
-                "cardCode": card_code,
             }))
             .unwrap(),
         ))

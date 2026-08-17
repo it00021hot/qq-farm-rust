@@ -2,19 +2,24 @@
 
 use serde_json::{json, Value};
 
+use crate::dto::friend_summaries_from_values;
 use crate::error::{AppError, AppResult};
 use crate::farm::require_worker_loop;
 use crate::session::AppContext;
 
 /// 好友列表。
-pub async fn list_friends(ctx: &AppContext, account_id: &str, force: bool) -> AppResult<Value> {
+pub async fn list_friends(
+    ctx: &AppContext,
+    account_id: &str,
+    force: bool,
+) -> AppResult<Vec<qq_farm_core::services::friend::visit_strategy::FriendSummary>> {
     let loop_ = require_worker_loop(ctx, account_id)?;
     let friends = loop_
         .friend()
         .get_friends_list(force)
         .await
         .map_err(AppError::from_core)?;
-    serde_json::to_value(friends).map_err(|e| AppError::Internal(e.to_string()))
+    Ok(friend_summaries_from_values(friends))
 }
 
 /// 清空好友列表缓存。

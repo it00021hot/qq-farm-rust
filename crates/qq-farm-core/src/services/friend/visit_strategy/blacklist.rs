@@ -43,14 +43,7 @@ pub fn is_transient_network_error(error_message: &str) -> bool {
     KEYWORDS.iter().any(|k| error_message.contains(k))
 }
 
-// ============ 黑名单管理 ============
-
-/// 全局好友黑名单（host_gid -> reason）—— 延迟初始化
-pub fn friend_blacklist() -> &'static PMutex<std::collections::HashMap<i64, String>> {
-    use std::sync::OnceLock;
-    static BLACKLIST: OnceLock<PMutex<std::collections::HashMap<i64, String>>> = OnceLock::new();
-    BLACKLIST.get_or_init(|| PMutex::new(std::collections::HashMap::new()))
-}
+// ============ 黑名单管理（仅 per-account store，无进程级 gid 表） ============
 
 /// 加入好友黑名单（持久化到账号配置，对齐 bot `postToMaster(friend_blacklist_add)`）
 pub fn add_friend_to_blacklist(
@@ -59,25 +52,14 @@ pub fn add_friend_to_blacklist(
     friend_name: &str,
     reason: &str,
 ) -> bool {
-    if friend_gid == 0 {
+    if friend_gid == 0 || account_id.is_empty() {
         return false;
     }
-    let added = if account_id.is_empty() {
-        let mut map = friend_blacklist().lock();
-        if map.contains_key(&friend_gid) {
-            return false;
-        }
-        map.insert(friend_gid, reason.to_string());
-        true
-    } else {
-        crate::models::store::account_config::add_friend_to_blacklist(account_id, friend_gid)
-    };
+    let added =
+        crate::models::store::account_config::add_friend_to_blacklist(account_id, friend_gid);
     if !added {
         return false;
     }
-    friend_blacklist()
-        .lock()
-        .insert(friend_gid, reason.to_string());
     tracing::warn!(
         friend_gid,
         friend_name = %friend_name,
@@ -88,27 +70,30 @@ pub fn add_friend_to_blacklist(
     true
 }
 
-/// 移除黑名单（进程内表；持久化请走 account_config）
-pub fn remove_from_blacklist(friend_gid: i64) -> bool {
-    friend_blacklist().lock().remove(&friend_gid).is_some()
+/// 移除黑名单（账号配置落盘）
+pub fn remove_from_blacklist(account_id: &str, friend_gid: i64) -> bool {
+    if account_id.is_empty() || friend_gid <= 0 {
+        return false;
+    }
+    let current = crate::models::store::account_config::get_friend_blacklist(Some(account_id));
+    if !current.contains(&friend_gid) {
+        return false;
+    }
+    let next: Vec<i64> = current.into_iter().filter(|g| *g != friend_gid).collect();
+    crate::models::store::account_config::set_friend_blacklist(account_id, next);
+    true
 }
 
-/// 是否在黑名单（进程内表 ∪ 若提供 account_id 则含账号配置）
+/// 是否在该账号黑名单
 #[must_use]
-pub fn is_in_blacklist(friend_gid: i64) -> bool {
-    friend_blacklist().lock().contains_key(&friend_gid)
+pub fn is_in_blacklist(account_id: &str, friend_gid: i64) -> bool {
+    is_friend_blacklisted(account_id, friend_gid)
 }
 
 /// 是否在账号黑名单（配置落盘源）
 #[must_use]
 pub fn is_friend_blacklisted(account_id: &str, friend_gid: i64) -> bool {
-    if friend_gid <= 0 {
-        return false;
-    }
-    if is_in_blacklist(friend_gid) {
-        return true;
-    }
-    if account_id.is_empty() {
+    if friend_gid <= 0 || account_id.is_empty() {
         return false;
     }
     crate::models::store::account_config::get_friend_blacklist(Some(account_id))
@@ -117,8 +102,11 @@ pub fn is_friend_blacklisted(account_id: &str, friend_gid: i64) -> bool {
 
 /// 黑名单大小
 #[must_use]
-pub fn blacklist_size() -> usize {
-    friend_blacklist().lock().len()
+pub fn blacklist_size(account_id: &str) -> usize {
+    if account_id.is_empty() {
+        return 0;
+    }
+    crate::models::store::account_config::get_friend_blacklist(Some(account_id)).len()
 }
 
 fn invalid_known_friend_gid_cooldown() -> &'static PMutex<HashMap<i64, u64>> {

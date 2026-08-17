@@ -271,10 +271,12 @@ impl FriendOperation {
         match s {
             "water" => Some(Self::Water),
             "weed" => Some(Self::Weed),
-            "insecticide" => Some(Self::Insecticide),
+            // Go / web: `bug` == 除虫
+            "insecticide" | "bug" => Some(Self::Insecticide),
             "steal" => Some(Self::Steal),
             "fertilize" => Some(Self::Fertilize),
-            "farming" => Some(Self::Farming),
+            // Go / web: `help` == 一键务农
+            "farming" | "help" => Some(Self::Farming),
             "bad" => Some(Self::Bad),
             _ => None,
         }
@@ -388,7 +390,7 @@ pub struct AccountConfig {
 
 impl Default for AccountConfig {
     fn default() -> Self {
-        // 单一权威源：与 bot DEFAULT_ACCOUNT_CONFIG / normalize::default_account_config 一致
+        // 单一权威源：与 Go DefaultAccountConfig / normalize::default_account_config 一致
         crate::models::store::normalize::default_account_config()
     }
 }
@@ -480,6 +482,9 @@ mod tests {
         assert_eq!(FriendOperation::Water.as_str(), "water");
         assert_eq!(FriendOperation::Steal.as_str(), "steal");
         assert_eq!(FriendOperation::Fertilize.as_str(), "fertilize");
+        assert_eq!(FriendOperation::from_str_opt("help"), Some(FriendOperation::Farming));
+        assert_eq!(FriendOperation::from_str_opt("farming"), Some(FriendOperation::Farming));
+        assert_eq!(FriendOperation::from_str_opt("bug"), Some(FriendOperation::Insecticide));
     }
 
     #[test]
@@ -493,8 +498,11 @@ mod tests {
         assert!(back.automation.farm);
         assert!(back.automation.sell);
         assert!(back.automation.skip_own_weed_bug);
-        assert!(back.automation.friend_help_exp_limit);
-        assert_eq!(back.automation.fertilizer_smart_seconds, 300);
+        assert!(!back.automation.friend_help);
+        assert!(!back.automation.friend_bad);
+        assert!(!back.automation.friend_help_exp_limit);
+        assert!(back.automation.fertilizer_gift);
+        assert_eq!(back.automation.fertilizer_smart_seconds, 360);
         assert!(back.bag_seed_priority.is_empty());
     }
 

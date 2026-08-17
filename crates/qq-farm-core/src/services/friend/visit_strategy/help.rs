@@ -476,7 +476,7 @@ pub async fn visit_friend(
             entered: true,
         };
     }
-    let status = analyze_friend_lands(&lands, my_gid, &plant_blacklist, false);
+    let status = analyze_friend_lands(&lands, my_gid, &plant_blacklist, false, account_id);
     let snapshot_key = RecentHelpCache::make_snapshot_key(
         &lands.iter().map(LandSnapshot::from_land).collect::<Vec<_>>(),
     );
@@ -619,9 +619,8 @@ pub async fn visit_friend(
             account_id,
             "好友",
             format!("{friend_name}: {}", actions.join("/")),
-            Some(serde_json::json!({
-                "module": "friend",
-                "event": "照顾好友",
+            crate::constants::PanelEvent::CareFriend, Some(serde_json::json!({
+                "module": "friend", 
                 "friendName": friend_name,
                 "friendGid": friend_gid,
                 "actions": actions,
@@ -689,7 +688,7 @@ pub async fn visit_friend_for_help(
         });
     }
 
-    let status = analyze_friend_lands(&lands, my_gid, &[], false);
+    let status = analyze_friend_lands(&lands, my_gid, &[], false, account_id);
     let snapshot_key = RecentHelpCache::make_snapshot_key(
         &lands.iter().map(LandSnapshot::from_land).collect::<Vec<_>>(),
     );
@@ -733,9 +732,8 @@ pub async fn visit_friend_for_help(
                         account_id,
                         "好友",
                         "今日帮助经验已达上限，自动停止帮忙",
-                        Some(serde_json::json!({
-                            "module": "friend",
-                            "event": "friend_cycle",
+                        crate::constants::PanelEvent::FriendCycle, Some(serde_json::json!({
+                            "module": "friend", 
                             "result": "ok",
                         })),
                     );
@@ -749,9 +747,8 @@ pub async fn visit_friend_for_help(
             account_id,
             "好友",
             format!("{}: {}", friend_name, actions.join("/")),
-            Some(serde_json::json!({
-                "module": "friend",
-                "event": "visit_friend",
+            crate::constants::PanelEvent::VisitFriend, Some(serde_json::json!({
+                "module": "friend", 
                 "result": "ok",
                 "friendName": friend_name,
                 "friendGid": friend_gid,
@@ -848,7 +845,7 @@ async fn do_farm_op(
     lands: &[LandInfo],
     my_gid: i64,
 ) -> serde_json::Value {
-    let status = analyze_friend_lands(lands, my_gid, &[], false);
+    let status = analyze_friend_lands(lands, my_gid, &[], false, "");
     let land_ids: Vec<i64> = match op {
         crate::models::types::FriendOperation::Farming => status
             .need_weed
@@ -898,7 +895,7 @@ pub async fn do_bad_op(
     if api.remaining_bad_times() <= 0 {
         return serde_json::json!({"ok": true, "opType": "bad", "count": 0, "bugCount": 0, "weedCount": 0, "message": "今日捣乱次数已达上限", "limitReached": true});
     }
-    let status = analyze_friend_lands(lands, my_gid, &[], false);
+    let status = analyze_friend_lands(lands, my_gid, &[], false, "");
     if status.can_put_bug.is_empty() && status.can_put_weed.is_empty() {
         return serde_json::json!({"ok": true, "opType": "bad", "count": 0, "bugCount": 0, "weedCount": 0, "message": "没有可捣乱土地"});
     }

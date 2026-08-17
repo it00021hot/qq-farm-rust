@@ -84,13 +84,6 @@ fn scroll_region(top: usize, bottom: usize) -> String {
 // 全局状态
 // =====================================================================
 
-static STATUS_DATA: Mutex<StatusData> = Mutex::new(StatusData {
-    platform: String::new(),
-    name: String::new(),
-    level: 0,
-    gold: 0,
-    exp: 0,
-});
 static STATUS_BY_ACCOUNT: Mutex<Option<HashMap<String, StatusData>>> = Mutex::new(None);
 static STATUS_ENABLED: Mutex<bool> = Mutex::new(false);
 static TERM_ROWS: Mutex<usize> = Mutex::new(24);
@@ -100,19 +93,12 @@ fn account_map() -> parking_lot::MutexGuard<'static, Option<HashMap<String, Stat
 }
 
 fn map_slot(account_id: &str) -> StatusData {
-    if account_id.is_empty() {
-        return STATUS_DATA.lock().clone();
-    }
     let mut guard = account_map();
     let map = guard.get_or_insert_with(HashMap::new);
     map.get(account_id).cloned().unwrap_or_default()
 }
 
 fn write_slot(account_id: &str, data: StatusData) {
-    if account_id.is_empty() {
-        *STATUS_DATA.lock() = data;
-        return;
-    }
     let mut guard = account_map();
     let map = guard.get_or_insert_with(HashMap::new);
     map.insert(account_id.to_string(), data);
@@ -127,7 +113,7 @@ pub fn is_enabled() -> bool {
 /// 读取当前状态数据快照（CLI / 单测；多账号请用 [`status_data_for`]）
 #[must_use]
 pub fn status_data() -> StatusData {
-    STATUS_DATA.lock().clone()
+    map_slot("")
 }
 
 /// 按账号读取状态（对齐 TS 每 worker 独立 `statusData`）
@@ -195,7 +181,7 @@ pub fn render_status_bar() {
     if !is_enabled() {
         return;
     }
-    let data = STATUS_DATA.lock().clone();
+    let data = map_slot("");
     let line1 = build_line1(&data);
     let width = 80;
     let line2 = format!("{DIM}{}{RESET}", "─".repeat(width.min(80)));
@@ -256,7 +242,7 @@ fn build_line1(data: &StatusData) -> String {
 
 /// 更新状态（部分字段）
 pub fn update_status(data: &StatusData) {
-    let mut current = STATUS_DATA.lock();
+    let mut current = map_slot("");
     let mut changed = false;
     let mut gold_or_exp_changed = false;
     if current.platform != data.platform {
@@ -281,7 +267,7 @@ pub fn update_status(data: &StatusData) {
         changed = true;
         gold_or_exp_changed = true;
     }
-    drop(current);
+    write_slot("", current.clone());
 
     if changed {
         if is_enabled() {
@@ -291,8 +277,7 @@ pub fn update_status(data: &StatusData) {
         if gold_or_exp_changed {
             let hook = RECORD_HOOK.lock().clone();
             if let Some(h) = hook {
-                let snapshot = STATUS_DATA.lock().clone();
-                h(snapshot.gold, snapshot.exp);
+                h(current.gold, current.exp);
             }
         }
     }
@@ -300,7 +285,7 @@ pub fn update_status(data: &StatusData) {
 
 /// 设置平台
 pub fn set_status_platform(platform: &str) {
-    let mut s = STATUS_DATA.lock().clone();
+    let mut s = map_slot("");
     s.platform = platform.to_string();
     update_status(&s);
 }
@@ -335,7 +320,7 @@ fn apply_login_fields(s: &mut StatusData, basic: &serde_json::Value) {
 
 /// 从登录数据更新状态
 pub fn update_status_from_login(basic: &serde_json::Value) {
-    let mut s = STATUS_DATA.lock().clone();
+    let mut s = map_slot("");
     apply_login_fields(&mut s, basic);
     update_status(&s);
 }
@@ -352,7 +337,7 @@ pub fn update_status_from_login_for(account_id: &str, basic: &serde_json::Value)
 
 /// 更新金币
 pub fn update_status_gold(gold: i64) {
-    let mut s = STATUS_DATA.lock().clone();
+    let mut s = map_slot("");
     s.gold = gold;
     update_status(&s);
 }
@@ -404,7 +389,7 @@ pub fn apply_reward_deltas_for<'a>(
 
 /// 更新等级和经验
 pub fn update_status_level(level: i64, exp: Option<i64>) {
-    let mut s = STATUS_DATA.lock().clone();
+    let mut s = map_slot("");
     s.level = level;
     if let Some(e) = exp {
         s.exp = e;
@@ -434,13 +419,6 @@ mod tests {
     use super::*;
 
     fn reset() {
-        *STATUS_DATA.lock() = StatusData {
-            platform: String::new(),
-            name: String::new(),
-            level: 0,
-            gold: 0,
-            exp: 0,
-        };
         *STATUS_BY_ACCOUNT.lock() = None;
         *STATUS_ENABLED.lock() = false;
         *RECORD_HOOK.lock() = None;

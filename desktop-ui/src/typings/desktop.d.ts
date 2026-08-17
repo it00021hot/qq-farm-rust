@@ -39,9 +39,13 @@ declare namespace Desktop {
     automationSell: boolean;
   }
 
+  /** Aligns with web Socket.IO envelope `{ type, payload, accountId }`. */
   interface AppEventPayload {
-    kind: string;
+    type: string;
+    payload?: unknown;
     accountId?: string | null;
+    /** @deprecated use `type` */
+    kind?: string;
     accountName?: string | null;
     message?: string | null;
   }

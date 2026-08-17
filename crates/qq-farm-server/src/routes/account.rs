@@ -163,95 +163,38 @@ async fn create_account(
         .filter(|u| !u.is_empty())
         .or_else(|| sess.as_ref().map(|s| s.username.clone()))
         .unwrap_or_else(|| username_from_headers(&ctx, &headers));
-    let name = body.name.as_deref().unwrap_or("").trim().to_string();
-    let code = body.code.clone().unwrap_or_default();
-    let platform_set = body.platform.is_some();
-    let platform = body.platform.clone().unwrap_or_else(|| "qq".to_string());
-    let mut update_id = body.id.as_deref().unwrap_or("").trim().to_string();
-
-    let visible: Vec<_> = {
-        let all = qq_farm_core::models::store::accounts::get_accounts();
-        if sess.as_ref().map(|s| s.role.as_str()) == Some("admin") {
-            all
+    let policy = sess.as_ref().map(acl_policy_from_session).unwrap_or_else(|| {
+        qq_farm_app::accounts::AclPolicy::PanelUser {
+            username: owner.clone(),
+            role: "user".into(),
+        }
+    });
+    let account_limit = sess.as_ref().and_then(|s| {
+        if s.role == "admin" {
+            None
         } else {
-            all.into_iter().filter(|a| a.username == owner).collect()
+            let user = qq_farm_core::models::user_store::users::get_session_user(&s.username);
+            Some(
+                user.map(|u| u.account_limit.max(1))
+                    .unwrap_or(qq_farm_core::models::user_store::users::DEFAULT_ACCOUNT_LIMIT),
+            )
         }
-    };
-    let remark_relogin = update_id.is_empty() && !name.is_empty() && visible.iter().any(|a| a.name.trim() == name);
-    if update_id.is_empty() && remark_relogin {
-        if let Some(matched) = visible.iter().find(|a| a.name.trim() == name) {
-            update_id = matched.id.clone();
-        }
-    }
-
-    if update_id.is_empty() {
-        if let Some(sess) = sess.as_ref() {
-            if sess.role != "admin" {
-                let user = qq_farm_core::models::user_store::users::get_session_user(&sess.username);
-                let limit = user
-                    .map(|u| u.account_limit.max(1))
-                    .unwrap_or(qq_farm_core::models::user_store::users::DEFAULT_ACCOUNT_LIMIT);
-                let count = qq_farm_core::models::store::accounts::get_accounts()
-                    .iter()
-                    .filter(|a| a.username == sess.username)
-                    .count() as i64;
-                if count >= limit {
-                    return Err(ApiError::Forbidden(format!(
-                        "账号数量已达上限（{limit}个），请购买额度卡密增加额度"
-                    )));
-                }
-            }
-        }
-    }
-
-    let is_update = !update_id.is_empty();
-    let qq_set = body.qq.is_some();
-    let uin_set = body.uin.is_some();
-    let avatar_set = body.avatar.is_some();
-    let saved = if is_update {
-        let existing = qq_farm_core::models::store::accounts::get_accounts()
-            .into_iter()
-            .find(|a| a.id == update_id)
-            .ok_or_else(|| ApiError::NotFound(format!("account not found: {update_id}")))?;
-        if let Some(sess) = sess.as_ref() {
-            if sess.role != "admin" && existing.username != sess.username {
-                return Err(ApiError::Forbidden("无权访问此账号".to_string()));
-            }
-        }
-        let updated = qq_farm_core::models::store::accounts::AccountRecord {
-            name: if name.is_empty() { existing.name.clone() } else { name.clone() },
-            code: if code.is_empty() { existing.code.clone() } else { code.clone() },
-            platform: if platform_set { platform.clone() } else { existing.platform.clone() },
-            qq: body.qq.clone().unwrap_or(existing.qq),
-            uin: body.uin.clone().unwrap_or(existing.uin),
-            avatar: body.avatar.clone().unwrap_or(existing.avatar),
-            username: if owner.is_empty() { existing.username } else { owner },
-            ..existing
-        };
-        qq_farm_core::models::store::accounts::add_or_update_account(updated)
-    } else {
-        let acc = qq_farm_core::models::store::accounts::AccountRecord {
-            id: String::new(),
-            name: name.clone(),
-            code: code.clone(),
-            platform: platform.clone(),
-            qq: body.qq.unwrap_or_default(),
-            uin: body.uin.unwrap_or_default(),
-            avatar: body.avatar.unwrap_or_default(),
-            username: owner,
-            nick: String::new(),
-            created_at: 0,
-            updated_at: 0,
-        };
-        let mut saved = qq_farm_core::models::store::accounts::add_or_update_account(acc);
-        if saved.name.trim().is_empty() {
-            saved.name = format!("账号{}", saved.id);
-            saved = qq_farm_core::models::store::accounts::add_or_update_account(saved);
-        }
-        saved
-    };
-    persist_accounts();
-
+    });
+    qq_farm_app::accounts::upsert_account(
+        &ctx.app_context(),
+        &policy,
+        qq_farm_app::accounts::UpsertAccountRequest {
+            id: body.id,
+            name: body.name,
+            code: body.code,
+            platform: body.platform,
+            qq: body.qq,
+            uin: body.uin,
+            avatar: body.avatar,
+            username: Some(owner),
+            account_limit,
+        },
+    )?;
     let list_filter = sess.as_ref().and_then(|s| {
         if s.role == "admin" {
             None
@@ -259,49 +202,6 @@ async fn create_account(
             Some(s.username.clone())
         }
     });
-
-    if !is_update {
-        ctx.engine.runtime_state().add_account_log(
-            "add",
-            &format!("添加账号: {}", saved.name),
-            Some(&saved.id),
-            Some(&saved.name),
-            None,
-        );
-        if !saved.code.is_empty() {
-            let models_acc = qq_farm_core::models::AccountSession::from_store(&saved);
-            if let Err(e) = ctx.engine.start_worker(models_acc) {
-                tracing::warn!(account_id = %saved.id, "自动启动 worker 失败: {e}");
-            }
-        }
-    } else {
-        let only_remark = body.code.as_deref().unwrap_or("").is_empty()
-            && !platform_set
-            && !qq_set
-            && !uin_set
-            && !avatar_set;
-        let was_running = ctx.engine.has_worker(&saved.id);
-        let should_restart = remark_relogin || (was_running && !only_remark);
-        if should_restart && !saved.code.is_empty() {
-            let models_acc = qq_farm_core::models::AccountSession::from_store(&saved);
-            if let Err(e) = ctx.engine.restart_worker(models_acc) {
-                tracing::warn!(account_id = %saved.id, "更新后重启 worker 失败: {e}");
-            }
-        }
-        let msg = if remark_relogin {
-            format!("通过备注重新登录账号: {}", saved.name)
-        } else {
-            format!("更新账号: {}", saved.name)
-        };
-        ctx.engine.runtime_state().add_account_log(
-            "update",
-            &msg,
-            Some(&saved.id),
-            Some(&saved.name),
-            None,
-        );
-    }
-
     ok_data(accounts_list_payload(&ctx, list_filter.as_deref()))
 }
 

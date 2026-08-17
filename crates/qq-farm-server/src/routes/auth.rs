@@ -1,15 +1,13 @@
-//! Auth 路由 — 13 端点。
-//!
-//! 1:1 对应原 `controllers/admin/auth-routes.ts`（327 行）。
+//! Auth 路由 — 面板用户登录 / 注册（无需卡密）。
 
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{get, post},
     Json, Router,
 };
 use serde::Deserialize;
@@ -31,14 +29,11 @@ pub fn router() -> Router<Arc<AdminContext>> {
         .route("/api/register", post(register))
         .route("/api/logout", post(logout))
         .route("/api/user/me", get(get_me))
-        .route("/api/user/renew", post(renew))
         .route("/api/user/change-password", post(change_password))
         .route("/api/ping", get(ping))
         .route("/api/game-version", get(game_version))
         .route("/api/auth/validate", get(validate))
         .route("/api/scheduler", get(scheduler))
-        // /api/admin/login-logs 已在 admin::router() 中通过 super::auth::admin_list_login_logs 暴露，这里不再加
-        .route("/api/card/info/{code}", get(card_info))
 }
 
 #[derive(Debug, Deserialize)]
@@ -51,16 +46,6 @@ struct LoginBody {
 struct RegisterBody {
     username: String,
     password: String,
-    #[serde(alias = "cardCode", alias = "card_code")]
-    card_code: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct RenewBody {
-    #[serde(alias = "cardCode", alias = "card_code")]
-    card_code: String,
-    #[serde(default)]
-    username: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -82,7 +67,7 @@ pub struct LoginLogsQuery {
     offset: Option<usize>,
 }
 
-/// 登录（1:1 对应原 TS）：validate → banned/expired 二次校验 → bindSession → addLoginLog
+/// 登录：validate → bindSession → addLoginLog
 async fn login(
     State(ctx): State<Arc<AdminContext>>,
     headers: HeaderMap,
@@ -158,51 +143,8 @@ async fn login(
         return (status, Json(payload)).into_response();
     }
 
-    // validate_user 成功时：username/role/card 都在 validation 里
     let username = validation.username.clone().unwrap_or(body.username.clone());
     let role = validation.role.clone().unwrap_or_else(|| "user".to_string());
-
-    // banned 检查
-    if role != "admin" {
-        if let Some(card) = &validation.card {
-            if !card.enabled {
-                qq_farm_core::models::user_store::auth::add_login_log(json!({
-                    "event": "login_failed",
-                    "username": username,
-                    "errorType": "banned",
-                    "ip": client_ip,
-                    "userAgent": user_agent,
-                }));
-                return (
-                    StatusCode::FORBIDDEN,
-                    Json(json!({
-                        "ok": false,
-                        "error": "账号已被封禁，请联系管理员",
-                    })),
-                )
-                    .into_response();
-            }
-            if let Some(expires_at) = card.expires_at {
-                if expires_at < now_ms() {
-                    qq_farm_core::models::user_store::auth::add_login_log(json!({
-                        "event": "login_failed",
-                        "username": username,
-                        "errorType": "expired",
-                        "ip": client_ip,
-                        "userAgent": user_agent,
-                    }));
-                    return (
-                        StatusCode::FORBIDDEN,
-                        Json(json!({
-                            "ok": false,
-                            "error": "账号已过期，请续费后重新登录",
-                        })),
-                    )
-                        .into_response();
-                }
-            }
-        }
-    }
 
     // 发 token + bindSession
     let token = Uuid::new_v4().to_string();
@@ -218,11 +160,9 @@ async fn login(
 
     tracing::info!(username = %username, role = %role, ip = %client_ip, "登录成功");
 
-    let card_json = validation
-        .card
-        .as_ref()
-        .and_then(|_| serde_json::to_value(&validation.card).ok());
-    let account_limit = validation.account_limit.unwrap_or(0);
+    let account_limit = validation.account_limit.unwrap_or(
+        qq_farm_core::models::user_store::users::DEFAULT_ACCOUNT_LIMIT,
+    );
     let user_obj = qq_farm_core::models::user_store::users::get_session_user(&username);
     let user_json = user_obj
         .as_ref()
@@ -236,7 +176,6 @@ async fn login(
             "data": {
                 "token": token,
                 "role": role,
-                "card": card_json,
                 "accountLimit": account_limit,
                 "user": user_json,
                 "username": username,
@@ -252,11 +191,7 @@ async fn register(
     Json(body): Json<RegisterBody>,
 ) -> ApiResult<serde_json::Value> {
     let result = tokio::task::spawn_blocking(move || {
-        qq_farm_core::models::user_store::users::register_user(
-            &body.username,
-            &body.password,
-            &body.card_code,
-        )
+        qq_farm_core::models::user_store::users::register_user(&body.username, &body.password)
     })
     .await
     .map_err(|_| ApiError::Internal("注册中断".to_string()))?;
@@ -270,7 +205,6 @@ async fn logout(
     State(ctx): State<Arc<AdminContext>>,
     headers: HeaderMap,
 ) -> ApiResult<serde_json::Value> {
-    // 优先从 body 解析 token；fallback 到 header
     if let Some(t) = headers.get("x-admin-token").and_then(|v| v.to_str().ok()) {
         ctx.sessions.delete(t);
     }
@@ -294,35 +228,12 @@ async fn get_me(
         return ok_data(json!({
             "username": info.username,
             "role": info.role,
-            "card": user_json.get("card").cloned().unwrap_or(json!(null)),
-            "accountLimit": user_json.get("accountLimit").cloned().unwrap_or(json!(2)),
+            "accountLimit": user_json.get("accountLimit").cloned().unwrap_or(
+                json!(qq_farm_core::models::user_store::users::DEFAULT_ACCOUNT_LIMIT)
+            ),
         }));
     }
     Err(ApiError::Unauthorized("missing or invalid token".to_string()))
-}
-
-async fn renew(
-    State(_ctx): State<Arc<AdminContext>>,
-    headers: HeaderMap,
-    Json(body): Json<RenewBody>,
-) -> ApiResult<serde_json::Value> {
-    let username = body
-        .username
-        .clone()
-        .or_else(|| {
-            headers
-                .get("x-username")
-                .and_then(|v| v.to_str().ok().map(String::from))
-        })
-        .unwrap_or_default();
-    if username.is_empty() {
-        return Err(ApiError::BadRequest("missing username".to_string()));
-    }
-    let result = qq_farm_core::models::user_store::users::renew_user(&username, &body.card_code);
-    match result {
-        Ok(r) => ok(json!({ "ok": true, "card": r.card, "addedSec": r.added_sec.unwrap_or(0) })),
-        Err(e) => Ok(Json(json!({ "ok": false, "error": e }))),
-    }
 }
 
 async fn change_password(
@@ -330,12 +241,10 @@ async fn change_password(
     headers: HeaderMap,
     Json(body): Json<ChangePasswordBody>,
 ) -> ApiResult<serde_json::Value> {
-    // 解析 target username：body.username 优先；否则从 x-admin-token 取
     let target_username = if let Some(u) = body.username.clone() {
         if !u.is_empty() {
             u
         } else {
-            // fallback to token
             headers
                 .get("x-admin-token")
                 .and_then(|v| v.to_str().ok())
@@ -358,7 +267,6 @@ async fn change_password(
         &body.new_password,
     );
     if result.is_ok() {
-        // 改密成功 → 让该用户所有 session 失效
         ctx.sessions.invalidate_by_username(&target_username);
     }
     match result {
@@ -431,30 +339,6 @@ async fn delete_login_logs(
 ) -> ApiResult<serde_json::Value> {
     qq_farm_core::models::user_store::auth::clear_login_logs();
     ok_empty()
-}
-
-async fn card_info(
-    State(_ctx): State<Arc<AdminContext>>,
-    Path(code): Path<String>,
-) -> ApiResult<serde_json::Value> {
-    let cards = qq_farm_core::models::user_store::users::get_all_cards();
-    let card = cards.into_iter().find(|c| c.code == code);
-    match card {
-        Some(c) => ok_data(json!({
-            "type": c.card_type,
-            "days": c.days,
-            "description": c.description,
-        })),
-        None => Ok(Json(json!({ "ok": false, "error": "card not found" }))),
-    }
-}
-
-fn now_ms() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
 }
 
 /// admin 用的 login-logs GET（从 admin 路由引用）

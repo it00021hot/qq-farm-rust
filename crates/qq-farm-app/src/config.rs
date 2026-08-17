@@ -92,10 +92,28 @@ pub fn list_plants() -> Value {
     json!(gc.get_all_plants())
 }
 
-/// 道具类型。
+/// 道具类型（对齐 Go `logic.ItemTypes` 面板选项）。
 #[must_use]
 pub fn item_types() -> Value {
-    json!(qq_farm_core::config::game_config::load_item_types_config())
+    json!([
+        { "value": 1, "label": "特殊道具" },
+        { "value": 2, "label": "货币" },
+        { "value": 3, "label": "经验" },
+        { "value": 4, "label": "农场工具" },
+        { "value": 7, "label": "化肥" },
+        { "value": 8, "label": "宠物" },
+        { "value": 9, "label": "宠物食品" },
+        { "value": 10, "label": "头像框" },
+        { "value": 11, "label": "礼品盒" },
+        { "value": 12, "label": "收藏点" },
+        { "value": 13, "label": "活跃点" },
+        { "value": 14, "label": "解锁卡" },
+        { "value": 15, "label": "高级货币" },
+        { "value": 16, "label": "自选礼包" },
+        { "value": 17, "label": "变异果实" },
+        { "value": 18, "label": "皮肤/装饰" },
+        { "value": 23, "label": "虫虫道具" },
+    ])
 }
 
 /// 保存配置图片（base64）→ 返回文件名。

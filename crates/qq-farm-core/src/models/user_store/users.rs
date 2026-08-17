@@ -1,6 +1,6 @@
-//! 用户系统（注册 / 登录 / 续费 / 卡密管理）。
+//! 用户系统（注册 / 登录 / 用户管理）。
 //!
-//! 1:1 翻译原 `core/src/models/user-store/users.ts`（707 行）。
+//! 面板鉴权不再依赖卡密；历史卡密数据结构保留以兼容旧 users.json。
 
 use std::fs;
 use std::path::PathBuf;
@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::paths::{ensure_data_dir, get_data_file};
 use crate::models::user_store::auth;
 
-pub const DEFAULT_ACCOUNT_LIMIT: i64 = 2;
+pub const DEFAULT_ACCOUNT_LIMIT: i64 = 100;
 const CARD_CODE_LENGTH: usize = 16;
 const CARD_CODE_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
@@ -282,10 +282,9 @@ pub struct UserSummary {
 /// 注册结果
 pub type RegisterResult = Result<UserSummary, String>;
 
-/// 注册用户
-pub fn register_user(username: &str, password: &str, card_code: &str) -> RegisterResult {
+/// 注册用户（无需卡密）
+pub fn register_user(username: &str, password: &str) -> RegisterResult {
     load_users();
-    load_cards();
 
     if username.len() < 3 || username.len() > 32 {
         return Err("用户名长度需在3-32位之间".to_string());
@@ -297,7 +296,7 @@ pub fn register_user(username: &str, password: &str, card_code: &str) -> Registe
         return Err("用户名已存在".to_string());
     }
 
-    create_user_internal(username, password, "user", card_code)
+    create_user_internal(username, password, "user")
 }
 
 /// 管理员创建用户（指定 role）
@@ -305,69 +304,43 @@ pub fn create_user_with_role(
     username: &str,
     password: &str,
     role: &str,
-    card_code: &str,
 ) -> RegisterResult {
     load_users();
-    load_cards();
 
     if USERS.read().iter().any(|u| u.username == username) {
         return Err("用户名已存在".to_string());
     }
-    create_user_internal(username, password, role, card_code)
+    create_user_internal(username, password, role)
 }
 
 fn create_user_internal(
     username: &str,
     password: &str,
-    _role: &str,
-    card_code: &str,
+    role: &str,
 ) -> RegisterResult {
-
     let pw = auth::validate_password_strength(password);
     if !pw.valid {
         return Err(pw.errors.join("；"));
-    }
-
-    let card = CARDS.read().iter().find(|c| c.code == card_code).cloned();
-    let Some(card) = card else {
-        return Err("卡密不存在".to_string());
-    };
-    if !card.enabled {
-        return Err("卡密已被禁用".to_string());
-    }
-    if card.used_by.is_some() {
-        return Err("卡密已被使用".to_string());
-    }
-    let card_type = if card.card_type.is_empty() { "time" } else { &card.card_type };
-    if card_type == "quota" {
-        return Err("注册只能使用时间卡密，额度卡密请登录后在续费中使用".to_string());
     }
 
     let now_secs = crate::utils::time::now_secs();
     let new_user = User {
         username: username.to_string(),
         password: auth::hash_password(password, None),
-        role: "user".to_string(),
-        card_code: Some(card_code.to_string()),
-        card: Some(UserCard {
-            code: card.code.clone(),
-            description: card.description.clone(),
-            days: card.days,
-            expires_at: if card.days == -1 { None } else { Some(crate::utils::time::now_ms() + card.days * 86_400_000) },
-            enabled: true,
-        }),
+        role: if role == "admin" {
+            "admin".to_string()
+        } else {
+            "user".to_string()
+        },
+        card_code: None,
+        card: None,
         account_limit: DEFAULT_ACCOUNT_LIMIT,
         created_at: now_secs,
         ..Default::default()
     };
 
     USERS.write().push(new_user.clone());
-    if let Some(c) = CARDS.write().iter_mut().find(|c| c.code == card_code) {
-        c.used_by = Some(username.to_string());
-        c.used_at = Some(now_secs);
-    }
     save_users();
-    save_cards();
     auth::clear_failed_attempts(username);
 
     Ok(UserSummary {
@@ -815,7 +788,7 @@ mod tests {
     #[serial(user_store)]
     fn register_user_validates_username() {
         reset();
-        let r = register_user("ab", "pass1234", "CARD");
+        let r = register_user("ab", "pass1234");
         assert!(r.is_err());
         assert!(r.unwrap_err().contains("长度"));
     }
@@ -824,37 +797,17 @@ mod tests {
     #[serial(user_store)]
     fn register_user_validates_username_chars() {
         reset();
-        let r = register_user("ab-cd", "pass1234", "CARD");
+        let r = register_user("ab-cd", "pass1234");
         assert!(r.is_err());
-    }
-
-    #[test]
-    #[serial(user_store)]
-    fn register_user_card_not_found() {
-        reset();
-        let r = register_user("alice", "Pass1234", "NOPE");
-        assert!(r.is_err());
-        assert!(r.unwrap_err().contains("卡密"));
-    }
-
-    #[test]
-    #[serial(user_store)]
-    fn register_user_quota_card_rejected() {
-        reset();
-        let c = create_card("quota", 10, "quota");
-        let r = register_user("alice", "Pass1234", &c.code);
-        assert!(r.is_err());
-        assert!(r.unwrap_err().contains("时间卡密"));
     }
 
     #[test]
     #[serial(user_store)]
     fn register_user_success() {
         reset();
-        let c = create_card("test", 30, "time");
-        let r = register_user("alice", "Pass1234", &c.code);
+        let r = register_user("alice", "Pass1234");
         assert!(r.is_ok(), "error = {:?}", r.err());
-        assert_eq!(r.as_ref().unwrap().account_limit, 2);
+        assert_eq!(r.as_ref().unwrap().account_limit, DEFAULT_ACCOUNT_LIMIT);
         let users = get_all_users();
         assert_eq!(users.len(), 1);
     }
@@ -863,20 +816,8 @@ mod tests {
     #[serial(user_store)]
     fn register_user_duplicate_name() {
         reset();
-        let c1 = create_card("c1", 30, "time");
-        register_user("alice", "Pass1234", &c1.code).ok();
-        let c2 = create_card("c2", 30, "time");
-        let r = register_user("alice", "Pass1234", &c2.code);
-        assert!(r.is_err());
-    }
-
-    #[test]
-    #[serial(user_store)]
-    fn register_user_card_already_used() {
-        reset();
-        let c = create_card("c", 30, "time");
-        register_user("alice", "Pass1234", &c.code).ok();
-        let r = register_user("bob", "Pass1234", &c.code);
+        register_user("alice", "Pass1234").ok();
+        let r = register_user("alice", "Pass1234");
         assert!(r.is_err());
     }
 
@@ -884,8 +825,7 @@ mod tests {
     #[serial(user_store)]
     fn validate_user_wrong_password() {
         reset();
-        let c = create_card("c", 30, "time");
-        register_user("alice", "Pass1234", &c.code).ok();
+        register_user("alice", "Pass1234").ok();
         let r = validate_user("alice", "WrongPass", "127.0.0.1");
         assert_eq!(r.error.as_deref(), Some("invalid_credentials"));
     }
@@ -894,8 +834,7 @@ mod tests {
     #[serial(user_store)]
     fn validate_user_success() {
         reset();
-        let c = create_card("c", 30, "time");
-        register_user("alice", "Pass1234", &c.code).ok();
+        register_user("alice", "Pass1234").ok();
         let r = validate_user("alice", "Pass1234", "127.0.0.1");
         assert!(r.error.is_none());
         assert_eq!(r.username.as_deref(), Some("alice"));
@@ -905,20 +844,23 @@ mod tests {
     #[serial(user_store)]
     fn renew_user_quota() {
         reset();
-        let c = create_card("c", 5, "time");
-        register_user("alice", "Pass1234", &c.code).ok();
+        register_user("alice", "Pass1234").ok();
         let quota_card = create_card("q", 3, "quota");
         let r = renew_user("alice", &quota_card.code);
         assert!(r.is_ok(), "error = {:?}", r.err());
-        assert_eq!(r.as_ref().unwrap().account_limit, Some(5));
+        assert_eq!(
+            r.as_ref().unwrap().account_limit,
+            Some(DEFAULT_ACCOUNT_LIMIT + 3)
+        );
     }
 
     #[test]
     #[serial(user_store)]
     fn renew_user_time_extends() {
         reset();
+        register_user("alice", "Pass1234").ok();
         let c1 = create_card("c1", 30, "time");
-        register_user("alice", "Pass1234", &c1.code).ok();
+        renew_user("alice", &c1.code).ok();
         let c2 = create_card("c2", 7, "time");
         let r = renew_user("alice", &c2.code).unwrap();
         assert_eq!(r.card.unwrap().days, 37);
@@ -928,8 +870,9 @@ mod tests {
     #[serial(user_store)]
     fn renew_user_time_permanent() {
         reset();
+        register_user("alice", "Pass1234").ok();
         let c1 = create_card("c1", 30, "time");
-        register_user("alice", "Pass1234", &c1.code).ok();
+        renew_user("alice", &c1.code).ok();
         let c2 = create_card("c2", -1, "time");
         let r = renew_user("alice", &c2.code).unwrap();
         let card = r.card.unwrap();
@@ -941,10 +884,8 @@ mod tests {
     #[serial(user_store)]
     fn test_delete_user() {
         reset();
-        let c1 = create_card("a", 30, "time");
-        let c2 = create_card("b", 30, "time");
-        register_user("alice", "Pass1234", &c1.code).ok();
-        register_user("bob", "Pass1234", &c2.code).ok();
+        register_user("alice", "Pass1234").ok();
+        register_user("bob", "Pass1234").ok();
         assert_eq!(get_all_users().len(), 2);
         assert!(super::delete_user("alice"));
         assert_eq!(get_all_users().len(), 1);
@@ -954,8 +895,7 @@ mod tests {
     #[serial(user_store)]
     fn test_change_password() {
         reset();
-        let c = create_card("c", 30, "time");
-        register_user("alice", "Pass1234", &c.code).ok();
+        register_user("alice", "Pass1234").ok();
         assert!(super::change_password("alice", "Pass1234", "NewPass56").is_ok());
         // 旧密码失败
         let r = validate_user("alice", "Pass1234", "127.0.0.1");
@@ -1003,7 +943,7 @@ mod tests {
         reset();
         let c1 = create_card("a", 30, "time");
         let c2 = create_card("b", 30, "time");
-        let c3 = create_card("c", 30, "time");
+        let _c3 = create_card("c", 30, "time");
         let n = super::delete_cards_batch(&[&c1.code, &c2.code]);
         assert_eq!(n, 2);
         assert_eq!(get_all_cards().len(), 1);

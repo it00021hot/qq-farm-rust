@@ -91,7 +91,7 @@ cd crates/qq-farm-desktop && cargo tauri dev
 | `FARM_CLIENT_VERSION` | `1.13.1.6_20260723` | 客户端版本 |
 | `ADMIN_PORT` | `3007` | HTTP / Socket.IO 端口 |
 | `RUST_LOG` | `info` | 日志级别 |
-| `FARM_DATA_DIR` | `~/.qq-farm-rust` | 账号、用户、卡密、配置 |
+| `FARM_DATA_DIR` | `~/.qq-farm-rust` | 账号、用户、配置 |
 
 ## 运行时行为
 

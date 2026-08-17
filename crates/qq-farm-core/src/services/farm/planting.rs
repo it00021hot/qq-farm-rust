@@ -14,7 +14,7 @@ use tokio::time::sleep;
 use crate::error::Result;
 use crate::proto::generated::gamepb::plantpb::PlantItem;
 use crate::services::farm::api::{
-    Api, NORMAL_FERTILIZER_ID, ORGANIC_FERTILIZER_ID,
+    Api, NORMAL_FERTILIZER_ID,
 };
 use crate::services::farm::land_analysis::{
     analyze_lands, build_planting_layouts, resolve_occupied_land_ids, select_non_overlapping_layouts,
@@ -671,9 +671,8 @@ impl PlantingEngine {
                     account_id,
                     "铲除",
                     format!("清理枯株 {} 块土地", dead_land_ids.len()),
-                    Some(serde_json::json!({
-                        "module": "farm",
-                        "event": "remove_plant",
+                    crate::constants::PanelEvent::RemovePlant, Some(serde_json::json!({
+                        "module": "farm", 
                         "result": "ok",
                         "count": dead_land_ids.len(),
                         "landIds": dead_land_ids,

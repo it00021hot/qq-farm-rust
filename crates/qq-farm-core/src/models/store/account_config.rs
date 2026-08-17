@@ -454,7 +454,7 @@ pub fn apply_config_snapshot(
                 }
                 "fertilizer_smart_seconds" => {
                     next.automation.fertilizer_smart_seconds =
-                        v.as_i64().unwrap_or(300).clamp(30, 3600);
+                        v.as_i64().unwrap_or(crate::models::store::normalize::DEFAULT_FERTILIZER_SMART_SECONDS).clamp(30, 3600);
                 }
                 _ => {
                     if let Some(b) = v.as_bool() {

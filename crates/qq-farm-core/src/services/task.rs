@@ -279,7 +279,7 @@ impl TaskService {
                 &self.account_id.lock(),
                 "任务",
                 format!("发现 {} 个可领取任务", claimable.len()),
-                Some(serde_json::json!({ "module": "task", "event": "检查任务", "count": claimable.len() })),
+                crate::constants::PanelEvent::TaskScan, Some(serde_json::json!({ "module": "task",  "count": claimable.len() })),
             );
             if !daily_claimable.is_empty() {
                 let descs: Vec<&str> = daily_claimable.iter().map(|t| t.desc.as_str()).collect();
@@ -288,7 +288,7 @@ impl TaskService {
                     &self.account_id.lock(),
                     "任务",
                     format!("每日任务可领取: {}", descs.join("，")),
-                    Some(serde_json::json!({ "module": "task", "event": "每日任务" })),
+                    crate::constants::PanelEvent::DailyTask, Some(serde_json::json!({ "module": "task"})),
                 );
             }
             let mut daily_claim_success: i32 = 0;
@@ -341,7 +341,7 @@ impl TaskService {
                     &self.account_id.lock(),
                     "任务",
                     format!("领取({category_name}): {}{multiple_str} → {reward_str}", task.desc),
-                    Some(serde_json::json!({ "module": "task", "event": "领取任务" })),
+                    crate::constants::PanelEvent::TaskClaim, Some(serde_json::json!({ "module": "task"})),
                 );
                 *self.task_claim_done_date_key.lock() = get_date_key();
                 *self.task_claim_last_at.lock() = now_ms();
@@ -393,7 +393,7 @@ impl TaskService {
                 &self.account_id.lock(),
                 "活跃",
                 format!("{type_name} 发现 {} 个可领取奖励", point_ids.len()),
-                Some(serde_json::json!({ "module": "task", "event": "活跃度" })),
+                crate::constants::PanelEvent::ActivityPoints, Some(serde_json::json!({ "module": "task"})),
             );
             match self.claim_daily_reward(active_type, point_ids.clone()).await {
                 Ok(reply) => {
@@ -405,7 +405,7 @@ impl TaskService {
                                 &self.account_id.lock(),
                                 "活跃",
                                 format!("{type_name} 领取: {reward}"),
-                                Some(serde_json::json!({ "module": "task", "event": "活跃度" })),
+                                crate::constants::PanelEvent::ActivityPoints, Some(serde_json::json!({ "module": "task"})),
                             );
                         }
                     }
@@ -419,7 +419,7 @@ impl TaskService {
                         &self.account_id.lock(),
                         "活跃",
                         format!("{type_name} 领取失败: {e}"),
-                        Some(serde_json::json!({ "module": "task", "event": "活跃度" })),
+                        crate::constants::PanelEvent::ActivityPoints, Some(serde_json::json!({ "module": "task"})),
                     );
                 }
             }
@@ -445,7 +445,7 @@ impl TaskService {
             &self.account_id.lock(),
             "任务",
             format!("领取成功: 点券{gain}"),
-            Some(serde_json::json!({ "module": "task", "event": "图鉴" })),
+            crate::constants::PanelEvent::IllustratedRewards, Some(serde_json::json!({ "module": "task"})),
         );
         *self.task_claim_done_date_key.lock() = get_date_key();
         *self.task_claim_last_at.lock() = now_ms();

@@ -70,7 +70,7 @@
 | 商城 / 神秘商店 / 月卡 / 钻石 | 齐 | 列表、购买（神秘 Buy 无回包）、月卡、充值信息 | `mall`, `mystery_shop`, `monthcard`, `pay`, `commerce` |
 | 日常领取 | 齐 | 任务（成长 claim 后刷新 TaskInfo + `currentTask`）、邮件、分享等 | `task`, `email`, `share`, … |
 | 活动中心 | 齐 | 千星游记、观星、星砂、节令、青梅（含已领幂等） | `activity_center*` |
-| 面板鉴权与账号 | 齐 | 登录注册、卡密、账号 CRUD、设置 | `routes/auth`, `account`, `admin` |
+| 面板鉴权与账号 | 齐 | 登录注册（无卡密）、账号 CRUD、设置 | `routes/auth`, `account`, `admin` |
 | 面板农场/好友/活动/商业 API | 齐 | 与 Vue 面板契约兼容，可挂 3007 | `qq-farm-server/src/routes/*` |
 | Socket 状态/日志推送 | 齐 | `status:update` / `log:new` 等 | `socket.rs` |
 | 离线重登提醒 | 齐 | 掉线可提醒 | `runtime/relogin_reminder.rs` |
@@ -246,3 +246,86 @@
 - `desktop-ui/`：SoybeanAdmin（NaiveUI）裁剪壳；分层 `typings` / `service/tauri` / `store/desktop` / `views`；登录为本地进入；scaffold 页：概览 + 设置只读
 - **不改** `qq-farm-bot/web`；**不**在 `qq-farm-app` 引入 Tauri；面板 HTTP/Socket 契约 **不变**
 - 能力状态：桌面 Scaffold 可开窗打通 IPC；完整业务页待后续迁入
+
+### 2026-08-17 — 移除面板卡密（license card）
+
+- 注册/登录不再要求 `cardCode`；去掉卡密管理、卡密领取、续费-by-card 路由
+- 保留面板用户鉴权与账号 ACL；`DEFAULT_ACCOUNT_LIMIT` 提高到 100；admin 仍无限额
+- **不改**游戏内月卡（`monthcard`）；**不改** Go `qq-farm`
+- 能力状态：面板鉴权仍可用；卡密相关 HTTP 契约已移除
+
+### 2026-08-17 — 桌面功能对齐（个人免费 / 无权限）
+
+- 桌面产品：无登录门闸、无用户管理、无面板 RBAC；ACL 固定 `LocalOwner`
+- `desktop-ui`：侧栏 10 项对齐 qq-farm-web 农场菜单（去掉 `/system/admin`）；迁入 farm/home 页，HTTP → Tauri `invoke`
+- `qq-farm-desktop`：按域扩面 IPC（account/farm/friend/activity/commerce/settings/config + wx_login_code）
+- **不改** `qq-farm-bot/web`；server 面板 token 登录可保留（与桌面无关）
+- 能力状态：开窗直达首页；多农场账号主路径 IPC 通；卡密已从 rust 面板栈移除
+
+### 2026-08-17 — 桌面农场页功能打通
+
+- `farm.ts` 适配层：对齐桌面 IPC 参数/返回（status 扁平化、automation→settings_panel、friend/mall/bag/activity）
+- 侧栏账号切换器；`farm_diamond`、青梅酿造 IPC；config overlay 增删改
+- `app-event` 触发状态/日志刷新（不全量塞 Go 形状 payload）
+- 能力状态：各农场页主路径可走 IPC；真实游戏数据仍依赖账号在线 worker
+
+### 2026-08-17 — 扫码更新后自动启动（对齐 Go）
+
+- `upsert_account`：更新时若提交了新 code（`code_changed`），即使账号原先已停止也 `restart_worker`；失败返回错误（对齐 Go `Start`）
+- `desktop-ui` 账号抽屉：微信扫码「编辑/重新登录」成功后补一次 `start_account`
+- 能力状态：已停止账号扫码换 code 后应进入运行中；server HTTP 契约不变
+
+### 2026-08-17 — 好友列表偷菜后刷新
+
+- Rust：偷菜成功 `mark_friend_steal_cleared`（覆盖游戏 GetAll 滞后的 stealNum）；列表 API `force`；好友页「刷新列表」+ 监听偷菜事件防抖刷新
+- Go：Session `friendStealCleared` 覆盖 Friends()；web 好友页同样监听 `friend_interact` +「刷新列表」
+- 能力状态：自动/手动偷菜后气泡应清零；手动按钮可强制拉新列表
+
+### 2026-08-17 — 好友 help 操作 / 日志 event / 桌面全屏
+
+- `FriendOperation::from_str_opt`：`help` → 一键务农（对齐 Go），`bug` → 除虫
+- 看板日志：英文 event key 映射中文（对齐 bot Dashboard）
+- 全屏：Tauri `setFullscreen`，不再用 WebView `requestFullscreen`
+- 能力状态：好友页一键务农可调用；日志 chip 可读；全屏切原生窗口
+
+### 2026-08-17 — 架构卫生（事件信封 / app 编排 / DTO / PanelEvent / L3 / 资源）
+
+- 桌面实时事件对齐 web 信封 `{ type, payload, accountId }`；补 `status:update` 体、`friend_interact` / `farm_operation`（由日志派生）
+- server farm/friend/commerce/activity/账号 upsert 只调 `qq-farm-app`；wx-login 共用 `WxLoginHub`
+- 第一批面板 DTO：status / lands / bag / friend list / logs；desktop-ui 去掉双键读
+- 日志 event 改为 `PanelEvent` 英文 snake_case；中文只在 UI 映射
+- 去掉 stats「当前账号」槽与 status 单槽；好友黑名单只走 per-account store；活动植物按账号分槽
+- `assets/game_config/seed_images_named` 进仓；`tauri dev` 走 `frontendDist`（先 `pnpm build`），不占用 Vite 端口；去掉 Soybean `hasAuth` / 未用 desktop store / HTTP `fetchLogin`
+- 能力状态：分层执行更接近 `desktop/server → app → core`；面板 HTTP 契约不变
+
+### 2026-08-17 — 游戏网关 WS 握手对齐 Go（User-Agent 大小写）
+
+- 现象：微信扫码后立刻「系统连接已断开… WS 连接失败: HTTP 400 Bad Request」
+- 原因：tungstenite 把额外头写成小写 `user-agent`（只特判 `Origin`）；Go gorilla / Node `ws` 发 `User-Agent`，腾讯网关按大小写校验会 400
+- 修复：`WsClient` 按 Go 写法手写握手（`Origin` / `User-Agent` 规范大小写），15s 超时与 Go `HandshakeTimeout` 一致
+- 能力状态：扫码拿到 code 后应能完成网关 upgrade；需重启桌面进程后实机验证
+
+### 2026-08-17 — 自动化默认对齐 Go 面板，保存热更新
+
+- 默认开关改回 Go / 面板截图：种植收获、任务、卖果实、好友互动、推送巡田、升级土地、填充化肥、跳过一键务农、偷菜开启；帮忙 / 捣乱 / 经验满不帮忙 / 自动买肥关闭；智能施肥 360s
+- 已落盘且仍是旧 rust（bot）默认组合的账号，启动时自动迁到上述默认，不覆盖用户手动改过的组合
+- 保存设置：`ReloadConfig` 失败会异步补发，并立刻 `sync_status`；帮忙/偷菜关闭时仍改下次调度，买肥开关随保存启停定时器——运行中账号不用停再开
+- 能力状态：新账号与未改过的旧账号设置页应与截图一致；改开关保存后当轮即生效
+
+### 2026-08-17 — 点好友列表不再把心跳打死
+
+- 现象：打开好友列表立刻 GetAll/Heartbeat 请求超时，约 49s 无响应后 `heartbeat_timeout` 停号，之后任何接口都调不了
+- 与 Go 的差：
+  1. 微信 GetAll 失败后 Rust 再打空 `SyncAll`（回包还在路上时把连接堵死）；Go 只对已知 GID 走 `GetGameFriends`
+  2. 心跳 30s 无 Heartbeat 回包就杀号；Go 明确「Bare RPC timeout 不是 socket 已死」
+  3. 普通 RPC `pending>=5` 直接 QueueFull（Go 无此硬限），Heartbeat 也被挡住
+  4. 桌面进好友页 `force: true` 每次都打网关；Go web 用缓存/DB，失败仍展示旧列表
+- 修复：GetAll 等 60s；失败走 GetGameFriends；有入站帧或 in-flight RPC 时不因心跳静默杀号；Heartbeat 不受排队上限；列表失败回缓存；进页不再 force
+- 能力状态：点好友列表不应掉线；需重启桌面后再试
+
+### 2026-08-17 — 策略对比作物图标（去掉 Vite 后 404）
+
+- 现象：分析页策略对比瓶子树 / 山竹变成问号；图标文件仍在 `assets/game_config/seed_images_named`
+- 原因：`tauri dev` 无 `devUrl` 时 CLI 用内置静态站托管 `desktop-ui/dist`（`http://127.0.0.1`）。前端把 localhost 当成 Vite，请求 `/game-config/…`，但 `dist` 里没有这些 PNG（原 Vite 中间件也不会跑）
+- 修复：`pnpm build` 把 `assets/game_config` 拷进 `dist/game-config`；`resolveCatalogImage` 一律同源 `/game-config/…`（打包 `tauri://` 同样走前端资源）
+- 能力状态：策略对比 / 背包 / 好友田应显示作物图；需重新 `pnpm build` 或重启 `cargo tauri dev`

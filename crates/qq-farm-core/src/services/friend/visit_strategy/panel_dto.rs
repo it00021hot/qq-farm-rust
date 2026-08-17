@@ -6,23 +6,28 @@ use crate::services::friend::api::FriendApi;
 use crate::services::friend::gid_manager::GidManager;
 
 /// 好友摘要
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FriendSummary {
     pub gid: i64,
     pub name: String,
+    #[serde(default, alias = "avatarUrl")]
     pub avatar_url: String,
     pub level: i64,
     pub gold: i64,
     pub plant: Option<FriendPlantSummary>,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FriendPlantSummary {
+    #[serde(alias = "steal_num")]
     pub steal_num: i64,
+    #[serde(alias = "dry_num")]
     pub dry_num: i64,
+    #[serde(alias = "weed_num")]
     pub weed_num: i64,
+    #[serde(alias = "insect_num")]
     pub insect_num: i64,
 }
 

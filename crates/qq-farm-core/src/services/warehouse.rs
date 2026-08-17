@@ -302,7 +302,7 @@ impl WarehouseService {
                 &self.account_id.lock(),
                 "仓库",
                 format!("自动使用化肥类道具 x{opened}"),
-                Some(serde_json::json!({ "module": "warehouse", "event": "fertilizer_gift_open", "count": opened })),
+                crate::constants::PanelEvent::FertilizerGiftOpen, Some(serde_json::json!({ "module": "warehouse",  "count": opened })),
             );
         }
         (opened, normal_h, organic_h)
@@ -322,9 +322,8 @@ impl WarehouseService {
                     &account_id,
                     "仓库",
                     format!("出售失败: {e}"),
-                    Some(serde_json::json!({
-                        "module": "warehouse",
-                        "event": "sell_done",
+                    crate::constants::PanelEvent::SellDone, Some(serde_json::json!({
+                        "module": "warehouse", 
                         "result": "error",
                     })),
                 );
@@ -360,9 +359,8 @@ impl WarehouseService {
                 &account_id,
                 "仓库",
                 "无果实可出售",
-                Some(serde_json::json!({
-                    "module": "warehouse",
-                    "event": "sell_done",
+                crate::constants::PanelEvent::SellDone, Some(serde_json::json!({
+                    "module": "warehouse", 
                     "result": "empty",
                 })),
             );
@@ -386,7 +384,7 @@ impl WarehouseService {
                         &account_id,
                         "仓库",
                         format!("批量出售失败，改为逐个重试: {batch_err}"),
-                        Some(serde_json::json!({ "module": "warehouse", "event": "sell_done" })),
+                        crate::constants::PanelEvent::SellDone, Some(serde_json::json!({ "module": "warehouse"})),
                     );
                     for item in chunk {
                         match self.sell_items(&[*item]).await {
@@ -406,9 +404,8 @@ impl WarehouseService {
                                         "跳过不可售物品: ID={} x{} ({single_err})",
                                         item.0, item.1
                                     ),
-                                    Some(serde_json::json!({
-                                        "module": "warehouse",
-                                        "event": "sell_done",
+                                    crate::constants::PanelEvent::SellDone, Some(serde_json::json!({
+                                        "module": "warehouse", 
                                         "result": "skip",
                                         "itemId": item.0,
                                         "count": item.1,
@@ -467,7 +464,7 @@ impl WarehouseService {
                     String::new()
                 }
             ),
-            Some(serde_json::json!({
+            crate::constants::PanelEvent::FarmCycle, Some(serde_json::json!({
                 "module": "warehouse",
                 "event": event,
                 "result": if total_gold > 0 { "ok" } else { "unknown_gain" },
@@ -766,11 +763,39 @@ pub fn build_bag_detail_from_items(raw_items: &[BagItemLite]) -> BagDetail {
     }
 
     let mut items: Vec<BagItemView> = merged.into_values().collect();
+    // Align Go `FormatBagResponse`: uid<=0 currency/buckets also appear in `items`
+    // (desktop dashboard reads coupon / fertilizer from `items`, not only `systemItems`).
+    for sys in &system_items {
+        if items.iter().any(|row| row.id == sys.id) {
+            continue;
+        }
+        let item_info = gc.get_item_by_id(sys.id);
+        items.push(BagItemView {
+            key: format!("sys:{}", sys.id),
+            id: sys.id,
+            count: sys.count,
+            uid: 0,
+            mutant_types: Vec::new(),
+            name: sys.name.clone(),
+            image: gc.get_item_image_by_id(sys.id),
+            category: "item".to_string(),
+            item_type: item_info.as_ref().map(|i| i.item_type).unwrap_or(0),
+            sellable: false,
+            sell_status: String::new(),
+            sell_condition: None,
+            price_id: 0,
+            price: 0,
+            price_unit: String::new(),
+            level: item_info.as_ref().and_then(|i| i.level).unwrap_or(0),
+            interaction_type: sys.interaction_type.clone(),
+            hours_text: sys.hours_text.clone(),
+        });
+    }
     for row in &mut items {
         if row.interaction_type == "fertilizerbucket" && row.count > 0 {
             let h = ((row.count as f64) / 3600.0 * 10.0).floor() / 10.0;
             row.hours_text = format!("{h:.1}小时");
-        } else {
+        } else if row.uid > 0 {
             row.hours_text.clear();
         }
     }
@@ -1148,10 +1173,11 @@ mod tests {
             },
             BagItemLite::new(1011, 3600, 0),
         ]);
-        assert_eq!(detail.items.len(), 2);
+        assert_eq!(detail.items.len(), 3);
         assert_eq!(detail.original_items.len(), 2);
         assert_eq!(detail.system_items.len(), 1);
         assert_eq!(detail.system_items[0].id, 1011);
+        assert!(detail.items.iter().any(|i| i.id == 1011 && i.uid == 0));
         let keys: Vec<_> = detail.items.iter().map(|i| i.key.as_str()).collect();
         assert!(keys.contains(&"uid:100"));
         assert!(keys.contains(&"uid:200"));

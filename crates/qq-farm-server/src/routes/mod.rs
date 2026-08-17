@@ -202,6 +202,5 @@ pub fn build(ctx: Arc<AdminContext>) -> Router<Arc<AdminContext>> {
         .merge(auth::router())
         .merge(authed)
         .merge(admin::router().route_layer(admin_check))
-        .merge(admin::public_router())
         .route_layer(inject_layer)
 }

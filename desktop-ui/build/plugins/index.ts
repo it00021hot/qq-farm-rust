@@ -8,6 +8,7 @@ import { setupUnocss } from './unocss';
 import { setupUnplugin } from './unplugin';
 import { setupHtmlPlugin } from './html';
 import { setupDevtoolsPlugin } from './devtools';
+import { setupGameConfigStatic } from './game-config';
 
 export function setupVitePlugins(viteEnv: Env.ImportMeta, buildTime: string) {
   const plugins: PluginOption = [
@@ -19,7 +20,8 @@ export function setupVitePlugins(viteEnv: Env.ImportMeta, buildTime: string) {
     ...setupUnplugin(viteEnv),
     progress(),
     setupHtmlPlugin(buildTime),
-    vueRootValidator()
+    vueRootValidator(),
+    setupGameConfigStatic()
   ];
 
   return plugins;

@@ -144,10 +144,11 @@ mod tests {
     use serial_test::serial;
 
     fn temp_file() -> PathBuf {
-        let _ = ensure_parent_dir("/tmp/qq-farm-test");
+        let dir = PathBuf::from("/tmp/qq-farm-test");
+        let _ = fs::create_dir_all(&dir);
         let pid = std::process::id();
         let ts = crate::utils::time::now_ms();
-        PathBuf::from(format!("/tmp/qq-farm-test/json-db-{pid}-{ts}.json"))
+        dir.join(format!("json-db-{pid}-{ts}.json"))
     }
 
     #[test]

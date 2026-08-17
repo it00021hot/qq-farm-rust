@@ -4151,6 +4151,7 @@ dependencies = [
  "hmac",
  "image",
  "lz4_flex",
+ "native-tls",
  "once_cell",
  "p256",
  "parking_lot",
@@ -4168,6 +4169,7 @@ dependencies = [
  "sha2",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-native-tls",
  "tokio-stream",
  "tokio-tungstenite 0.24.0",
  "tokio-util",
@@ -4185,6 +4187,7 @@ name = "qq-farm-desktop"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "dotenvy",
  "qq-farm-app",
  "qq-farm-core",

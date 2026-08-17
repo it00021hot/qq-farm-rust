@@ -777,7 +777,7 @@ pub fn classify_harvested_lands_by_map(
 use crate::constants::{PHASE_DEAD, PHASE_MATURE, PHASE_NAMES, PHASE_UNKNOWN};
 
 /// 面板土地汇总（对齐 TS `summarizeLandDetails`）
-#[derive(Debug, Clone, Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LandDetailSummary {
     pub harvestable: usize,
@@ -1114,10 +1114,12 @@ pub fn own_lands_detail(lands: &[LandInfo]) -> (Vec<serde_json::Value>, LandDeta
     (dto, summary)
 }
 
-/// 好友农场土地详情 DTO
+/// 好友农场土地详情 + 汇总（对齐 Go `FormatFriendLandsResponse`）
 #[must_use]
-pub fn friend_lands_detail(lands: &[LandInfo]) -> Vec<serde_json::Value> {
-    build_lands_panel_dto(lands, LandDetailKind::Friend)
+pub fn friend_lands_detail(lands: &[LandInfo]) -> (Vec<serde_json::Value>, LandDetailSummary) {
+    let dto = build_lands_panel_dto(lands, LandDetailKind::Friend);
+    let summary = summarize_land_details(&dto);
+    (dto, summary)
 }
 
 #[cfg(test)]
