@@ -2,7 +2,6 @@
 //!
 //! 1:1 对应原 `controllers/admin/account-routes.ts`（495 行）。
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use axum::{
@@ -20,37 +19,7 @@ use crate::routes::{
 };
 
 fn accounts_list_payload(ctx: &AdminContext, username: Option<&str>) -> serde_json::Value {
-    let running: HashSet<String> = ctx
-        .engine
-        .list_workers()
-        .into_iter()
-        .map(|w| w.account_id)
-        .collect();
-    let data = qq_farm_core::models::store::accounts::accounts_data();
-    let accounts: Vec<serde_json::Value> = data
-        .accounts
-        .iter()
-        .filter(|a| username.is_none_or(|u| a.username == u))
-        .map(|a| {
-            let mut v = serde_json::to_value(a).unwrap_or(json!({}));
-            if let Some(obj) = v.as_object_mut() {
-                obj.insert("running".to_string(), json!(running.contains(&a.id)));
-                let status = ctx.engine.panel_status(&a.id);
-                if let Some(nick) = status
-                    .pointer("/status/name")
-                    .and_then(|n| n.as_str())
-                    .filter(|s| !s.is_empty())
-                {
-                    obj.insert("nick".to_string(), json!(nick));
-                }
-            }
-            v
-        })
-        .collect();
-    json!({
-        "accounts": accounts,
-        "nextId": data.next_id.max(1),
-    })
+    qq_farm_app::accounts::list_accounts_enriched(&ctx.app_context(), username)
 }
 
 fn persist_accounts() {
@@ -499,44 +468,7 @@ async fn delete_logs(
 }
 
 fn settings_panel_payload(account_id: &str, username: &str) -> serde_json::Value {
-    use qq_farm_core::models::store::account_config as cfg;
-    let id = if account_id.is_empty() { None } else { Some(account_id) };
-    let intervals = cfg::get_intervals(id);
-    let strategy = cfg::get_planting_strategy(id);
-    let preferred = cfg::get_preferred_seed(id);
-    let quiet = cfg::get_friend_quiet_hours(id);
-    let automation = cfg::get_automation(id);
-    let snap = cfg::get_config_snapshot(id).config;
-    let ui = qq_farm_core::models::store::global_config::get_ui();
-    let offline = qq_farm_core::models::store::global_config::get_user_offline_reminder(username)
-        .unwrap_or_else(qq_farm_core::models::store::global_config::get_offline_reminder);
-    json!({
-        "intervals": {
-            "farm": intervals.farm,
-            "farmMin": intervals.farm_min,
-            "farmMax": intervals.farm_max,
-            "helpMin": intervals.help_min,
-            "helpMax": intervals.help_max,
-            "stealMin": intervals.steal_min,
-            "stealMax": intervals.steal_max,
-        },
-        "strategy": strategy,
-        "preferredSeed": preferred,
-        "friendQuietHours": quiet,
-        "automation": automation,
-        "stealDelaySeconds": snap.steal_delay_seconds,
-        "plantOrderRandom": snap.plant_order_random,
-        "plantDelaySeconds": snap.plant_delay_seconds,
-        "fertilizerBuyOrganicCount": snap.fertilizer_buy_organic_count,
-        "fertilizerBuyOrganicThresholdHours": snap.fertilizer_buy_organic_threshold_hours,
-        "fertilizerBuyNormalCount": snap.fertilizer_buy_normal_count,
-        "fertilizerBuyNormalThresholdHours": snap.fertilizer_buy_normal_threshold_hours,
-        "fertilizerBuyCheckIntervalMinutes": snap.fertilizer_buy_check_interval_minutes,
-        "bagSeedPriority": cfg::get_bag_seed_priority(id),
-        "bagSeedFallbackStrategy": cfg::get_bag_seed_fallback_strategy(id),
-        "ui": ui,
-        "offlineReminder": offline,
-    })
+    qq_farm_app::settings::settings_panel(account_id, username)
 }
 
 async fn get_settings(

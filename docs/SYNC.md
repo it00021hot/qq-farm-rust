@@ -219,3 +219,22 @@
   - `qq-farm-desktop`：占位 crate（无 GPUI UI）
 - 质量：AccountRecord/AccountSession 命名；rate_limiter 改用 `core::Error`；Friend/automation 按账号隔离；CLI mock 去重
 - 能力状态：矩阵保持 **齐**（重构不引入已知业务差）；实机 L 清单仍待勾选
+### 2026-08-15 — GPUI 桌面端落地（进程内嵌）
+
+- `qq-farm-desktop`：gpui 0.2.2 + gpui-component 0.5.1；`LocalOwner` ACL；导航对齐 web（概览/个人/活动/商城/神秘商人/好友/分析/设置/配置/本机运维）
+- `qq-farm-app`：补齐 `bootstrap`、`settings`、`farm`（status/lands/bag/operate/analytics/logs）、`friend`、`activity`、`commerce`、`config`、`admin`；账号 `list_accounts_enriched` / `upsert_account`
+- server：账号列表、settings 面板、farm status 改调 app 门面
+- 能力状态：面板 HTTP 契约 **不变**；desktop 与 web **语义对齐**（UI 为 gpui 实现，非像素级还原）
+### 2026-08-15 — 桌面端微信扫码登录（对齐 web AccountModal）
+
+- `qq-farm-app::wx_login`：create / poll / confirm / issue_code / destroy，语义对齐 `/api/wx-login/tasks*`
+- 设置 → 账号：双 Tab「输入 code」/「微信扫码」；扫码展示 JPEG QR、状态文案、刷新/取消；成功后 `upsert_account(platform=wx)` 并启动
+- 概览补点券/钻石资产卡；个人农场操作按钮保持与 web FarmPanel 同名
+- 能力状态：桌面扫码与 web 同协议；server HTTP 契约 **不变**
+
+### 2026-08-15 — 桌面账号管理语义修正（停机≠可启动）
+
+- 概览：去掉假「启动账号」；离线 CTA 改为「扫码重新登录」（同备注 upsert）
+- 设置 → 账号管理：表格（序号/备注/平台/运行状态/最近更新/操作）；工具栏「+ 新增」「刷新」；新增面板按需展开
+- 运行中 →「停止」；已停止 →「重新登录」（扫码/新 code），不再用旧一次性 code 点「启动」
+- 能力状态：桌面语义更正；server HTTP 契约 **不变**

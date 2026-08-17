@@ -11,9 +11,9 @@ CLI / demo ───────────────────────
 ```
 
 - `qq-farm-core`：零 UI、零进程入口的库。
-- `qq-farm-app`：UI 无关门面（Account / Farm / Friend / Auth + `AppEvent`）。**已实现骨架**：`accounts`（ACL + start/stop/remark/delete）、`farm`（`require_worker_loop` + daily gifts）、其余模块为 stub。
-- `qq-farm-server`：仅协议适配；不堆领域算法。start/stop 与 ACL 已委托 `qq-farm-app`。
-- `qq-farm-desktop`：GPUI View → app；**当前为占位 binary**（无 gpui 依赖），仅链接 `qq-farm-app`。
+- `qq-farm-app`：UI 无关门面（Account / Farm / Friend / Auth / Activity / Commerce / Settings / Config / Admin + `AppEvent` + `bootstrap`）。
+- `qq-farm-server`：仅协议适配；不堆领域算法。start/stop、账号列表、settings 面板、status 等已委托 `qq-farm-app`。
+- `qq-farm-desktop`：GPUI + gpui-component；进程内嵌引擎，侧栏导航对齐 web 菜单。
 - server ↔ desktop **互不依赖**。
 
 ## 桌面嵌入模式（默认）

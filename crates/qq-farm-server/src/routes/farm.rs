@@ -162,16 +162,7 @@ async fn get_status(
     if id.is_empty() {
         return Ok(Json(json!({ "ok": false, "error": "Missing x-account-id" })));
     }
-    let mut data = ctx.engine.panel_status(&id);
-    if let Some(status) = data.get("status") {
-        let level = status.get("level").and_then(|v| v.as_i64()).unwrap_or(0);
-        let exp = status.get("exp").and_then(|v| v.as_i64()).unwrap_or(0);
-        let (current, needed) = qq_farm_core::config::game_config::global()
-            .get_level_exp_progress(level, exp);
-        if let Some(obj) = data.as_object_mut() {
-            obj.insert("levelProgress".to_string(), json!({ "current": current, "needed": needed }));
-        }
-    }
+    let data = qq_farm_app::farm::panel_status_with_progress(&ctx.app_context(), &id);
     ok_data(data)
 }
 

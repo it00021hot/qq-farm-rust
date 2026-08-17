@@ -113,6 +113,10 @@ p256 = { version = "0.13", features = ["ecdh"] }
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
 
+# Desktop UI (GPUI)
+gpui = "0.2.2"
+gpui-component = "0.5.1"
+
 # 进程内 crate
 qq-farm-core = { path = "crates/qq-farm-core" }
 qq-farm-app = { path = "crates/qq-farm-app" }

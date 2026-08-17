@@ -20,3 +20,4 @@ tracing = { workspace = true }
 parking_lot = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
+uuid = { workspace = true }

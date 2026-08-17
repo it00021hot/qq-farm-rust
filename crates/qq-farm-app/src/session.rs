@@ -4,16 +4,27 @@ use std::sync::Arc;
 
 use qq_farm_core::runtime::engine::RuntimeEngine;
 
-/// 应用上下文 — 持有运行时引擎。
+use crate::wx_login::WxLoginHub;
+
+/// 应用上下文 — 持有运行时引擎与共享门面状态。
 #[derive(Clone)]
 pub struct AppContext {
     pub engine: Arc<RuntimeEngine>,
+    pub wx_login: Arc<WxLoginHub>,
 }
 
 impl AppContext {
     #[must_use]
     pub fn new(engine: Arc<RuntimeEngine>) -> Self {
-        Self { engine }
+        Self {
+            engine,
+            wx_login: Arc::new(WxLoginHub::new()),
+        }
+    }
+
+    #[must_use]
+    pub fn with_wx_login(engine: Arc<RuntimeEngine>, wx_login: Arc<WxLoginHub>) -> Self {
+        Self { engine, wx_login }
     }
 }
 
