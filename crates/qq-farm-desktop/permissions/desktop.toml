@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-desktop-commands"
+description = "Allow QQ Farm desktop scaffold IPC commands"
+commands.allow = [
+  "desktop_ready",
+  "get_snapshot",
+  "list_accounts",
+  "get_settings"
+]

@@ -15,15 +15,21 @@
 .DS_Store
 Thumbs.db
 
-# 环境
-.env
-.env.local
+# 环境（仅仓库根；desktop-ui 保留 Soybean 的 .env* 模板）
+/.env
+/.env.local
 *.local
 
 # 运行时数据（与原项目一致）
 data/
 logs/
 *.log
+
+# Desktop UI (SoybeanAdmin + Tauri)
+desktop-ui/node_modules/
+desktop-ui/dist/
+desktop-ui/.vite/
+crates/qq-farm-desktop/gen/
 
 # WASM 临时文件
 *.wasm.tmp

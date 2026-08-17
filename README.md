@@ -12,8 +12,9 @@ qq-farm-rust/
 │   ├── qq-farm-core/      # 网关、登录、农场/好友调度、活动中心、统计
 │   ├── qq-farm-app/       # UI 无关应用门面（server / desktop 共用）
 │   ├── qq-farm-server/    # HTTP API + Socket.IO（默认 3007）
-│   ├── qq-farm-desktop/   # GPUI 桌面端（预留）
+│   ├── qq-farm-desktop/   # Tauri v2 桌面宿主（IPC → app）
 │   └── qq-farm-cli/       # 调试命令（crypto / farm / friend / wx-code）
+├── desktop-ui/            # SoybeanAdmin 桌面前端（与客户端共存）
 ├── proto/                 # 游戏 protobuf
 ├── assets/activity-data/  # 活动静态数据
 ├── scripts/               # 辅助脚本
@@ -62,6 +63,18 @@ pnpm dev
 
 浏览器打开 `http://127.0.0.1:5173`。面板登录、加号、农场操作都打到本仓库的 3007。
 
+### 桌面端（Tauri v2 + SoybeanAdmin）
+
+```bash
+# 前端依赖
+pnpm -C desktop-ui i
+
+# 需已安装 Tauri CLI：cargo install tauri-cli --version "^2"
+cd crates/qq-farm-desktop && cargo tauri dev
+```
+
+桌面端经 IPC 调 `qq-farm-app`（LocalOwner），**不**走 3007 HTTP。浏览器面板与桌面前端并存。
+
 ### 微信扫码登录
 
 1. 面板里给账号选微信平台，走扫码登录。
@@ -93,7 +106,7 @@ pnpm dev
 
 ## CLI
 
-`qq-farm-cli` 里的 demo 子命令（`demo-crypto`、`worker-demo`、`farm-demo`、`friend-demo`）仅用于本地开发与阶段验证，依赖 mock WebSocket，**不是生产入口**。生产请用 `qq-farm-server`；`qq-farm-desktop` 仍为占位 crate。
+`qq-farm-cli` 里的 demo 子命令（`demo-crypto`、`worker-demo`、`farm-demo`、`friend-demo`）仅用于本地开发与阶段验证，依赖 mock WebSocket，**不是生产入口**。生产入口：`qq-farm-server`（面板）或 `qq-farm-desktop`（Tauri）。
 
 ```bash
 cargo run -p qq-farm-cli -- farm-demo

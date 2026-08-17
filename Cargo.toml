@@ -113,9 +113,7 @@ p256 = { version = "0.13", features = ["ecdh"] }
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
 
-# Desktop UI (GPUI)
-gpui = "0.2.2"
-gpui-component = "0.5.1"
+# Desktop UI (Tauri v2) — versions pinned in qq-farm-desktop Cargo.toml
 
 # 进程内 crate
 qq-farm-core = { path = "crates/qq-farm-core" }

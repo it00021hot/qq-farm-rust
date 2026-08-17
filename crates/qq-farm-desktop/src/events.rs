@@ -1,51 +1,83 @@
-//! 订阅 RuntimeEvent → 刷新 UI。
+//! `AppEvent` / `RuntimeEvent` → 前端 `app-event`。
 
-use std::time::Duration;
+use serde::Serialize;
+use tauri::{AppHandle, Emitter};
 
-use gpui::*;
+use qq_farm_app::events::AppEvent;
+use qq_farm_core::runtime::runtime_state::RuntimeEvent;
 
-use crate::app_state::AppState;
+use crate::state::DesktopState;
 
-/// 启动事件监听与定时刷新。
-pub fn spawn_event_listener(state: Entity<AppState>, cx: &mut App) {
-    let (app, _, handle) = state.read(cx).bridge_parts();
-    let weak = state.downgrade();
-    let weak2 = state.downgrade();
+/// 推送给前端的事件载荷。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopAppEvent {
+    pub kind: String,
+    pub account_id: Option<String>,
+    pub account_name: Option<String>,
+    pub message: Option<String>,
+}
 
-    let (tx, rx) = std::sync::mpsc::channel::<()>();
-    handle.spawn(async move {
-        let mut events = app.subscribe_events();
-        while events.recv().await.is_ok() {
-            let _ = tx.send(());
+impl From<&RuntimeEvent> for DesktopAppEvent {
+    fn from(ev: &RuntimeEvent) -> Self {
+        match ev {
+            RuntimeEvent::Log(entry) => Self {
+                kind: "log".into(),
+                account_id: entry.account_id.clone(),
+                account_name: entry.account_name.clone(),
+                message: Some(entry.msg.clone()),
+            },
+            RuntimeEvent::AccountLog(entry) => Self {
+                kind: "account_log".into(),
+                account_id: Some(entry.account_id.clone()),
+                account_name: Some(entry.account_name.clone()),
+                message: Some(entry.msg.clone()),
+            },
+            RuntimeEvent::Status {
+                account_id,
+                account_name,
+                ..
+            } => Self {
+                kind: "status".into(),
+                account_id: Some(account_id.clone()),
+                account_name: Some(account_name.clone()),
+                message: None,
+            },
+            RuntimeEvent::WorkerLog {
+                account_id,
+                account_name,
+                ..
+            } => Self {
+                kind: "worker_log".into(),
+                account_id: Some(account_id.clone()),
+                account_name: Some(account_name.clone()),
+                message: None,
+            },
+        }
+    }
+}
+
+/// 在后台任务中订阅 runtime 事件并 emit 到所有窗口。
+pub fn spawn_event_bridge(app: AppHandle, state: DesktopState) {
+    tauri::async_runtime::spawn(async move {
+        let mut rx = state.app.subscribe_events();
+        loop {
+            match rx.recv().await {
+                Ok(ev) => {
+                    let _ = AppEvent::from(ev.clone());
+                    let payload = DesktopAppEvent::from(&ev);
+                    if let Err(e) = app.emit("app-event", &payload) {
+                        tracing::warn!(error = %e, "emit app-event failed");
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(skipped = n, "desktop event bridge lagged");
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    tracing::info!("desktop event bridge closed");
+                    break;
+                }
+            }
         }
     });
-
-    cx.spawn(async move |cx| {
-        loop {
-            let has_event = rx.try_recv().is_ok();
-            if has_event {
-                let _ = weak.update(cx, |state, cx| {
-                    state.refresh_sync();
-                    cx.notify();
-                });
-            }
-            cx.background_executor()
-                .timer(Duration::from_millis(500))
-                .await;
-        }
-    })
-    .detach();
-
-    cx.spawn(async move |cx| {
-        loop {
-            cx.background_executor()
-                .timer(Duration::from_secs(3))
-                .await;
-            let _ = weak2.update(cx, |state, cx| {
-                state.refresh_sync();
-                cx.notify();
-            });
-        }
-    })
-    .detach();
 }

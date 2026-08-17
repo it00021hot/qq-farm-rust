@@ -6,13 +6,13 @@
 
 | Crate | 允许 | 禁止 |
 |-------|------|------|
-| `qq-farm-core` | 领域、协议、运行时、持久化、常量 | `axum` / `gpui` / 任何 UI |
-| `qq-farm-app` | Command / Query / Event 门面；只依赖 core | HTTP Status、GPUI View、路由 |
+| `qq-farm-core` | 领域、协议、运行时、持久化、常量 | `axum` / `tauri` / 任何 UI |
+| `qq-farm-app` | Command / Query / Event 门面；只依赖 core | HTTP Status、Tauri API、路由、View |
 | `qq-farm-server` | Axum / Socket.IO 协议适配 → 调 app | 领域算法、复制 start/stop 编排 |
-| `qq-farm-desktop` | GPUI → 调 **同一套** app；默认内嵌 RuntimeEngine | 依赖 server；经 localhost HTTP（仅可选第二路径） |
+| `qq-farm-desktop` | Tauri IPC → 调 **同一套** app；默认内嵌 RuntimeEngine | 依赖 server；把 Tauri 泄漏进 app；经 localhost HTTP（非默认） |
 | `qq-farm-cli` | 调试 / demo / 运维命令 | 复制 core 类型与 mock（应复用） |
 
-**硬性规则：** `server` 与 `desktop` **禁止**互相依赖。
+**硬性规则：** `server` 与 `desktop` **禁止**互相依赖；`qq-farm-app` **禁止**依赖 `tauri`。
 
 ## 常量
 

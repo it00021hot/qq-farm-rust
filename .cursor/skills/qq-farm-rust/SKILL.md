@@ -3,9 +3,9 @@ name: qq-farm-rust
 description: >-
   Develop and refactor the qq-farm-rust workspace (QQ farm multi-account bot in Rust):
   crate boundaries (core/app/server/desktop/cli), constants/infra/domain packaging,
-  panel API parity with qq-farm-bot, ACL, AppEvent, and GPUI desktop prep.
+  panel API parity with qq-farm-bot, ACL, AppEvent, and Tauri v2 desktop + SoybeanAdmin.
   Use when editing qq-farm-rust, qq-farm-core, qq-farm-app, qq-farm-server,
-  qq-farm-desktop, farm/friend/activity automation, or SYNC/ARCHITECTURE/CODING_STANDARDS.
+  qq-farm-desktop, desktop-ui, farm/friend/activity automation, or SYNC/ARCHITECTURE/CODING_STANDARDS.
 ---
 
 # qq-farm-rust
@@ -26,22 +26,21 @@ QQ 农场多账号挂机 Rust 重写。改代码前先对齐分层与契约，�
 ## Crate topology (hard rules)
 
 ```text
-Vue ──HTTP/Socket──► qq-farm-server ──► qq-farm-app ──► qq-farm-core
-GPUI ──────────────► qq-farm-desktop ──► qq-farm-app ──► qq-farm-core
-CLI / demo ────────────────────────────► core（运维可调 app）
+Vue (bot/web) ──HTTP/Socket──► qq-farm-server ──► qq-farm-app ──► qq-farm-core
+desktop-ui ──────Tauri IPC──► qq-farm-desktop ──► qq-farm-app ──► qq-farm-core
+CLI / demo ─────────────────────────────────────► core（运维可调 app）
 ```
 
 | Crate | Do | Don't |
 |-------|----|-------|
-| `qq-farm-core` | 领域、协议、runtime、store、`constants`、`infra` | `axum` / `gpui` / UI |
-| `qq-farm-app` | Command/Query/Event；ACL；start/stop；聚合 | HTTP Status、GPUI View、路由 |
+| `qq-farm-core` | 领域、协议、runtime、store、`constants`、`infra` | `axum` / `tauri` / UI |
+| `qq-farm-app` | Command/Query/Event；ACL；start/stop；聚合 | HTTP Status、Tauri、路由 |
 | `qq-farm-server` | 协议适配 → 调 app → `ApiError` | 领域算法、复制编排 |
-| `qq-farm-desktop` | GPUI → **同一套** app；默认内嵌 `RuntimeEngine` | 依赖 server；默认走 localhost HTTP |
+| `qq-farm-desktop` | Tauri IPC → **同一套** app；默认内嵌 `RuntimeEngine` | 依赖 server；把 Tauri 放进 app |
 | `qq-farm-cli` | demo / 运维 | 复制 core mock（用共用辅助） |
+| `desktop-ui/` | SoybeanAdmin 风格；IPC service/store/views 分层 | 私自主题；单文件堆业务；复制 bot web 组件 |
 
-**server ↔ desktop 禁止互相依赖。**
-
-Desktop UI：同时加载个人 skill `gpui` + `gpui-component`；业务仍只经 `qq-farm-app`。
+**server ↔ desktop 禁止互相依赖。`qq-farm-app` 禁止依赖 `tauri`。**
 
 ## Where to put code
 
@@ -49,9 +48,9 @@ Desktop UI：同时加载个人 skill `gpui` + `gpui-component`；业务仍只�
 2. **部署配置**（端口、CORS、max_workers）→ `ServerConfig` / 各入口 `*Config`。
 3. **基础设施** → `core::infra`（`json_db`、`rate_limiter`、`automation`、`stats`、`status`、`panel_log`）。
 4. **业务域** → `core::services::{farm,friend,activity,commerce,daily,auth,tasks,warehouse}`。
-5. **多前端共用编排**（ACL、start/stop、礼包聚合、事件）→ `qq-farm-app`，不要堆在 Axum handler。
-6. **类型**：store 用 `AccountRecord`，runtime 用 `AccountSession`；错误 `core::Error` → `AppError` → `ApiError`。
-7. **新公共 API** 禁止以 `serde_json::Value` 为主返回类型；JSON 只在 HTTP 边界。
+5. **多前端共用编排**（ACL、start/stop、礼包聚合、事件）→ `qq-farm-app`，不要堆在 Axum handler 或 Tauri command。
+6. **类型**：store 用 `AccountRecord`，runtime 用 `AccountSession`；错误 `core::Error` → `AppError` → `ApiError` / desktop `IpcError`。
+7. **新公共 API** 禁止以 `serde_json::Value` 为主返回类型；JSON 只在 HTTP / IPC 边界。
 
 ## Statics policy
 
@@ -65,16 +64,18 @@ Desktop UI：同时加载个人 skill `gpui` + `gpui-component`；业务仍只�
 - 行为或契约变更：在 `docs/SYNC.md` 文末「更新记录」追加一条。
 - 验收只认「齐」，不接受「基本齐」留下已知差。
 - Vue 面板在原 `qq-farm-bot/web`；本仓默认 `ADMIN_PORT=3007`，鉴权头 `x-admin-token`。
+- 桌面前端在本仓 `desktop-ui/`，经 Tauri IPC，不用面板 token。
 
 ## Implementation checklist
 
 ```
-- [ ] 变更落在正确 crate（core / app / server / desktop / cli）
-- [ ] 无新增 L3 全局；无 handler 内领域算法
+- [ ] 变更落在正确 crate（core / app / server / desktop / cli）或 desktop-ui 分层
+- [ ] 无新增 L3 全局；无 handler/command 内领域算法
 - [ ] 常量进 constants；配置进 *Config
 - [ ] 账号操作走 ACL（app::accounts + PanelUser / LocalOwner）
-- [ ] 错误经 AppError/ApiError，不解析 Display 字符串
+- [ ] 错误经 AppError/ApiError/IpcError，不解析 Display 字符串
 - [ ] cargo check / 相关 test；server E2E 用 --test-threads=1
+- [ ] desktop-ui：Soybean/Naive 组件优先；无私自主题；typings/service/store/views 分层
 - [ ] 业务/契约变更已写 SYNC.md
 ```
 
@@ -85,10 +86,13 @@ cargo check --workspace
 cargo test --workspace
 cargo test -p qq-farm-server --test e2e_integration -- --test-threads=1
 RUST_LOG=info ADMIN_PORT=3007 cargo run -p qq-farm-server
+pnpm -C desktop-ui i && pnpm -C desktop-ui build
+cd crates/qq-farm-desktop && cargo tauri dev
 ```
 
-## Desktop (GPUI) notes
+## Desktop (Tauri) notes
 
-- 占位 crate：`crates/qq-farm-desktop`；实现时只依赖 `qq-farm-app` + gpui/gpui-component。
-- 订阅状态：`AppContext::subscribe_events` / `AppEvent`，不要复制 Socket.IO 推送逻辑。
-- UI 组件与 GPUI API：用已安装的 `gpui` / `gpui-component` skill，不在本 skill 展开。
+- Crate：`crates/qq-farm-desktop`；只依赖 `qq-farm-app` + Tauri；前端 `desktop-ui/`。
+- 订阅状态：`AppContext::subscribe_events` → `emit("app-event")`，不要复制 Socket.IO。
+- Scaffold 命令：`desktop_ready` / `get_snapshot` / `list_accounts` / `get_settings`。
+- UI：沿用 Soybean 主题与组件；新增页走 `views/*/modules` + `service/tauri`。

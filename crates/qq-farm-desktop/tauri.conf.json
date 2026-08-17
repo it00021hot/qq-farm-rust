@@ -1,0 +1,43 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "QQ Farm",
+  "version": "0.1.0",
+  "identifier": "com.qqfarm.desktop",
+  "build": {
+    "beforeDevCommand": {
+      "cwd": "../../desktop-ui",
+      "script": "pnpm dev"
+    },
+    "devUrl": "http://localhost:9527",
+    "beforeBuildCommand": {
+      "cwd": "../../desktop-ui",
+      "script": "pnpm build"
+    },
+    "frontendDist": "../../desktop-ui/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "QQ Farm",
+        "width": 1280,
+        "height": 800,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/henry.w@example.net",
+      "icons/icon.png"
+    ]
+  },
+  "plugins": {}
+}

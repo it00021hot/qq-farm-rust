@@ -80,7 +80,7 @@ pub fn setup_socketio(ctx: Arc<AdminContext>) -> (socketioxide::layer::SocketIoL
 /// 把 runtime 事件转到 Socket.IO 房间（对齐 emitRealtimeStatus / Log / AccountLog）。
 ///
 /// 订阅 `RuntimeEngine::runtime_state().subscribe()` 的 broadcast 通道。
-/// GPUI / desktop 客户端应改用 `qq_farm_app::AppContext::subscribe_events` 并包装为 [`AppEvent`](qq_farm_app::events::AppEvent)。
+/// desktop 客户端应改用 `qq_farm_app::AppContext::subscribe_events` 并包装为 [`AppEvent`](qq_farm_app::events::AppEvent)。
 pub fn spawn_socket_forwarder(io: SocketIo, ctx: Arc<AdminContext>) {
     let mut rx = ctx.engine.runtime_state().subscribe();
     tokio::spawn(async move {

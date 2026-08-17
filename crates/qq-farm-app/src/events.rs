@@ -5,7 +5,7 @@ use tokio::sync::broadcast;
 
 use crate::session::AppContext;
 
-/// 应用层事件（当前直接包装 RuntimeEvent，后续可扩展 GPUI 专用变体）。
+/// 应用层事件（当前直接包装 RuntimeEvent，后续可扩展 desktop 专用变体）。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
 pub struct AppEvent(pub RuntimeEvent);
@@ -37,7 +37,7 @@ impl From<AppEvent> for RuntimeEvent {
 impl AppContext {
     /// 订阅运行时事件。
     ///
-    /// GPUI / desktop 客户端应通过此方法订阅，并将收到的 [`RuntimeEvent`] 包装为 [`AppEvent`]。
+    /// desktop / 其它非 HTTP 客户端应通过此方法订阅，并将收到的 [`RuntimeEvent`] 包装为 [`AppEvent`]。
     /// HTTP server 的 Socket.IO 转发仍可直接使用 `RuntimeEngine::runtime_state().subscribe()`。
     pub fn subscribe_events(&self) -> broadcast::Receiver<RuntimeEvent> {
         self.engine.subscribe_runtime_events()

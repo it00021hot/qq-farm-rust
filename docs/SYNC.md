@@ -238,3 +238,11 @@
 - 设置 → 账号管理：表格（序号/备注/平台/运行状态/最近更新/操作）；工具栏「+ 新增」「刷新」；新增面板按需展开
 - 运行中 →「停止」；已停止 →「重新登录」（扫码/新 code），不再用旧一次性 code 点「启动」
 - 能力状态：桌面语义更正；server HTTP 契约 **不变**
+
+### 2026-08-17 — 桌面端切换 Tauri v2 + SoybeanAdmin（Scaffold）
+
+- 删除 GPUI 实现与 workspace `gpui` / `gpui-component` 依赖
+- `qq-farm-desktop`：Tauri v2 宿主；IPC 命令 `desktop_ready` / `get_snapshot` / `list_accounts` / `get_settings`；`AppEvent` → `emit("app-event")`；ACL 仍为 `LocalOwner`
+- `desktop-ui/`：SoybeanAdmin（NaiveUI）裁剪壳；分层 `typings` / `service/tauri` / `store/desktop` / `views`；登录为本地进入；scaffold 页：概览 + 设置只读
+- **不改** `qq-farm-bot/web`；**不**在 `qq-farm-app` 引入 Tauri；面板 HTTP/Socket 契约 **不变**
+- 能力状态：桌面 Scaffold 可开窗打通 IPC；完整业务页待后续迁入

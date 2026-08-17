@@ -18,7 +18,7 @@
 //! 1. **零 IO 入口** — 本 crate 不直接起进程/服务，作为库被 server/cli/app/desktop 引用
 //! 2. **依赖倒置** — 业务 trait 不直接依赖具体网络实现
 //! 3. **错误统一** — 所有错误归约到 [`error::Error`]
-//! 4. **零 UI** — 禁止依赖 axum / gpui；常量见 [`constants`]
+//! 4. **零 UI** — 禁止依赖 axum / tauri；常量见 [`constants`]
 
 #![doc(html_root_url = "https://docs.rs/qq-farm-core/0.1.0")]
 
