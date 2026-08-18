@@ -388,3 +388,11 @@
 - 原因：单条游戏 WS 上几乎所有 RPC（本田/好友/背包 10s、访客记录 2.5s 探测）硬切 waiter 后继续发请求，把通道堵死；心跳在 pending>0 时 skip，pending 被 cancel 打成 0 后误杀；统一 tick 的 `clear` 会 abort 正在跑的巡查；看板同时 `pushLog` 了 `log:new` 和派生的 `farm_operation`/`friend_interact`
 - 修复：WS 读/写分 task；`Gateway::request` 等到回包或断线（仅 Login/Heartbeat/握手保留短超时），业务 RPC 账号内串行；心跳只 skip 叠发，静默看入站帧不看 pending；timeout 任务开火后另 spawn，abort 用 Drop 清 running/`farm_at`；看板只从 `log:new` 写运行日志
 - 能力状态：巡查中点土地/背包/好友/活动/商城/任务/邮件不应再刷游戏「请求超时」或心跳停号；真掉线显示离线；偷菜/出售/土地推送各一行
+
+### 2026-08-18 — 桌面壳对齐 Wails（菜单 / 托盘 / 发版 / 更新）
+
+- 对照 `qq-farm-desktop`：macOS 原生菜单 + 全平台托盘 + 关窗进托盘；不移植「在浏览器中打开」（IPC 内嵌无 HTTP）
+- 安装包 `bundle.resources` 打进 `tsdk.wasm` 与 `game_config`；release 数据目录走 OS `QQFarm`
+- GitHub Actions `v*` tag 打 Windows NSIS（用户级）+ macOS universal；`tauri-plugin-updater` 读 `latest.json`
+- 删除无用的 `qq-farm-cli`
+- 能力状态：托盘可显隐/退出；干净机器安装后能加载 TSDK 登录；打更高版本 tag 后「检查更新」能换包重启

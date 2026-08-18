@@ -1,9 +1,7 @@
-//! Protobuf 调试解码工具（CLI 用）。
+//! Protobuf 调试解码工具。
 //!
 //! 1:1 翻译原 `core/src/utils/decode.ts` 的辅助函数（`tryDecodeString` /
 //! `longReplacer` / `tryGenericDecode` / `inferBodyType`）。
-//!
-//! 主入口在 `qq-farm-cli` 的 `pb-decode` 子命令；这里只放纯函数。
 
 /// 尝试将字节解码为可读 UTF-8（>=80% 可打印字符）
 #[must_use]

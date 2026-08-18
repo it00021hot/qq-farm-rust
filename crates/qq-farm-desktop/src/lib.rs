@@ -6,7 +6,13 @@ mod assets;
 mod commands;
 mod error;
 mod events;
+#[cfg(target_os = "macos")]
+mod menu;
+mod paths;
+mod shell;
 mod state;
+mod tray;
+mod updater;
 
 use std::sync::Arc;
 
@@ -17,8 +23,8 @@ use crate::state::DesktopState;
 /// 桌面端进程入口（由 `main` / 移动端入口调用）。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    paths::prepare_data_dir();
     qq_farm_core::utils::logger::init();
-    dotenvy::dotenv().ok();
 
     // RuntimeEngine / AppEvent 桥依赖当前线程的 Tokio runtime（与旧 GPUI 入口一致）。
     let runtime = Box::leak(Box::new(
@@ -30,19 +36,31 @@ pub fn run() {
     ));
     let _enter = runtime.enter();
 
-    let max_workers = std::env::var("MAX_WORKERS").ok().and_then(|s| s.parse().ok()).unwrap_or(16);
-    let app_ctx =
-        Arc::new(qq_farm_app::bootstrap::assemble_app_context(max_workers, "https://game.qq.com"));
-    let desktop = DesktopState::new(app_ctx);
-
-    tauri::Builder::default()
-        .manage(desktop)
+    let app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .register_uri_scheme_protocol("farmcfg", |_ctx, request| assets::handle_request(request))
+        .on_menu_event(|app, event| shell::handle_menu_event(app, event.id()))
         .setup(|app| {
-            let handle = app.handle().clone();
-            let state = app.state::<DesktopState>().inner().clone();
-            events::spawn_event_bridge(handle, state.clone());
-            state.app.engine.schedule_wx_authorized_start();
+            paths::apply_bundled_resource_env(app.handle());
+            let max_workers =
+                std::env::var("MAX_WORKERS").ok().and_then(|s| s.parse().ok()).unwrap_or(16);
+            let app_ctx = Arc::new(qq_farm_app::bootstrap::assemble_app_context(
+                max_workers,
+                "https://game.qq.com",
+            ));
+            let desktop = DesktopState::new(app_ctx);
+            events::spawn_event_bridge(app.handle().clone(), desktop.clone());
+            desktop.app.engine.schedule_wx_authorized_start();
+            app.manage(desktop);
+
+            #[cfg(target_os = "macos")]
+            menu::install(app.handle())?;
+            tray::install(app.handle())?;
+            shell::install_close_to_tray(app.handle());
+            updater::setup(app.handle());
+
             let cfg_dir = qq_farm_core::config::paths::game_config_static_dir();
             tracing::info!(dir = %cfg_dir.display(), "game-config static dir");
             Ok(())
@@ -125,6 +143,13 @@ pub fn run() {
             commands::config::config_modify,
             commands::config::config_delete,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running qq-farm-desktop");
+        .build(tauri::generate_context!())
+        .expect("error while building qq-farm-desktop");
+
+    app.run(|app_handle, event| {
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Reopen { .. } = event {
+            shell::show_main_window(app_handle);
+        }
+    });
 }

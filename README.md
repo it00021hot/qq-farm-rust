@@ -12,8 +12,7 @@ qq-farm-rust/
 │   ├── qq-farm-core/      # 网关、登录、农场/好友调度、活动中心、统计
 │   ├── qq-farm-app/       # UI 无关应用门面（server / desktop 共用）
 │   ├── qq-farm-server/    # HTTP API + Socket.IO（默认 3007）
-│   ├── qq-farm-desktop/   # Tauri v2 桌面宿主（IPC → app）
-│   └── qq-farm-cli/       # 调试命令（crypto / farm / friend / wx-code）
+│   └── qq-farm-desktop/   # Tauri v2 桌面宿主（IPC → app）
 ├── desktop-ui/            # SoybeanAdmin 桌面前端（与客户端共存）
 ├── proto/                 # 游戏 protobuf
 ├── assets/activity-data/  # 活动静态数据
@@ -23,7 +22,7 @@ qq-farm-rust/
 └── .env.example
 ```
 
-数据目录默认 `~/.qq-farm-rust/`（可用 `FARM_DATA_DIR` 覆盖），不要提交进去。
+数据目录可用 `FARM_DATA_DIR` 覆盖（server 默认 `<app_root>/data`），不要提交进去。
 
 ## 环境
 
@@ -75,6 +74,19 @@ cd crates/qq-farm-desktop && cargo tauri dev
 
 桌面端经 IPC 调 `qq-farm-app`（LocalOwner），**不**走 3007 HTTP。浏览器面板与桌面前端并存。
 
+- macOS 有原生菜单（应用：打开数据目录 / 检查更新）；Windows 动作在托盘
+- 关闭窗口隐藏到托盘；退出只走托盘「退出」或 macOS Cmd+Q
+- 安装包内嵌 `tsdk.wasm` 与 `game_config`；数据目录默认 `~/Library/Application Support/QQFarm` 或 `%LOCALAPPDATA%\QQFarm`
+
+### 发版与自动更新
+
+打 tag 后 GitHub Actions 构建 Windows NSIS + macOS universal DMG，并上传 `latest.json` 供客户端更新。验收见 [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)。
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
 ### 微信扫码登录
 
 1. 面板里给账号选微信平台，走扫码登录。
@@ -91,7 +103,7 @@ cd crates/qq-farm-desktop && cargo tauri dev
 | `FARM_CLIENT_VERSION` | `1.13.1.6_20260723` | 客户端版本 |
 | `ADMIN_PORT` | `3007` | HTTP / Socket.IO 端口 |
 | `RUST_LOG` | `info` | 日志级别 |
-| `FARM_DATA_DIR` | `~/.qq-farm-rust` | 账号、用户、配置 |
+| `FARM_DATA_DIR` | server：`<app_root>/data`；桌面安装包：OS 应用数据目录 `QQFarm` | 账号、用户、配置 |
 
 ## 运行时行为
 
@@ -103,16 +115,6 @@ cd crates/qq-farm-desktop && cargo tauri dev
 - **面板**：`status:update` 推送效率（`sessionExpGained` / `uptime`），`log:new` 推送运行日志
 
 安静时段、好友总开关、蔬菜黑名单与原版配置项一致。
-
-## CLI
-
-`qq-farm-cli` 里的 demo 子命令（`demo-crypto`、`worker-demo`、`farm-demo`、`friend-demo`）仅用于本地开发与阶段验证，依赖 mock WebSocket，**不是生产入口**。生产入口：`qq-farm-server`（面板）或 `qq-farm-desktop`（Tauri）。
-
-```bash
-cargo run -p qq-farm-cli -- farm-demo
-cargo run -p qq-farm-cli -- friend-demo
-cargo run -p qq-farm-cli -- wx-code --help
-```
 
 ## 测试
 

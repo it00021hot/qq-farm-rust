@@ -6,8 +6,6 @@ use qq_farm_app::events::AppEvent;
 
 use crate::state::DesktopState;
 
-pub use qq_farm_app::events::PanelRealtimeEvent as DesktopAppEvent;
-
 /// 在后台任务中订阅 runtime 事件并 emit 到所有窗口。
 pub fn spawn_event_bridge(app: AppHandle, state: DesktopState) {
     tauri::async_runtime::spawn(async move {

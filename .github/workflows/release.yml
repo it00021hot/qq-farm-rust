@@ -1,0 +1,119 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v0.2.0); defaults to the triggering ref"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: --target universal-apple-darwin
+          - platform: windows-latest
+            args: --target x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Require tsdk.wasm
+        shell: bash
+        run: |
+          if [[ ! -s assets/tsdk.wasm ]]; then
+            echo "assets/tsdk.wasm is missing or empty; commit it before releasing (packaged login needs TSDK)." >&2
+            exit 1
+          fi
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: desktop-ui/pnpm-lock.yaml
+
+      - name: Install frontend deps
+        run: pnpm -C desktop-ui install --frozen-lockfile
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || 'x86_64-pc-windows-msvc' }}
+
+      - name: Install protoc
+        uses: taiki-e/install-action@v2
+        with:
+          tool: protoc
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          REF="${{ github.event.inputs.tag || github.ref_name }}"
+          VER="${REF#v}"
+          echo "tag=v${VER}" >> "$GITHUB_OUTPUT"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "Building $VER"
+
+      - name: Build and upload
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: crates/qq-farm-desktop
+          args: ${{ matrix.args }}
+          tagName: ${{ steps.ver.outputs.tag }}
+          releaseName: QQ Farm Desktop ${{ steps.ver.outputs.tag }}
+          releaseBody: See the assets to download and install this version.
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
+
+  checksums:
+    name: SHA256SUMS
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve version
+        id: ver
+        run: |
+          REF="${{ github.event.inputs.tag || github.ref_name }}"
+          VER="${REF#v}"
+          echo "tag=v${VER}" >> "$GITHUB_OUTPUT"
+
+      - name: Download release assets and upload SHA256SUMS
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          mkdir dist
+          gh release download "$TAG" --repo "${{ github.repository }}" --dir dist
+          cd dist
+          rm -f SHA256SUMS
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+          gh release upload "$TAG" SHA256SUMS --repo "${{ github.repository }}" --clobber

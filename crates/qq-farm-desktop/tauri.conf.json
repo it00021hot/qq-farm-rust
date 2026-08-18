@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "QQ Farm",
+  "productName": "QQ农场智能助手",
   "version": "0.1.0",
   "identifier": "com.qqfarm.desktop",
   "build": {
@@ -17,7 +17,8 @@
   "app": {
     "windows": [
       {
-        "title": "QQ Farm",
+        "label": "main",
+        "title": "QQ农场智能助手",
         "width": 1280,
         "height": 800,
         "resizable": true,
@@ -38,7 +39,8 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "createUpdaterArtifacts": true,
+    "targets": ["nsis", "dmg"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -46,7 +48,29 @@
       "icons/icon.icns",
       "icons/icon.ico",
       "icons/icon.png"
-    ]
+    ],
+    "resources": {
+      "../../assets/tsdk.wasm": "assets/tsdk.wasm",
+      "../../assets/game_config": "assets/game_config"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    }
   },
-  "plugins": {}
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRFQ0NDNjczOUVDRDMxQ0MKUldUTU1jMmVjOGJNVHR6akxucVBTTnN2SDZrbC9zUUdJVXo5c0xlNFl1enI1Z1krOGtZak5CdjIK",
+      "endpoints": [
+        "https://github.com/it00021hot/qq-farm-rust/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
 }

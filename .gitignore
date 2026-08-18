@@ -30,6 +30,9 @@ desktop-ui/node_modules/
 desktop-ui/dist/
 desktop-ui/.vite/
 crates/qq-farm-desktop/gen/
+crates/qq-farm-desktop/.tauri/
+crates/qq-farm-desktop/icons/android/
+crates/qq-farm-desktop/icons/ios/
 
 # WASM 临时文件
 *.wasm.tmp

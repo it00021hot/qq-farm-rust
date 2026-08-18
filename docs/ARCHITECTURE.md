@@ -7,7 +7,6 @@
 ```text
 Vue 面板 (qq-farm-bot/web) ──HTTP/Socket.IO──► qq-farm-server ──► qq-farm-app ──► qq-farm-core
 desktop-ui (SoybeanAdmin) ──Tauri IPC──► qq-farm-desktop ──► qq-farm-app ──► qq-farm-core
-CLI / demo ─────────────────────────────────────────────────► qq-farm-core（运维可调 app）
 ```
 
 - `qq-farm-core`：零 UI、零进程入口的库。
@@ -38,6 +37,8 @@ Tauri App (qq-farm-desktop)
 ```
 
 前端不走 localhost HTTP / Socket.IO；实时推送由 `subscribe_events` → `emit("app-event")`。
+
+壳层对齐原 Wails 桌面端：macOS 原生菜单、全平台托盘、关窗进托盘、GitHub Releases 自动更新。安装包内嵌 `tsdk.wasm` / `game_config`。无「在浏览器中打开」。发版见 [RELEASE_CHECKLIST.md](./RELEASE_CHECKLIST.md)。
 
 侧栏菜单对齐 `qq-farm-web` 农场项（去掉 `/system/admin`）：home、personal、friends、activity、analytics、game-mall、mystery-shop、settings、game-config、account。
 

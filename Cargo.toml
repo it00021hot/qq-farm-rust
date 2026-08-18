@@ -4,7 +4,6 @@ members = [
     "crates/qq-farm-core",
     "crates/qq-farm-app",
     "crates/qq-farm-server",
-    "crates/qq-farm-cli",
     "crates/qq-farm-desktop",
 ]
 
@@ -109,9 +108,6 @@ aes-gcm = "0.10"
 lz4_flex = "0.11"
 # ECDH P-256（wx-login 协议）
 p256 = { version = "0.13", features = ["ecdh"] }
-
-# CLI
-clap = { version = "4", features = ["derive", "env"] }
 
 # Desktop UI (Tauri v2) — versions pinned in qq-farm-desktop Cargo.toml
 

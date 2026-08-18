@@ -2,7 +2,7 @@
 name: qq-farm-rust
 description: >-
   Develop and refactor the qq-farm-rust workspace (QQ farm multi-account bot in Rust):
-  crate boundaries (core/app/server/desktop/cli), constants/infra/domain packaging,
+  crate boundaries (core/app/server/desktop), constants/infra/domain packaging,
   panel API parity with qq-farm-bot, ACL, AppEvent, and Tauri v2 desktop + SoybeanAdmin.
   Use when editing qq-farm-rust, qq-farm-core, qq-farm-app, qq-farm-server,
   qq-farm-desktop, desktop-ui, farm/friend/activity automation, or SYNC/ARCHITECTURE/CODING_STANDARDS.
@@ -28,7 +28,6 @@ QQ 农场多账号挂机 Rust 重写。改代码前先对齐分层与契约，�
 ```text
 Vue (bot/web) ──HTTP/Socket──► qq-farm-server ──► qq-farm-app ──► qq-farm-core
 desktop-ui ──────Tauri IPC──► qq-farm-desktop ──► qq-farm-app ──► qq-farm-core
-CLI / demo ─────────────────────────────────────► core（运维可调 app）
 ```
 
 | Crate | Do | Don't |
@@ -37,7 +36,6 @@ CLI / demo ───────────────────────
 | `qq-farm-app` | Command/Query/Event；ACL；start/stop；聚合 | HTTP Status、Tauri、路由 |
 | `qq-farm-server` | 协议适配 → 调 app → `ApiError` | 领域算法、复制编排 |
 | `qq-farm-desktop` | Tauri IPC → **同一套** app；默认内嵌 `RuntimeEngine` | 依赖 server；把 Tauri 放进 app |
-| `qq-farm-cli` | demo / 运维 | 复制 core mock（用共用辅助） |
 | `desktop-ui/` | SoybeanAdmin 风格；IPC service/store/views 分层 | 私自主题；单文件堆业务；复制 bot web 组件 |
 
 **server ↔ desktop 禁止互相依赖。`qq-farm-app` 禁止依赖 `tauri`。**
@@ -69,7 +67,7 @@ CLI / demo ───────────────────────
 ## Implementation checklist
 
 ```
-- [ ] 变更落在正确 crate（core / app / server / desktop / cli）或 desktop-ui 分层
+- [ ] 变更落在正确 crate（core / app / server / desktop）或 desktop-ui 分层
 - [ ] 无新增 L3 全局；无 handler/command 内领域算法
 - [ ] 常量进 constants；配置进 *Config
 - [ ] 账号操作走 ACL（app::accounts + PanelUser / LocalOwner）
@@ -95,7 +93,8 @@ cd crates/qq-farm-desktop && cargo tauri dev
 - **定位**：个人免费开源；无面板登录 / RBAC / 用户管理 / 卡密；仅多农场账号 + 农场业务。
 - Crate：`crates/qq-farm-desktop`；只依赖 `qq-farm-app` + Tauri；前端 `desktop-ui/`。
 - ACL：进程内固定 `AclPolicy::LocalOwner`；不暴露 users / login / cards IPC。
-- 菜单：10 项（home + 9 个 farm_*），对齐 qq-farm-web 农场页；无 `/system/*`、无登录门闸。
+- 侧栏：10 项（home + 9 个 farm_*），对齐 qq-farm-web 农场页；无 `/system/*`、无登录门闸。
+- 原生壳：macOS App/Edit/Window +「应用」；全平台托盘；关窗进托盘；GitHub Releases 自动更新。
 - 订阅状态：`AppContext::subscribe_events` → `emit("app-event")`，不要复制 Socket.IO。
 - IPC：按域 `account` / `farm` / `friend` / `activity` / `commerce` / `settings` / `config` / `snapshot`（含 wx_login）。
 - UI：沿用 Soybean 主题与组件；`service/api` → `invoke`；views 来自 web 农场页改接 Tauri。

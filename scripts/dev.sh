@@ -53,13 +53,8 @@ case "$MODE" in
         echo "✅ Cleaned: target/ + $DATA_DIR"
         ;;
 
-    cli)
-        echo "🎮 Running CLI (farm demo)..."
-        cargo run -p qq-farm-cli --bin qq-farm -- farm-demo
-        ;;
-
     *)
-        echo "Usage: $0 {debug|release|test|e2e|clean|cli}"
+        echo "Usage: $0 {debug|release|test|e2e|clean}"
         exit 1
         ;;
 esac
