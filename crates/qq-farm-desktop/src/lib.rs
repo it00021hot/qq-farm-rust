@@ -82,6 +82,8 @@ pub fn run() {
             commands::account::wx_login_confirm,
             commands::account::wx_login_code,
             commands::account::wx_login_destroy,
+            commands::account::wx_quick_login_create,
+            commands::account::wx_quick_login_confirm,
             // farm
             commands::farm::farm_status_detail,
             commands::farm::farm_diamond,
@@ -146,10 +148,12 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building qq-farm-desktop");
 
+    #[cfg(target_os = "macos")]
     app.run(|app_handle, event| {
-        #[cfg(target_os = "macos")]
         if let tauri::RunEvent::Reopen { .. } = event {
             shell::show_main_window(app_handle);
         }
     });
+    #[cfg(not(target_os = "macos"))]
+    app.run(|_, _| {});
 }

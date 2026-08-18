@@ -36,5 +36,8 @@ dotenvy = { workspace = true }
 thiserror = { workspace = true }
 dirs = "5"
 
+[lints]
+workspace = true
+
 [features]
 default = []

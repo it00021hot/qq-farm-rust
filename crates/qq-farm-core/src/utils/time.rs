@@ -11,14 +11,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
 
-/// 全局服务器时间状态
-struct ServerTimeState {
-    /// 同步时的服务器时间（ms）
-    server_time_ms: i64,
-    /// 同步时的本地时间（ms）
-    local_time_at_sync: i64,
-}
-
 static SERVER_TIME_MS: AtomicI64 = AtomicI64::new(0);
 static LOCAL_TIME_AT_SYNC: AtomicI64 = AtomicI64::new(0);
 /// 标记是否已同步（避免启动时 get_server_time_ms 退化为本地时间）

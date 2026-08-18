@@ -77,12 +77,28 @@ jobs:
           echo "version=$VER" >> "$GITHUB_OUTPUT"
           echo "Building $VER"
 
+      - name: Normalize updater signing env
+        shell: bash
+        env:
+          RAW_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          RAW_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          KEY=$(printf '%s' "$RAW_KEY" | tr -d '\r')
+          {
+            echo "TAURI_SIGNING_PRIVATE_KEY<<EOF"
+            printf '%s\n' "$KEY"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+          PASS=$(printf '%s' "$RAW_PASSWORD" | tr -d '\r')
+          if [ -n "$PASS" ]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$PASS" >> "$GITHUB_ENV"
+          fi
+
       - name: Build and upload
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          RUSTFLAGS: "-D warnings"
         with:
           projectPath: crates/qq-farm-desktop
           args: ${{ matrix.args }}

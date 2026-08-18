@@ -112,12 +112,6 @@ pub fn try_generic_decode(buf: &[u8]) -> Vec<GenericField> {
     out
 }
 
-fn decode_zigzag_signed(n: u64) -> i64 {
-    // 当前未使用；保留以备 sint32/sint64 支持
-    let _ = n;
-    0
-}
-
 fn read_varint(buf: &[u8], mut pos: usize) -> Option<(u64, usize)> {
     let mut result: u64 = 0;
     let mut shift = 0;

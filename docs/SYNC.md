@@ -352,6 +352,15 @@
 - 相对 Go：这是 Rust 增强，不是缺口
 - 能力状态：微信扫码账号掉线后应自动重连；授权失效才提示重新扫码
 
+### 2026-08-18 — 应用宝 token 续期 / 失败清授权 / 本机微信快速授权
+
+- 扫码与本机快速授权 confirm 后落盘 `refreshtoken` + `expires_at`；列表 API 继续脱敏（不返回 buffer/token/refresh）
+- mint 失败：有 refresh 时先 `pcyyb_refresh_token_auth` 再换 `login_buffer` 再 mint；仍失败则清 buffer/token/refresh、保留 openid，**不**排 5 分钟重连，推送 `account_status` / `wxAuthorized=false`
+- 后台保活：每 30 分钟检查，token 剩余不足 45 分钟则续 token+buffer（不 mint 网关 code）
+- 桌面端微信 Tab：「本机微信 | 扫码」；WebView 调 `localhost.weixin.qq.com`（Windows + 已登录桌面微信）；检测失败自动回退扫码
+- HTTP：`POST /api/wx-login/quick-tasks`、`POST .../confirm`；桌面 IPC：`wx_quick_login_create` / `wx_quick_login_confirm`
+- 能力状态：授权失效后账号页授权列应变为未授权；Windows 本机微信可一键添加；旧账号无 refresh 跳过保活续期
+
 ### 2026-08-18 — 授权状态列 / 5 分钟再重连 / 策略落盘
 
 - 账号列表「启用」改为「授权状态」（应用宝 login_buffer 是否在）
@@ -396,3 +405,9 @@
 - GitHub Actions `v*` tag 打 Windows NSIS（用户级）+ macOS universal；`tauri-plugin-updater` 读 `latest.json`
 - 删除无用的 `qq-farm-cli`
 - 能力状态：托盘可显隐/退出；干净机器安装后能加载 TSDK 登录；打更高版本 tag 后「检查更新」能换包重启
+
+### 2026-08-18 — Windows 发版签名与编译警告
+
+- Windows CI 把空的 updater 密钥密码当成错误密码；仅在 Secret 非空时写入环境变量，并去掉私钥 CR
+- 清掉 core/desktop 未使用字段、重名 glob、弃用 `Account` 导出；CI `RUSTFLAGS=-D warnings`
+- 能力状态：Windows job 能签 updater 产物；`cargo check --workspace` 无 rustc warning

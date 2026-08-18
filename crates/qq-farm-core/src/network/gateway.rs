@@ -146,7 +146,6 @@ pub struct Gateway {
 struct Inner {
     config: GatewayConfig,
     phase: RwLock<ConnectionPhase>,
-    client_seq: AtomicI64,
     server_seq: AtomicI64,
     requests: RequestManager,
     /// 加密器（外部注入）
@@ -174,7 +173,6 @@ impl Gateway {
             inner: Arc::new(Inner {
                 config,
                 phase: RwLock::new(ConnectionPhase::Disconnected),
-                client_seq: AtomicI64::new(1),
                 server_seq: AtomicI64::new(0),
                 requests: RequestManager::new(),
                 encryptor,

@@ -44,13 +44,9 @@ pub fn router() -> Router<Arc<AdminContext>> {
 #[derive(Debug, Deserialize)]
 struct AnnouncementBody {
     #[serde(default)]
-    title: String,
-    #[serde(default)]
     content: String,
     #[serde(default, alias = "showOnce")]
     show_once: Option<bool>,
-    #[serde(default)]
-    version: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]

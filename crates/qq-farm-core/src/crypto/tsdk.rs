@@ -66,8 +66,6 @@ struct HostState {
     memory: Option<Memory>,
     /// 数据目录
     data_dir: String,
-    /// 已绑定的 openid
-    user_bound: bool,
 }
 
 // ===== Engine 单例 =====

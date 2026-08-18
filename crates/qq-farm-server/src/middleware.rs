@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{Extension, Request, State},
+    extract::{Request, State},
     http::{header, HeaderMap, HeaderValue},
     middleware::Next,
     response::Response,
@@ -19,7 +19,6 @@ use axum::{
 
 use crate::config::ServerConfig;
 use crate::context::AdminContext;
-use crate::sessions::SessionStore;
 
 /// 注入 CORS headers（允许列表来自 [`ServerConfig`]，缺省走 Default）
 pub async fn cors_layer(headers_in: HeaderMap, mut req: Request, next: Next) -> Response {

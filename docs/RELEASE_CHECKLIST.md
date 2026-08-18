@@ -7,7 +7,7 @@ Use after pushing a `v*` tag (or `workflow_dispatch` with a tag).
 GitHub repo **Settings → Secrets and variables → Actions**：
 
 - `TAURI_SIGNING_PRIVATE_KEY` — minisign 私钥全文（与 `tauri.conf.json` 里 `plugins.updater.pubkey` 配对）
-- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — 生成密钥时的密码；无密码可留空字符串
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — 生成密钥时的密码。当前密钥无密码时**不要设这个 Secret**（Windows 会把空字符串当成错误密码；macOS 则当作无密码）。
 
 本地私钥在 `crates/qq-farm-desktop/.tauri/`（gitignore，勿提交）。丢失后无法给旧客户端签名更新，只能换密钥并让用户重装。
 

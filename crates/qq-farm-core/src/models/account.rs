@@ -61,11 +61,13 @@ pub struct AccountSession {
     /// 应用宝 accesstoken
     #[serde(default)]
     pub wx_access_token: String,
+    /// 应用宝 refreshtoken
+    #[serde(default)]
+    pub wx_refresh_token: String,
+    /// accesstoken 过期 Unix 秒
+    #[serde(default)]
+    pub wx_token_expires_at: i64,
 }
-
-/// 兼容旧名；请改用 [`AccountSession`]。
-#[deprecated(note = "use AccountSession")]
-pub type Account = AccountSession;
 
 impl AccountSession {
     /// 创建新账号
@@ -91,6 +93,8 @@ impl AccountSession {
             wx_openid: String::new(),
             wx_login_buffer: String::new(),
             wx_access_token: String::new(),
+            wx_refresh_token: String::new(),
+            wx_token_expires_at: 0,
         }
     }
 
@@ -116,6 +120,21 @@ impl AccountSession {
             wx_openid: acc.wx_openid.clone(),
             wx_login_buffer: acc.wx_login_buffer.clone(),
             wx_access_token: acc.wx_access_token.clone(),
+            wx_refresh_token: acc.wx_refresh_token.clone(),
+            wx_token_expires_at: acc.wx_token_expires_at,
+        }
+    }
+
+    /// 构造应用宝凭据视图（供换码 / 续期）。
+    #[must_use]
+    pub fn yyb_credentials(&self) -> crate::services::wx_login::YybCredentials {
+        crate::services::wx_login::YybCredentials {
+            openid: self.wx_openid.clone(),
+            access_token: self.wx_access_token.clone(),
+            refresh_token: self.wx_refresh_token.clone(),
+            login_buffer: self.wx_login_buffer.clone(),
+            expires_at: self.wx_token_expires_at,
+            expires_in: 7200,
         }
     }
 
@@ -148,6 +167,7 @@ mod tests {
             wx_openid: "oid".into(),
             wx_login_buffer: "buf".into(),
             wx_access_token: "tok".into(),
+            ..Default::default()
         };
         let acc = AccountSession::from_store(&store);
         assert_eq!(acc.platform, "wx");

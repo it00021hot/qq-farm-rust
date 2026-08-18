@@ -322,7 +322,17 @@ impl ReloginReminderService {
             // 不论结果如何都清理 watcher
             {
                 let mut guard = watchers.lock().await;
-                guard.remove(&key);
+                if let Some(state) = guard.remove(&key) {
+                    let elapsed_ms = now_ms() - state.started_at;
+                    logger.log(
+                        "系统",
+                        &format!("重登录监听结束: {acc_label} ({elapsed_ms}ms)"),
+                        Some(serde_json::json!({
+                            "accountId": account_id_bg,
+                            "elapsedMs": elapsed_ms,
+                        })),
+                    );
+                }
             }
             if let Some(mut payload) = payload {
                 payload.account_id = account_id_bg;

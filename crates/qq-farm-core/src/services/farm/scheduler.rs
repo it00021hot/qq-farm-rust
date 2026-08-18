@@ -25,7 +25,6 @@ use crate::services::farm::planting::{PlantingConfig, PlantingEngine};
 
 /// 农场服务
 pub struct FarmService {
-    gateway: Arc<Gateway>,
     api: Api,
     planting: Arc<Mutex<PlantingEngine>>,
     scheduler: Scheduler,
@@ -68,11 +67,10 @@ impl FarmService {
     /// 创建
     #[must_use]
     pub fn new(gateway: Arc<Gateway>) -> Self {
-        let api = Api::new(gateway.clone());
+        let api = Api::new(gateway);
         let planting = PlantingEngine::new(api.clone(), PlantingConfig::default());
         let (event_tx, _) = broadcast::channel(256);
         Self {
-            gateway,
             api,
             planting: Arc::new(Mutex::new(planting)),
             scheduler: Scheduler::new("farm-service"),

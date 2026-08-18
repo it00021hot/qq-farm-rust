@@ -160,7 +160,6 @@ impl TaskEntry {
 struct QueueEntry {
     task: TaskEntry,
     priority: i32,
-    added_at: i64,
 }
 
 /// 优先级队列（数字越大越优先）
@@ -181,7 +180,7 @@ impl PriorityQueue {
     }
 
     pub fn enqueue(&mut self, task: TaskEntry, priority: i32) {
-        let entry = QueueEntry { task, priority, added_at: crate::utils::time::now_ms() };
+        let entry = QueueEntry { task, priority };
         let idx = self.queue.iter().position(|e| e.priority < priority).unwrap_or(self.queue.len());
         self.queue.insert(idx, entry);
     }

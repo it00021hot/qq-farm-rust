@@ -151,8 +151,6 @@ struct FarmOperateBody {
 struct AnalyticsQuery {
     #[serde(default, alias = "sortBy", alias = "sort")]
     sort_by: Option<String>,
-    #[serde(default, alias = "accountId")]
-    account_id: Option<String>,
 }
 
 async fn get_status(

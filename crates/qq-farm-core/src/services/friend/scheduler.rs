@@ -128,7 +128,6 @@ impl VisitStrategy {
 
 /// 好友服务
 pub struct FriendService {
-    gateway: Arc<Gateway>,
     api: FriendApi,
     gid_manager: Arc<GidManager>,
     strategy: Arc<VisitStrategy>,
@@ -195,10 +194,9 @@ impl FriendService {
     /// 创建
     #[must_use]
     pub fn new(gateway: Arc<Gateway>, batch_size: usize) -> Self {
-        let api = FriendApi::new(gateway.clone());
+        let api = FriendApi::new(gateway);
         let (event_tx, _) = broadcast::channel(64);
         Self {
-            gateway,
             api,
             gid_manager: Arc::new(GidManager::new()),
             strategy: Arc::new(VisitStrategy::new(batch_size)),

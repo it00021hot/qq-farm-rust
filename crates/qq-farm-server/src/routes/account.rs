@@ -420,6 +420,7 @@ async fn set_offline_reminder(
     headers: axum::http::HeaderMap,
     Json(body): Json<OfflineReminderBody>,
 ) -> ApiResult<serde_json::Value> {
+    let _ = body.account_id;
     let cfg: qq_farm_core::models::store::global_config::OfflineReminder =
         serde_json::from_value(body.cfg).unwrap_or_default();
     let username = current_session(&ctx, &headers).map(|s| s.username).unwrap_or_default();
@@ -436,6 +437,7 @@ async fn test_offline_reminder(
     headers: axum::http::HeaderMap,
     Json(body): Json<OfflineReminderBody>,
 ) -> ApiResult<serde_json::Value> {
+    let _ = body.account_id;
     let username = current_session(&ctx, &headers).map(|s| s.username).unwrap_or_default();
     let cfg = if username.is_empty() {
         qq_farm_core::models::store::global_config::get_offline_reminder()

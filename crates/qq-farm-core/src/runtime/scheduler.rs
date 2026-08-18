@@ -10,7 +10,7 @@
 //! 每个 Scheduler 实例有独立 namespace（多个账号 worker 各持一个）。
 //! `Scheduler::registry()` 提供全局注册表快照（用于 UI 展示）。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -237,6 +237,12 @@ impl Scheduler {
     }
 }
 
+impl Drop for SchedulerInner {
+    fn drop(&mut self) {
+        self.registry.remove(&self.namespace);
+    }
+}
+
 /// 把 `async fn` 转成 `TaskFn` 的便捷宏
 #[macro_export]
 macro_rules! task_fn {
@@ -250,12 +256,8 @@ macro_rules! task_fn {
 
 /// 全局 Scheduler 注册表（所有 namespace 的 Scheduler 都在这里登记）
 pub struct SchedulerRegistry {
-    namespaces: Mutex<HashMap<String, SchedulerEntry>>,
+    namespaces: Mutex<HashSet<String>>,
     notify: Notify,
-}
-
-struct SchedulerEntry {
-    created_at_ms: i64,
 }
 
 impl SchedulerRegistry {
@@ -263,17 +265,18 @@ impl SchedulerRegistry {
         use std::sync::OnceLock;
         static REG: OnceLock<Arc<SchedulerRegistry>> = OnceLock::new();
         REG.get_or_init(|| {
-            Arc::new(Self { namespaces: Mutex::new(HashMap::new()), notify: Notify::new() })
+            Arc::new(Self { namespaces: Mutex::new(HashSet::new()), notify: Notify::new() })
         })
         .clone()
     }
 
     fn insert(&self, namespace: &str) {
-        let mut map = self.namespaces.lock();
-        map.insert(
-            namespace.to_string(),
-            SchedulerEntry { created_at_ms: chrono::Utc::now().timestamp_millis() },
-        );
+        self.namespaces.lock().insert(namespace.to_string());
+        self.notify.notify_waiters();
+    }
+
+    fn remove(&self, namespace: &str) {
+        self.namespaces.lock().remove(namespace);
         self.notify.notify_waiters();
     }
 
@@ -281,7 +284,7 @@ impl SchedulerRegistry {
     #[must_use]
     pub fn list_namespaces(&self) -> Vec<String> {
         let map = self.namespaces.lock();
-        let mut keys: Vec<String> = map.keys().cloned().collect();
+        let mut keys: Vec<String> = map.iter().cloned().collect();
         keys.sort();
         keys
     }
