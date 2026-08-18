@@ -334,7 +334,9 @@ const local: App.I18n.Schema = {
         },
         authStatus: {
           authorized: 'Authorized',
-          unauthorized: 'Unauthorized'
+          unauthorized: 'Unauthorized',
+          rescanRecommended: 'Rescan suggested',
+          rescanHint: 'Refresh token has been used for about 25 days; rescan before it expires'
         },
         fertilizerMode: {
           none: 'None',

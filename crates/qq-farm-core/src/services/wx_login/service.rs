@@ -240,7 +240,7 @@ impl WxLoginService {
             ..Default::default()
         };
         creds.login_buffer = self.post_login_buffer_for(&creds, &mut cookies).await?;
-        Ok(creds)
+        Ok(creds.ensure_observed_at(now_unix()))
     }
 
     /// 校验本机微信 fast_login 回调 URL，提取 OAuth code。
@@ -340,16 +340,16 @@ impl WxLoginService {
     }
 
     /// 续 token 并换 login_buffer（保活 / mint 失败恢复）。
+    ///
+    /// 有 refresh_token 时一定先打 `pcyyb_refresh_token_auth`；45 分钟提前量只由保活外层判断。
     pub async fn refresh_credentials_and_buffer(
         &self,
         creds: &YybCredentials,
     ) -> Result<YybCredentials, WxAuthError> {
         let refreshed = if creds.refresh_token.trim().is_empty() {
             creds.clone()
-        } else if creds.token_due_for_refresh(0) {
-            self.refresh_credentials(creds).await?
         } else {
-            creds.clone()
+            self.refresh_credentials(creds).await?
         };
         let mut cookies = HashMap::new();
         let login_buffer = self.post_login_buffer_for(&refreshed, &mut cookies).await?;
@@ -605,25 +605,21 @@ fn parse_refresh_token_json(body: &str, base: &YybCredentials) -> Result<YybCred
     if access_token.is_empty() {
         return Err(WxAuthError::dead("refresh response missing access_token"));
     }
-    let refresh_token = info
+    let refresh_from_resp = info
         .and_then(|v| v.get("refresh_token").or_else(|| v.get("refreshToken")))
         .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| base.refresh_token.clone());
+        .unwrap_or("");
     let expires_in = info
         .and_then(|v| v.get("expires_in").or_else(|| v.get("expiresIn")))
         .and_then(|v| v.as_i64())
         .filter(|v| *v > 0)
         .unwrap_or(base.expires_in.max(7200));
-    Ok(YybCredentials {
-        openid: base.openid.clone(),
-        access_token,
-        refresh_token,
-        login_buffer: base.login_buffer.clone(),
-        expires_at: now_unix() + expires_in,
-        expires_in,
-    })
+    let now = now_unix();
+    let mut updated = base.clone().apply_new_refresh_token(refresh_from_resp, now);
+    updated.access_token = access_token;
+    updated.expires_at = now + expires_in;
+    updated.expires_in = expires_in;
+    Ok(updated)
 }
 
 fn map_http_err(err: String) -> WxAuthError {
@@ -1276,5 +1272,63 @@ mod tests {
         assert_eq!(cookies.get("sid").map(String::as_str), Some("abc"));
         assert_eq!(cookies.get("openid").map(String::as_str), Some("oxxx"));
         assert_eq!(cookies.get("accesstoken").map(String::as_str), Some("atok"));
+    }
+
+    #[test]
+    fn parse_refresh_token_json_rotates_observed_at() {
+        let base = YybCredentials {
+            openid: "oid".into(),
+            access_token: "old".into(),
+            refresh_token: "rt".into(),
+            login_buffer: "buf".into(),
+            expires_in: 7200,
+            refresh_token_observed_at: 100,
+            ..Default::default()
+        };
+        let updated = parse_refresh_token_json(
+            r#"{"code":0,"user_info":{"access_token":"new","refresh_token":"rt2","expires_in":3600}}"#,
+            &base,
+        )
+        .expect("parse");
+        assert_eq!(updated.access_token, "new");
+        assert_eq!(updated.refresh_token, "rt2");
+        assert!(updated.refresh_token_observed_at >= now_unix() - 2);
+        assert_ne!(updated.refresh_token_observed_at, 100);
+    }
+
+    #[test]
+    fn parse_refresh_token_json_keeps_observed_at_when_same_token() {
+        let base = YybCredentials {
+            openid: "oid".into(),
+            access_token: "old".into(),
+            refresh_token: "rt".into(),
+            expires_in: 7200,
+            refresh_token_observed_at: 111,
+            ..Default::default()
+        };
+        let updated = parse_refresh_token_json(
+            r#"{"code":0,"user_info":{"access_token":"new","refresh_token":"rt","expires_in":1800}}"#,
+            &base,
+        )
+        .expect("parse");
+        assert_eq!(updated.refresh_token, "rt");
+        assert_eq!(updated.refresh_token_observed_at, 111);
+    }
+
+    #[test]
+    fn parse_refresh_token_json_keeps_old_refresh_when_missing() {
+        let base = YybCredentials {
+            refresh_token: "rt".into(),
+            refresh_token_observed_at: 222,
+            expires_in: 7200,
+            ..Default::default()
+        };
+        let updated = parse_refresh_token_json(
+            r#"{"code":0,"user_info":{"access_token":"new"}}"#,
+            &base,
+        )
+        .expect("parse");
+        assert_eq!(updated.refresh_token, "rt");
+        assert_eq!(updated.refresh_token_observed_at, 222);
     }
 }

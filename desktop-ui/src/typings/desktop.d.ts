@@ -9,6 +9,7 @@ declare namespace Desktop {
     avatar: string;
     running: boolean;
     wxAuthorized?: boolean;
+    wxRescanRecommended?: boolean;
   }
 
   interface DesktopSnapshot {

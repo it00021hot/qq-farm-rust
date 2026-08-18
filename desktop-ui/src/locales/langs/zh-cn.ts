@@ -330,7 +330,9 @@ const local: App.I18n.Schema = {
         },
         authStatus: {
           authorized: '已授权',
-          unauthorized: '未授权'
+          unauthorized: '未授权',
+          rescanRecommended: '建议重扫',
+          rescanHint: 'RefreshToken 已使用约 25 天，建议在失效前重新扫码'
         },
         fertilizerMode: {
           none: '不施肥',

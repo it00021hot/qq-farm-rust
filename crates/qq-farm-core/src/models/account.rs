@@ -67,6 +67,9 @@ pub struct AccountSession {
     /// accesstoken 过期 Unix 秒
     #[serde(default)]
     pub wx_token_expires_at: i64,
+    /// 当前 refresh_token 首次观察 Unix 秒
+    #[serde(default)]
+    pub wx_refresh_token_observed_at: i64,
 }
 
 impl AccountSession {
@@ -95,6 +98,7 @@ impl AccountSession {
             wx_access_token: String::new(),
             wx_refresh_token: String::new(),
             wx_token_expires_at: 0,
+            wx_refresh_token_observed_at: 0,
         }
     }
 
@@ -122,6 +126,7 @@ impl AccountSession {
             wx_access_token: acc.wx_access_token.clone(),
             wx_refresh_token: acc.wx_refresh_token.clone(),
             wx_token_expires_at: acc.wx_token_expires_at,
+            wx_refresh_token_observed_at: acc.wx_refresh_token_observed_at,
         }
     }
 
@@ -135,6 +140,7 @@ impl AccountSession {
             login_buffer: self.wx_login_buffer.clone(),
             expires_at: self.wx_token_expires_at,
             expires_in: 7200,
+            refresh_token_observed_at: self.wx_refresh_token_observed_at,
         }
     }
 

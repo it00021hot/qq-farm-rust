@@ -4091,7 +4091,7 @@ dependencies = [
 
 [[package]]
 name = "qq-farm-app"
-version = "0.1.0"
+version = "0.1.4"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4107,7 +4107,7 @@ dependencies = [
 
 [[package]]
 name = "qq-farm-core"
-version = "0.1.0"
+version = "0.1.4"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -4155,7 +4155,7 @@ dependencies = [
 
 [[package]]
 name = "qq-farm-desktop"
-version = "0.1.0"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4178,7 +4178,7 @@ dependencies = [
 
 [[package]]
 name = "qq-farm-server"
-version = "0.1.0"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "axum",

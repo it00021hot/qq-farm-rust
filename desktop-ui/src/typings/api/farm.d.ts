@@ -31,6 +31,7 @@ declare namespace Api {
       lastOnlineAt: number;
       status: EnableStatus;
       wxAuthorized?: boolean;
+      wxRescanRecommended?: boolean;
       createdAt: number;
       updatedAt: number;
     };

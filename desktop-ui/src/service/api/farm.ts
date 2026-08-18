@@ -38,6 +38,7 @@ function toAccountRecord(raw: any): Api.Farm.Account {
     lastOnlineAt: Number(raw?.lastOnlineAt ?? raw?.updatedAt ?? raw?.updated_at ?? 0),
     status: (String(raw?.status ?? '1') === '2' ? '2' : '1') as Api.Farm.EnableStatus,
     wxAuthorized: Boolean(raw?.wxAuthorized ?? raw?.wx_authorized),
+    wxRescanRecommended: Boolean(raw?.wxRescanRecommended ?? raw?.wx_rescan_recommended),
     createdAt: Number(raw?.createdAt ?? raw?.created_at ?? 0),
     updatedAt: Number(raw?.updatedAt ?? raw?.updated_at ?? 0)
   };

@@ -34,8 +34,11 @@ const searchParams = ref<Api.Farm.AccountSearchParams>({
   authStatus: null
 });
 
-function authStatusOf(row: Api.Farm.Account): 'authorized' | 'unauthorized' {
-  return row.wxAuthorized ? 'authorized' : 'unauthorized';
+function authStatusOf(row: Api.Farm.Account): 'authorized' | 'unauthorized' | 'rescanRecommended' {
+  if (!row.wxAuthorized) {
+    return 'unauthorized';
+  }
+  return row.wxRescanRecommended ? 'rescanRecommended' : 'authorized';
 }
 
 const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagination } =
@@ -93,11 +96,19 @@ const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagi
       align: 'center',
       render: row => {
         const status = authStatusOf(row);
-        const tagMap: Record<'authorized' | 'unauthorized', NaiveUI.ThemeColor> = {
+        const tagMap: Record<'authorized' | 'unauthorized' | 'rescanRecommended', NaiveUI.ThemeColor> = {
           authorized: 'success',
-          unauthorized: 'warning'
+          unauthorized: 'warning',
+          rescanRecommended: 'warning'
         };
-        return <NTag type={tagMap[status]}>{$t(farmAuthStatusRecord[status])}</NTag>;
+        return (
+          <NTag
+            type={tagMap[status]}
+            title={status === 'rescanRecommended' ? $t('page.farm.common.authStatus.rescanHint') : undefined}
+          >
+            {$t(farmAuthStatusRecord[status])}
+          </NTag>
+        );
       }
     },
     {

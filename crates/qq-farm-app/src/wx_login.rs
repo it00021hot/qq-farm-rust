@@ -338,6 +338,7 @@ pub async fn issue_code_for(
         refresh_token,
         expires_at: token_expires_at,
         expires_in: 7200,
+        ..Default::default()
     };
     let (code, updated) = hub
         .service

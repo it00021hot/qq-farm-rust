@@ -32,6 +32,8 @@ pub const WX_RECONNECT_DELAY_MS: u64 = 5 * 60 * 1000;
 pub const WX_KEEPALIVE_INTERVAL_MS: u64 = 30 * 60 * 1000;
 /// 剩余不足该秒数时提前续 token（默认 45 分钟）
 pub const WX_KEEPALIVE_AHEAD_SECS: i64 = 45 * 60;
+/// 同一 refresh_token 连续使用超过该秒数后建议重扫（25 天）
+pub const WX_REFRESH_TOKEN_RESCAN_SECS: i64 = 25 * 24 * 60 * 60;
 
 /// 运行日志用的等待文案（「5 分钟」）。
 #[must_use]

@@ -705,6 +705,7 @@ fn persist_wx_gateway_credentials(account_id: &str, code: &str, creds: &YybCrede
             wx_access_token: Some(creds.access_token.clone()),
             wx_refresh_token: Some(creds.refresh_token.clone()),
             wx_token_expires_at: Some(creds.expires_at),
+            wx_refresh_token_observed_at: Some(creds.refresh_token_observed_at),
             ..Default::default()
         },
     );

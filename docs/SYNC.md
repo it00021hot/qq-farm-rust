@@ -417,3 +417,16 @@
 - Windows 使用 `tauri.windows.conf.json` 关闭原生边框，保留前端自定义最小化/最大化/关闭按钮；对齐 Wails frameless
 - Release workflow 在构建前用 tag 同步 `Cargo.toml` / `tauri.conf.json` / `desktop-ui/package.json` 版本
 - 能力状态：Windows 不再出现系统标题栏与虚拟按钮重复；安装包文件名与 Release tag 一致
+
+### 2026-08-18 — 应用宝保活提前续 token
+
+- 现象：剩余不足 45 分钟会进保活并落盘，但 `expires_at` 不变；只换了 `login_buffer`
+- 原因：`refresh_credentials_and_buffer` 内部用 `token_due_for_refresh(0)`，access_token 未过期就跳过 `pcyyb_refresh_token_auth`
+- 修复：内部续期改用 `WX_KEEPALIVE_AHEAD_SECS`（45 分钟）
+- 能力状态：保活成功后 `wx_token_expires_at` 应往后推；日志「应用宝 token 保活成功」
+
+### 2026-08-18 — 保活对齐 YYB：到期必续 token + 建议重扫
+
+- 对照 YYB-Go-Enhanced：45 分钟提前量只做保活外层门闸；`refresh_credentials_and_buffer` 有 refresh_token 就一定先 `pcyyb_refresh_token_auth` 再换 `login_buffer`
+- 落盘 `wx_refresh_token_observed_at`；微信未轮换 refresh_token 时不改时钟；约 25 天后列表 `wxRescanRecommended` 显示「建议重扫」
+- 能力状态：保活后过期时间应往后推；同一 refresh 连续约 25 天账号授权列变为「建议重扫」

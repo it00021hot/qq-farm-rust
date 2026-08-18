@@ -16,6 +16,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -66,6 +67,9 @@ pub struct AccountRecord {
     /// accesstoken 过期 Unix 秒
     #[serde(default)]
     pub wx_token_expires_at: i64,
+    /// 当前 refresh_token 首次观察 Unix 秒
+    #[serde(default, skip_serializing_if = "is_zero_i64")]
+    pub wx_refresh_token_observed_at: i64,
 }
 
 impl AccountRecord {
@@ -92,6 +96,7 @@ pub fn clear_wx_auth(id: &str) -> bool {
     acc.wx_access_token.clear();
     acc.wx_refresh_token.clear();
     acc.wx_token_expires_at = 0;
+    acc.wx_refresh_token_observed_at = 0;
     acc.code.clear();
     true
 }
@@ -124,6 +129,12 @@ pub fn persist_yyb_credentials(id: &str, patch: YybCredentialPatch) -> bool {
     if let Some(v) = patch.wx_token_expires_at {
         acc.wx_token_expires_at = v;
     }
+    if let Some(v) = patch.wx_refresh_token_observed_at {
+        acc.wx_refresh_token_observed_at = v;
+    }
+    if !acc.wx_refresh_token.trim().is_empty() && acc.wx_refresh_token_observed_at <= 0 {
+        acc.wx_refresh_token_observed_at = unix_now();
+    }
     true
 }
 
@@ -136,6 +147,15 @@ pub struct YybCredentialPatch {
     pub wx_access_token: Option<String>,
     pub wx_refresh_token: Option<String>,
     pub wx_token_expires_at: Option<i64>,
+    pub wx_refresh_token_observed_at: Option<i64>,
+}
+
+fn is_zero_i64(v: &i64) -> bool {
+    *v == 0
+}
+
+fn unix_now() -> i64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
 /// 兼容旧名；请改用 [`AccountRecord`]。
@@ -431,6 +451,7 @@ mod tests {
         assert!(!saved.has_wx_auth());
         assert!(saved.wx_login_buffer.is_empty());
         assert!(saved.wx_refresh_token.is_empty());
+        assert_eq!(saved.wx_refresh_token_observed_at, 0);
         assert!(saved.code.is_empty());
     }
 }

@@ -963,6 +963,7 @@ impl RuntimeEngine {
                             wx_access_token: Some(updated.access_token.clone()),
                             wx_refresh_token: Some(updated.refresh_token.clone()),
                             wx_token_expires_at: Some(updated.expires_at),
+                            wx_refresh_token_observed_at: Some(updated.refresh_token_observed_at),
                             ..Default::default()
                         },
                     );

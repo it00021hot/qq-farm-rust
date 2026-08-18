@@ -132,7 +132,7 @@ pub fn list_accounts_enriched(ctx: &AppContext, username_filter: Option<&str>) -
         .map(|a| {
             let mut v = serde_json::to_value(a).unwrap_or(json!({}));
             if let Some(obj) = v.as_object_mut() {
-                redact_wx_auth_fields(obj, a.has_wx_auth());
+                redact_wx_auth_fields(obj, a);
                 obj.insert("running".to_string(), json!(running.contains(&a.id)));
                 let status = ctx.engine.panel_status(&a.id);
                 if let Some(nick) = status
@@ -152,12 +152,25 @@ pub fn list_accounts_enriched(ctx: &AppContext, username_filter: Option<&str>) -
     })
 }
 
-fn redact_wx_auth_fields(obj: &mut serde_json::Map<String, Value>, authorized: bool) {
+fn redact_wx_auth_fields(obj: &mut serde_json::Map<String, Value>, acc: &AccountRecord) {
     obj.remove("wx_login_buffer");
     obj.remove("wx_access_token");
     obj.remove("wx_refresh_token");
     obj.remove("wx_token_expires_at");
-    obj.insert("wxAuthorized".to_string(), json!(authorized));
+    obj.remove("wx_refresh_token_observed_at");
+    obj.insert("wxAuthorized".to_string(), json!(acc.has_wx_auth()));
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    obj.insert(
+        "wxRescanRecommended".to_string(),
+        json!(qq_farm_core::services::wx_login::wx_auth::rescan_recommended(
+            &acc.wx_refresh_token,
+            acc.wx_refresh_token_observed_at,
+            now,
+        )),
+    );
 }
 
 /// 账号 JSON（去掉应用宝敏感字段）。
@@ -165,7 +178,7 @@ fn redact_wx_auth_fields(obj: &mut serde_json::Map<String, Value>, authorized: b
 pub fn account_to_public_json(acc: &AccountRecord) -> Value {
     let mut v = serde_json::to_value(acc).unwrap_or(json!({}));
     if let Some(obj) = v.as_object_mut() {
-        redact_wx_auth_fields(obj, acc.has_wx_auth());
+        redact_wx_auth_fields(obj, acc);
     }
     v
 }
@@ -273,6 +286,14 @@ pub fn upsert_account(
         saved.wx_access_token = auth.access_token;
         saved.wx_refresh_token = auth.refresh_token;
         saved.wx_token_expires_at = auth.token_expires_at;
+        saved.wx_refresh_token_observed_at = if saved.wx_refresh_token.trim().is_empty() {
+            0
+        } else {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0)
+        };
         saved = accounts::add_or_update_account(saved);
     }
     accounts::persist_global();
@@ -327,22 +348,35 @@ mod tests {
 
     #[test]
     fn redact_wx_auth_strips_secrets_and_flags() {
+        let acc = AccountRecord {
+            wx_login_buffer: "secret-buf".into(),
+            wx_access_token: "secret-tok".into(),
+            wx_openid: "oid".into(),
+            ..Default::default()
+        };
         let mut obj = Map::new();
         obj.insert("wx_login_buffer".into(), json!("secret-buf"));
         obj.insert("wx_access_token".into(), json!("secret-tok"));
         obj.insert("wx_openid".into(), json!("oid"));
-        redact_wx_auth_fields(&mut obj, true);
+        obj.insert("wx_refresh_token".into(), json!("secret-rt"));
+        obj.insert("wx_refresh_token_observed_at".into(), json!(1));
+        redact_wx_auth_fields(&mut obj, &acc);
         assert!(obj.get("wx_login_buffer").is_none());
         assert!(obj.get("wx_access_token").is_none());
+        assert!(obj.get("wx_refresh_token").is_none());
+        assert!(obj.get("wx_refresh_token_observed_at").is_none());
         assert_eq!(obj.get("wx_openid").and_then(|v| v.as_str()), Some("oid"));
         assert_eq!(obj.get("wxAuthorized"), Some(&json!(true)));
+        assert_eq!(obj.get("wxRescanRecommended"), Some(&json!(false)));
     }
 
     #[test]
     fn redact_wx_auth_false_when_missing() {
+        let acc = AccountRecord::default();
         let mut obj = Map::new();
-        redact_wx_auth_fields(&mut obj, false);
+        redact_wx_auth_fields(&mut obj, &acc);
         assert_eq!(obj.get("wxAuthorized"), Some(&json!(false)));
+        assert_eq!(obj.get("wxRescanRecommended"), Some(&json!(false)));
     }
 
     #[test]
@@ -355,12 +389,17 @@ mod tests {
             wx_openid: "oid".into(),
             wx_login_buffer: "buf".into(),
             wx_access_token: "tok".into(),
+            wx_refresh_token: "rt".into(),
+            wx_refresh_token_observed_at: 1,
             ..Default::default()
         };
         let v = account_to_public_json(&acc);
         assert!(v.get("wx_login_buffer").is_none());
         assert!(v.get("wx_access_token").is_none());
+        assert!(v.get("wx_refresh_token").is_none());
+        assert!(v.get("wx_refresh_token_observed_at").is_none());
         assert_eq!(v["wxAuthorized"], json!(true));
         assert_eq!(v["wx_openid"], "oid");
+        assert_eq!(v["wxRescanRecommended"], json!(true));
     }
 }
