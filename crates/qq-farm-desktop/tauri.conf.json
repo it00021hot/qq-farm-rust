@@ -65,7 +65,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRFQ0NDNjczOUVDRDMxQ0MKUldUTU1jMmVjOGJNVHR6akxucVBTTnN2SDZrbC9zUUdJVXo5c0xlNFl1enI1Z1krOGtZak5CdjIK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEM4MjFCNjRFOTczRjFEMTQKUldRVUhUK1hUclloeU4vVllmNGYzV0l4NUM5MGdlS2J5QW15enYyOUsxTFJ6OFhEOTFIbTlqeHYK",
       "endpoints": [
         "https://github.com/it00021hot/qq-farm-rust/releases/latest/download/latest.json"
       ],
