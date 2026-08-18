@@ -31,6 +31,9 @@ desktop-ui/dist/
 desktop-ui/.vite/
 crates/qq-farm-desktop/gen/
 crates/qq-farm-desktop/.tauri/
+# Tauri updater 签名私钥（含 .tauri 目录外误放的副本）
+*.key
+*.key.bak
 crates/qq-farm-desktop/icons/android/
 crates/qq-farm-desktop/icons/ios/
 
