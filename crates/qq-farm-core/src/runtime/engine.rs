@@ -511,15 +511,51 @@ impl RuntimeEngine {
                             if name.is_empty() { account_id.clone() } else { name.clone() };
                         let user_stop = reason == "主动取消";
                         let kicked = reason.contains("kickout");
+                        let wx_auth_failed = reason.contains("wx_auth_failed");
+                        let wx_mint_failed = reason.contains("wx_mint_failed");
                         let acc =
                             accounts_store::get_accounts().into_iter().find(|a| a.id == account_id);
                         let has_wx = acc.as_ref().is_some_and(|a| a.has_wx_auth());
-                        if user_stop {
+                        if user_stop || wx_auth_failed {
                             engine.clear_wx_reconnect(&account_id);
                         }
                         let mut schedule_wx_reconnect: Option<u32> = None;
                         if !already && !user_stop {
-                            if should_attempt_wx_reconnect(user_stop, has_wx) {
+                            if wx_auth_failed {
+                                state.log(
+                                    "系统",
+                                    &format!("账号 {display} 应用宝授权已失效，请重新扫码"),
+                                    Some(serde_json::json!({
+                                        "accountId": account_id,
+                                        "accountName": display,
+                                        "reason": reason,
+                                    })),
+                                );
+                                state.add_account_log(
+                                    "wx_auth_failed",
+                                    &format!("账号 {display} 应用宝授权已失效，请重新扫码"),
+                                    Some(&account_id),
+                                    Some(&display),
+                                    Some(serde_json::json!({ "reason": reason })),
+                                );
+                                engine.emit_account_status(
+                                    &account_id,
+                                    &display,
+                                    "error",
+                                    "应用宝授权已失效，请重新扫码",
+                                    false,
+                                );
+                            } else if wx_mint_failed {
+                                state.log(
+                                    "系统",
+                                    &format!("账号 {display} 应用宝换码失败，请稍后重试或重新扫码"),
+                                    Some(serde_json::json!({
+                                        "accountId": account_id,
+                                        "accountName": display,
+                                        "reason": reason,
+                                    })),
+                                );
+                            } else if should_attempt_wx_reconnect(user_stop, has_wx, &reason) {
                                 match engine.plan_wx_reconnect(&account_id) {
                                     WxReconnectPlan::Spawn { attempt } => {
                                         schedule_wx_reconnect = Some(attempt);
@@ -891,6 +927,113 @@ impl RuntimeEngine {
         });
     }
 
+    /// 后台保活：每 30 分钟检查 accesstoken，剩余不足 45 分钟则续 token + buffer。
+    pub fn spawn_wx_keepalive(self: &Arc<Self>) {
+        let engine = self.clone();
+        tokio::spawn(async move {
+            let interval = Duration::from_millis(crate::constants::WX_KEEPALIVE_INTERVAL_MS);
+            loop {
+                tokio::time::sleep(interval).await;
+                engine.run_wx_keepalive_tick().await;
+            }
+        });
+    }
+
+    async fn run_wx_keepalive_tick(&self) {
+        let svc = crate::services::wx_login::service::WxLoginService::new();
+        let ahead = crate::constants::WX_KEEPALIVE_AHEAD_SECS;
+        let accounts: Vec<_> = accounts_store::get_accounts()
+            .into_iter()
+            .filter(|a| a.can_refresh_wx_token())
+            .collect();
+        for acc in accounts {
+            let creds = AccountSession::from_store(&acc).yyb_credentials();
+            if !creds.token_due_for_refresh(ahead) {
+                continue;
+            }
+            let account_id = acc.id.clone();
+            let display =
+                if acc.name.trim().is_empty() { account_id.clone() } else { acc.name.clone() };
+            match svc.refresh_credentials_and_buffer(&creds).await {
+                Ok(updated) => {
+                    accounts_store::persist_yyb_credentials(
+                        &account_id,
+                        accounts_store::YybCredentialPatch {
+                            wx_login_buffer: Some(updated.login_buffer.clone()),
+                            wx_access_token: Some(updated.access_token.clone()),
+                            wx_refresh_token: Some(updated.refresh_token.clone()),
+                            wx_token_expires_at: Some(updated.expires_at),
+                            ..Default::default()
+                        },
+                    );
+                    accounts_store::persist_global();
+                    tracing::info!(account_id = %account_id, "应用宝 token 保活成功");
+                }
+                Err(e)
+                    if e.kind == crate::services::wx_login::WxAuthErrorKind::CredentialsDead =>
+                {
+                    tracing::warn!(account_id = %account_id, "应用宝保活失败，清授权: {e}");
+                    accounts_store::clear_wx_auth(&account_id);
+                    accounts_store::persist_global();
+                    self.clear_wx_reconnect(&account_id);
+                    self.stop_worker(&account_id);
+                    self.runtime_state.log(
+                        "系统",
+                        &format!("账号 {display} 应用宝授权已失效，请重新扫码"),
+                        Some(serde_json::json!({
+                            "accountId": account_id,
+                            "accountName": display,
+                        })),
+                    );
+                    self.emit_account_status(
+                        &account_id,
+                        &display,
+                        "error",
+                        "应用宝授权已失效，请重新扫码",
+                        false,
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(account_id = %account_id, "应用宝保活临时失败: {e}");
+                }
+            }
+        }
+    }
+
+    /// 换码失败清授权后通知面板（wxAuthorized=false）。
+    pub fn notify_wx_auth_cleared(&self, account_id: &str, account_name: &str) {
+        self.emit_account_status(
+            account_id,
+            account_name,
+            "error",
+            "应用宝授权已失效，请重新扫码",
+            false,
+        );
+        let panel = self.panel_status(account_id);
+        let _ = self.runtime_state.events.send(RuntimeEvent::Status {
+            account_id: account_id.to_string(),
+            account_name: account_name.to_string(),
+            status: panel,
+        });
+    }
+
+    fn emit_account_status(
+        &self,
+        account_id: &str,
+        account_name: &str,
+        status: &str,
+        detail: &str,
+        wx_authorized: bool,
+    ) {
+        let _ = self.runtime_state.events.send(RuntimeEvent::AccountStatus {
+            account_id: account_id.to_string(),
+            account_name: account_name.to_string(),
+            status: status.to_string(),
+            detail: detail.to_string(),
+            wx_authorized,
+        });
+    }
+
     fn start_wx_authorized_account(
         self: &Arc<Self>,
         acc: &crate::models::store::accounts::AccountRecord,
@@ -985,8 +1128,11 @@ enum WxReconnectPlan {
     GiveUp,
 }
 
-fn should_attempt_wx_reconnect(user_stop: bool, has_wx_auth: bool) -> bool {
-    !user_stop && has_wx_auth
+fn should_attempt_wx_reconnect(user_stop: bool, has_wx_auth: bool, reason: &str) -> bool {
+    !user_stop
+        && has_wx_auth
+        && !reason.contains("wx_auth_failed")
+        && !reason.contains("wx_mint_failed")
 }
 
 fn spawn_offline_reminder(
@@ -1289,9 +1435,11 @@ mod tests {
 
     #[test]
     fn should_attempt_wx_reconnect_skips_user_stop() {
-        assert!(should_attempt_wx_reconnect(false, true));
-        assert!(!should_attempt_wx_reconnect(true, true));
-        assert!(!should_attempt_wx_reconnect(false, false));
+        assert!(should_attempt_wx_reconnect(false, true, "disconnect:kickout"));
+        assert!(!should_attempt_wx_reconnect(true, true, "disconnect:kickout"));
+        assert!(!should_attempt_wx_reconnect(false, false, "disconnect:kickout"));
+        assert!(!should_attempt_wx_reconnect(false, true, "disconnect:wx_auth_failed"));
+        assert!(!should_attempt_wx_reconnect(false, true, "disconnect:wx_mint_failed"));
     }
 
     #[test]

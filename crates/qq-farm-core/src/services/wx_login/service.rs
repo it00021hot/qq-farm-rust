@@ -20,7 +20,12 @@ use std::time::Duration;
 
 use reqwest::redirect::Policy;
 
+use crate::constants::game_ids::{
+    WX_OAUTH_APP_ID, WX_OAUTH_REDIRECT_URI, WX_OAUTH_SCOPE, WX_OAUTH_STATE,
+};
+
 use super::native_protocol;
+use super::wx_auth::{classify_yyb_message, now_unix, WxAuthError, YybCredentials};
 
 /// 微信 QR 状态
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +46,8 @@ pub struct WxLoginSession {
     pub openid: Option<String>,
     pub login_buffer: Option<String>,
     pub access_token: Option<String>,
+    pub refresh_token: Option<String>,
+    pub expires_at: Option<i64>,
 }
 
 impl WxLoginSession {
@@ -55,6 +62,8 @@ impl WxLoginSession {
         self.openid = None;
         self.login_buffer = None;
         self.access_token = None;
+        self.refresh_token = None;
+        self.expires_at = None;
     }
 }
 
@@ -64,7 +73,9 @@ const QR_POLL_URL: &str = "https://long.open.weixin.qq.com/connect/l/qrconnect";
 const CALLBACK_URL: &str = "https://yybadaccess.3g.qq.com/pc_yyb/pcyyb_oauth";
 const LOGIN_BUFFER_URL: &str =
     "https://yybadaccess.3g.qq.com/pc_yyb_auth/pcyyb_get_wx_login_buffer_auth";
-const OAUTH_APP_ID: &str = "wxd44977328b36e647";
+const REFRESH_TOKEN_URL: &str =
+    "https://yybadaccess.3g.qq.com/pc_yyb_auth/pcyyb_refresh_token_auth";
+const OAUTH_APP_ID: &str = WX_OAUTH_APP_ID;
 const USER_AGENT: &str = "Mozilla/5.0";
 const LOGIN_BUFFER_ACCESS_KEY: &str = "wgrdg373hy26ww2";
 
@@ -113,10 +124,10 @@ impl WxLoginService {
         let mut cookies: HashMap<String, String> = HashMap::new();
         let params = [
             ("appid", OAUTH_APP_ID),
-            ("redirect_uri", &format!("{CALLBACK_URL}?login_type=WX")),
+            ("redirect_uri", WX_OAUTH_REDIRECT_URI),
             ("response_type", "code"),
-            ("scope", "snsapi_login,snsapi_runtime_pcsdk"),
-            ("state", "web"),
+            ("scope", WX_OAUTH_SCOPE),
+            ("state", WX_OAUTH_STATE),
             ("fast_login", "1"),
             ("self_redirect", "true"),
         ];
@@ -174,7 +185,7 @@ impl WxLoginService {
         }
     }
 
-    /// 确认授权，拿到 `openid` + `loginBuffer`
+    /// 确认授权，拿到 `openid` + `loginBuffer`（含 refreshtoken）。
     ///
     /// # Errors
     /// - 未授权 / HTTP 错误 / 响应解析失败
@@ -182,67 +193,201 @@ impl WxLoginService {
         let oauth_code = session
             .oauth_code
             .as_ref()
-            .ok_or_else(|| "Waiting for scan authorization".to_string())?;
-        let params = [("login_type", "WX"), ("code", oauth_code.as_str()), ("state", "web")];
-        let query = encode_query(&params);
-        let callback =
-            self.request(&format!("{CALLBACK_URL}?{query}"), &mut session.cookies, None).await?;
-        if callback.status < 200 || callback.status >= 400 {
-            return Err(format!("WeChat authorization callback failed (HTTP {})", callback.status));
-        }
-        let openid = required_cookie(&session.cookies, "openid")?;
-        let access_token = required_cookie(&session.cookies, "accesstoken")?;
-        let login_buffer =
-            self.post_login_buffer(&mut session.cookies, &openid, &access_token).await?;
+            .ok_or_else(|| "Waiting for scan authorization".to_string())?
+            .clone();
+        let creds = self.exchange_oauth_code(&oauth_code).await.map_err(|e| e.to_string())?;
         session.cookies.clear();
-        session.openid = Some(openid.clone());
-        session.access_token = Some(access_token);
-        session.login_buffer = Some(login_buffer.clone());
-        Ok((openid, login_buffer))
+        session.openid = Some(creds.openid.clone());
+        session.access_token = Some(creds.access_token.clone());
+        session.refresh_token = Some(creds.refresh_token.clone());
+        session.login_buffer = Some(creds.login_buffer.clone());
+        session.expires_at = Some(creds.expires_at);
+        Ok((creds.openid, creds.login_buffer))
     }
 
-    /// 用已保存的应用宝 accesstoken 重新换 login_buffer（无需再扫码）。
-    ///
-    /// # Errors
-    /// - openid / access_token 为空
-    /// - HTTP / 响应解析失败
+    /// OAuth code → 应用宝凭据（扫码 confirm / 本机快速授权共用）。
+    pub async fn exchange_oauth_code(&self, oauth_code: &str) -> Result<YybCredentials, WxAuthError> {
+        let code = oauth_code.trim();
+        if code.is_empty() {
+            return Err(WxAuthError::dead("quick authorization code is missing"));
+        }
+        let mut cookies = HashMap::new();
+        let params = [("login_type", "WX"), ("code", code), ("state", WX_OAUTH_STATE)];
+        let query = encode_query(&params);
+        let callback =
+            self.request(&format!("{CALLBACK_URL}?{query}"), &mut cookies, None).await.map_err(map_http_err)?;
+        if callback.status < 200 || callback.status >= 400 {
+            return Err(WxAuthError::transient(format!(
+                "WeChat authorization callback failed (HTTP {})",
+                callback.status
+            )));
+        }
+        let openid = required_cookie(&cookies, "openid").map_err(WxAuthError::dead)?;
+        let access_token = required_cookie(&cookies, "accesstoken").map_err(WxAuthError::dead)?;
+        let refresh_token = cookies.get("refreshtoken").cloned().unwrap_or_default();
+        let expires_in = cookies
+            .get("expires_in")
+            .and_then(|s| s.parse::<i64>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(7200);
+        let expires_at = now_unix() + expires_in;
+        let mut creds = YybCredentials {
+            openid: openid.clone(),
+            access_token,
+            refresh_token,
+            expires_at,
+            expires_in,
+            ..Default::default()
+        };
+        creds.login_buffer = self.post_login_buffer_for(&creds, &mut cookies).await?;
+        Ok(creds)
+    }
+
+    /// 校验本机微信 fast_login 回调 URL，提取 OAuth code。
+    pub fn parse_quick_redirect_url(raw: &str) -> Result<String, WxAuthError> {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return Err(WxAuthError::dead("invalid quick authorization redirect"));
+        }
+        let parsed = url::Url::parse(raw)
+            .map_err(|_| WxAuthError::dead("invalid quick authorization redirect"))?;
+        if parsed.scheme() != "https" {
+            return Err(WxAuthError::dead("invalid quick authorization redirect"));
+        }
+        if parsed.host_str() != Some("yybadaccess.3g.qq.com") {
+            return Err(WxAuthError::dead("invalid quick authorization redirect"));
+        }
+        if !parsed.port().is_none() || !parsed.username().is_empty() {
+            return Err(WxAuthError::dead("invalid quick authorization redirect"));
+        }
+        if parsed.path() != "/pc_yyb/pcyyb_oauth" {
+            return Err(WxAuthError::dead("invalid quick authorization redirect"));
+        }
+        let mut login_type = None;
+        let mut state = None;
+        let mut code = None;
+        for (k, v) in parsed.query_pairs() {
+            match k.as_ref() {
+                "login_type" => login_type = Some(v.into_owned()),
+                "state" => state = Some(v.into_owned()),
+                "code" => code = Some(v.into_owned()),
+                _ => {}
+            }
+        }
+        if login_type.as_deref() != Some("WX") || state.as_deref() != Some(WX_OAUTH_STATE) {
+            return Err(WxAuthError::dead("invalid quick authorization state"));
+        }
+        let code = code.unwrap_or_default();
+        if code.trim().is_empty() || code.len() > 2048 {
+            return Err(WxAuthError::dead("quick authorization code is missing"));
+        }
+        Ok(code)
+    }
+
+    /// 用已保存的应用宝 accesstoken 重新换 login_buffer（旧账号无 refresh 时回退）。
     pub async fn refresh_login_buffer(
         &self,
         openid: &str,
         access_token: &str,
-    ) -> Result<String, String> {
-        let openid = openid.trim();
-        let access_token = access_token.trim();
-        if openid.is_empty() || access_token.is_empty() {
-            return Err("Missing Yingyongbao authorization".to_string());
+    ) -> Result<String, WxAuthError> {
+        let creds = YybCredentials {
+            openid: openid.trim().to_string(),
+            access_token: access_token.trim().to_string(),
+            ..Default::default()
+        };
+        if creds.openid.is_empty() || creds.access_token.is_empty() {
+            return Err(WxAuthError::dead("Missing Yingyongbao authorization"));
         }
         let mut cookies = HashMap::new();
-        self.post_login_buffer(&mut cookies, openid, access_token).await
+        self.post_login_buffer_for(&creds, &mut cookies).await
     }
 
-    /// 用 login_buffer 换网关 code；失败且有 accesstoken 时先刷新 buffer 再试一次。
+    /// 续 accesstoken（需 refreshtoken）。
+    pub async fn refresh_credentials(
+        &self,
+        creds: &YybCredentials,
+    ) -> Result<YybCredentials, WxAuthError> {
+        if creds.refresh_token.trim().is_empty() {
+            return Err(WxAuthError::dead("missing refresh token"));
+        }
+        if creds.openid.trim().is_empty() || creds.access_token.trim().is_empty() {
+            return Err(WxAuthError::dead("Missing Yingyongbao authorization"));
+        }
+        let payload = refresh_token_payload(creds);
+        let timestamp = now_ms_string();
+        let nonce = random_int(1000, 10000).to_string();
+        let signature = login_buffer_signature(&payload, &timestamp, &nonce);
+        let extra_headers = signed_json_headers(&timestamp, &nonce, &signature);
+        let response = self
+            .request(
+                REFRESH_TOKEN_URL,
+                &mut HashMap::new(),
+                Some(RequestInput {
+                    method: "POST",
+                    body: Some(payload.as_bytes().to_vec()),
+                    extra_headers,
+                }),
+            )
+            .await
+            .map_err(map_http_err)?;
+        if !(200..300).contains(&response.status) {
+            return Err(WxAuthError::transient(format!(
+                "Unable to refresh Yingyongbao token (HTTP {})",
+                response.status
+            )));
+        }
+        parse_refresh_token_json(&String::from_utf8_lossy(&response.body), creds)
+    }
+
+    /// 续 token 并换 login_buffer（保活 / mint 失败恢复）。
+    pub async fn refresh_credentials_and_buffer(
+        &self,
+        creds: &YybCredentials,
+    ) -> Result<YybCredentials, WxAuthError> {
+        let refreshed = if creds.refresh_token.trim().is_empty() {
+            creds.clone()
+        } else if creds.token_due_for_refresh(0) {
+            self.refresh_credentials(creds).await?
+        } else {
+            creds.clone()
+        };
+        let mut cookies = HashMap::new();
+        let login_buffer = self.post_login_buffer_for(&refreshed, &mut cookies).await?;
+        Ok(YybCredentials { login_buffer, ..refreshed })
+    }
+
+    /// 用 login_buffer 换网关 code；失败则续 token / buffer 再试。
     ///
-    /// 返回 `(wx.login code, login_buffer)`，后者可能被刷新。
-    ///
-    /// # Errors
-    /// - MMTLS / 应用宝换票失败
+    /// 返回 `(wx.login code, 更新后的凭据)`。
     pub async fn mint_gateway_code(
         &self,
-        login_buffer: &str,
-        openid: &str,
-        access_token: &str,
+        creds: &YybCredentials,
         app_id: &str,
-    ) -> Result<(String, String), String> {
-        match native_protocol::get_native_wx_login_code(login_buffer, app_id).await {
-            Ok(code) => Ok((code, login_buffer.to_string())),
-            Err(e) => {
-                if openid.trim().is_empty() || access_token.trim().is_empty() {
-                    return Err(e);
+    ) -> Result<(String, YybCredentials), WxAuthError> {
+        let mut current = creds.clone();
+        if current.login_buffer.trim().is_empty() {
+            return Err(WxAuthError::dead("Missing Yingyongbao authorization"));
+        }
+        match native_protocol::get_native_wx_login_code(&current.login_buffer, app_id).await {
+            Ok(code) => Ok((code, current)),
+            Err(first) => {
+                tracing::warn!("login_buffer mint failed, refreshing via Yingyongbao: {first}");
+                if !current.refresh_token.trim().is_empty() {
+                    current = self.refresh_credentials_and_buffer(&current).await?;
+                } else if !current.openid.trim().is_empty()
+                    && !current.access_token.trim().is_empty()
+                {
+                    let buf = self
+                        .refresh_login_buffer(&current.openid, &current.access_token)
+                        .await?;
+                    current.login_buffer = buf;
+                } else {
+                    return Err(map_native_mint_err(first));
                 }
-                tracing::warn!("login_buffer mint failed, refreshing via Yingyongbao: {e}");
-                let new_buf = self.refresh_login_buffer(openid, access_token).await?;
-                let code = native_protocol::get_native_wx_login_code(&new_buf, app_id).await?;
-                Ok((code, new_buf))
+                let code = native_protocol::get_native_wx_login_code(&current.login_buffer, app_id)
+                    .await
+                    .map_err(map_native_mint_err)?;
+                Ok((code, current))
             }
         }
     }
@@ -270,24 +415,24 @@ impl WxLoginService {
         session.clear_sensitive();
     }
 
-    async fn post_login_buffer(
+    async fn post_login_buffer_for(
         &self,
+        creds: &YybCredentials,
         cookies: &mut HashMap<String, String>,
-        openid: &str,
-        access_token: &str,
-    ) -> Result<String, String> {
-        let payload = login_buffer_payload(openid, access_token);
+    ) -> Result<String, WxAuthError> {
+        if creds.openid.trim().is_empty() || creds.access_token.trim().is_empty() {
+            return Err(WxAuthError::dead("Missing Yingyongbao authorization"));
+        }
+        cookies.insert("openid".to_string(), creds.openid.clone());
+        cookies.insert("accesstoken".to_string(), creds.access_token.clone());
+        if !creds.refresh_token.trim().is_empty() {
+            cookies.insert("refreshtoken".to_string(), creds.refresh_token.clone());
+        }
+        let payload = login_buffer_payload(&creds.openid, &creds.access_token);
         let timestamp = now_ms_string();
         let nonce = random_int(1000, 10000).to_string();
         let signature = login_buffer_signature(&payload, &timestamp, &nonce);
-
-        let mut extra_headers = HashMap::new();
-        extra_headers.insert("Content-Type".to_string(), "application/json".to_string());
-        extra_headers.insert("Ual-Access-Businessid".to_string(), "pc_yyb_auth".to_string());
-        extra_headers.insert("Ual-Access-Timestamp".to_string(), timestamp);
-        extra_headers.insert("Ual-Access-Nonce".to_string(), nonce);
-        extra_headers.insert("Ual-Access-Signature".to_string(), signature);
-
+        let extra_headers = signed_json_headers(&timestamp, &nonce, &signature);
         let response = self
             .request(
                 LOGIN_BUFFER_URL,
@@ -298,9 +443,13 @@ impl WxLoginService {
                     extra_headers,
                 }),
             )
-            .await?;
+            .await
+            .map_err(map_http_err)?;
         if !(200..300).contains(&response.status) {
-            return Err(format!("Unable to obtain WeChat login buffer (HTTP {})", response.status));
+            return Err(WxAuthError::transient(format!(
+                "Unable to obtain WeChat login buffer (HTTP {})",
+                response.status
+            )));
         }
         parse_login_buffer_json(&String::from_utf8_lossy(&response.body))
     }
@@ -417,9 +566,78 @@ fn login_buffer_payload(openid: &str, access_token: &str) -> String {
     .to_string()
 }
 
-fn parse_login_buffer_json(body: &str) -> Result<String, String> {
+fn signed_json_headers(timestamp: &str, nonce: &str, signature: &str) -> HashMap<String, String> {
+    let mut extra_headers = HashMap::new();
+    extra_headers.insert("Content-Type".to_string(), "application/json".to_string());
+    extra_headers.insert("Ual-Access-Businessid".to_string(), "pc_yyb_auth".to_string());
+    extra_headers.insert("Ual-Access-Timestamp".to_string(), timestamp.to_string());
+    extra_headers.insert("Ual-Access-Nonce".to_string(), nonce.to_string());
+    extra_headers.insert("Ual-Access-Signature".to_string(), signature.to_string());
+    extra_headers
+}
+
+fn refresh_token_payload(creds: &YybCredentials) -> String {
+    serde_json::json!({
+        "userInfo": {
+            "openId": creds.openid,
+            "refreshToken": creds.refresh_token,
+            "accessToken": creds.access_token,
+            "loginType": "WX",
+        }
+    })
+    .to_string()
+}
+
+fn parse_refresh_token_json(body: &str, base: &YybCredentials) -> Result<YybCredentials, WxAuthError> {
     let data: serde_json::Value =
-        serde_json::from_str(body).map_err(|e| format!("JSON parse: {e}"))?;
+        serde_json::from_str(body).map_err(|e| WxAuthError::transient(format!("JSON parse: {e}")))?;
+    let code = data.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
+    if code != 0 {
+        let msg = data.get("msg").and_then(|v| v.as_str()).unwrap_or("refresh failed");
+        return Err(WxAuthError::dead(format!("refresh failed: code={code} msg={msg}")));
+    }
+    let info = data.get("user_info").or_else(|| data.get("userInfo"));
+    let access_token = info
+        .and_then(|v| v.get("access_token").or_else(|| v.get("accessToken")))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if access_token.is_empty() {
+        return Err(WxAuthError::dead("refresh response missing access_token"));
+    }
+    let refresh_token = info
+        .and_then(|v| v.get("refresh_token").or_else(|| v.get("refreshToken")))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| base.refresh_token.clone());
+    let expires_in = info
+        .and_then(|v| v.get("expires_in").or_else(|| v.get("expiresIn")))
+        .and_then(|v| v.as_i64())
+        .filter(|v| *v > 0)
+        .unwrap_or(base.expires_in.max(7200));
+    Ok(YybCredentials {
+        openid: base.openid.clone(),
+        access_token,
+        refresh_token,
+        login_buffer: base.login_buffer.clone(),
+        expires_at: now_unix() + expires_in,
+        expires_in,
+    })
+}
+
+fn map_http_err(err: String) -> WxAuthError {
+    WxAuthError::transient(err)
+}
+
+fn map_native_mint_err(err: String) -> WxAuthError {
+    let kind = classify_yyb_message(&err);
+    WxAuthError { kind, message: err }
+}
+
+fn parse_login_buffer_json(body: &str) -> Result<String, WxAuthError> {
+    let data: serde_json::Value =
+        serde_json::from_str(body).map_err(|e| WxAuthError::transient(format!("JSON parse: {e}")))?;
     let code = data.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
     let login_buffer = if code == 0 {
         data.get("ext_info")
@@ -435,7 +653,7 @@ fn parse_login_buffer_json(body: &str) -> Result<String, String> {
         String::new()
     };
     if login_buffer.is_empty() {
-        return Err("WeChat login buffer response is invalid".to_string());
+        return Err(WxAuthError::dead("WeChat login buffer response is invalid"));
     }
     Ok(login_buffer)
 }
@@ -946,9 +1164,39 @@ mod tests {
     async fn refresh_login_buffer_requires_credentials() {
         let svc = WxLoginService::new();
         let err = svc.refresh_login_buffer("", "tok").await.unwrap_err();
-        assert!(err.contains("Missing Yingyongbao"));
+        assert!(err.to_string().contains("Missing Yingyongbao"));
         let err = svc.refresh_login_buffer("oid", "  ").await.unwrap_err();
-        assert!(err.contains("Missing Yingyongbao"));
+        assert!(err.to_string().contains("Missing Yingyongbao"));
+    }
+
+    #[test]
+    fn parse_quick_redirect_url_accepts_valid() {
+        let url = "https://yybadaccess.3g.qq.com/pc_yyb/pcyyb_oauth?login_type=WX&state=web&code=abc123";
+        assert_eq!(WxLoginService::parse_quick_redirect_url(url).unwrap(), "abc123");
+    }
+
+    #[test]
+    fn parse_quick_redirect_url_rejects_bad_host() {
+        assert!(WxLoginService::parse_quick_redirect_url(
+            "https://evil.com/pc_yyb/pcyyb_oauth?login_type=WX&state=web&code=x"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn parse_quick_redirect_url_rejects_bad_state() {
+        assert!(WxLoginService::parse_quick_redirect_url(
+            "https://yybadaccess.3g.qq.com/pc_yyb/pcyyb_oauth?login_type=WX&state=bad&code=x"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn parse_quick_redirect_url_rejects_empty_code() {
+        assert!(WxLoginService::parse_quick_redirect_url(
+            "https://yybadaccess.3g.qq.com/pc_yyb/pcyyb_oauth?login_type=WX&state=web&code="
+        )
+        .is_err());
     }
 
     #[test]

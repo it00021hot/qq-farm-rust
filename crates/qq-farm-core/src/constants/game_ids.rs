@@ -42,5 +42,15 @@ pub const MALL_ORGANIC_FERTILIZER_GOODS_ID: i32 = 1002;
 /// 微信开放平台 / 桌面与扫码共用的小程序 AppId（面板 wx 登录另有 TARGET）
 pub const WX_MINI_APP_ID: &str = "wx5306c5978fdb76e4";
 
+/// 应用宝网站应用 OAuth appid（qrconnect / 本机快速授权）
+pub const WX_OAUTH_APP_ID: &str = "wxd44977328b36e647";
+pub const WX_OAUTH_SCOPE: &str = "snsapi_login,snsapi_runtime_pcsdk";
+pub const WX_OAUTH_STATE: &str = "web";
+pub const WX_OAUTH_REDIRECT_URI: &str =
+    "https://yybadaccess.3g.qq.com/pc_yyb/pcyyb_oauth?login_type=WX";
+
+/// 桌面微信本地 HTTP API 端口（Windows fast_login）
+pub const DESKTOP_WECHAT_PORTS: &[u16] = &[14013, 14014, 14015, 13013, 13014, 13015];
+
 /// 网关 Origin（WS 握手）
 pub const DEFAULT_GATEWAY_ORIGIN: &str = "https://gate-obt.nqf.qq.com";

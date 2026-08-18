@@ -11,7 +11,7 @@ use qq_farm_core::models::store::accounts as account_store;
 use crate::error::{IpcError, IpcResult};
 use crate::state::DesktopState;
 
-use super::dto::{AccountSummary, WxLoginCreateDto, WxLoginStatusDto};
+use super::dto::{AccountSummary, WxLoginCreateDto, WxLoginStatusDto, WxQuickCreateDto};
 
 /// 账号列表（LocalOwner：全部本地账号）。
 #[tauri::command]
@@ -127,6 +127,36 @@ pub fn wx_login_destroy(state: State<'_, DesktopState>, task_id: String) -> IpcR
     let _ = &state.acl;
     wx_login::destroy_task(&state.app.wx_login, &task_id);
     Ok(())
+}
+
+/// 创建本机微信快速授权会话。
+#[tauri::command]
+pub async fn wx_quick_login_create(state: State<'_, DesktopState>) -> IpcResult<WxQuickCreateDto> {
+    let _ = &state.acl;
+    let r = wx_login::create_quick_session(&state.app.wx_login).await.map_err(IpcError::from)?;
+    Ok(WxQuickCreateDto {
+        session_id: r.session_id,
+        app_id: r.app_id,
+        scope: r.scope,
+        redirect_uri: r.redirect_uri,
+        state: r.state,
+        ports: r.ports,
+        expires_at: r.expires_at,
+    })
+}
+
+/// 确认本机微信 fast_login 回调。
+#[tauri::command]
+pub async fn wx_quick_login_confirm(
+    state: State<'_, DesktopState>,
+    session_id: String,
+    redirect_url: String,
+) -> IpcResult<Value> {
+    let _ = &state.acl;
+    let r = wx_login::confirm_quick_session(&state.app.wx_login, &session_id, &redirect_url)
+        .await
+        .map_err(IpcError::from)?;
+    Ok(serde_json::json!({ "code": r.code, "openid": r.openid, "appId": r.app_id }))
 }
 
 pub(crate) fn build_accounts(state: &DesktopState) -> Vec<AccountSummary> {

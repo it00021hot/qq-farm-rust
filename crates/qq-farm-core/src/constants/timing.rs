@@ -28,6 +28,11 @@ pub const WX_RECONNECT_MAX_ATTEMPTS: u32 = 3;
 /// 换码重连等待（踢号 / 断线 / 进程重启后均先等再连）
 pub const WX_RECONNECT_DELAY_MS: u64 = 5 * 60 * 1000;
 
+/// 应用宝 accesstoken 后台保活检查间隔
+pub const WX_KEEPALIVE_INTERVAL_MS: u64 = 30 * 60 * 1000;
+/// 剩余不足该秒数时提前续 token（默认 45 分钟）
+pub const WX_KEEPALIVE_AHEAD_SECS: i64 = 45 * 60;
+
 /// 运行日志用的等待文案（「5 分钟」）。
 #[must_use]
 pub fn wx_reconnect_delay_zh() -> String {

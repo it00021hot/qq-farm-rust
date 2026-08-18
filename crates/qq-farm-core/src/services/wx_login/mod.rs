@@ -6,3 +6,6 @@
 
 pub mod native_protocol;
 pub mod service;
+pub mod wx_auth;
+
+pub use wx_auth::{WxAuthError, WxAuthErrorKind, YybCredentials};

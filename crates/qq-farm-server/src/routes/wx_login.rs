@@ -29,6 +29,8 @@ pub fn router() -> Router<Arc<AdminContext>> {
         .route("/api/wx-login/tasks/{task_id}/status", get(get_status))
         .route("/api/wx-login/tasks/{task_id}/confirm", post(confirm_task))
         .route("/api/wx-login/tasks/{task_id}/code", post(consume_code))
+        .route("/api/wx-login/quick-tasks", post(create_quick_task))
+        .route("/api/wx-login/quick-tasks/{session_id}/confirm", post(confirm_quick_task))
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -134,6 +136,52 @@ async fn consume_code(
     let owner = owner_from_headers(&ctx, &headers);
     let r =
         wx_login::issue_code_for(&ctx.wx, &task_id, Some(&owner)).await.map_err(ApiError::from)?;
+    Ok(Json(json!({
+        "ok": true,
+        "data": {
+            "openid": r.openid,
+            "app_id": r.app_id,
+            "code": r.code,
+            "err_msg": "login:ok",
+        }
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+struct QuickConfirmBody {
+    redirect_url: String,
+}
+
+async fn create_quick_task(
+    State(ctx): State<Arc<AdminContext>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let owner = owner_from_headers(&ctx, &headers);
+    let r = wx_login::create_quick_session_for(&ctx.wx, &owner).await.map_err(ApiError::from)?;
+    Ok(Json(json!({
+        "ok": true,
+        "data": {
+            "session_id": r.session_id,
+            "appid": r.app_id,
+            "scope": r.scope,
+            "redirect_uri": r.redirect_uri,
+            "state": r.state,
+            "ports": r.ports,
+            "expires_at": r.expires_at,
+        }
+    })))
+}
+
+async fn confirm_quick_task(
+    State(ctx): State<Arc<AdminContext>>,
+    headers: axum::http::HeaderMap,
+    Path(session_id): Path<String>,
+    Json(body): Json<QuickConfirmBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let owner = owner_from_headers(&ctx, &headers);
+    let r = wx_login::confirm_quick_session_for(&ctx.wx, &session_id, &body.redirect_url, Some(&owner))
+        .await
+        .map_err(ApiError::from)?;
     Ok(Json(json!({
         "ok": true,
         "data": {

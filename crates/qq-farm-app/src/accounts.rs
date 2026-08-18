@@ -155,6 +155,8 @@ pub fn list_accounts_enriched(ctx: &AppContext, username_filter: Option<&str>) -
 fn redact_wx_auth_fields(obj: &mut serde_json::Map<String, Value>, authorized: bool) {
     obj.remove("wx_login_buffer");
     obj.remove("wx_access_token");
+    obj.remove("wx_refresh_token");
+    obj.remove("wx_token_expires_at");
     obj.insert("wxAuthorized".to_string(), json!(authorized));
 }
 
@@ -269,6 +271,8 @@ pub fn upsert_account(
         saved.wx_openid = auth.openid;
         saved.wx_login_buffer = auth.login_buffer;
         saved.wx_access_token = auth.access_token;
+        saved.wx_refresh_token = auth.refresh_token;
+        saved.wx_token_expires_at = auth.token_expires_at;
         saved = accounts::add_or_update_account(saved);
     }
     accounts::persist_global();

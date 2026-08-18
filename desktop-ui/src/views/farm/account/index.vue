@@ -12,6 +12,7 @@ import {
 import type { FlatResponseData } from '@sa/axios';
 import { useAppStore } from '@/store/modules/app';
 import { useFarmAccountStore } from '@/store/modules/farm-account';
+import { useFarmWs } from '@/hooks/business/farm-ws';
 import { defaultTransform, useNaivePaginatedTable, useTableOperate } from '@/hooks/common/table';
 import { $t } from '@/locales';
 import AccountOperateDrawer from './modules/account-operate-drawer.vue';
@@ -190,6 +191,21 @@ async function refreshList(page: number = 1) {
 
 onMounted(async () => {
   await refreshList();
+});
+
+useFarmWs({
+  onMessage(type, payload) {
+    if (type === 'account_status') {
+      void refreshList(searchParams.value.current || 1);
+      return;
+    }
+    if (type === 'status:update') {
+      const body = payload as { status?: { wxAuthorized?: boolean } };
+      if (body?.status?.wxAuthorized === false) {
+        void refreshList(searchParams.value.current || 1);
+      }
+    }
+  }
 });
 </script>
 

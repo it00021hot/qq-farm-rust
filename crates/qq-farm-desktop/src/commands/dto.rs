@@ -66,6 +66,19 @@ pub struct WxLoginStatusDto {
     pub expires_at: i64,
 }
 
+/// 本机微信快速授权会话。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WxQuickCreateDto {
+    pub session_id: String,
+    pub app_id: String,
+    pub scope: String,
+    pub redirect_uri: String,
+    pub state: String,
+    pub ports: Vec<u16>,
+    pub expires_at: i64,
+}
+
 /// 背包出售单项。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]

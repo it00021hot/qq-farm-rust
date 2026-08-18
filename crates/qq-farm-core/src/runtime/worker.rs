@@ -18,6 +18,7 @@ use crate::runtime::events::WorkerEvent;
 use crate::runtime::scheduler::Scheduler;
 use crate::runtime::worker_handle::WorkerHandle;
 use crate::runtime::worker_message::WorkerMessage;
+use crate::services::wx_login::{WxAuthErrorKind, YybCredentials};
 
 /// Worker 启动配置
 #[derive(Debug, Clone)]
@@ -159,26 +160,36 @@ impl Worker {
             if account.has_wx_auth() {
                 emit_login_log(&account_id, "正在用应用宝授权换取新的登录码", false);
                 match prepare_wx_gateway_code(&account).await {
-                    Ok((code, login_buffer)) => {
-                        persist_wx_gateway_credentials(&account_id, &code, &login_buffer);
+                    Ok((code, creds)) => {
+                        persist_wx_gateway_credentials(&account_id, &code, &creds);
                         config.gateway.auth_code = code;
                         emit_login_log(&account_id, "换码成功，正在连接网关", false);
                     }
                     Err(e) => {
                         tracing::warn!(account_id = %account_id, "应用宝换码失败: {e}");
+                        let dead = e.kind == WxAuthErrorKind::CredentialsDead;
+                        if dead {
+                            crate::models::store::accounts::clear_wx_auth(&account_id);
+                            crate::models::store::accounts::persist_global();
+                        }
                         emit_login_log(
                             &account_id,
                             &format!("应用宝换码失败，请重新扫码: {e}"),
                             true,
                         );
-                        emit_terminal_stop(
+                        let source = if dead { "wx_auth_failed" } else { "wx_mint_failed" };
+                        emit_wx_failure_stop(
                             &event_tx,
                             &account_id,
                             &account_name,
                             &format!("应用宝授权已失效，请重新扫码: {e}"),
-                            "wx_auth_failed",
-                            has_wx_auth,
+                            source,
                         );
+                        if dead {
+                            if let Some(eng) = &engine {
+                                eng.notify_wx_auth_cleared(&account_id, &account_name);
+                            }
+                        }
                         crate::services::panel_log::unregister(&account_id);
                         if let Some(eng) = &engine {
                             eng.release_worker(&account_id);
@@ -653,27 +664,50 @@ fn emit_terminal_stop(
     });
 }
 
-async fn prepare_wx_gateway_code(account: &AccountSession) -> Result<(String, String), String> {
+fn emit_wx_failure_stop(
+    event_tx: &tokio::sync::broadcast::Sender<WorkerEvent>,
+    account_id: &str,
+    account_name: &str,
+    message: &str,
+    source: &str,
+) {
+    let _ = event_tx.send(WorkerEvent::Log {
+        account_id: account_id.to_string(),
+        account_name: account_name.to_string(),
+        level: "warn".to_string(),
+        module: "system".to_string(),
+        message: message.to_string(),
+    });
+    let _ = event_tx.send(WorkerEvent::Stopped {
+        account_id: account_id.to_string(),
+        reason: format!("disconnect:{source}"),
+    });
+}
+
+async fn prepare_wx_gateway_code(
+    account: &AccountSession,
+) -> Result<(String, YybCredentials), crate::services::wx_login::WxAuthError> {
     let svc = crate::services::wx_login::service::WxLoginService::new();
     svc.mint_gateway_code(
-        &account.wx_login_buffer,
-        &account.wx_openid,
-        &account.wx_access_token,
+        &account.yyb_credentials(),
         crate::constants::WX_MINI_APP_ID,
     )
     .await
 }
 
-fn persist_wx_gateway_credentials(account_id: &str, code: &str, login_buffer: &str) {
-    use crate::models::store::accounts;
-    let Some(mut acc) = accounts::get_accounts().into_iter().find(|a| a.id == account_id) else {
-        return;
-    };
-    acc.code = code.to_string();
-    if !login_buffer.trim().is_empty() {
-        acc.wx_login_buffer = login_buffer.to_string();
-    }
-    accounts::add_or_update_account(acc);
+fn persist_wx_gateway_credentials(account_id: &str, code: &str, creds: &YybCredentials) {
+    use crate::models::store::accounts::{self, YybCredentialPatch};
+    accounts::persist_yyb_credentials(
+        account_id,
+        YybCredentialPatch {
+            code: Some(code.to_string()),
+            wx_login_buffer: Some(creds.login_buffer.clone()),
+            wx_access_token: Some(creds.access_token.clone()),
+            wx_refresh_token: Some(creds.refresh_token.clone()),
+            wx_token_expires_at: Some(creds.expires_at),
+            ..Default::default()
+        },
+    );
     accounts::persist_global();
 }
 

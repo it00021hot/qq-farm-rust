@@ -5,8 +5,12 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
+use qq_farm_core::constants::game_ids::{
+    DESKTOP_WECHAT_PORTS, WX_OAUTH_APP_ID, WX_OAUTH_REDIRECT_URI, WX_OAUTH_SCOPE, WX_OAUTH_STATE,
+};
 use qq_farm_core::constants::{WX_LOGIN_PENDING_AUTH_TTL_MS, WX_LOGIN_TASK_TTL_MS, WX_MINI_APP_ID};
 use qq_farm_core::services::wx_login::service::{ScanStatus, WxLoginService, WxLoginSession};
+use qq_farm_core::services::wx_login::YybCredentials;
 
 use crate::error::{AppError, AppResult};
 
@@ -16,6 +20,11 @@ struct WxLoginTask {
     created_at: AtomicI64,
     app_id: String,
     /// HTTP 面板任务归属；桌面端可为空。
+    owner: String,
+}
+
+struct QuickLoginSession {
+    created_at: i64,
     owner: String,
 }
 
@@ -31,12 +40,27 @@ pub struct WxAuth {
     pub openid: String,
     pub login_buffer: String,
     pub access_token: String,
+    pub refresh_token: String,
+    pub token_expires_at: i64,
+}
+
+impl From<YybCredentials> for WxAuth {
+    fn from(c: YybCredentials) -> Self {
+        Self {
+            openid: c.openid,
+            login_buffer: c.login_buffer,
+            access_token: c.access_token,
+            refresh_token: c.refresh_token,
+            token_expires_at: c.expires_at,
+        }
+    }
 }
 
 /// 进程内微信扫码任务仓库。
 pub struct WxLoginHub {
     service: Arc<WxLoginService>,
     tasks: Mutex<HashMap<String, Arc<WxLoginTask>>>,
+    quick_sessions: Mutex<HashMap<String, QuickLoginSession>>,
     pending_auth: Mutex<HashMap<String, PendingWxAuth>>,
 }
 
@@ -52,6 +76,7 @@ impl WxLoginHub {
         Self {
             service: Arc::new(WxLoginService::new()),
             tasks: Mutex::new(HashMap::new()),
+            quick_sessions: Mutex::new(HashMap::new()),
             pending_auth: Mutex::new(HashMap::new()),
         }
     }
@@ -65,6 +90,18 @@ pub struct WxCreateResult {
     pub status: String,
     pub expires_at: i64,
     pub qr_jpeg: Vec<u8>,
+}
+
+/// 本机微信快速授权会话。
+#[derive(Debug, Clone)]
+pub struct WxQuickCreateResult {
+    pub session_id: String,
+    pub app_id: String,
+    pub scope: String,
+    pub redirect_uri: String,
+    pub state: String,
+    pub ports: Vec<u16>,
+    pub expires_at: i64,
 }
 
 /// 状态轮询结果。
@@ -115,6 +152,24 @@ fn find_task(hub: &WxLoginHub, task_id: &str, owner: Option<&str>) -> AppResult<
     Ok(task)
 }
 
+fn prune_quick_sessions(hub: &WxLoginHub, now: i64) {
+    let ttl = WX_LOGIN_TASK_TTL_MS as i64;
+    hub.quick_sessions.lock().retain(|_, v| now - v.created_at <= ttl);
+}
+
+fn take_quick_session(hub: &WxLoginHub, session_id: &str, owner: Option<&str>) -> AppResult<()> {
+    prune_quick_sessions(hub, now_ms());
+    let session = hub
+        .quick_sessions
+        .lock()
+        .remove(session_id)
+        .ok_or_else(|| AppError::NotFound("Quick login session expired or not found".into()))?;
+    if owner.filter(|o| !o.is_empty()).is_some_and(|o| session.owner != o) {
+        return Err(AppError::Forbidden("Quick login session owner mismatch".into()));
+    }
+    Ok(())
+}
+
 /// 创建扫码任务并返回 JPEG 二维码。
 pub async fn create_task(hub: &WxLoginHub) -> AppResult<WxCreateResult> {
     create_task_for(hub, "").await
@@ -140,6 +195,66 @@ pub async fn create_task_for(hub: &WxLoginHub, owner: &str) -> AppResult<WxCreat
         expires_at: (created_at + WX_LOGIN_TASK_TTL_MS as i64) / 1000,
         qr_jpeg,
     })
+}
+
+/// 创建本机微信快速授权会话（前端 WebView 调 localhost.weixin.qq.com）。
+pub async fn create_quick_session(hub: &WxLoginHub) -> AppResult<WxQuickCreateResult> {
+    create_quick_session_for(hub, "").await
+}
+
+pub async fn create_quick_session_for(
+    hub: &WxLoginHub,
+    owner: &str,
+) -> AppResult<WxQuickCreateResult> {
+    let now = now_ms();
+    prune_quick_sessions(hub, now);
+    let session_id = uuid::Uuid::new_v4().simple().to_string();
+    hub.quick_sessions.lock().insert(
+        session_id.clone(),
+        QuickLoginSession { created_at: now, owner: owner.to_string() },
+    );
+    Ok(WxQuickCreateResult {
+        session_id,
+        app_id: WX_OAUTH_APP_ID.to_string(),
+        scope: WX_OAUTH_SCOPE.to_string(),
+        redirect_uri: WX_OAUTH_REDIRECT_URI.to_string(),
+        state: WX_OAUTH_STATE.to_string(),
+        ports: DESKTOP_WECHAT_PORTS.to_vec(),
+        expires_at: (now + WX_LOGIN_TASK_TTL_MS as i64) / 1000,
+    })
+}
+
+/// 确认本机微信 fast_login 回调并完成换票。
+pub async fn confirm_quick_session(
+    hub: &WxLoginHub,
+    session_id: &str,
+    redirect_url: &str,
+) -> AppResult<WxCodeResult> {
+    confirm_quick_session_for(hub, session_id, redirect_url, None).await
+}
+
+pub async fn confirm_quick_session_for(
+    hub: &WxLoginHub,
+    session_id: &str,
+    redirect_url: &str,
+    owner: Option<&str>,
+) -> AppResult<WxCodeResult> {
+    take_quick_session(hub, session_id, owner)?;
+    let oauth_code = WxLoginService::parse_quick_redirect_url(redirect_url)
+        .map_err(|e| AppError::BadRequest(e.to_string()))?;
+    let creds = hub.service.exchange_oauth_code(&oauth_code).await.map_err(map_wx_auth_err)?;
+    let openid = creds.openid.clone();
+    let (gateway_code, updated) = hub
+        .service
+        .mint_gateway_code(&creds, WX_MINI_APP_ID)
+        .await
+        .map_err(map_wx_auth_err)?;
+    store_pending_auth(hub, &gateway_code, WxAuth::from(updated));
+    Ok(WxCodeResult { openid, app_id: WX_MINI_APP_ID.to_string(), code: gateway_code })
+}
+
+fn map_wx_auth_err(e: qq_farm_core::services::wx_login::WxAuthError) -> AppError {
+    AppError::Internal(e.to_string())
 }
 
 /// 读取任务二维码 JPEG。
@@ -208,18 +323,29 @@ pub async fn issue_code_for(
 ) -> AppResult<WxCodeResult> {
     let task = find_task(hub, task_id, owner)?;
     let session = task.session.lock().await;
-    let code = hub.service.issue_code(&*session, &task.app_id).await.map_err(AppError::Internal)?;
     let openid = session.openid.clone().unwrap_or_default();
     let login_buffer = session.login_buffer.clone().unwrap_or_default();
     let access_token = session.access_token.clone().unwrap_or_default();
+    let refresh_token = session.refresh_token.clone().unwrap_or_default();
+    let token_expires_at = session.expires_at.unwrap_or(0);
     let app_id = task.app_id.clone();
     drop(session);
-    if !login_buffer.is_empty() {
-        store_pending_auth(
-            hub,
-            &code,
-            WxAuth { openid: openid.clone(), login_buffer, access_token },
-        );
+
+    let creds = YybCredentials {
+        openid: openid.clone(),
+        login_buffer: login_buffer.clone(),
+        access_token,
+        refresh_token,
+        expires_at: token_expires_at,
+        expires_in: 7200,
+    };
+    let (code, updated) = hub
+        .service
+        .mint_gateway_code(&creds, &app_id)
+        .await
+        .map_err(map_wx_auth_err)?;
+    if !updated.login_buffer.is_empty() {
+        store_pending_auth(&hub, &code, WxAuth::from(updated));
     }
     destroy_task(hub, task_id);
     Ok(WxCodeResult { openid, app_id, code })
@@ -279,8 +405,13 @@ mod tests {
     #[test]
     fn pending_auth_claim_is_one_shot() {
         let hub = WxLoginHub::new();
-        let auth =
-            WxAuth { openid: "oid".into(), login_buffer: "buf".into(), access_token: "tok".into() };
+        let auth = WxAuth {
+            openid: "oid".into(),
+            login_buffer: "buf".into(),
+            access_token: "tok".into(),
+            refresh_token: "rt".into(),
+            token_expires_at: 1,
+        };
         store_pending_auth(&hub, "wx-code", auth.clone());
         assert_eq!(take_pending_auth(&hub, "wx-code"), Some(auth));
         assert!(take_pending_auth(&hub, "wx-code").is_none());
@@ -315,5 +446,13 @@ mod tests {
             }
         }
         assert!(take_pending_auth(&hub, "old").is_none());
+    }
+
+    #[tokio::test]
+    async fn quick_session_one_shot_confirm() {
+        let hub = WxLoginHub::new();
+        let created = create_quick_session(&hub).await.unwrap();
+        take_quick_session(&hub, &created.session_id, None).unwrap();
+        assert!(take_quick_session(&hub, &created.session_id, None).is_err());
     }
 }

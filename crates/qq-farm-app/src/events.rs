@@ -91,6 +91,28 @@ impl PanelRealtimeEvent {
                     account_id: Some(entry.account_id.clone()),
                 }]
             }
+            RuntimeEvent::AccountStatus {
+                account_id,
+                account_name,
+                status,
+                detail,
+                wx_authorized,
+            } => {
+                if account_id.is_empty() {
+                    return Vec::new();
+                }
+                vec![Self {
+                    event_type: "account_status".into(),
+                    payload: json!({
+                        "accountId": account_id,
+                        "accountName": account_name,
+                        "status": status,
+                        "detail": detail,
+                        "wxAuthorized": wx_authorized,
+                    }),
+                    account_id: Some(account_id.clone()),
+                }]
+            }
             RuntimeEvent::WorkerLog { entry, account_id, .. } => {
                 if account_id.is_empty() {
                     return Vec::new();

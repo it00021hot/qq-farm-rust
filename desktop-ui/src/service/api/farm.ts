@@ -273,6 +273,25 @@ export function fetchDestroyFarmWxLogin(taskId: string) {
   return invokeFlat('wx_login_destroy', { taskId });
 }
 
+export function fetchCreateFarmWxQuickLoginSession() {
+  return invokeFlat<{
+    sessionId: string;
+    appId: string;
+    scope: string;
+    redirectUri: string;
+    state: string;
+    ports: number[];
+    expiresAt: number;
+  }>('wx_quick_login_create');
+}
+
+export function fetchConfirmFarmWxQuickLogin(sessionId: string, redirectUrl: string) {
+  return invokeFlat<{ code: string; openid?: string }>('wx_quick_login_confirm', {
+    sessionId,
+    redirectUrl
+  });
+}
+
 export async function fetchGetFarmStatusDetail(accountId: number) {
   const res = await invokeFlat<PanelStatusDto>('farm_status_detail', { accountId: aid(accountId) });
   if (res.error) return res as FlatResponseData<Api.Farm.Status, Api.Farm.Status>;

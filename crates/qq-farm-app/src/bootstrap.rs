@@ -78,5 +78,6 @@ pub fn assemble_app_context(max_workers: usize, gateway_origin: &str) -> AppCont
         ..Default::default()
     }));
     engine.spawn_event_bridge();
+    engine.spawn_wx_keepalive();
     AppContext::new(engine)
 }

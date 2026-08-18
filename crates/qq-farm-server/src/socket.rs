@@ -114,6 +114,26 @@ pub fn spawn_socket_forwarder(io: SocketIo, ctx: Arc<AdminContext>) {
                     let room = format!("account:{}", entry.account_id);
                     let _ = io.to(room).emit("account-log:new", &entry).await;
                 }
+                RuntimeEvent::AccountStatus {
+                    account_id,
+                    account_name,
+                    status,
+                    detail,
+                    wx_authorized,
+                } => {
+                    if account_id.is_empty() {
+                        continue;
+                    }
+                    let room = format!("account:{account_id}");
+                    let payload = json!({
+                        "accountId": account_id,
+                        "accountName": account_name,
+                        "status": status,
+                        "detail": detail,
+                        "wxAuthorized": wx_authorized,
+                    });
+                    let _ = io.to(room).emit("account_status", &payload).await;
+                }
                 RuntimeEvent::WorkerLog { entry, account_id, .. } => {
                     if account_id.is_empty() {
                         continue;
@@ -382,6 +402,7 @@ fn event_account_id(event: &RuntimeEvent) -> Option<String> {
         RuntimeEvent::Log(e) => e.account_id.clone(),
         RuntimeEvent::AccountLog(e) => non_empty(e.account_id.clone()),
         RuntimeEvent::Status { account_id, .. } => non_empty(account_id.clone()),
+        RuntimeEvent::AccountStatus { account_id, .. } => non_empty(account_id.clone()),
         RuntimeEvent::WorkerLog { account_id, .. } => non_empty(account_id.clone()),
     }
 }

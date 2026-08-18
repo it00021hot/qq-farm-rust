@@ -60,6 +60,12 @@ pub struct AccountRecord {
     /// 应用宝 accesstoken，login_buffer 失效时换票
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub wx_access_token: String,
+    /// 应用宝 refreshtoken，用于续 accesstoken
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub wx_refresh_token: String,
+    /// accesstoken 过期 Unix 秒
+    #[serde(default)]
+    pub wx_token_expires_at: i64,
 }
 
 impl AccountRecord {
@@ -68,6 +74,68 @@ impl AccountRecord {
     pub fn has_wx_auth(&self) -> bool {
         !self.wx_login_buffer.trim().is_empty()
     }
+
+    /// 是否可后台续 token（需 refreshtoken）。
+    #[must_use]
+    pub fn can_refresh_wx_token(&self) -> bool {
+        self.has_wx_auth() && !self.wx_refresh_token.trim().is_empty()
+    }
+}
+
+/// 清除应用宝授权字段，保留 openid 便于下次扫码对上账号。
+pub fn clear_wx_auth(id: &str) -> bool {
+    let mut guard = ACCOUNTS.write();
+    let Some(acc) = guard.accounts.iter_mut().find(|a| a.id == id) else {
+        return false;
+    };
+    acc.wx_login_buffer.clear();
+    acc.wx_access_token.clear();
+    acc.wx_refresh_token.clear();
+    acc.wx_token_expires_at = 0;
+    acc.code.clear();
+    true
+}
+
+/// 写入应用宝凭据（换码 / 续期 / 扫码落盘）。
+pub fn persist_yyb_credentials(id: &str, patch: YybCredentialPatch) -> bool {
+    let mut guard = ACCOUNTS.write();
+    let Some(acc) = guard.accounts.iter_mut().find(|a| a.id == id) else {
+        return false;
+    };
+    if let Some(v) = patch.code {
+        acc.code = v;
+    }
+    if let Some(v) = patch.wx_openid {
+        if !v.is_empty() {
+            acc.wx_openid = v;
+        }
+    }
+    if let Some(v) = patch.wx_login_buffer {
+        if !v.trim().is_empty() {
+            acc.wx_login_buffer = v;
+        }
+    }
+    if let Some(v) = patch.wx_access_token {
+        acc.wx_access_token = v;
+    }
+    if let Some(v) = patch.wx_refresh_token {
+        acc.wx_refresh_token = v;
+    }
+    if let Some(v) = patch.wx_token_expires_at {
+        acc.wx_token_expires_at = v;
+    }
+    true
+}
+
+/// 部分更新应用宝字段。
+#[derive(Debug, Default)]
+pub struct YybCredentialPatch {
+    pub code: Option<String>,
+    pub wx_openid: Option<String>,
+    pub wx_login_buffer: Option<String>,
+    pub wx_access_token: Option<String>,
+    pub wx_refresh_token: Option<String>,
+    pub wx_token_expires_at: Option<i64>,
 }
 
 /// 兼容旧名；请改用 [`AccountRecord`]。
@@ -343,5 +411,26 @@ mod tests {
         let qq_json = serde_json::to_value(&qq).unwrap();
         assert!(qq_json.get("wx_login_buffer").is_none());
         assert!(qq_json.get("wx_access_token").is_none());
+    }
+
+    #[test]
+    #[serial(accounts)]
+    fn clear_wx_auth_keeps_openid() {
+        reset();
+        let mut acc = make_account("1", "wx", "u1");
+        acc.wx_openid = "oid".into();
+        acc.wx_login_buffer = "buf".into();
+        acc.wx_access_token = "tok".into();
+        acc.wx_refresh_token = "rt".into();
+        acc.wx_token_expires_at = 999;
+        acc.code = "code".into();
+        add_or_update_account(acc);
+        assert!(clear_wx_auth("1"));
+        let saved = get_accounts().into_iter().find(|a| a.id == "1").unwrap();
+        assert_eq!(saved.wx_openid, "oid");
+        assert!(!saved.has_wx_auth());
+        assert!(saved.wx_login_buffer.is_empty());
+        assert!(saved.wx_refresh_token.is_empty());
+        assert!(saved.code.is_empty());
     }
 }

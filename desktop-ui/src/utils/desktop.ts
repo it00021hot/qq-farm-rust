@@ -69,7 +69,7 @@ export async function desktopToggleFullscreen(): Promise<boolean> {
 
 let contextMenuGuardInstalled = false;
 
-/** Block image save / open-in-new-tab style context menus; keep input/selection menus. */
+/** Block WebView “View Source / Inspect”; keep copy-paste on inputs and Vue custom menus. */
 export function installDesktopContextMenuGuard(): void {
   if (typeof document === 'undefined' || contextMenuGuardInstalled) return;
   contextMenuGuardInstalled = true;
@@ -78,12 +78,10 @@ export function installDesktopContextMenuGuard(): void {
     event => {
       if (!desktopShellActive.value) return;
       const target = event.target;
-      if (!(target instanceof Element)) return;
-      if (target.closest('input, textarea, [contenteditable="true"]')) return;
-      if (target.closest('img, picture, video, canvas, svg, a[href]')) {
-        event.preventDefault();
-        event.stopPropagation();
+      if (target instanceof Element && target.closest('input, textarea, [contenteditable="true"]')) {
+        return;
       }
+      event.preventDefault();
     },
     true
   );

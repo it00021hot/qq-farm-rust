@@ -86,6 +86,13 @@ pub enum RuntimeEvent {
     Log(LogEntry),
     AccountLog(AccountLogEntry),
     Status { account_id: String, account_name: String, status: serde_json::Value },
+    AccountStatus {
+        account_id: String,
+        account_name: String,
+        status: String,
+        detail: String,
+        wx_authorized: bool,
+    },
     WorkerLog { entry: serde_json::Value, account_id: String, account_name: String },
 }
 
