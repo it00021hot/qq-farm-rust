@@ -31,10 +31,9 @@ const MERGED_DATA_KEY: u32 = 1_871_261_153;
 
 /// Runtime table (59 bytes)
 const RUNTIME_TABLE: [u8; 59] = [
-    93, 86, 110, 34, 65, 129, 8, 113, 53, 192, 121, 32, 86, 162, 255, 139, 217, 70, 223, 0,
-    45, 176, 85, 103, 234, 116, 120, 194, 206, 7, 176, 222, 56, 6, 161, 159, 154, 231, 93,
-    229, 39, 107, 197, 136, 167, 52, 155, 228, 209, 117, 218, 8, 107, 241, 32, 62, 53, 200,
-    238,
+    93, 86, 110, 34, 65, 129, 8, 113, 53, 192, 121, 32, 86, 162, 255, 139, 217, 70, 223, 0, 45,
+    176, 85, 103, 234, 116, 120, 194, 206, 7, 176, 222, 56, 6, 161, 159, 154, 231, 93, 229, 39,
+    107, 197, 136, 167, 52, 155, 228, 209, 117, 218, 8, 107, 241, 32, 62, 53, 200, 238,
 ];
 
 /// Merged data segments: (offset, length) —— 17 段
@@ -88,8 +87,8 @@ fn shared_engine() -> Result<&'static Engine> {
         }
         Err(e) => tracing::warn!(error = %e, "TSDK wasm 编译缓存不可用"),
     }
-    let engine = Engine::new(&config)
-        .map_err(|e| Error::crypto(format!("create engine failed: {e}")))?;
+    let engine =
+        Engine::new(&config).map_err(|e| Error::crypto(format!("create engine failed: {e}")))?;
     let _ = ENGINE.set(engine);
     Ok(ENGINE.get().expect("engine initialized"))
 }
@@ -153,10 +152,7 @@ impl TsdkRuntime {
     /// 创建 runtime（不加载 wasm）
     #[must_use]
     pub fn new(data_dir: impl Into<String>) -> Self {
-        Self {
-            data_dir: data_dir.into(),
-            inner: parking_lot::Mutex::new(None),
-        }
+        Self { data_dir: data_dir.into(), inner: parking_lot::Mutex::new(None) }
     }
 
     /// 便捷构造：创建 + 初始化
@@ -180,10 +176,7 @@ impl TsdkRuntime {
         let engine = shared_engine()?;
         let module = shared_module(engine, wasm_path)?;
 
-        let host = HostState {
-            data_dir: self.data_dir.clone(),
-            ..Default::default()
-        };
+        let host = HostState { data_dir: self.data_dir.clone(), ..Default::default() };
         let mut store = Store::new(engine, host);
         let linker = create_linker(engine)?;
         let instance = linker
@@ -229,33 +222,20 @@ impl TsdkRuntime {
         let mut alloc_res = [Val::I32(0); 1];
         exports
             .alloc
-            .call(
-                &mut store,
-                &mut [Val::I32(TSDK_APP_KEY.len() as i32 + 1)],
-                &mut alloc_res,
-            )
+            .call(&mut store, &mut [Val::I32(TSDK_APP_KEY.len() as i32 + 1)], &mut alloc_res)
             .map_err(|e| Error::crypto(format!("alloc app_key failed: {e}")))?;
         let app_key_ptr = i32_val(&alloc_res, 0)?;
         write_cstring(&mut store, &exports.memory, app_key_ptr, TSDK_APP_KEY.as_bytes())?;
         exports
             .g
-            .call(
-                &mut store,
-                &mut [Val::I32(TSDK_GAME_ID as i32), Val::I32(app_key_ptr)],
-                &mut [],
-            )
+            .call(&mut store, &mut [Val::I32(TSDK_GAME_ID as i32), Val::I32(app_key_ptr)], &mut [])
             .map_err(|e| Error::crypto(format!("G(gameId) failed: {e}")))?;
         exports
             .free
             .call(&mut store, &mut [Val::I32(app_key_ptr)], &mut [])
             .map_err(|e| Error::crypto(format!("free app_key failed: {e}")))?;
 
-        *self.inner.lock() = Some(Inner {
-            store,
-            instance,
-            exports,
-            user_bound: false,
-        });
+        *self.inner.lock() = Some(Inner { store, instance, exports, user_bound: false });
         Ok(())
     }
 
@@ -272,9 +252,7 @@ impl TsdkRuntime {
     /// 加解密主逻辑
     pub fn transform(&self, input: &[u8], decrypt: bool) -> Result<Vec<u8>> {
         let mut guard = self.inner.lock();
-        let inner = guard
-            .as_mut()
-            .ok_or_else(|| Error::crypto("TSDK 未初始化"))?;
+        let inner = guard.as_mut().ok_or_else(|| Error::crypto("TSDK 未初始化"))?;
 
         let store = &mut inner.store;
         let exports = &inner.exports;
@@ -293,17 +271,13 @@ impl TsdkRuntime {
 
         // 3. 加密/解密
         let func = if decrypt { &exports.decrypt } else { &exports.encrypt };
-        func.call(
-            &mut *store,
-            &mut [Val::I32(ptr), Val::I32(input.len() as i32)],
-            &mut [],
-        )
-        .map_err(|e| {
-            Error::crypto(format!(
-                "{} failed: {e}",
-                if decrypt { "decrypt" } else { "encrypt" }
-            ))
-        })?;
+        func.call(&mut *store, &mut [Val::I32(ptr), Val::I32(input.len() as i32)], &mut [])
+            .map_err(|e| {
+                Error::crypto(format!(
+                    "{} failed: {e}",
+                    if decrypt { "decrypt" } else { "encrypt" }
+                ))
+            })?;
 
         // 4. 读出
         let result = read_bytes(store, &exports.memory, ptr, input.len())?;
@@ -329,9 +303,7 @@ impl TsdkRuntime {
             return Ok(());
         }
         let mut guard = self.inner.lock();
-        let inner = guard
-            .as_mut()
-            .ok_or_else(|| Error::crypto("TSDK 未初始化"))?;
+        let inner = guard.as_mut().ok_or_else(|| Error::crypto("TSDK 未初始化"))?;
         if inner.user_bound {
             return Ok(());
         }
@@ -352,11 +324,7 @@ impl TsdkRuntime {
         // 调 G(game_id, app_key_ptr) —— 把用户绑到 wasm
         exports
             .g
-            .call(
-                &mut *store,
-                &mut [Val::I32(TSDK_GAME_ID as i32), Val::I32(ptr)],
-                &mut [],
-            )
+            .call(&mut *store, &mut [Val::I32(TSDK_GAME_ID as i32), Val::I32(ptr)], &mut [])
             .map_err(|e| Error::crypto(format!("G(bind) failed: {e}")))?;
 
         exports
@@ -371,9 +339,7 @@ impl TsdkRuntime {
     /// 拿加密的 init info（base64 字符串，原 TS 调 H()）
     pub fn get_encrypted_init_info(&self) -> Result<String> {
         let mut guard = self.inner.lock();
-        let inner = guard
-            .as_mut()
-            .ok_or_else(|| Error::crypto("TSDK 未初始化"))?;
+        let inner = guard.as_mut().ok_or_else(|| Error::crypto("TSDK 未初始化"))?;
         let store = &mut inner.store;
         let exports = &inner.exports;
 
@@ -395,9 +361,7 @@ impl TsdkRuntime {
     /// 实现:  alloc 4 字节 lengthPtr → N(lengthPtr) → 读 ptr + length
     pub fn get_data_to_server(&self) -> Result<Vec<u8>> {
         let mut guard = self.inner.lock();
-        let inner = guard
-            .as_mut()
-            .ok_or_else(|| Error::crypto("TSDK 未初始化"))?;
+        let inner = guard.as_mut().ok_or_else(|| Error::crypto("TSDK 未初始化"))?;
         let store = &mut inner.store;
         let exports = &inner.exports;
 
@@ -426,9 +390,8 @@ impl TsdkRuntime {
 
         // 读 length (i32 little-endian)
         let len_bytes = read_bytes(store, &exports.memory, length_ptr, 4)?;
-        let data_len = i32::from_le_bytes([
-            len_bytes[0], len_bytes[1], len_bytes[2], len_bytes[3],
-        ]) as usize;
+        let data_len =
+            i32::from_le_bytes([len_bytes[0], len_bytes[1], len_bytes[2], len_bytes[3]]) as usize;
 
         // 读 data
         let data = if data_len > 0 {
@@ -457,9 +420,7 @@ impl TsdkRuntime {
             return Ok(());
         }
         let mut guard = self.inner.lock();
-        let inner = guard
-            .as_mut()
-            .ok_or_else(|| Error::crypto("TSDK 未初始化"))?;
+        let inner = guard.as_mut().ok_or_else(|| Error::crypto("TSDK 未初始化"))?;
         let store = &mut inner.store;
         let exports = &inner.exports;
 
@@ -474,11 +435,7 @@ impl TsdkRuntime {
 
         exports
             .o
-            .call(
-                &mut *store,
-                &mut [Val::I32(ptr), Val::I32(data.len() as i32)],
-                &mut [],
-            )
+            .call(&mut *store, &mut [Val::I32(ptr), Val::I32(data.len() as i32)], &mut [])
             .map_err(|e| Error::crypto(format!("O() failed: {e}")))?;
 
         exports
@@ -492,9 +449,7 @@ impl TsdkRuntime {
     /// 原 TS: `heartbeatTick()` → M()
     pub fn heartbeat_tick(&self) -> Result<()> {
         let mut guard = self.inner.lock();
-        let inner = guard
-            .as_mut()
-            .ok_or_else(|| Error::crypto("TSDK 未初始化"))?;
+        let inner = guard.as_mut().ok_or_else(|| Error::crypto("TSDK 未初始化"))?;
         let store = &mut inner.store;
         inner
             .exports
@@ -508,9 +463,7 @@ impl TsdkRuntime {
     /// 原 TS: `processReceivedData()` → P()
     pub fn process_received_data(&self) -> Result<()> {
         let mut guard = self.inner.lock();
-        let inner = guard
-            .as_mut()
-            .ok_or_else(|| Error::crypto("TSDK 未初始化"))?;
+        let inner = guard.as_mut().ok_or_else(|| Error::crypto("TSDK 未初始化"))?;
         let store = &mut inner.store;
         inner
             .exports
@@ -524,9 +477,7 @@ impl TsdkRuntime {
     /// 原 TS: `sendStatus()` → E()
     pub fn send_status(&self) -> Result<()> {
         let mut guard = self.inner.lock();
-        let inner = guard
-            .as_mut()
-            .ok_or_else(|| Error::crypto("TSDK 未初始化"))?;
+        let inner = guard.as_mut().ok_or_else(|| Error::crypto("TSDK 未初始化"))?;
         let store = &mut inner.store;
         inner
             .exports
@@ -540,9 +491,7 @@ impl TsdkRuntime {
     /// 原 TS: `detectSpeedHack(elapsedMs)` → fa(elapsedMs)
     pub fn detect_speed_hack(&self, elapsed_ms: u64) -> Result<()> {
         let mut guard = self.inner.lock();
-        let inner = guard
-            .as_mut()
-            .ok_or_else(|| Error::crypto("TSDK 未初始化"))?;
+        let inner = guard.as_mut().ok_or_else(|| Error::crypto("TSDK 未初始化"))?;
         let store = &mut inner.store;
         inner
             .exports
@@ -555,11 +504,7 @@ impl TsdkRuntime {
     /// 是否已 bindUser
     #[must_use]
     pub fn is_user_bound(&self) -> bool {
-        self.inner
-            .lock()
-            .as_ref()
-            .map(|i| i.user_bound)
-            .unwrap_or(false)
+        self.inner.lock().as_ref().map(|i| i.user_bound).unwrap_or(false)
     }
 
     /// 销毁
@@ -570,10 +515,7 @@ impl TsdkRuntime {
     /// 当前 memory 大小（调试用）
     #[must_use]
     pub fn memory_size(&self) -> usize {
-        self.inner
-            .lock()
-            .as_ref()
-            .map_or(0, |i| i.exports.memory.data(&i.store).len())
+        self.inner.lock().as_ref().map_or(0, |i| i.exports.memory.data(&i.store).len())
     }
 }
 
@@ -589,16 +531,21 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
     linker.func_wrap(
         "a",
         "a",
-        |_c: wasmtime::Caller<'_, HostState>, _e: i32, _f: i32, _l: i32, _fn_: i32| -> WasmResult<()> {
-            Err(anyhow!("TSDK assertion"))
-        },
+        |_c: wasmtime::Caller<'_, HostState>,
+         _e: i32,
+         _f: i32,
+         _l: i32,
+         _fn_: i32|
+         -> WasmResult<()> { Err(anyhow!("TSDK assertion")) },
     )?;
 
     // b: writeStringToFile — 阶段 0 跳过（返回 0）
     linker.func_wrap(
         "a",
         "b",
-        |_c: wasmtime::Caller<'_, HostState>, _f: i32, _d: i32, _e: i32| -> WasmResult<i32> { Ok(0) },
+        |_c: wasmtime::Caller<'_, HostState>, _f: i32, _d: i32, _e: i32| -> WasmResult<i32> {
+            Ok(0)
+        },
     )?;
 
     // c: captureStackTrace — 写空字符串
@@ -635,24 +582,31 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
     )?;
 
     // f: sensors — noop
-    linker.func_wrap(
-        "a",
-        "f",
-        |_c: wasmtime::Caller<'_, HostState>| -> WasmResult<()> { Ok(()) },
-    )?;
+    linker
+        .func_wrap("a", "f", |_c: wasmtime::Caller<'_, HostState>| -> WasmResult<()> { Ok(()) })?;
 
     // g: readFileToString — 阶段 0 跳过
     linker.func_wrap(
         "a",
         "g",
-        |_c: wasmtime::Caller<'_, HostState>, _f: i32, _o: i32, _cap: i32, _e: i32| -> WasmResult<i32> { Ok(0) },
+        |_c: wasmtime::Caller<'_, HostState>,
+         _f: i32,
+         _o: i32,
+         _cap: i32,
+         _e: i32|
+         -> WasmResult<i32> { Ok(0) },
     )?;
 
     // h: clock_gettime — 写当前时间（微秒）
     linker.func_wrap(
         "a",
         "h",
-        |mut c: wasmtime::Caller<'_, HostState>, clock_id: i32, _l: i32, _h: i32, out: i32| -> WasmResult<i32> {
+        |mut c: wasmtime::Caller<'_, HostState>,
+         clock_id: i32,
+         _l: i32,
+         _h: i32,
+         out: i32|
+         -> WasmResult<i32> {
             if !(0..=3).contains(&clock_id) {
                 return Ok(28);
             }
@@ -728,11 +682,8 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
     )?;
 
     // l: arch (2 = wasm32)
-    linker.func_wrap(
-        "a",
-        "l",
-        |_c: wasmtime::Caller<'_, HostState>| -> WasmResult<i32> { Ok(2) },
-    )?;
+    linker
+        .func_wrap("a", "l", |_c: wasmtime::Caller<'_, HostState>| -> WasmResult<i32> { Ok(2) })?;
 
     // m: appId
     linker.func_wrap(
@@ -768,7 +719,12 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
     linker.func_wrap(
         "a",
         "o",
-        |_caller: wasmtime::Caller<'_, HostState>, _a: i32, _b: i32, _c: i32, _d: i32| -> WasmResult<()> { Ok(()) },
+        |_caller: wasmtime::Caller<'_, HostState>,
+         _a: i32,
+         _b: i32,
+         _c: i32,
+         _d: i32|
+         -> WasmResult<()> { Ok(()) },
     )?;
 
     // p: stat — 阶段 0 跳过
@@ -805,33 +761,27 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
     )?;
 
     // s: time (ms) —— wasm 实际要求返回 f64（与 JS Date.now() 一致）
-    linker.func_wrap(
-        "a",
-        "s",
-        |_c: wasmtime::Caller<'_, HostState>| -> WasmResult<f64> {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as f64)
-                .unwrap_or(0.0);
-            Ok(now)
-        },
-    )?;
+    linker.func_wrap("a", "s", |_c: wasmtime::Caller<'_, HostState>| -> WasmResult<f64> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as f64)
+            .unwrap_or(0.0);
+        Ok(now)
+    })?;
 
     // t: appendStringToFile
     linker.func_wrap(
         "a",
         "t",
-        |_c: wasmtime::Caller<'_, HostState>, _f: i32, _d: i32, _e: i32| -> WasmResult<i32> { Ok(0) },
+        |_c: wasmtime::Caller<'_, HostState>, _f: i32, _d: i32, _e: i32| -> WasmResult<i32> {
+            Ok(0)
+        },
     )?;
 
     // u: abort
-    linker.func_wrap(
-        "a",
-        "u",
-        |_c: wasmtime::Caller<'_, HostState>| -> WasmResult<()> {
-            Err(anyhow!("TSDK aborted"))
-        },
-    )?;
+    linker.func_wrap("a", "u", |_c: wasmtime::Caller<'_, HostState>| -> WasmResult<()> {
+        Err(anyhow!("TSDK aborted"))
+    })?;
 
     // v: reportEvent
     linker.func_wrap(
@@ -913,7 +863,12 @@ fn extract_exports(instance: &Instance, store: &mut Store<HostState>) -> Result<
 
 // ===== 字节读写工具 =====
 
-fn write_bytes(store: &mut Store<HostState>, memory: &Memory, ptr: i32, bytes: &[u8]) -> Result<()> {
+fn write_bytes(
+    store: &mut Store<HostState>,
+    memory: &Memory,
+    ptr: i32,
+    bytes: &[u8],
+) -> Result<()> {
     let data = memory.data_mut(store);
     let off = ptr as usize;
     if off + bytes.len() > data.len() {
@@ -932,7 +887,12 @@ fn read_bytes(store: &Store<HostState>, memory: &Memory, ptr: i32, len: usize) -
     Ok(data[off..off + len].to_vec())
 }
 
-fn write_cstring(store: &mut Store<HostState>, memory: &Memory, ptr: i32, bytes: &[u8]) -> Result<()> {
+fn write_cstring(
+    store: &mut Store<HostState>,
+    memory: &Memory,
+    ptr: i32,
+    bytes: &[u8],
+) -> Result<()> {
     write_bytes(store, memory, ptr, bytes)?;
     let null_pos = (ptr as usize).saturating_add(bytes.len());
     let data = memory.data_mut(store);
@@ -948,11 +908,7 @@ fn write_cstring_in_caller(
     ptr: i32,
     bytes: &[u8],
 ) -> WasmResult<()> {
-    let mem = caller
-        .data()
-        .memory
-        .clone()
-        .ok_or_else(|| anyhow!("memory not set"))?;
+    let mem = caller.data().memory.clone().ok_or_else(|| anyhow!("memory not set"))?;
     let data = mem.data_mut(caller);
     let off = ptr as usize;
     if off + bytes.len() + 1 > data.len() {

@@ -30,21 +30,13 @@ impl AdminContext {
     /// 构造 context
     #[must_use]
     pub fn new(engine: Arc<RuntimeEngine>) -> Self {
-        Self {
-            engine,
-            sessions: SessionStore::new(),
-            wx: Arc::new(WxLoginHub::new()),
-        }
+        Self { engine, sessions: SessionStore::new(), wx: Arc::new(WxLoginHub::new()) }
     }
 
     /// 从已组装的 [`qq_farm_app::AppContext`] 构造（共享引擎 + 扫码 hub）。
     #[must_use]
     pub fn from_app(app: qq_farm_app::AppContext) -> Self {
-        Self {
-            engine: app.engine.clone(),
-            sessions: SessionStore::new(),
-            wx: app.wx_login,
-        }
+        Self { engine: app.engine.clone(), sessions: SessionStore::new(), wx: app.wx_login }
     }
 
     /// 转为 qq-farm-app 上下文（共用同一 WxLoginHub）。
@@ -56,11 +48,7 @@ impl AdminContext {
     /// 构造 context（带 sessions）
     #[must_use]
     pub fn with_sessions(engine: Arc<RuntimeEngine>, sessions: SessionStore) -> Self {
-        Self {
-            engine,
-            sessions,
-            wx: Arc::new(WxLoginHub::new()),
-        }
+        Self { engine, sessions, wx: Arc::new(WxLoginHub::new()) }
     }
 }
 

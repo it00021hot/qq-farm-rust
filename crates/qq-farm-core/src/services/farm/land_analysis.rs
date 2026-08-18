@@ -97,10 +97,7 @@ impl PlantPhase {
 /// 土地当前阶段（无 plant 时为 Seed）
 #[must_use]
 pub fn current_phase(land: &LandInfo) -> PlantPhase {
-    land.plant
-        .as_ref()
-        .and_then(|p| PlantPhase::from_phases(&p.phases))
-        .unwrap_or(PlantPhase::Seed)
+    land.plant.as_ref().and_then(|p| PlantPhase::from_phases(&p.phases)).unwrap_or(PlantPhase::Seed)
 }
 
 /// 判断土地是否可种植
@@ -137,10 +134,7 @@ pub struct LandSummary {
 /// 汇总土地状态
 #[must_use]
 pub fn summarize_lands(lands: &[LandInfo]) -> LandSummary {
-    let mut s = LandSummary {
-        total: lands.len(),
-        ..Default::default()
-    };
+    let mut s = LandSummary { total: lands.len(), ..Default::default() };
     for land in lands {
         match current_phase(land) {
             PlantPhase::Seed => {
@@ -217,13 +211,8 @@ pub fn land_type_by_level(level: i64) -> LandType {
 }
 
 /// 全部施肥土地类型（用于"全选"判断，1:1 对齐 TS 的 5 类）
-pub const ALL_FERTILIZER_LAND_TYPES: &[LandType] = &[
-    LandType::PurpleGold,
-    LandType::Gold,
-    LandType::Black,
-    LandType::Red,
-    LandType::Normal,
-];
+pub const ALL_FERTILIZER_LAND_TYPES: &[LandType] =
+    &[LandType::PurpleGold, LandType::Gold, LandType::Black, LandType::Red, LandType::Normal];
 
 /// 规范化施肥土地类型（去重 + 顺序）
 #[must_use]
@@ -268,9 +257,7 @@ pub fn filter_ids_by_land_types(ids: &[i64], lands: &[LandInfo], types: &[LandTy
     ids.iter()
         .copied()
         .filter(|id| {
-            map.get(id)
-                .map(|l| type_set.contains(&land_type_by_level(l.level)))
-                .unwrap_or(false)
+            map.get(id).map(|l| type_set.contains(&land_type_by_level(l.level))).unwrap_or(false)
         })
         .collect()
 }
@@ -316,10 +303,7 @@ pub fn get_organic_fertilizer_targets(lands: &[LandInfo], planted_ids: &[i64]) -
                 return false;
             }
             // 多季作物 = 植物最后阶段不是 Ripe
-            matches!(
-                current_phase(l),
-                PlantPhase::Sprout | PlantPhase::Growing
-            )
+            matches!(current_phase(l), PlantPhase::Sprout | PlantPhase::Growing)
         })
         .map(|l| l.id)
         .collect()
@@ -496,16 +480,14 @@ pub fn analyze_lands(lands: &[LandInfo], own_gid: i64) -> LandAnalysis {
 
         let current_phase_info = current_phase_info(&plant.phases);
         let dry_num = plant.dry_num;
-        let dry_time = current_phase_info
-            .map(|p| crate::utils::time::to_time_secs(p.dry_time))
-            .unwrap_or(0);
+        let dry_time =
+            current_phase_info.map(|p| crate::utils::time::to_time_secs(p.dry_time)).unwrap_or(0);
         if dry_num > 0 || (dry_time > 0 && dry_time <= now_sec) {
             result.need_water.push(id);
         }
 
-        let weeds_time = current_phase_info
-            .map(|p| crate::utils::time::to_time_secs(p.weeds_time))
-            .unwrap_or(0);
+        let weeds_time =
+            current_phase_info.map(|p| crate::utils::time::to_time_secs(p.weeds_time)).unwrap_or(0);
         let mut has_weeds = weeds_time > 0 && weeds_time <= now_sec;
         if !has_weeds && !plant.weed_owners.is_empty() {
             if own_gid != 0 {
@@ -561,7 +543,10 @@ pub struct PlantingLayout {
 
 /// 按植物占地尺寸生成合法布局
 #[must_use]
-pub fn build_planting_layouts(available_land_ids: &[i64], plant_size: usize) -> Vec<PlantingLayout> {
+pub fn build_planting_layouts(
+    available_land_ids: &[i64],
+    plant_size: usize,
+) -> Vec<PlantingLayout> {
     let size = plant_size.max(1);
     let mut ordered: Vec<i64> = Vec::new();
     let mut seen_ids = HashSet::new();
@@ -573,10 +558,7 @@ pub fn build_planting_layouts(available_land_ids: &[i64], plant_size: usize) -> 
     if size == 1 {
         return ordered
             .into_iter()
-            .map(|id| PlantingLayout {
-                anchor_land_id: id,
-                land_ids: vec![id],
-            })
+            .map(|id| PlantingLayout { anchor_land_id: id, land_ids: vec![id] })
             .collect();
     }
 
@@ -593,9 +575,10 @@ pub fn build_planting_layouts(available_land_ids: &[i64], plant_size: usize) -> 
         let mut complete = true;
         'outer: for y_offset in 0..size as i64 {
             for x_offset in 0..size as i64 {
-                let Some(land) =
-                    gc.get_land_config_by_coordinate(anchor.grid_x + x_offset, anchor.grid_y + y_offset)
-                else {
+                let Some(land) = gc.get_land_config_by_coordinate(
+                    anchor.grid_x + x_offset,
+                    anchor.grid_y + y_offset,
+                ) else {
                     complete = false;
                     break 'outer;
                 };
@@ -611,18 +594,11 @@ pub fn build_planting_layouts(available_land_ids: &[i64], plant_size: usize) -> 
         }
         let mut key_ids = footprint.clone();
         key_ids.sort_unstable();
-        let key = key_ids
-            .iter()
-            .map(|id| id.to_string())
-            .collect::<Vec<_>>()
-            .join(",");
+        let key = key_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
         if !seen.insert(key) {
             continue;
         }
-        layouts.push(PlantingLayout {
-            anchor_land_id,
-            land_ids: footprint,
-        });
+        layouts.push(PlantingLayout { anchor_land_id, land_ids: footprint });
     }
     layouts
 }
@@ -668,23 +644,13 @@ pub fn select_non_overlapping_layouts(
         }
         visit(index + 1, source, selected, occupied, limit, best);
     }
-    visit(
-        0,
-        layouts,
-        &mut Vec::new(),
-        &mut HashSet::new(),
-        max_count,
-        &mut best,
-    );
+    visit(0, layouts, &mut Vec::new(), &mut HashSet::new(), max_count, &mut best);
     best
 }
 
 /// 解析某锚点实际占用的土地
 #[must_use]
-pub fn resolve_occupied_land_ids(
-    anchor_land_id: i64,
-    lands: &[LandInfo],
-) -> (i64, Vec<i64>) {
+pub fn resolve_occupied_land_ids(anchor_land_id: i64, lands: &[LandInfo]) -> (i64, Vec<i64>) {
     let lands_map = build_land_map(lands);
     let slave_to_master = build_slave_to_master_map(lands);
     let anchor = lands_map.get(&anchor_land_id);
@@ -692,10 +658,7 @@ pub fn resolve_occupied_land_ids(
     let master_land_id = if declared_master != 0 {
         declared_master
     } else {
-        slave_to_master
-            .get(&anchor_land_id)
-            .copied()
-            .unwrap_or(anchor_land_id)
+        slave_to_master.get(&anchor_land_id).copied().unwrap_or(anchor_land_id)
     };
     let master = lands_map.get(&master_land_id).or(anchor);
     let mut occupied = HashSet::new();
@@ -719,11 +682,7 @@ pub fn resolve_occupied_land_ids(
         occupied.insert(anchor_land_id);
     }
     (
-        if master_land_id != 0 {
-            master_land_id
-        } else {
-            anchor_land_id
-        },
+        if master_land_id != 0 { master_land_id } else { anchor_land_id },
         occupied.into_iter().collect(),
     )
 }
@@ -759,10 +718,7 @@ pub fn get_land_lifecycle_state(land: Option<&LandInfo>) -> &'static str {
 
 /// 按 map 分类刚收获的土地
 #[must_use]
-pub fn classify_harvested_lands_by_map(
-    land_ids: &[i64],
-    lands_map: &LandMap,
-) -> HarvestedClassify {
+pub fn classify_harvested_lands_by_map(land_ids: &[i64], lands_map: &LandMap) -> HarvestedClassify {
     let mut out = HarvestedClassify::default();
     for &id in land_ids {
         match get_land_lifecycle_state(lands_map.get(&id)) {
@@ -799,9 +755,7 @@ pub enum LandDetailKind {
 }
 
 fn has_plant_data(land: &LandInfo) -> bool {
-    land.plant
-        .as_ref()
-        .is_some_and(|p| !p.phases.is_empty())
+    land.plant.as_ref().is_some_and(|p| !p.phases.is_empty())
 }
 
 fn get_linked_master_land<'a>(land: &'a LandInfo, lands_map: &'a LandMap) -> Option<&'a LandInfo> {
@@ -826,11 +780,7 @@ fn display_land_context<'a>(
             occupied.retain(|id| *id != 0);
             occupied.sort_unstable();
             occupied.dedup();
-            let occupied = if occupied.is_empty() {
-                vec![master.id]
-            } else {
-                occupied
-            };
+            let occupied = if occupied.is_empty() { vec![master.id] } else { occupied };
             return (master, true, master.id, occupied);
         }
     }
@@ -980,11 +930,8 @@ pub fn build_lands_panel_dto(lands: &[LandInfo], kind: LandDetailKind) -> Vec<se
         let plant_id = plant.id;
         let mut plant_name = gc.get_plant_name(plant_id);
         if plant_name.is_empty() {
-            plant_name = if plant.name.is_empty() {
-                "未知".to_string()
-            } else {
-                plant.name.clone()
-            };
+            plant_name =
+                if plant.name.is_empty() { "未知".to_string() } else { plant.name.clone() };
         }
         let plant_cfg = gc.get_plant_by_id(plant_id);
         let seed_id = plant_cfg.as_ref().and_then(|p| p.seed_id).unwrap_or(0);
@@ -993,37 +940,19 @@ pub fn build_lands_panel_dto(lands: &[LandInfo], kind: LandDetailKind) -> Vec<se
         } else {
             String::new()
         };
-        let plant_size = plant_cfg
-            .as_ref()
-            .and_then(|p| p.size)
-            .unwrap_or(1)
-            .max(1);
-        let total_season = plant_cfg
-            .as_ref()
-            .and_then(|p| p.seasons)
-            .unwrap_or(1)
-            .max(1);
+        let plant_size = plant_cfg.as_ref().and_then(|p| p.size).unwrap_or(1).max(1);
+        let total_season = plant_cfg.as_ref().and_then(|p| p.seasons).unwrap_or(1).max(1);
         let current_season_raw = plant.season;
-        let current_season = if current_season_raw > 0 {
-            current_season_raw.min(total_season)
-        } else {
-            1
-        };
-        let phase_name = PHASE_NAMES
-            .get(phase_val as usize)
-            .copied()
-            .unwrap_or("");
+        let current_season =
+            if current_season_raw > 0 { current_season_raw.min(total_season) } else { 1 };
+        let phase_name = PHASE_NAMES.get(phase_val as usize).copied().unwrap_or("");
         let mature_begin = plant
             .phases
             .iter()
             .find(|p| p.phase == PHASE_MATURE)
             .map(|p| crate::utils::time::to_time_secs(p.begin_time))
             .unwrap_or(0);
-        let mature_in_sec = if mature_begin > now_sec {
-            mature_begin - now_sec
-        } else {
-            0
-        };
+        let mature_in_sec = if mature_begin > now_sec { mature_begin - now_sec } else { 0 };
         let total_grow_time = gc.get_plant_grow_time(plant_id);
         let mut land_status = "growing".to_string();
         match kind {
@@ -1038,11 +967,8 @@ pub fn build_lands_panel_dto(lands: &[LandInfo], kind: LandDetailKind) -> Vec<se
             }
             LandDetailKind::Friend => {
                 if phase_val == PHASE_MATURE {
-                    land_status = if plant.stealable {
-                        "stealable".into()
-                    } else {
-                        "harvested".into()
-                    };
+                    land_status =
+                        if plant.stealable { "stealable".into() } else { "harvested".into() };
                 } else if phase_val == PHASE_DEAD {
                     land_status = "dead".into();
                 }
@@ -1052,9 +978,7 @@ pub fn build_lands_panel_dto(lands: &[LandInfo], kind: LandDetailKind) -> Vec<se
         let weeds_time = crate::utils::time::to_time_secs(current_phase.weeds_time);
         let insect_time = crate::utils::time::to_time_secs(current_phase.insect_time);
         let need_water = match kind {
-            LandDetailKind::Own => {
-                plant.dry_num > 0 || (dry_time > 0 && dry_time <= now_sec)
-            }
+            LandDetailKind::Own => plant.dry_num > 0 || (dry_time > 0 && dry_time <= now_sec),
             LandDetailKind::Friend => plant.dry_num > 0,
         };
         let need_weed = match kind {
@@ -1149,12 +1073,7 @@ mod tests {
             }],
             ..Default::default()
         });
-        LandInfo {
-            id,
-            unlocked,
-            plant,
-            ..Default::default()
-        }
+        LandInfo { id, unlocked, plant, ..Default::default() }
     }
 
     #[test]
@@ -1236,11 +1155,8 @@ mod tests {
 
     #[test]
     fn filter_by_all_returns_all_unlocked() {
-        let lands = vec![
-            make_land(1, true, None),
-            make_land(2, false, None),
-            make_land(3, true, None),
-        ];
+        let lands =
+            vec![make_land(1, true, None), make_land(2, false, None), make_land(3, true, None)];
         let all = filter_land_ids_by_types(&lands, ALL_FERTILIZER_LAND_TYPES);
         assert_eq!(all, vec![1, 3]);
     }
@@ -1336,18 +1252,9 @@ mod tests {
     #[test]
     fn select_non_overlapping_picks_disjoint() {
         let layouts = vec![
-            PlantingLayout {
-                anchor_land_id: 1,
-                land_ids: vec![1, 2],
-            },
-            PlantingLayout {
-                anchor_land_id: 3,
-                land_ids: vec![3, 4],
-            },
-            PlantingLayout {
-                anchor_land_id: 2,
-                land_ids: vec![2, 3],
-            },
+            PlantingLayout { anchor_land_id: 1, land_ids: vec![1, 2] },
+            PlantingLayout { anchor_land_id: 3, land_ids: vec![3, 4] },
+            PlantingLayout { anchor_land_id: 2, land_ids: vec![2, 3] },
         ];
         let picked = select_non_overlapping_layouts(&layouts, 2);
         assert_eq!(picked.len(), 2);

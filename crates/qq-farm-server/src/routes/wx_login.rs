@@ -38,14 +38,8 @@ struct CreateTaskBody {
 }
 
 fn owner_from_headers(ctx: &AdminContext, headers: &axum::http::HeaderMap) -> String {
-    let token = headers
-        .get("x-admin-token")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    ctx.sessions
-        .get_username(token)
-        .filter(|u| !u.is_empty())
-        .unwrap_or_else(|| token.to_string())
+    let token = headers.get("x-admin-token").and_then(|v| v.to_str().ok()).unwrap_or("");
+    ctx.sessions.get_username(token).filter(|u| !u.is_empty()).unwrap_or_else(|| token.to_string())
 }
 
 async fn create_task(
@@ -60,9 +54,7 @@ async fn create_task(
         }
     }
     let owner = owner_from_headers(&ctx, &headers);
-    let r = wx_login::create_task_for(&ctx.wx, &owner)
-        .await
-        .map_err(ApiError::from)?;
+    let r = wx_login::create_task_for(&ctx.wx, &owner).await.map_err(ApiError::from)?;
     let qr_url = format!("/api/wx-login/tasks/{}/qr", r.task_id);
     Ok(Json(json!({
         "ok": true,
@@ -103,9 +95,8 @@ async fn get_status(
     Path(task_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let owner = owner_from_headers(&ctx, &headers);
-    let r = wx_login::poll_status_for(&ctx.wx, &task_id, Some(&owner))
-        .await
-        .map_err(ApiError::from)?;
+    let r =
+        wx_login::poll_status_for(&ctx.wx, &task_id, Some(&owner)).await.map_err(ApiError::from)?;
     Ok(Json(json!({
         "ok": true,
         "data": {
@@ -123,9 +114,7 @@ async fn confirm_task(
     Path(task_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let owner = owner_from_headers(&ctx, &headers);
-    let r = wx_login::confirm_for(&ctx.wx, &task_id, Some(&owner))
-        .await
-        .map_err(ApiError::from)?;
+    let r = wx_login::confirm_for(&ctx.wx, &task_id, Some(&owner)).await.map_err(ApiError::from)?;
     Ok(Json(json!({
         "ok": true,
         "data": {
@@ -143,9 +132,8 @@ async fn consume_code(
     Path(task_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let owner = owner_from_headers(&ctx, &headers);
-    let r = wx_login::issue_code_for(&ctx.wx, &task_id, Some(&owner))
-        .await
-        .map_err(ApiError::from)?;
+    let r =
+        wx_login::issue_code_for(&ctx.wx, &task_id, Some(&owner)).await.map_err(ApiError::from)?;
     Ok(Json(json!({
         "ok": true,
         "data": {

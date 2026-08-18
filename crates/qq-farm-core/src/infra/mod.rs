@@ -14,7 +14,6 @@ pub use json_db::{
     read_json_with_default, read_text_file, write_json_file_atomic, write_text_file_atomic,
 };
 pub use rate_limiter::{
-    get_farm_optimizer, get_friend_optimizer, get_service_config, get_service_queue,
-    PriorityQueue, QueueStatus, RateLimiterConfig, RequestQueue, ServiceConfig, TaskEntry,
-    TokenBucket,
+    get_farm_optimizer, get_friend_optimizer, get_service_config, get_service_queue, PriorityQueue,
+    QueueStatus, RateLimiterConfig, RequestQueue, ServiceConfig, TaskEntry, TokenBucket,
 };

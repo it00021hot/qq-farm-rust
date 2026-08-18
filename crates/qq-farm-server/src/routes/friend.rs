@@ -83,11 +83,7 @@ async fn get_friends(
     Query(q): Query<AccountQuery>,
 ) -> ApiResult<serde_json::Value> {
     let id = resolve_account_id(&ctx, &headers, q.account_id.as_deref())?;
-    let force = q
-        .force_sync
-        .as_deref()
-        .map(|s| s == "true" || s == "1")
-        .unwrap_or(false);
+    let force = q.force_sync.as_deref().map(|s| s == "true" || s == "1").unwrap_or(false);
     match qq_farm_app::friend::list_friends(&ctx.app_context(), &id, force).await {
         Ok(f) => ok_data(f),
         Err(e) => Ok(Json(json!({ "ok": false, "error": e.to_string() }))),

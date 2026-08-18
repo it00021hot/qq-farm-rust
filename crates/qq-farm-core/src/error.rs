@@ -37,10 +37,7 @@ pub enum Error {
 
     /// 账号相关错误
     #[error("account error: {context} (account_id={account_id})")]
-    Account {
-        account_id: String,
-        context: String,
-    },
+    Account { account_id: String, context: String },
 
     /// 业务逻辑错误（如：作物等级不足、化肥不足）
     #[error("business error: {0}")]
@@ -67,10 +64,7 @@ impl Error {
     /// 便捷构造：账号错误
     #[must_use]
     pub fn account<S1: Into<String>, S2: Into<String>>(account_id: S1, context: S2) -> Self {
-        Self::Account {
-            account_id: account_id.into(),
-            context: context.into(),
-        }
+        Self::Account { account_id: account_id.into(), context: context.into() }
     }
 
     /// 便捷构造：内部错误

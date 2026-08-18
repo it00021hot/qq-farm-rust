@@ -137,10 +137,7 @@ pub fn extract_client_ip(
             return Some(v.clone());
         }
         let lower = name.to_ascii_lowercase();
-        headers
-            .iter()
-            .find(|(k, _)| k.to_ascii_lowercase() == lower)
-            .map(|(_, v)| v.clone())
+        headers.iter().find(|(k, _)| k.to_ascii_lowercase() == lower).map(|(_, v)| v.clone())
     };
 
     let source_order: &[&str] = &["cf-connecting-ip", "x-real-ip", "x-forwarded-for"];
@@ -151,10 +148,7 @@ pub fn extract_client_ip(
                 if name == "x-forwarded-for" {
                     let first = s.split(',').next().unwrap_or("").trim();
                     if !first.is_empty() {
-                        return ClientIpInfo {
-                            ip: first.to_string(),
-                            source: "x-forwarded-for",
-                        };
+                        return ClientIpInfo { ip: first.to_string(), source: "x-forwarded-for" };
                     }
                 } else {
                     return ClientIpInfo {
@@ -171,30 +165,18 @@ pub fn extract_client_ip(
     }
     if let Some(ip) = fallback_ip {
         if !ip.is_empty() && ip != "::1" && ip != "::ffff:127.0.0.1" {
-            return ClientIpInfo {
-                ip: ip.to_string(),
-                source: "req_ip",
-            };
+            return ClientIpInfo { ip: ip.to_string(), source: "req_ip" };
         }
     }
     if let Some(addr) = fallback_socket {
         if let Some(stripped) = addr.strip_prefix("::ffff:") {
-            return ClientIpInfo {
-                ip: stripped.to_string(),
-                source: "socket",
-            };
+            return ClientIpInfo { ip: stripped.to_string(), source: "socket" };
         }
         if !addr.is_empty() {
-            return ClientIpInfo {
-                ip: addr.to_string(),
-                source: "socket",
-            };
+            return ClientIpInfo { ip: addr.to_string(), source: "socket" };
         }
     }
-    ClientIpInfo {
-        ip: "unknown".to_string(),
-        source: "unknown",
-    }
+    ClientIpInfo { ip: "unknown".to_string(), source: "unknown" }
 }
 
 // =====================================================================
@@ -222,11 +204,7 @@ pub struct RateLimiter {
 impl RateLimiter {
     #[must_use]
     pub fn new(window_ms: i64, max_requests: u32) -> Self {
-        Self {
-            window_ms,
-            max_requests,
-            store: Mutex::new(HashMap::new()),
-        }
+        Self { window_ms, max_requests, store: Mutex::new(HashMap::new()) }
     }
 
     /// 检查并递增计数
@@ -237,10 +215,9 @@ impl RateLimiter {
     pub fn check(&self, key: &str) -> RateLimitDecision {
         let now = now_ms();
         let mut store = self.store.lock();
-        let record = store.entry(key.to_string()).or_insert_with(|| RateLimitRecord {
-            count: 0,
-            reset_at: now + self.window_ms,
-        });
+        let record = store
+            .entry(key.to_string())
+            .or_insert_with(|| RateLimitRecord { count: 0, reset_at: now + self.window_ms });
         if now > record.reset_at {
             record.count = 0;
             record.reset_at = now + self.window_ms;
@@ -266,13 +243,8 @@ impl RateLimiter {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RateLimitDecision {
-    Allowed {
-        remaining: u32,
-        reset_at: i64,
-    },
-    Limited {
-        retry_after_secs: i64,
-    },
+    Allowed { remaining: u32, reset_at: i64 },
+    Limited { retry_after_secs: i64 },
 }
 
 // =====================================================================
@@ -281,10 +253,7 @@ pub enum RateLimitDecision {
 
 fn now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
 // =====================================================================
@@ -292,10 +261,10 @@ fn now_ms() -> i64 {
 // =====================================================================
 
 pub use crate::models::user_store::auth::{
-    check_account_lockout as _check_account_lockout,
-    check_rate_limit as _check_ip_rate_limit, clear_failed_attempts as _clear_login_attempts,
-    hash_password, record_failed_attempt as _record_login_attempt, validate_password_strength,
-    verify_password, FailedAttemptResult, LockoutResult, PasswordStrengthResult, RateLimitResult,
+    check_account_lockout as _check_account_lockout, check_rate_limit as _check_ip_rate_limit,
+    clear_failed_attempts as _clear_login_attempts, hash_password,
+    record_failed_attempt as _record_login_attempt, validate_password_strength, verify_password,
+    FailedAttemptResult, LockoutResult, PasswordStrengthResult, RateLimitResult,
 };
 
 // =====================================================================
@@ -385,10 +354,7 @@ mod tests {
     #[test]
     fn extract_ip_from_x_forwarded_for_first() {
         let mut h = HashMap::new();
-        h.insert(
-            "x-forwarded-for".to_string(),
-            "10.0.0.1, 192.168.1.1, 172.16.0.1".to_string(),
-        );
+        h.insert("x-forwarded-for".to_string(), "10.0.0.1, 192.168.1.1, 172.16.0.1".to_string());
         let r = extract_client_ip(&h, None, None);
         assert_eq!(r.ip, "10.0.0.1");
         assert_eq!(r.source, "x-forwarded-for");
@@ -485,14 +451,8 @@ mod tests {
 
     #[test]
     fn rate_limit_decision_partial_eq() {
-        let a = RateLimitDecision::Allowed {
-            remaining: 5,
-            reset_at: 1000,
-        };
-        let b = RateLimitDecision::Allowed {
-            remaining: 5,
-            reset_at: 1000,
-        };
+        let a = RateLimitDecision::Allowed { remaining: 5, reset_at: 1000 };
+        let b = RateLimitDecision::Allowed { remaining: 5, reset_at: 1000 };
         assert_eq!(a, b);
     }
 }

@@ -8,6 +8,7 @@ declare namespace Desktop {
     qq: string;
     avatar: string;
     running: boolean;
+    wxAuthorized?: boolean;
   }
 
   interface DesktopSnapshot {

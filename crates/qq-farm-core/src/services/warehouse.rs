@@ -31,9 +31,8 @@ use crate::proto::generated::gamepb::itempb::{
     UseRequest,
 };
 
-const FERTILIZER_RELATED_IDS: &[i64] = &[
-    100_003, 100_004, 80_001, 80_002, 80_003, 80_004, 80_011, 80_012, 80_013, 80_014,
-];
+const FERTILIZER_RELATED_IDS: &[i64] =
+    &[100_003, 100_004, 80_001, 80_002, 80_003, 80_004, 80_011, 80_012, 80_013, 80_014];
 
 // 化肥道具每小时数
 fn normal_fertilizer_hours(id: i64) -> Option<i64> {
@@ -129,16 +128,12 @@ impl WarehouseService {
     /// 出售物品。对齐 bot `sellItems`：不可售物品在发 RPC 前拒绝。
     pub async fn sell_items(&self, items: &[(i64, i64, i64)]) -> Result<SellReply> {
         if items.is_empty() {
-            return Err(crate::error::Error::Business(
-                "没有可出售的物品".to_string(),
-            ));
+            return Err(crate::error::Error::Business("没有可出售的物品".to_string()));
         }
         let gc = crate::config::game_config::global();
         for &(id, count, _) in items {
             if id <= 0 || count <= 0 {
-                return Err(crate::error::Error::Business(
-                    "出售物品参数无效".to_string(),
-                ));
+                return Err(crate::error::Error::Business("出售物品参数无效".to_string()));
             }
             let sell_info = gc.get_effective_sell_info_by_id(id);
             if !sell_info.sellable {
@@ -147,15 +142,11 @@ impl WarehouseService {
                     .map(|i| i.name.clone())
                     .filter(|n| !n.is_empty())
                     .unwrap_or_else(|| format!("物品{id}"));
-                return Err(crate::error::Error::Business(format!(
-                    "{name}当前不可出售"
-                )));
+                return Err(crate::error::Error::Business(format!("{name}当前不可出售")));
             }
         }
-        let payload: Vec<CoreItem> = items
-            .iter()
-            .map(|(id, count, uid)| core_item(*id, *count, *uid))
-            .collect();
+        let payload: Vec<CoreItem> =
+            items.iter().map(|(id, count, uid)| core_item(*id, *count, *uid)).collect();
         let req = SellRequest { items: payload };
         let body = self
             .gateway
@@ -196,40 +187,23 @@ impl WarehouseService {
                 }
             }
             let reply = self.batch_use_items(&batch).await?;
-            return Ok(UseReply {
-                used_items: reply.used_items,
-                items: reply.items,
-            });
+            return Ok(UseReply { used_items: reply.used_items, items: reply.items });
         }
         let Some(item) = single else {
-            return Err(crate::error::Error::Business(format!(
-                "背包中未找到物品 {item_id}"
-            )));
+            return Err(crate::error::Error::Business(format!("背包中未找到物品 {item_id}")));
         };
-        let req = UseRequest {
-            item: Some(core_item(item_id, count, item.uid)),
-        };
+        let req = UseRequest { item: Some(core_item(item_id, count, item.uid)) };
         let body = self
             .gateway
-            .request(
-                "gamepb.itempb.ItemService",
-                "Use",
-                &req.encode_to_vec(),
-                10_000,
-            )
+            .request("gamepb.itempb.ItemService", "Use", &req.encode_to_vec(), 10_000)
             .await?;
         Ok(UseReply::decode(&body)?)
     }
 
     /// 批量使用
-    pub async fn batch_use_items(
-        &self,
-        items: &[(i64, i64, i64)],
-    ) -> Result<BatchUseReply> {
-        let payload: Vec<CoreItem> = items
-            .iter()
-            .map(|(id, count, uid)| core_item(*id, *count, *uid))
-            .collect();
+    pub async fn batch_use_items(&self, items: &[(i64, i64, i64)]) -> Result<BatchUseReply> {
+        let payload: Vec<CoreItem> =
+            items.iter().map(|(id, count, uid)| core_item(*id, *count, *uid)).collect();
         let req = BatchUseRequest { items: payload };
         let body = self
             .gateway
@@ -262,17 +236,12 @@ impl WarehouseService {
 
             // 容器 990h 上限判断
             if ftype == FertilizerType::Normal || ftype == FertilizerType::Organic {
-                let current = if ftype == FertilizerType::Normal {
-                    normal_h
-                } else {
-                    organic_h
-                };
+                let current = if ftype == FertilizerType::Normal { normal_h } else { organic_h };
                 if current >= FERTILIZER_CONTAINER_LIMIT_HOURS {
                     continue;
                 }
                 if per_item_hours > 0 {
-                    let remain =
-                        (FERTILIZER_CONTAINER_LIMIT_HOURS - current).max(0);
+                    let remain = (FERTILIZER_CONTAINER_LIMIT_HOURS - current).max(0);
                     let max_count = remain / per_item_hours;
                     use_count = raw_count.min(max_count).max(0);
                     if use_count <= 0 {
@@ -302,7 +271,8 @@ impl WarehouseService {
                 &self.account_id.lock(),
                 "仓库",
                 format!("自动使用化肥类道具 x{opened}"),
-                crate::constants::PanelEvent::FertilizerGiftOpen, Some(serde_json::json!({ "module": "warehouse",  "count": opened })),
+                crate::constants::PanelEvent::FertilizerGiftOpen,
+                Some(serde_json::json!({ "module": "warehouse",  "count": opened })),
             );
         }
         (opened, normal_h, organic_h)
@@ -322,8 +292,9 @@ impl WarehouseService {
                     &account_id,
                     "仓库",
                     format!("出售失败: {e}"),
-                    crate::constants::PanelEvent::SellDone, Some(serde_json::json!({
-                        "module": "warehouse", 
+                    crate::constants::PanelEvent::SellDone,
+                    Some(serde_json::json!({
+                        "module": "warehouse",
                         "result": "error",
                     })),
                 );
@@ -359,8 +330,9 @@ impl WarehouseService {
                 &account_id,
                 "仓库",
                 "无果实可出售",
-                crate::constants::PanelEvent::SellDone, Some(serde_json::json!({
-                    "module": "warehouse", 
+                crate::constants::PanelEvent::SellDone,
+                Some(serde_json::json!({
+                    "module": "warehouse",
                     "result": "empty",
                 })),
             );
@@ -384,13 +356,13 @@ impl WarehouseService {
                         &account_id,
                         "仓库",
                         format!("批量出售失败，改为逐个重试: {batch_err}"),
-                        crate::constants::PanelEvent::SellDone, Some(serde_json::json!({ "module": "warehouse"})),
+                        crate::constants::PanelEvent::SellDone,
+                        Some(serde_json::json!({ "module": "warehouse"})),
                     );
                     for item in chunk {
                         match self.sell_items(&[*item]).await {
                             Ok(reply) => {
-                                let inferred =
-                                    derive_gold_gain_from_sell_reply(&reply, known_gold);
+                                let inferred = derive_gold_gain_from_sell_reply(&reply, known_gold);
                                 if inferred.gain > 0 {
                                     server_gold_total += inferred.gain;
                                 }
@@ -404,8 +376,9 @@ impl WarehouseService {
                                         "跳过不可售物品: ID={} x{} ({single_err})",
                                         item.0, item.1
                                     ),
-                                    crate::constants::PanelEvent::SellDone, Some(serde_json::json!({
-                                        "module": "warehouse", 
+                                    crate::constants::PanelEvent::SellDone,
+                                    Some(serde_json::json!({
+                                        "module": "warehouse",
                                         "result": "skip",
                                         "itemId": item.0,
                                         "count": item.1,
@@ -429,11 +402,7 @@ impl WarehouseService {
             }
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
-        let notify_delta = if gold_after > gold_before {
-            gold_after - gold_before
-        } else {
-            0
-        };
+        let notify_delta = if gold_after > gold_before { gold_after - gold_before } else { 0 };
         let mut bag_delta: i64 = 0;
         if notify_delta <= 0 && server_gold_total <= 0 {
             if let Ok(bag_after) = self.get_bag().await {
@@ -447,11 +416,7 @@ impl WarehouseService {
         if notify_delta <= 0 && total_gold > 0 {
             crate::services::status::update_status_gold_for(&account_id, gold_before + total_gold);
         }
-        let event = if total_gold > 0 {
-            "sell_success"
-        } else {
-            "sell_done"
-        };
+        let event = if total_gold > 0 { "sell_success" } else { "sell_done" };
         crate::services::panel_log::log(
             &account_id,
             "仓库",
@@ -464,7 +429,8 @@ impl WarehouseService {
                     String::new()
                 }
             ),
-            crate::constants::PanelEvent::FarmCycle, Some(serde_json::json!({
+            crate::constants::PanelEvent::FarmCycle,
+            Some(serde_json::json!({
                 "module": "warehouse",
                 "event": event,
                 "result": if total_gold > 0 { "ok" } else { "unknown_gain" },
@@ -505,7 +471,8 @@ impl WarehouseService {
                 .filter(|l| *l > 0)
                 .or(plant.land_level_need)
                 .unwrap_or(0);
-            let image = gc.get_seed_image_by_seed_id(seed_id).or_else(|| gc.get_item_image_by_id(seed_id));
+            let image =
+                gc.get_seed_image_by_seed_id(seed_id).or_else(|| gc.get_item_image_by_id(seed_id));
             let plant_size = plant.size.unwrap_or(1).max(1);
             let row = merged.entry(seed_id).or_insert_with(|| BagSeedInfo {
                 seed_id,
@@ -655,10 +622,8 @@ pub fn build_bag_detail_from_items(raw_items: &[BagItemLite]) -> BagDetail {
         }
         if uid <= 0 {
             let item_info = gc.get_item_by_id(id);
-            let interaction_type = item_info
-                .as_ref()
-                .and_then(|i| i.interaction_type.clone())
-                .unwrap_or_default();
+            let interaction_type =
+                item_info.as_ref().and_then(|i| i.interaction_type.clone()).unwrap_or_default();
             let hours_text = if interaction_type == "fertilizerbucket" {
                 let h = ((count as f64) / 3600.0 * 10.0).floor() / 10.0;
                 format!("{h:.1}小时")
@@ -720,19 +685,12 @@ pub fn build_bag_detail_from_items(raw_items: &[BagItemLite]) -> BagDetail {
         if name.is_empty() {
             name = format!("物品{id}");
         }
-        let interaction_type = item_info
-            .as_ref()
-            .and_then(|i| i.interaction_type.clone())
-            .unwrap_or_default();
-        let sell_info = item_info
-            .as_ref()
-            .map(|i| gc.get_effective_sell_info(i))
-            .unwrap_or_default();
-        let (price_id, price) = if let Some(&(c, p)) = sell_info.sells.first() {
-            (c, p)
-        } else {
-            (0, 0)
-        };
+        let interaction_type =
+            item_info.as_ref().and_then(|i| i.interaction_type.clone()).unwrap_or_default();
+        let sell_info =
+            item_info.as_ref().map(|i| gc.get_effective_sell_info(i)).unwrap_or_default();
+        let (price_id, price) =
+            if let Some(&(c, p)) = sell_info.sells.first() { (c, p) } else { (0, 0) };
         let price_unit = match price_id {
             1005 => "金豆豆",
             1002 => "点券",
@@ -809,17 +767,10 @@ pub fn build_bag_detail_from_items(raw_items: &[BagItemLite]) -> BagDetail {
         };
         let pa = priority(a.item_type);
         let pb = priority(b.item_type);
-        pa.cmp(&pb)
-            .then_with(|| b.count.cmp(&a.count))
-            .then_with(|| a.id.cmp(&b.id))
+        pa.cmp(&pb).then_with(|| b.count.cmp(&a.count)).then_with(|| a.id.cmp(&b.id))
     });
 
-    BagDetail {
-        total_kinds: items.len(),
-        items,
-        original_items,
-        system_items,
-    }
+    BagDetail { total_kinds: items.len(), items, original_items, system_items }
 }
 
 /// 简化的 item 表示（用于跨函数）
@@ -834,25 +785,12 @@ pub struct BagItemLite {
 impl BagItemLite {
     #[must_use]
     pub fn new(id: i64, count: i64, uid: i64) -> Self {
-        Self {
-            id,
-            count,
-            uid,
-            mutant_types: vec![],
-        }
+        Self { id, count, uid, mutant_types: vec![] }
     }
 }
 
 fn core_item(id: i64, count: i64, uid: i64) -> CoreItem {
-    CoreItem {
-        id,
-        count,
-        expire_time: 0,
-        uid,
-        is_new: false,
-        mutant_types: vec![],
-        show: None,
-    }
+    CoreItem { id, count, expire_time: 0, uid, is_new: false, mutant_types: vec![], show: None }
 }
 
 /// 判断是否是果实
@@ -874,10 +812,7 @@ pub fn collect_fertilizer_use_payload(items: &[BagItemLite]) -> Vec<FertilizerUs
         }
         *merged.entry(it.id).or_insert(0) += it.count;
     }
-    merged
-        .into_iter()
-        .map(|(id, count)| FertilizerUsePayload { id, count })
-        .collect()
+    merged.into_iter().map(|(id, count)| FertilizerUsePayload { id, count }).collect()
 }
 
 /// 判断是否是化肥相关物品
@@ -894,10 +829,7 @@ pub fn is_fertilizer_related_item_id(id: i64) -> bool {
     use crate::config::game_config::global as global_game_config;
     let gc = global_game_config();
     let info = gc.get_item_by_id(id);
-    let interaction = info
-        .as_ref()
-        .and_then(|i| i.interaction_type.as_deref())
-        .unwrap_or("");
+    let interaction = info.as_ref().and_then(|i| i.interaction_type.as_deref()).unwrap_or("");
     matches!(interaction, "fertilizer" | "fertilizerpro")
 }
 
@@ -927,10 +859,7 @@ pub fn get_fertilizer_item_type_and_hours(id: i64) -> (FertilizerType, i64) {
     use crate::config::game_config::global as global_game_config;
     let gc = global_game_config();
     let info = gc.get_item_by_id(id);
-    let interaction = info
-        .as_ref()
-        .and_then(|i| i.interaction_type.as_deref())
-        .unwrap_or("");
+    let interaction = info.as_ref().and_then(|i| i.interaction_type.as_deref()).unwrap_or("");
     let t = FertilizerType::from_interaction_type(interaction);
     let h = if t == FertilizerType::Other { 0 } else { 1 };
     (t, h)
@@ -964,17 +893,11 @@ struct GoldGain {
 fn derive_gold_gain_from_sell_reply(reply: &SellReply, last_known_gold: i64) -> GoldGain {
     let from_get = gold_from_core_items(&reply.get_items);
     if from_get > 0 {
-        return GoldGain {
-            gain: from_get,
-            next_known_gold: last_known_gold,
-        };
+        return GoldGain { gain: from_get, next_known_gold: last_known_gold };
     }
     let current_or_delta = gold_from_core_items(&reply.sell_items);
     if current_or_delta <= 0 {
-        return GoldGain {
-            gain: 0,
-            next_known_gold: last_known_gold,
-        };
+        return GoldGain { gain: 0, next_known_gold: last_known_gold };
     }
     if last_known_gold > 0 && current_or_delta >= last_known_gold {
         return GoldGain {
@@ -982,10 +905,7 @@ fn derive_gold_gain_from_sell_reply(reply: &SellReply, last_known_gold: i64) -> 
             next_known_gold: current_or_delta,
         };
     }
-    GoldGain {
-        gain: current_or_delta,
-        next_known_gold: last_known_gold,
-    }
+    GoldGain { gain: current_or_delta, next_known_gold: last_known_gold }
 }
 
 trait EncodeExt {
@@ -1049,10 +969,7 @@ mod tests {
 
     #[test]
     fn get_container_hours_calculates() {
-        let items = vec![
-            BagItemLite::new(1011, 3600, 0),
-            BagItemLite::new(1012, 7200, 0),
-        ];
+        let items = vec![BagItemLite::new(1011, 3600, 0), BagItemLite::new(1012, 7200, 0)];
         let (n, o) = get_container_hours_from_bag_items(&items);
         assert_eq!(n, 1);
         assert_eq!(o, 2);
@@ -1109,10 +1026,7 @@ mod tests {
 
     #[test]
     fn derive_gold_gain_prefers_get_items() {
-        let reply = SellReply {
-            sell_items: vec![],
-            get_items: vec![core_item(1001, 88, 0)],
-        };
+        let reply = SellReply { sell_items: vec![], get_items: vec![core_item(1001, 88, 0)] };
         let inferred = derive_gold_gain_from_sell_reply(&reply, 1000);
         assert_eq!(inferred.gain, 88);
         assert_eq!(inferred.next_known_gold, 1000);
@@ -1120,9 +1034,7 @@ mod tests {
 
     #[test]
     fn use_request_encodes_nested_item_not_scalar_ids() {
-        let req = UseRequest {
-            item: Some(core_item(101351, 1, 42)),
-        };
+        let req = UseRequest { item: Some(core_item(101351, 1, 42)) };
         let bytes = prost::Message::encode_to_vec(&req);
         assert!(!bytes.is_empty());
         // field 1 + wire type 2 (length-delimited) = 0x0A
@@ -1137,8 +1049,8 @@ mod tests {
 
     #[test]
     fn warehouse_service_construction() {
-        use crate::network::gateway::{Gateway, GatewayConfig};
         use crate::network::encryptor::NoopEncryptor;
+        use crate::network::gateway::{Gateway, GatewayConfig};
         let cfg = GatewayConfig {
             server_url: "ws://127.0.0.1:0".into(),
             platform: "test".into(),
@@ -1159,18 +1071,8 @@ mod tests {
     #[test]
     fn bag_detail_splits_by_uid_not_item_id() {
         let detail = build_bag_detail_from_items(&[
-            BagItemLite {
-                id: 41221,
-                count: 2,
-                uid: 100,
-                mutant_types: vec![1],
-            },
-            BagItemLite {
-                id: 41221,
-                count: 3,
-                uid: 200,
-                mutant_types: vec![],
-            },
+            BagItemLite { id: 41221, count: 2, uid: 100, mutant_types: vec![1] },
+            BagItemLite { id: 41221, count: 3, uid: 200, mutant_types: vec![] },
             BagItemLite::new(1011, 3600, 0),
         ]);
         assert_eq!(detail.items.len(), 3);

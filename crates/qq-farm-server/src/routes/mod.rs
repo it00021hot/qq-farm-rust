@@ -20,10 +20,7 @@ use qq_farm_core::services::account_resolver::normalize_account_ref;
 
 /// 从面板会话构造 ACL 策略。
 pub fn acl_policy_from_session(sess: &crate::sessions::SessionInfo) -> AclPolicy {
-    AclPolicy::PanelUser {
-        username: sess.username.clone(),
-        role: sess.role.clone(),
-    }
+    AclPolicy::PanelUser { username: sess.username.clone(), role: sess.role.clone() }
 }
 
 /// 共享 helper：解析 account_id（query > header > env fallback）
@@ -68,7 +65,8 @@ pub fn resolve_id(
 pub fn get_loop(
     ctx: &AdminContext,
     account_id: &str,
-) -> Result<std::sync::Arc<qq_farm_core::runtime::worker_loop::WorkerLoop>, crate::context::ApiError> {
+) -> Result<std::sync::Arc<qq_farm_core::runtime::worker_loop::WorkerLoop>, crate::context::ApiError>
+{
     qq_farm_app::farm::require_worker_loop(&ctx.app_context(), account_id).map_err(Into::into)
 }
 
@@ -76,7 +74,8 @@ pub fn get_loop(
 pub fn require_worker_loop(
     ctx: &AdminContext,
     account_id: &str,
-) -> Result<std::sync::Arc<qq_farm_core::runtime::worker_loop::WorkerLoop>, crate::context::ApiError> {
+) -> Result<std::sync::Arc<qq_farm_core::runtime::worker_loop::WorkerLoop>, crate::context::ApiError>
+{
     get_loop(ctx, account_id)
 }
 
@@ -90,9 +89,7 @@ pub fn resolve_account_id_required(
 ) -> Result<String, crate::context::ApiError> {
     let id = resolve_account_id(ctx, headers, query_id);
     if id.is_empty() {
-        Err(crate::context::ApiError::BadRequest(
-            "missing x-account-id".to_string(),
-        ))
+        Err(crate::context::ApiError::BadRequest("missing x-account-id".to_string()))
     } else {
         ensure_account_access(ctx, headers, &id)?;
         Ok(id)
@@ -117,19 +114,17 @@ pub fn ensure_account_access(
     account_id: &str,
 ) -> Result<(), crate::context::ApiError> {
     let Some(sess) = current_session(ctx, headers) else {
-        return Err(crate::context::ApiError::Forbidden(
-            "无权访问该账号".to_string(),
-        ));
+        return Err(crate::context::ApiError::Forbidden("无权访问该账号".to_string()));
     };
     qq_farm_app::accounts::ensure_account_access(&acl_policy_from_session(&sess), account_id)
         .map_err(Into::into)
 }
 
-pub fn current_session(ctx: &AdminContext, headers: &HeaderMap) -> Option<crate::sessions::SessionInfo> {
-    let token = headers
-        .get("x-admin-token")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
+pub fn current_session(
+    ctx: &AdminContext,
+    headers: &HeaderMap,
+) -> Option<crate::sessions::SessionInfo> {
+    let token = headers.get("x-admin-token").and_then(|v| v.to_str().ok()).unwrap_or("");
     if token.is_empty() {
         return None;
     }
@@ -160,28 +155,25 @@ pub fn build(ctx: Arc<AdminContext>) -> Router<Arc<AdminContext>> {
     let ctx_for_auth = ctx.clone();
 
     // 顶层注入 ctx 到 request extensions
-    let inject_layer = middleware::from_fn(move |mut req: Request, next: axum::middleware::Next| {
-        let ctx = ctx_for_inject.clone();
-        async move {
-            req.extensions_mut().insert(ctx);
-            next.run(req).await
-        }
-    });
+    let inject_layer =
+        middleware::from_fn(move |mut req: Request, next: axum::middleware::Next| {
+            let ctx = ctx_for_inject.clone();
+            async move {
+                req.extensions_mut().insert(ctx);
+                next.run(req).await
+            }
+        });
 
     // admin 鉴权
     let admin_check = middleware::from_fn(move |req: Request, next: axum::middleware::Next| {
         let ctx = ctx_for_admin.clone();
-        async move {
-            crate::middleware::admin_required_strict_ext(ctx, req, next).await
-        }
+        async move { crate::middleware::admin_required_strict_ext(ctx, req, next).await }
     });
 
     // 普通用户鉴权
     let auth_check = middleware::from_fn(move |req: Request, next: axum::middleware::Next| {
         let ctx = ctx_for_auth.clone();
-        async move {
-            crate::middleware::auth_required_strict_ext(ctx, req, next).await
-        }
+        async move { crate::middleware::auth_required_strict_ext(ctx, req, next).await }
     });
 
     // auth：login/register 等公开（部分 handler 自行校验 token）

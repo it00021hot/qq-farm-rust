@@ -41,11 +41,7 @@ pub fn in_friend_quiet_hours_for(account_id: Option<&str>, now_hhmm: Option<(u32
         if !snap.enabled {
             return false;
         }
-        FriendQuietHours {
-            enabled: true,
-            start: snap.start,
-            end: snap.end,
-        }
+        FriendQuietHours { enabled: true, start: snap.start, end: snap.end }
     } else {
         let cfg = runtime_state::get_friend_quiet_hours(GLOBAL_QUIET_HOURS_ACCOUNT);
         match cfg {

@@ -129,11 +129,7 @@ impl Default for StatsSlot {
     fn default() -> Self {
         Self {
             operations: OperationsMap::default(),
-            last: LastState {
-                gold: -1,
-                exp: -1,
-                coupon: -1,
-            },
+            last: LastState { gold: -1, exp: -1, coupon: -1 },
             initial: InitialState::default(),
             session: SessionData::default(),
             date_key: None,
@@ -145,11 +141,7 @@ static SLOTS: LazyLock<Mutex<std::collections::HashMap<String, StatsSlot>>> =
     LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
 fn slot_for(account_id: &str) -> StatsSlot {
-    SLOTS
-        .lock()
-        .entry(account_id.to_string())
-        .or_default()
-        .clone()
+    SLOTS.lock().entry(account_id.to_string()).or_default().clone()
 }
 
 fn put_slot(account_id: &str, slot: StatsSlot) {
@@ -162,10 +154,8 @@ fn put_slot(account_id: &str, slot: StatsSlot) {
 
 #[must_use]
 pub fn stats_file(account_id: &str) -> PathBuf {
-    let dir = std::env::var("FARM_DATA_DIR")
-        .ok()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| get_data_dir());
+    let dir =
+        std::env::var("FARM_DATA_DIR").ok().map(PathBuf::from).unwrap_or_else(|| get_data_dir());
     dir.join("stats").join(format!("{account_id}.json"))
 }
 
@@ -334,10 +324,7 @@ fn apply_update_stats(slot: &mut StatsSlot, current_gold: i64, current_exp: i64)
         let delta = current_exp - slot.last.exp;
         let now = crate::utils::time::now_ms();
         if delta == slot.session.last_exp_gain
-            && slot
-                .session
-                .last_exp_time
-                .is_some_and(|t| now - t < 1000)
+            && slot.session.last_exp_time.is_some_and(|t| now - t < 1000)
         {
             // 忽略重复经验增量
         } else {
@@ -427,11 +414,7 @@ pub fn get_stats_for(
     connected: bool,
     limits: serde_json::Value,
 ) -> serde_json::Value {
-    let account_id = if account_id.is_empty() {
-        LEGACY_SLOT
-    } else {
-        account_id
-    };
+    let account_id = if account_id.is_empty() { LEGACY_SLOT } else { account_id };
     let mut slot = slot_for(account_id);
     let today = get_today_key();
     if let Some(prev) = slot.date_key.as_ref() {
@@ -441,20 +424,12 @@ pub fn get_stats_for(
     }
     slot.date_key = Some(today);
 
-    let status_obj = status_data
-        .and_then(|v| v.as_object())
-        .cloned()
-        .unwrap_or_default();
-    let user_obj = user_state
-        .and_then(|v| v.as_object())
-        .cloned()
-        .unwrap_or_default();
-    let current_gold = json_i64(user_obj.get("gold"))
-        .or_else(|| json_i64(status_obj.get("gold")))
-        .unwrap_or(0);
-    let current_exp = json_i64(user_obj.get("exp"))
-        .or_else(|| json_i64(status_obj.get("exp")))
-        .unwrap_or(0);
+    let status_obj = status_data.and_then(|v| v.as_object()).cloned().unwrap_or_default();
+    let user_obj = user_state.and_then(|v| v.as_object()).cloned().unwrap_or_default();
+    let current_gold =
+        json_i64(user_obj.get("gold")).or_else(|| json_i64(status_obj.get("gold"))).unwrap_or(0);
+    let current_exp =
+        json_i64(user_obj.get("exp")).or_else(|| json_i64(status_obj.get("exp"))).unwrap_or(0);
     let current_coupon = json_i64(user_obj.get("coupon"))
         .or_else(|| json_i64(status_obj.get("coupon")))
         .unwrap_or(0);
@@ -497,6 +472,14 @@ pub fn get_stats_for(
         .or_else(|| status_obj.get("name").and_then(|v| v.as_str()))
         .unwrap_or("")
         .to_string();
+    let avatar = user_obj
+        .get("avatar")
+        .and_then(|v| v.as_str())
+        .or_else(|| user_obj.get("avatarUrl").and_then(|v| v.as_str()))
+        .or_else(|| status_obj.get("avatar").and_then(|v| v.as_str()))
+        .or_else(|| status_obj.get("avatarUrl").and_then(|v| v.as_str()))
+        .unwrap_or("")
+        .to_string();
     let level = status_obj
         .get("level")
         .and_then(|v| v.as_i64())
@@ -516,6 +499,7 @@ pub fn get_stats_for(
         "connection": { "connected": connected },
         "status": {
             "name": name,
+            "avatar": avatar,
             "level": level,
             "gold": current_gold,
             "coupon": current_coupon,
@@ -546,9 +530,7 @@ pub fn save_stats_for(account_id: &str) {
         date: today,
         operations: slot.operations,
         initial_state: slot.initial,
-        total_steal: load_persisted_stats(account_id)
-            .map(|p| p.total_steal)
-            .unwrap_or(0),
+        total_steal: load_persisted_stats(account_id).map(|p| p.total_steal).unwrap_or(0),
         saved_at: crate::utils::time::now_ms(),
     };
     save_persisted_stats(account_id, &data);
@@ -717,13 +699,18 @@ mod tests {
         reset_for_test();
         init_stats(100, 50, 0);
         let status = serde_json::json!({"name": "test", "level": 5, "platform": "qq"});
-        let user = serde_json::json!({"gold": 150, "exp": 80});
+        let user = serde_json::json!({
+            "gold": 150,
+            "exp": 80,
+            "avatar": "https://cdn.example/a.png"
+        });
         let s = get_stats(Some(&status), Some(&user), true, serde_json::json!({}));
         let obj = s.as_object().expect("object");
         assert!(obj.contains_key("connection"));
         assert!(obj.contains_key("status"));
         assert!(obj.contains_key("operations"));
         assert!(obj.contains_key("sessionExpGained"));
+        assert_eq!(s["status"]["avatar"], "https://cdn.example/a.png");
     }
 
     #[test]
@@ -735,13 +722,7 @@ mod tests {
         reset_session_gains_for(account);
         let status = serde_json::json!({"name": "t", "level": 5, "exp": 80.0, "gold": 150.0});
         let user = serde_json::json!({"gold": 150.0, "exp": 80.0});
-        let s = get_stats_for(
-            account,
-            Some(&status),
-            Some(&user),
-            true,
-            serde_json::json!({}),
-        );
+        let s = get_stats_for(account, Some(&status), Some(&user), true, serde_json::json!({}));
         assert_eq!(s["sessionExpGained"], 30);
         assert_eq!(s["sessionGoldGained"], 50);
     }
@@ -755,16 +736,8 @@ mod tests {
         let acc = "test-acc-save";
         let data = PersistedStats {
             date: get_today_key(),
-            operations: OperationsMap {
-                harvest: 10,
-                fertilize: 5,
-                ..Default::default()
-            },
-            initial_state: InitialState {
-                gold: Some(100),
-                exp: Some(50),
-                coupon: Some(0),
-            },
+            operations: OperationsMap { harvest: 10, fertilize: 5, ..Default::default() },
+            initial_state: InitialState { gold: Some(100), exp: Some(50), coupon: Some(0) },
             total_steal: 0,
             saved_at: crate::utils::time::now_ms(),
         };

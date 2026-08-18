@@ -28,7 +28,10 @@ import {
   fetchGetFarmAutomationDetail,
   fetchGetFarmBagSeeds,
   fetchGetFarmSeeds,
-  fetchModifyFarmAutomation
+  fetchGetOfflineReminder,
+  fetchModifyFarmAutomation,
+  fetchSaveOfflineReminder,
+  fetchTestOfflineReminder
 } from '@/service/api';
 import { useFarmAccountStore } from '@/store/modules/farm-account';
 import { $t } from '@/locales';
@@ -60,7 +63,9 @@ const farmAccountStore = useFarmAccountStore();
 const loading = ref(false);
 const strategySaving = ref(false);
 const automationSaving = ref(false);
-const activeTab = ref<'strategy' | 'automation'>('strategy');
+const offlineSaving = ref(false);
+const offlineTesting = ref(false);
+const activeTab = ref<'strategy' | 'automation' | 'offline'>('strategy');
 
 const plantingStrategy = ref('preferred');
 const preferredSeedId = ref<number | null>(0);
@@ -91,6 +96,75 @@ const fertilizerBuy = reactive({
   normalThresholdHours: 10,
   checkIntervalMinutes: 60
 });
+
+const offline = reactive<Api.Farm.OfflineReminder>({
+  channel: 'none',
+  reloginUrlMode: 'none',
+  endpoint: '',
+  token: '',
+  title: '账号下线提醒',
+  msg: '账号下线',
+  offlineDeleteSec: 0
+});
+
+const CHANNEL_DOCS: Record<string, string> = {
+  qmsg: 'https://qmsg.zendee.cn/',
+  serverchan: 'https://sct.ftqq.com/',
+  pushplus: 'https://www.pushplus.plus/',
+  pushplushxtrip: 'https://pushplus.hxtrip.com/',
+  dingtalk: 'https://open.dingtalk.com/document/group/custom-robot-access',
+  wecom: 'https://guole.fun/posts/626/',
+  wecombot: 'https://developer.work.weixin.qq.com/document/path/91770',
+  bark: 'https://github.com/Finb/Bark',
+  gocqhttp: 'https://docs.go-cqhttp.org/api/',
+  onebot: 'https://docs.go-cqhttp.org/api/',
+  atri: 'https://blog.tianli0.top/',
+  pushdeer: 'https://www.pushdeer.com/',
+  igot: 'https://push.hellyw.com/',
+  telegram: 'https://core.telegram.org/bots',
+  feishu: 'https://www.feishu.cn/hc/zh-CN/articles/360024984973',
+  ifttt: 'https://ifttt.com/maker_webhooks',
+  discord: 'https://discord.com/developers/docs/resources/webhook#execute-webhook',
+  wxpusher: 'https://wxpusher.zjiecode.com/docs/#/'
+};
+
+const channelOptions = computed(() => [
+  { label: $t('page.farm.settings.channelNone'), value: 'none' },
+  { label: 'Webhook', value: 'webhook' },
+  { label: 'Qmsg 酱', value: 'qmsg' },
+  { label: 'Server 酱', value: 'serverchan' },
+  { label: 'Push Plus', value: 'pushplus' },
+  { label: 'Push Plus Hxtrip', value: 'pushplushxtrip' },
+  { label: '钉钉', value: 'dingtalk' },
+  { label: '企业微信', value: 'wecom' },
+  { label: 'Bark', value: 'bark' },
+  { label: 'Go-cqhttp', value: 'gocqhttp' },
+  { label: 'OneBot', value: 'onebot' },
+  { label: 'Atri', value: 'atri' },
+  { label: 'PushDeer', value: 'pushdeer' },
+  { label: 'iGot', value: 'igot' },
+  { label: 'Telegram', value: 'telegram' },
+  { label: '飞书', value: 'feishu' },
+  { label: 'IFTTT', value: 'ifttt' },
+  { label: '企业微信群机器人', value: 'wecombot' },
+  { label: 'Discord', value: 'discord' },
+  { label: 'WxPusher', value: 'wxpusher' }
+]);
+
+const reloginUrlModeOptions = computed(() => [
+  { label: $t('page.farm.settings.reloginNone'), value: 'none' },
+  { label: $t('page.farm.settings.reloginQqLink'), value: 'qq_link' },
+  { label: $t('page.farm.settings.reloginQrLink'), value: 'qr_link' }
+]);
+
+const currentChannelDocUrl = computed(() => {
+  const key = String(offline.channel || '')
+    .trim()
+    .toLowerCase();
+  return CHANNEL_DOCS[key] || '';
+});
+
+const endpointEnabled = computed(() => offline.channel === 'webhook');
 
 /** Bot AutomationConfig keys only (qq-farm-bot Settings) */
 const automation = reactive<Api.Farm.AutomationConfig>({
@@ -539,6 +613,7 @@ async function handleSaveStrategy() {
       plantOrderRandom: plantOrderRandom.value,
       plantDelaySeconds: plantDelaySeconds.value,
       stealDelaySeconds: stealDelaySeconds.value,
+      plantBlacklist: [...plantBlacklist.value],
       friendQuietHours: { ...quietHours }
     });
     if (!error) {
@@ -587,6 +662,69 @@ async function handleSaveAutomation() {
   } finally {
     automationSaving.value = false;
   }
+}
+
+function applyOffline(data: Api.Farm.OfflineReminder) {
+  offline.channel = data.channel || 'none';
+  offline.reloginUrlMode = data.reloginUrlMode || 'none';
+  offline.endpoint = data.endpoint || '';
+  offline.token = data.token || '';
+  offline.title = data.title || '';
+  offline.msg = data.msg || '';
+  offline.offlineDeleteSec = Number(data.offlineDeleteSec || 0);
+}
+
+async function loadOffline() {
+  const { error, data } = await fetchGetOfflineReminder();
+  if (!error && data) {
+    applyOffline(data);
+  }
+}
+
+function offlinePayload(): Api.Farm.OfflineReminder {
+  return {
+    channel: offline.channel || 'none',
+    reloginUrlMode: offline.reloginUrlMode || 'none',
+    endpoint: offline.endpoint || '',
+    token: offline.token || '',
+    title: offline.title || '',
+    msg: offline.msg || '',
+    offlineDeleteSec: Number(offline.offlineDeleteSec || 0)
+  };
+}
+
+async function handleSaveOffline() {
+  offlineSaving.value = true;
+  try {
+    const { error, data } = await fetchSaveOfflineReminder(offlinePayload());
+    if (!error) {
+      if (data) applyOffline(data);
+      window.$message?.success($t('page.farm.settings.saveOfflineSuccess'));
+    }
+  } finally {
+    offlineSaving.value = false;
+  }
+}
+
+async function handleTestOffline() {
+  offlineTesting.value = true;
+  try {
+    const { error, data } = await fetchTestOfflineReminder(offlinePayload());
+    if (error) return;
+    if (data?.ok) {
+      window.$message?.success($t('page.farm.settings.testOfflineSuccess'));
+    } else {
+      window.$message?.error(`${$t('page.farm.settings.testOfflineFail')}: ${data?.msg || 'unknown'}`);
+    }
+  } finally {
+    offlineTesting.value = false;
+  }
+}
+
+function openChannelDocs() {
+  const url = currentChannelDocUrl.value;
+  if (!url) return;
+  window.open(url, '_blank', 'noopener,noreferrer');
 }
 
 watch(
@@ -675,21 +813,20 @@ onMounted(async () => {
   if (!farmAccountStore.accounts.length) {
     await farmAccountStore.loadAccounts();
   }
-  await loadConfig();
+  await Promise.all([loadConfig(), loadOffline()]);
 });
 </script>
 
 <template>
   <div class="min-h-500px flex-col-stretch gap-16px overflow-auto">
-    <NEmpty
-      v-if="!farmAccountStore.currentAccountId"
-      class="py-48px"
-      :description="$t('page.farm.common.selectAccount')"
-    />
-
-    <NTabs v-else v-model:value="activeTab" type="line" animated>
+    <NTabs v-model:value="activeTab" type="line" animated>
       <NTabPane name="strategy" :tab="$t('page.farm.settings.strategy')">
-        <NCard :bordered="false" size="small" class="card-wrapper">
+        <NEmpty
+          v-if="!farmAccountStore.currentAccountId"
+          class="py-48px"
+          :description="$t('page.farm.common.selectAccount')"
+        />
+        <NCard v-else :bordered="false" size="small" class="card-wrapper">
           <NForm label-placement="left" :label-width="140">
             <div class="grid gap-12px md:grid-cols-2">
               <NFormItem :label="$t('page.farm.settings.plantingStrategy')">
@@ -868,7 +1005,12 @@ onMounted(async () => {
       </NTabPane>
 
       <NTabPane name="automation" :tab="$t('page.farm.settings.automation')">
-        <NCard :bordered="false" size="small" class="card-wrapper">
+        <NEmpty
+          v-if="!farmAccountStore.currentAccountId"
+          class="py-48px"
+          :description="$t('page.farm.common.selectAccount')"
+        />
+        <NCard v-else :bordered="false" size="small" class="card-wrapper">
           <div class="auto-switch-grid">
             <div class="auto-switch-item">
               <NSwitch v-model:value="automation.farm" />
@@ -1023,6 +1165,74 @@ onMounted(async () => {
               @click="handleSaveAutomation"
             >
               {{ $t('page.farm.settings.saveAutomation') }}
+            </NButton>
+          </div>
+        </NCard>
+      </NTabPane>
+
+      <NTabPane name="offline" :tab="$t('page.farm.settings.offlineReminder')">
+        <NCard :bordered="false" size="small" class="card-wrapper">
+          <NText depth="3" class="mb-16px block text-12px">{{ $t('page.farm.settings.offlineHint') }}</NText>
+          <NForm label-placement="left" :label-width="140">
+            <div class="grid max-w-640px gap-12px sm:grid-cols-2">
+              <NFormItem :label="$t('page.farm.settings.channel')">
+                <div class="flex w-full gap-8px">
+                  <NSelect v-model:value="offline.channel" class="flex-1" filterable :options="channelOptions" />
+                  <NButton
+                    size="small"
+                    :disabled="!currentChannelDocUrl"
+                    @click="openChannelDocs"
+                  >
+                    {{ $t('page.farm.settings.channelDocs') }}
+                  </NButton>
+                </div>
+              </NFormItem>
+              <NFormItem :label="$t('page.farm.settings.reloginUrl')">
+                <NSelect v-model:value="offline.reloginUrlMode" class="w-full" :options="reloginUrlModeOptions" />
+              </NFormItem>
+            </div>
+            <div class="grid max-w-640px gap-12px">
+              <NFormItem :label="$t('page.farm.settings.endpoint')">
+                <NInput
+                  v-model:value="offline.endpoint"
+                  :disabled="!endpointEnabled"
+                  placeholder="https://"
+                />
+              </NFormItem>
+              <NFormItem :label="$t('page.farm.settings.token')">
+                <NInput v-model:value="offline.token" :placeholder="$t('page.farm.settings.token')" />
+              </NFormItem>
+              <div class="grid gap-12px sm:grid-cols-2">
+                <NFormItem :label="$t('page.farm.settings.reminderTitle')">
+                  <NInput v-model:value="offline.title" />
+                </NFormItem>
+                <NFormItem :label="$t('page.farm.settings.offlineDeleteSec')">
+                  <NInputNumber v-model:value="offline.offlineDeleteSec" class="w-full" :min="0" />
+                </NFormItem>
+              </div>
+              <NFormItem :label="$t('page.farm.settings.reminderMsg')">
+                <NInput v-model:value="offline.msg" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" />
+              </NFormItem>
+            </div>
+          </NForm>
+          <NText depth="3" class="text-12px">{{ $t('page.farm.settings.offlineDeleteHint') }}</NText>
+          <div class="mt-16px flex justify-end gap-8px border-t border-[var(--n-border-color)] pt-16px">
+            <NButton
+              size="small"
+              :loading="offlineTesting"
+              :disabled="offlineSaving || offline.channel === 'none'"
+              @click="handleTestOffline"
+            >
+              {{ $t('page.farm.settings.testOffline') }}
+            </NButton>
+            <NButton
+              type="primary"
+              size="small"
+              :loading="offlineSaving"
+              :disabled="offlineTesting"
+              @click="handleSaveOffline"
+            >
+              {{ $t('page.farm.settings.saveOffline') }}
             </NButton>
           </div>
         </NCard>

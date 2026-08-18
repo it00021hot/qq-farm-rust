@@ -100,11 +100,8 @@ impl InteractService {
     pub async fn get_interact_records(&self) -> Result<Vec<NormalizedRecord>> {
         let reply = self.fetch_reply().await?;
         let records = reply.records;
-        let mut out: Vec<NormalizedRecord> = records
-            .iter()
-            .enumerate()
-            .map(|(i, r)| normalize_record(r, i))
-            .collect();
+        let mut out: Vec<NormalizedRecord> =
+            records.iter().enumerate().map(|(i, r)| normalize_record(r, i)).collect();
         out.sort_by(|a, b| {
             b.server_time_sec
                 .cmp(&a.server_time_sec)
@@ -166,8 +163,10 @@ impl InteractService {
 // 辅助
 // =====================================================================
 
-fn normalize_record(record: &crate::proto::generated::gamepb::interactpb::InteractRecord, index: usize) -> NormalizedRecord {
-    
+fn normalize_record(
+    record: &crate::proto::generated::gamepb::interactpb::InteractRecord,
+    index: usize,
+) -> NormalizedRecord {
     let (land_id, flag1, flag2) = match &record.extra {
         Some(e) => (e.land_id as i64, e.flag1 as i64, e.flag2 as i64),
         None => (0, 0, 0),
@@ -181,31 +180,18 @@ fn normalize_record(record: &crate::proto::generated::gamepb::interactpb::Intera
     let from_type = record.from_type as i64;
     let server_time_sec = to_time_secs(record.server_time);
     let crop_name = resolve_crop_name(crop_id);
-    let nick = if record.nick.is_empty() {
-        format!("GID:{visitor_gid}")
-    } else {
-        record.nick.clone()
-    };
+    let nick =
+        if record.nick.is_empty() { format!("GID:{visitor_gid}") } else { record.nick.clone() };
     let avatar_url = record.avatar_url.clone();
     let action_label = ActionType::from_i32(action_type)
         .map(|a| a.label().to_string())
         .unwrap_or_else(|| "互动".to_string());
     let key = format!("{server_time_sec}-{visitor_gid}-{action_type}-{index}");
-    let action_detail = build_action_detail(
-        action_type,
-        crop_count,
-        times,
-        land_id,
-        &crop_name,
-    );
+    let action_detail = build_action_detail(action_type, crop_count, times, land_id, &crop_name);
     NormalizedRecord {
         key,
         server_time_sec,
-        server_time_ms: if server_time_sec > 0 {
-            server_time_sec * 1000
-        } else {
-            0
-        },
+        server_time_ms: if server_time_sec > 0 { server_time_sec * 1000 } else { 0 },
         action_type,
         action_label,
         visitor_gid,
@@ -345,8 +331,8 @@ mod tests {
 
     #[test]
     fn interact_service_construction() {
-        use crate::network::gateway::{Gateway, GatewayConfig};
         use crate::network::encryptor::NoopEncryptor;
+        use crate::network::gateway::{Gateway, GatewayConfig};
         let cfg = GatewayConfig {
             server_url: "ws://127.0.0.1:0".into(),
             platform: "test".into(),

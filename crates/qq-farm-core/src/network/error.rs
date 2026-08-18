@@ -45,12 +45,7 @@ pub enum NetworkError {
 
     /// 请求超时（对齐 TS `请求超时: ${methodName} (seq=${seq}, pending=${pending})`）
     #[error("请求超时: {method_name} (seq={client_seq}, pending={pending})")]
-    Timeout {
-        client_seq: i64,
-        service_name: String,
-        method_name: String,
-        pending: usize,
-    },
+    Timeout { client_seq: i64, service_name: String, method_name: String, pending: usize },
 
     /// 主动关闭
     #[error("intentional close: {0}")]

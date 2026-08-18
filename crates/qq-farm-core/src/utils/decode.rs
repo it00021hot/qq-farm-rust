@@ -109,11 +109,7 @@ pub fn try_generic_decode(buf: &[u8]) -> Vec<GenericField> {
             }
         };
         pos = new_pos;
-        out.push(GenericField {
-            field_num,
-            wire_type,
-            value,
-        });
+        out.push(GenericField { field_num, wire_type, value });
     }
     out
 }
@@ -163,7 +159,11 @@ fn hex_encode(b: &[u8]) -> String {
 ///
 /// 给定 service_name + method_name + is_request，尝试多种候选名。
 #[must_use]
-pub fn infer_body_type_candidates(service_name: &str, method_name: &str, is_request: bool) -> Vec<String> {
+pub fn infer_body_type_candidates(
+    service_name: &str,
+    method_name: &str,
+    is_request: bool,
+) -> Vec<String> {
     let mut candidates = Vec::new();
     let suffix = if is_request { "Request" } else { "Reply" };
     let svc = service_name.trim_end_matches("Service");
@@ -194,10 +194,7 @@ mod tests {
 
     #[test]
     fn try_decode_string_printable() {
-        assert_eq!(
-            try_decode_string(b"hello world"),
-            Some("hello world".to_string())
-        );
+        assert_eq!(try_decode_string(b"hello world"), Some("hello world".to_string()));
         assert_eq!(try_decode_string(b"abc123"), Some("abc123".to_string()));
     }
 

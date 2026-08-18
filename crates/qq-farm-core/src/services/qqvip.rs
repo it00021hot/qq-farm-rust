@@ -219,10 +219,7 @@ fn get_date_key() -> String {
 
 fn now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
 // =====================================================================
@@ -250,11 +247,7 @@ mod tests {
 
     #[test]
     fn reward_summary_gold() {
-        let items = vec![Item {
-            id: 1,
-            count: 1000,
-            ..Default::default()
-        }];
+        let items = vec![Item { id: 1, count: 1000, ..Default::default() }];
         assert_eq!(get_reward_summary(&items), "金币1000");
     }
 

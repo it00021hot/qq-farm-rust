@@ -56,8 +56,8 @@ static ACTIVITY_PLANTS: std::sync::OnceLock<
     StdMutex<std::collections::HashMap<String, std::collections::HashSet<i64>>>,
 > = std::sync::OnceLock::new();
 
-fn activity_plants() -> &'static StdMutex<std::collections::HashMap<String, std::collections::HashSet<i64>>>
-{
+fn activity_plants(
+) -> &'static StdMutex<std::collections::HashMap<String, std::collections::HashSet<i64>>> {
     ACTIVITY_PLANTS.get_or_init(|| StdMutex::new(std::collections::HashMap::new()))
 }
 
@@ -71,11 +71,7 @@ pub fn is_activity_plant(account_id: &str, land: &LandInfo) -> bool {
         Some(p) => p.id,
         None => return false,
     };
-    activity_plants()
-        .lock()
-        .unwrap()
-        .get(account_id)
-        .is_some_and(|set| set.contains(&plant_id))
+    activity_plants().lock().unwrap().get(account_id).is_some_and(|set| set.contains(&plant_id))
 }
 
 /// 标记活动植物（在偷到带活动积分的植物时调用）
@@ -83,12 +79,7 @@ pub fn mark_activity_plant(account_id: &str, plant_id: i64) {
     if account_id.is_empty() {
         return;
     }
-    activity_plants()
-        .lock()
-        .unwrap()
-        .entry(account_id.to_string())
-        .or_default()
-        .insert(plant_id);
+    activity_plants().lock().unwrap().entry(account_id.to_string()).or_default().insert(plant_id);
 }
 
 /// 阶段枚举（与原 TS PlantPhase 对齐）
@@ -157,7 +148,11 @@ pub fn parse_max_steal_per_player(steal_num: &[u8]) -> i64 {
             break;
         }
     }
-    if v > 0 { v } else { 2 }
+    if v > 0 {
+        v
+    } else {
+        2
+    }
 }
 
 /// 解析 `PlantInfo.stealers` 中「我」已偷次数
@@ -226,7 +221,8 @@ pub fn analyze_friend_lands(
                     .get_plant_by_id(plant_id)
                     .and_then(|p| p.seed_id)
                     .unwrap_or(0);
-                if !plant_blacklist.is_empty() && seed_id > 0 && plant_blacklist.contains(&seed_id) {
+                if !plant_blacklist.is_empty() && seed_id > 0 && plant_blacklist.contains(&seed_id)
+                {
                     continue;
                 }
                 if steal_activity_only && !is_activity_plant(account_id, land) {
@@ -337,36 +333,28 @@ pub async fn visit_friend_for_steal(
             let msg = format!("{e}");
             let kind = handle_friend_enter_error(account_id, friend_gid, &friend_name, &msg);
             if kind != FriendEnterErrorKind::Error {
-                return Some(VisitResult {
-                    acted: false,
-                    entered: false,
-                });
+                return Some(VisitResult { acted: false, entered: false });
             }
             crate::services::panel_log::log_warn(
                 account_id,
                 "好友",
                 format!("进入 {friend_name} 农场失败: {msg}"),
-                crate::constants::PanelEvent::EnterFarm, Some(serde_json::json!({
-                    "module": "friend", 
+                crate::constants::PanelEvent::EnterFarm,
+                Some(serde_json::json!({
+                    "module": "friend",
                     "result": "error",
                     "friendName": friend_name,
                     "friendGid": friend_gid,
                 })),
             );
-            return Some(VisitResult {
-                acted: false,
-                entered: false,
-            });
+            return Some(VisitResult { acted: false, entered: false });
         }
     };
 
     let lands = enter_reply.lands.clone();
     if lands.is_empty() {
         let _ = api.leave_farm(friend_gid).await;
-        return Some(VisitResult {
-            acted: false,
-            entered: true,
-        });
+        return Some(VisitResult { acted: false, entered: true });
     }
 
     let plant_blacklist =
@@ -430,8 +418,9 @@ pub async fn visit_friend_for_steal(
             account_id,
             "好友",
             format!("{}: {}", friend_name, actions.join("/")),
-            crate::constants::PanelEvent::VisitFriend, Some(serde_json::json!({
-                "module": "friend", 
+            crate::constants::PanelEvent::VisitFriend,
+            Some(serde_json::json!({
+                "module": "friend",
                 "result": "ok",
                 "friendName": friend_name,
                 "friendGid": friend_gid,
@@ -441,10 +430,7 @@ pub async fn visit_friend_for_steal(
     }
 
     let _ = api.leave_farm(friend_gid).await;
-    Some(VisitResult {
-        acted: !actions.is_empty(),
-        entered: true,
-    })
+    Some(VisitResult { acted: !actions.is_empty(), entered: true })
 }
 
 pub(crate) async fn do_steal_op(

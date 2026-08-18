@@ -15,10 +15,7 @@ fn ensure(state: &DesktopState, account_id: &str) -> IpcResult<()> {
 
 /// 商城概览 stub（提示使用 catalog / mystery）。
 #[tauri::command]
-pub fn commerce_overview(
-    state: State<'_, DesktopState>,
-    account_id: String,
-) -> IpcResult<Value> {
+pub fn commerce_overview(state: State<'_, DesktopState>, account_id: String) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
     commerce::commerce_overview(&state.app, &account_id).map_err(IpcError::from)
 }
@@ -58,9 +55,7 @@ pub async fn commerce_mystery_shop(
     account_id: String,
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
-    commerce::mystery_shop(&state.app, &account_id)
-        .await
-        .map_err(IpcError::from)
+    commerce::mystery_shop(&state.app, &account_id).await.map_err(IpcError::from)
 }
 
 /// 购买神秘商人商品。
@@ -71,7 +66,5 @@ pub async fn commerce_mystery_purchase(
     offer_id: String,
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
-    commerce::purchase_mystery(&state.app, &account_id, &offer_id)
-        .await
-        .map_err(IpcError::from)
+    commerce::purchase_mystery(&state.app, &account_id, &offer_id).await.map_err(IpcError::from)
 }

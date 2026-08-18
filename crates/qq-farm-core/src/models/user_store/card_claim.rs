@@ -136,10 +136,7 @@ pub struct CardClaimStatusDto {
 #[must_use]
 pub fn get_status() -> CardClaimStatusDto {
     load_card_claim_records();
-    CardClaimStatusDto {
-        enabled: *ENABLED.read(),
-        message: MESSAGE.read().clone(),
-    }
+    CardClaimStatusDto { enabled: *ENABLED.read(), message: MESSAGE.read().clone() }
 }
 
 /// 设置卡密领取功能开关（带 message）

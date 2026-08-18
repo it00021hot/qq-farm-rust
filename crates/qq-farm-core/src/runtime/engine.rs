@@ -16,7 +16,7 @@
 //!
 //! 1:1 翻译自原 `core/src/runtime/runtime-engine.ts`（210 行）。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -71,9 +71,9 @@ impl Default for EngineConfig {
         Self {
             max_workers: 16,
             status_interval: Duration::from_secs(3),
-            tsdk_wasm_path: std::env::var("TSDK_WASM_PATH")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| crate::config::paths::get_resource_path(&["assets", "tsdk.wasm"])),
+            tsdk_wasm_path: std::env::var("TSDK_WASM_PATH").map(PathBuf::from).unwrap_or_else(
+                |_| crate::config::paths::get_resource_path(&["assets", "tsdk.wasm"]),
+            ),
             data_root: crate::config::paths::get_data_dir(),
             gateway_template: GatewayConfigTemplate::default(),
         }
@@ -109,6 +109,14 @@ pub struct RuntimeEngine {
     runtime_state: Arc<RuntimeState>,
     /// 重登录提醒服务
     relogin_reminder: Arc<ReloginReminderService>,
+    /// 微信应用宝授权掉线换码重连状态
+    wx_reconnect: Arc<RwLock<WxReconnectState>>,
+}
+
+#[derive(Debug, Default)]
+struct WxReconnectState {
+    attempts: HashMap<String, u32>,
+    inflight: HashSet<String>,
 }
 
 impl std::fmt::Debug for RuntimeEngine {
@@ -127,11 +135,10 @@ impl RuntimeEngine {
     /// 适合作为 server crate 的入口。
     #[must_use]
     pub fn assemble(config: EngineConfig) -> Self {
-        let operation_keys: Vec<String> = DEFAULT_OPERATION_KEYS.iter().map(|s| s.to_string()).collect();
-        let runtime_state = Arc::new(RuntimeState::new(
-            Arc::new(StoreAccountStoreLike::default()),
-            operation_keys,
-        ));
+        let operation_keys: Vec<String> =
+            DEFAULT_OPERATION_KEYS.iter().map(|s| s.to_string()).collect();
+        let runtime_state =
+            Arc::new(RuntimeState::new(Arc::new(StoreAccountStoreLike::default()), operation_keys));
         Self::assemble_with(config, runtime_state, None)
     }
 
@@ -145,8 +152,9 @@ impl RuntimeEngine {
         let (events, _) = broadcast::channel(4096);
         let workers: Arc<RwLock<HashMap<String, WorkerHandle>>> =
             Arc::new(RwLock::new(HashMap::new()));
-        let worker_loops: Arc<RwLock<HashMap<String, Arc<crate::runtime::worker_loop::WorkerLoop>>>> =
-            Arc::new(RwLock::new(HashMap::new()));
+        let worker_loops: Arc<
+            RwLock<HashMap<String, Arc<crate::runtime::worker_loop::WorkerLoop>>>,
+        > = Arc::new(RwLock::new(HashMap::new()));
         let relogin_reminder = relogin_reminder.unwrap_or_else(|| {
             // 没传就构造默认（无 worker controls 联动）
             let mp = Arc::new(MiniProgramLoginSession::new());
@@ -165,6 +173,7 @@ impl RuntimeEngine {
             events,
             runtime_state,
             relogin_reminder,
+            wx_reconnect: Arc::new(RwLock::new(WxReconnectState::default())),
         }
     }
 
@@ -172,9 +181,7 @@ impl RuntimeEngine {
     /// 供 `ReloginReminderService` 回调启动/重启 worker。
     #[must_use]
     pub fn worker_controls(self: &Arc<Self>) -> Arc<EngineWorkerControls> {
-        Arc::new(EngineWorkerControls {
-            engine: self.clone(),
-        })
+        Arc::new(EngineWorkerControls { engine: self.clone() })
     }
 
     /// 订阅 worker 事件
@@ -183,7 +190,9 @@ impl RuntimeEngine {
     }
 
     /// 订阅 runtime 事件（log / account_log / status / worker_log）
-    pub fn subscribe_runtime_events(&self) -> broadcast::Receiver<crate::runtime::runtime_state::RuntimeEvent> {
+    pub fn subscribe_runtime_events(
+        &self,
+    ) -> broadcast::Receiver<crate::runtime::runtime_state::RuntimeEvent> {
         self.runtime_state.subscribe()
     }
 
@@ -217,18 +226,17 @@ impl RuntimeEngine {
                     .get(&h.account_id)
                     .map(|w| w.account_name.clone())
                     .unwrap_or_else(|| h.account_id.clone());
-                EngineWorkerInfo {
-                    account_id: h.account_id.clone(),
-                    account_name,
-                    running: true,
-                }
+                EngineWorkerInfo { account_id: h.account_id.clone(), account_name, running: true }
             })
             .collect()
     }
 
     /// 获取某账号的 WorkerLoop（controller 用）
     #[must_use]
-    pub fn worker_loop(&self, account_id: &str) -> Option<Arc<crate::runtime::worker_loop::WorkerLoop>> {
+    pub fn worker_loop(
+        &self,
+        account_id: &str,
+    ) -> Option<Arc<crate::runtime::worker_loop::WorkerLoop>> {
         self.worker_loops.read().get(account_id).cloned()
     }
 
@@ -254,10 +262,7 @@ impl RuntimeEngine {
     /// worker 任务是否还在注册表里（fork 语义：进程在即 running）
     #[must_use]
     pub fn has_worker(&self, account_id: &str) -> bool {
-        self.workers
-            .read()
-            .get(account_id)
-            .is_some_and(|h| !h.is_cancelled())
+        self.workers.read().get(account_id).is_some_and(|h| !h.is_cancelled())
     }
 
     /// worker 任务已退出时摘掉注册，不 cancel（供 spawn 内部调用）
@@ -319,11 +324,7 @@ impl RuntimeEngine {
                     Err(broadcast::error::RecvError::Closed) => break,
                 };
                 match ev {
-                    WorkerEvent::Status {
-                        account_id,
-                        account_name,
-                        status,
-                    } => {
+                    WorkerEvent::Status { account_id, account_name, status } => {
                         let connected = status
                             .pointer("/connection/connected")
                             .and_then(|v| v.as_bool())
@@ -331,6 +332,18 @@ impl RuntimeEngine {
                         let nick = status
                             .pointer("/status/name")
                             .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let avatar = status
+                            .pointer("/status/avatar")
+                            .and_then(|v| v.as_str())
+                            .filter(|s| !s.is_empty())
+                            .or_else(|| {
+                                status
+                                    .pointer("/status/avatarUrl")
+                                    .and_then(|v| v.as_str())
+                                    .filter(|s| !s.is_empty())
+                            })
                             .unwrap_or("")
                             .to_string();
                         let now = crate::utils::time::now_ms();
@@ -345,6 +358,7 @@ impl RuntimeEngine {
                                 if connected {
                                     w.disconnected_since = None;
                                     w.auto_delete_triggered = false;
+                                    engine.wx_reconnect.write().attempts.remove(&account_id);
                                 } else if !w.stopping {
                                     if w.disconnected_since.is_none() {
                                         w.disconnected_since = Some(now);
@@ -372,13 +386,21 @@ impl RuntimeEngine {
                                 }
                             }
                         }
-                        if !nick.is_empty() {
+                        if !nick.is_empty() || !avatar.is_empty() {
                             if let Some(mut acc) = crate::models::store::accounts::get_accounts()
                                 .into_iter()
                                 .find(|a| a.id == account_id)
                             {
-                                if acc.nick != nick {
+                                let mut dirty = false;
+                                if !nick.is_empty() && acc.nick != nick {
                                     acc.nick = nick;
+                                    dirty = true;
+                                }
+                                if !avatar.is_empty() && acc.avatar != avatar {
+                                    acc.avatar = avatar;
+                                    dirty = true;
+                                }
+                                if dirty {
                                     crate::models::store::accounts::add_or_update_account(acc);
                                     crate::models::store::accounts::persist_global();
                                 }
@@ -409,10 +431,7 @@ impl RuntimeEngine {
                             status: panel,
                         });
                     }
-                    WorkerEvent::Error {
-                        account_id,
-                        message,
-                    } => {
+                    WorkerEvent::Error { account_id, message } => {
                         let code = parse_ws_http_code(&message).unwrap_or(0);
                         {
                             let mut workers = state.workers.lock();
@@ -421,9 +440,21 @@ impl RuntimeEngine {
                             }
                         }
                         if code == 400 {
+                            let has_wx = accounts_store::get_accounts()
+                                .into_iter()
+                                .find(|a| a.id == account_id)
+                                .is_some_and(|a| a.has_wx_auth());
+                            let msg = if has_wx {
+                                format!(
+                                    "连接被拒绝，将在 {}后用应用宝授权重连",
+                                    crate::constants::wx_reconnect_delay_zh()
+                                )
+                            } else {
+                                "连接被拒绝，可能需要更新 Code".to_string()
+                            };
                             state.log(
                                 "系统",
-                                "连接被拒绝，可能需要更新 Code",
+                                &msg,
                                 Some(serde_json::json!({ "accountId": account_id, "code": 400 })),
                             );
                             let name = state
@@ -432,22 +463,24 @@ impl RuntimeEngine {
                                 .get(&account_id)
                                 .map(|w| w.account_name.clone())
                                 .unwrap_or_else(|| account_id.clone());
+                            let log_msg = if has_wx {
+                                format!(
+                                    "账号 {name} 登录码失效，将在 {}后用应用宝授权重连",
+                                    crate::constants::wx_reconnect_delay_zh()
+                                )
+                            } else {
+                                format!("账号 {name} 登录失效，请更新 Code")
+                            };
                             state.add_account_log(
                                 "ws_400",
-                                &format!("账号 {name} 登录失效，请更新 Code"),
+                                &log_msg,
                                 Some(&account_id),
                                 Some(&name),
                                 None,
                             );
                         }
                     }
-                    WorkerEvent::Log {
-                        account_id,
-                        account_name,
-                        level,
-                        module,
-                        message,
-                    } => {
+                    WorkerEvent::Log { account_id, account_name, level, module, message } => {
                         let tag = panel_log_tag(&level, &module);
                         let is_warn = level == "warn" || level == "error";
                         state.log(
@@ -474,15 +507,79 @@ impl RuntimeEngine {
                                 None => (String::new(), true),
                             }
                         };
-                        let display = if name.is_empty() {
-                            account_id.clone()
-                        } else {
-                            name.clone()
-                        };
+                        let display =
+                            if name.is_empty() { account_id.clone() } else { name.clone() };
                         let user_stop = reason == "主动取消";
                         let kicked = reason.contains("kickout");
+                        let acc =
+                            accounts_store::get_accounts().into_iter().find(|a| a.id == account_id);
+                        let has_wx = acc.as_ref().is_some_and(|a| a.has_wx_auth());
+                        if user_stop {
+                            engine.clear_wx_reconnect(&account_id);
+                        }
+                        let mut schedule_wx_reconnect: Option<u32> = None;
                         if !already && !user_stop {
-                            if kicked {
+                            if should_attempt_wx_reconnect(user_stop, has_wx) {
+                                match engine.plan_wx_reconnect(&account_id) {
+                                    WxReconnectPlan::Spawn { attempt } => {
+                                        schedule_wx_reconnect = Some(attempt);
+                                        let wait = crate::constants::wx_reconnect_delay_zh();
+                                        let max = crate::constants::WX_RECONNECT_MAX_ATTEMPTS;
+                                        let msg = if kicked {
+                                            format!(
+                                                "账号 {display} 被踢下线，将在 {wait}后用应用宝授权重连（第 {attempt}/{max} 次）"
+                                            )
+                                        } else {
+                                            format!(
+                                                "账号 {display} 连接已断开，将在 {wait}后用应用宝授权重连（第 {attempt}/{max} 次）"
+                                            )
+                                        };
+                                        state.log(
+                                            "系统",
+                                            &msg,
+                                            Some(serde_json::json!({
+                                                "accountId": account_id,
+                                                "accountName": display,
+                                                "reason": reason,
+                                                "attempt": attempt,
+                                            })),
+                                        );
+                                        state.add_account_log(
+                                            "wx_reconnect",
+                                            &msg,
+                                            Some(&account_id),
+                                            Some(&display),
+                                            Some(serde_json::json!({ "reason": reason, "attempt": attempt })),
+                                        );
+                                    }
+                                    WxReconnectPlan::GiveUp => {
+                                        state.log(
+                                            "系统",
+                                            &format!("账号 {display} 应用宝授权失效，请重新扫码"),
+                                            Some(serde_json::json!({
+                                                "accountId": account_id,
+                                                "accountName": display,
+                                                "reason": reason,
+                                            })),
+                                        );
+                                        state.add_account_log(
+                                            "disconnect_stop",
+                                            &format!("账号 {display} 应用宝授权失效，请重新扫码"),
+                                            Some(&account_id),
+                                            Some(&display),
+                                            Some(serde_json::json!({ "reason": reason })),
+                                        );
+                                        spawn_offline_reminder(
+                                            &engine,
+                                            &account_id,
+                                            &display,
+                                            acc.as_ref().map(|a| a.username.as_str()).unwrap_or(""),
+                                            &reason,
+                                        );
+                                    }
+                                    WxReconnectPlan::Skip => {}
+                                }
+                            } else if kicked {
                                 state.log(
                                     "系统",
                                     &format!("账号 {display} 被踢下线，已自动停止账号"),
@@ -498,6 +595,13 @@ impl RuntimeEngine {
                                     Some(&account_id),
                                     Some(&display),
                                     Some(serde_json::json!({ "reason": reason })),
+                                );
+                                spawn_offline_reminder(
+                                    &engine,
+                                    &account_id,
+                                    &display,
+                                    acc.as_ref().map(|a| a.username.as_str()).unwrap_or(""),
+                                    &reason,
                                 );
                             } else {
                                 state.log(
@@ -516,27 +620,36 @@ impl RuntimeEngine {
                                     Some(&display),
                                     Some(serde_json::json!({ "reason": reason })),
                                 );
+                                spawn_offline_reminder(
+                                    &engine,
+                                    &account_id,
+                                    &display,
+                                    acc.as_ref().map(|a| a.username.as_str()).unwrap_or(""),
+                                    &reason,
+                                );
                             }
-                            let username = crate::models::store::accounts::get_accounts()
-                                .into_iter()
-                                .find(|a| a.id == account_id)
-                                .map(|a| a.username)
-                                .unwrap_or_default();
-                            let reminder = engine.relogin_reminder();
-                            let reason_clean = reason.strip_prefix("disconnect:").unwrap_or(&reason);
-                            let payload = crate::runtime::relogin_reminder::OfflineReminderPayload {
-                                account_id: account_id.clone(),
-                                account_name: display.clone(),
-                                username,
-                                reason: format!("disconnect:{reason_clean}"),
-                                offline_ms: 0,
-                            };
-                            tokio::spawn(async move {
-                                reminder.trigger_offline_reminder(payload).await;
-                            });
                         }
                         state.workers.lock().remove(&account_id);
                         engine.release_worker(&account_id);
+                        if let Some(attempt) = schedule_wx_reconnect {
+                            let engine2 = engine.clone();
+                            let reconnect_id = account_id.clone();
+                            tokio::spawn(async move {
+                                let delay = crate::constants::WX_RECONNECT_DELAY_MS;
+                                tokio::time::sleep(Duration::from_millis(delay)).await;
+                                engine2.wx_reconnect.write().inflight.remove(&reconnect_id);
+                                let Some(latest) = accounts_store::get_accounts()
+                                    .into_iter()
+                                    .find(|a| a.id == reconnect_id)
+                                else {
+                                    return;
+                                };
+                                if !latest.has_wx_auth() {
+                                    return;
+                                }
+                                engine2.start_wx_authorized_account(&latest, attempt);
+                            });
+                        }
                         let panel = engine.panel_status(&account_id);
                         let _ = state.events.send(RuntimeEvent::Status {
                             account_id,
@@ -558,14 +671,23 @@ impl RuntimeEngine {
             if let Some(h) = workers.get(&account.id) {
                 if !h.is_cancelled() {
                     tracing::warn!(account_id = %account.id, "worker already running");
+                    let name = account.display_name.clone();
+                    self.runtime_state.log(
+                        "系统",
+                        &format!("账号 {name} 已在运行，跳过启动"),
+                        Some(serde_json::json!({
+                            "accountId": account.id,
+                            "accountName": name,
+                            "module": "system",
+                            "event": "login",
+                        })),
+                    );
                     return Ok(());
                 }
                 workers.remove(&account.id);
             }
             if workers.len() >= max {
-                return Err(crate::error::Error::Internal(format!(
-                    "max workers reached ({max})"
-                )));
+                return Err(crate::error::Error::Internal(format!("max workers reached ({max})")));
             }
         }
 
@@ -607,8 +729,24 @@ impl RuntimeEngine {
             );
         }
         worker.spawn_with_engine(Some(self.clone()));
-        self.runtime_state
-            .add_account_log("add", &format!("启动账号: {}", account.display_name), Some(&account.id), Some(&account.display_name), None);
+        let start_extra = Some(serde_json::json!({
+            "accountId": account.id,
+            "accountName": account.display_name,
+            "module": "system",
+            "event": "login",
+        }));
+        self.runtime_state.log(
+            "系统",
+            &format!("开始启动账号: {}", account.display_name),
+            start_extra.clone(),
+        );
+        self.runtime_state.add_account_log(
+            "add",
+            &format!("启动账号: {}", account.display_name),
+            Some(&account.id),
+            Some(&account.display_name),
+            None,
+        );
         Ok(())
     }
 
@@ -651,6 +789,28 @@ impl RuntimeEngine {
         }
     }
 
+    fn clear_wx_reconnect(&self, account_id: &str) {
+        let mut g = self.wx_reconnect.write();
+        g.attempts.remove(account_id);
+        g.inflight.remove(account_id);
+    }
+
+    fn plan_wx_reconnect(&self, account_id: &str) -> WxReconnectPlan {
+        let mut g = self.wx_reconnect.write();
+        if g.inflight.contains(account_id) {
+            return WxReconnectPlan::Skip;
+        }
+        let n = g.attempts.entry(account_id.to_string()).or_insert(0);
+        *n = n.saturating_add(1);
+        if *n > crate::constants::WX_RECONNECT_MAX_ATTEMPTS {
+            g.inflight.remove(account_id);
+            return WxReconnectPlan::GiveUp;
+        }
+        let attempt = *n;
+        g.inflight.insert(account_id.to_string());
+        WxReconnectPlan::Spawn { attempt }
+    }
+
     /// 停止一个 worker
     pub fn stop_worker(&self, account_id: &str) {
         let handle = self.workers.write().remove(account_id);
@@ -679,8 +839,7 @@ impl RuntimeEngine {
     pub fn start_all_accounts(self: &Arc<Self>) {
         let accounts = accounts_store::get_accounts();
         if accounts.is_empty() {
-            self.runtime_state
-                .log("系统", "未发现账号，请访问管理面板添加账号", None);
+            self.runtime_state.log("系统", "未发现账号，请访问管理面板添加账号", None);
             return;
         }
         self.runtime_state.log(
@@ -689,14 +848,80 @@ impl RuntimeEngine {
             None,
         );
         for acc in accounts {
+            if acc.code.trim().is_empty() && !acc.has_wx_auth() {
+                continue;
+            }
             let name = acc.name.clone();
             let account = AccountSession::from_store(&acc);
             if let Err(e) = self.start_worker(account) {
+                self.runtime_state.log("错误", &format!("启动账号 {name} 失败: {e}"), None);
+            }
+        }
+    }
+
+    /// 进程启动后：已授权微信账号延迟再连，结果写入运行日志。
+    pub fn schedule_wx_authorized_start(self: &Arc<Self>) {
+        let delay = crate::constants::WX_RECONNECT_DELAY_MS;
+        let wait = crate::constants::wx_reconnect_delay_zh();
+        let accounts: Vec<_> =
+            accounts_store::get_accounts().into_iter().filter(|a| a.has_wx_auth()).collect();
+        if accounts.is_empty() {
+            return;
+        }
+        let n = accounts.len();
+        self.runtime_state.log(
+            "系统",
+            &format!("发现 {n} 个已授权微信账号，将在 {wait}后自动重连"),
+            None,
+        );
+        let engine = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(delay)).await;
+            for acc in accounts {
+                let Some(latest) =
+                    accounts_store::get_accounts().into_iter().find(|a| a.id == acc.id)
+                else {
+                    continue;
+                };
+                if !latest.has_wx_auth() {
+                    continue;
+                }
+                engine.start_wx_authorized_account(&latest, 0);
+            }
+        });
+    }
+
+    fn start_wx_authorized_account(
+        self: &Arc<Self>,
+        acc: &crate::models::store::accounts::AccountRecord,
+        attempt: u32,
+    ) {
+        if self.has_worker(&acc.id) {
+            return;
+        }
+        let name = if acc.name.trim().is_empty() { acc.id.clone() } else { acc.name.clone() };
+        let extra = Some(serde_json::json!({
+            "accountId": acc.id,
+            "accountName": name,
+            "attempt": attempt,
+        }));
+        let start_msg = if attempt > 0 {
+            format!("账号 {name} 开始重连（第 {attempt} 次）")
+        } else {
+            format!("账号 {name} 开始用应用宝授权自动重连")
+        };
+        self.runtime_state.log("系统", &start_msg, extra.clone());
+        match self.start_worker(AccountSession::from_store(acc)) {
+            Ok(()) => {
                 self.runtime_state.log(
-                    "错误",
-                    &format!("启动账号 {name} 失败: {e}"),
-                    None,
+                    "系统",
+                    &format!("账号 {name} 重连任务已启动，正在换码并连接网关"),
+                    extra,
                 );
+            }
+            Err(e) => {
+                tracing::warn!(account_id = %acc.id, "应用宝授权重连启动失败: {e}");
+                self.runtime_state.log("错误", &format!("账号 {name} 重连启动失败: {e}"), extra);
             }
         }
     }
@@ -753,6 +978,38 @@ impl RuntimeEngine {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WxReconnectPlan {
+    Skip,
+    Spawn { attempt: u32 },
+    GiveUp,
+}
+
+fn should_attempt_wx_reconnect(user_stop: bool, has_wx_auth: bool) -> bool {
+    !user_stop && has_wx_auth
+}
+
+fn spawn_offline_reminder(
+    engine: &Arc<RuntimeEngine>,
+    account_id: &str,
+    display: &str,
+    username: &str,
+    reason: &str,
+) {
+    let reminder = engine.relogin_reminder();
+    let reason_clean = reason.strip_prefix("disconnect:").unwrap_or(reason);
+    let payload = crate::runtime::relogin_reminder::OfflineReminderPayload {
+        account_id: account_id.to_string(),
+        account_name: display.to_string(),
+        username: username.to_string(),
+        reason: format!("disconnect:{reason_clean}"),
+        offline_ms: 0,
+    };
+    tokio::spawn(async move {
+        reminder.trigger_offline_reminder(payload).await;
+    });
+}
+
 fn parse_ws_http_code(msg: &str) -> Option<i64> {
     let lower = msg.to_ascii_lowercase();
     let needle = "unexpected server response:";
@@ -796,7 +1053,10 @@ impl WorkerControls for EngineWorkerControls {
         Some(())
     }
 
-    fn restart_worker(&self, account: &crate::models::store::accounts::AccountRecord) -> Option<()> {
+    fn restart_worker(
+        &self,
+        account: &crate::models::store::accounts::AccountRecord,
+    ) -> Option<()> {
         let id = account.id.clone();
         let a = AccountSession::from_store(account);
         if let Err(e) = self.engine.restart_worker(a) {
@@ -856,8 +1116,7 @@ impl ReminderLogger for StateLoggerAdapter {
         account_name: Option<&str>,
         extra: Option<serde_json::Value>,
     ) {
-        self.state
-            .add_account_log(action, msg, account_id, account_name, extra);
+        self.state.add_account_log(action, msg, account_id, account_name, extra);
     }
 }
 
@@ -870,10 +1129,7 @@ mod tests {
     use super::*;
 
     fn make_engine() -> Arc<RuntimeEngine> {
-        Arc::new(RuntimeEngine::assemble(EngineConfig {
-            max_workers: 4,
-            ..Default::default()
-        }))
+        Arc::new(RuntimeEngine::assemble(EngineConfig { max_workers: 4, ..Default::default() }))
     }
 
     #[test]
@@ -895,21 +1151,15 @@ mod tests {
             Arc::new(StoreAccountStoreLike),
             vec!["a".to_string(), "b".to_string()],
         ));
-        let engine = Arc::new(RuntimeEngine::assemble_with(
-            EngineConfig::default(),
-            state.clone(),
-            None,
-        ));
+        let engine =
+            Arc::new(RuntimeEngine::assemble_with(EngineConfig::default(), state.clone(), None));
         // 显式传入 state 仍然有效
         assert_eq!(engine.worker_count(), 0);
     }
 
     #[test]
     fn worker_controls_delegate_to_engine() {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
             let engine = make_engine();
             let controls = engine.worker_controls();
@@ -920,11 +1170,7 @@ mod tests {
                 platform: "qq".to_string(),
                 uin: "u".to_string(),
                 qq: "q".to_string(),
-                avatar: String::new(),
-                username: String::new(),
-                nick: String::new(),
-                created_at: 0,
-                updated_at: 0,
+                ..Default::default()
             };
             controls.start_worker(&acc);
             assert_eq!(engine.worker_count(), 1);
@@ -953,10 +1199,7 @@ mod tests {
 
     #[test]
     fn start_worker_respects_max() {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
             let engine = Arc::new(RuntimeEngine::assemble(EngineConfig {
                 max_workers: 2,
@@ -974,10 +1217,7 @@ mod tests {
 
     #[test]
     fn stop_worker_removes_from_map() {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
             let engine = make_engine();
             let acc = AccountSession::new("a1", "c", "n");
@@ -990,10 +1230,7 @@ mod tests {
 
     #[test]
     fn shutdown_clears_all() {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
             let engine = make_engine();
             for i in 0..3 {
@@ -1048,6 +1285,34 @@ mod tests {
         let engine = make_engine();
         let s = format!("{engine:?}");
         assert!(s.contains("RuntimeEngine"));
+    }
+
+    #[test]
+    fn should_attempt_wx_reconnect_skips_user_stop() {
+        assert!(should_attempt_wx_reconnect(false, true));
+        assert!(!should_attempt_wx_reconnect(true, true));
+        assert!(!should_attempt_wx_reconnect(false, false));
+    }
+
+    #[test]
+    fn wx_reconnect_waits_five_minutes() {
+        assert_eq!(crate::constants::WX_RECONNECT_DELAY_MS, 5 * 60 * 1000);
+        assert_eq!(crate::constants::wx_reconnect_delay_zh(), "5 分钟");
+    }
+
+    #[test]
+    fn plan_wx_reconnect_caps_attempts_and_inflight() {
+        let engine = make_engine();
+        assert!(matches!(engine.plan_wx_reconnect("a1"), WxReconnectPlan::Spawn { attempt: 1 }));
+        assert_eq!(engine.plan_wx_reconnect("a1"), WxReconnectPlan::Skip);
+        engine.wx_reconnect.write().inflight.remove("a1");
+        assert!(matches!(engine.plan_wx_reconnect("a1"), WxReconnectPlan::Spawn { attempt: 2 }));
+        engine.wx_reconnect.write().inflight.remove("a1");
+        assert!(matches!(engine.plan_wx_reconnect("a1"), WxReconnectPlan::Spawn { attempt: 3 }));
+        engine.wx_reconnect.write().inflight.remove("a1");
+        assert_eq!(engine.plan_wx_reconnect("a1"), WxReconnectPlan::GiveUp);
+        engine.clear_wx_reconnect("a1");
+        assert!(matches!(engine.plan_wx_reconnect("a1"), WxReconnectPlan::Spawn { attempt: 1 }));
     }
 
     #[test]

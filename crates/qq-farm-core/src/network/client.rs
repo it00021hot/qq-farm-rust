@@ -68,7 +68,10 @@ impl WsClient {
     ///
     /// # Errors
     /// - URL 非法、TCP/TLS 握手失败、WebSocket upgrade 失败
-    pub async fn connect(url: &str, options: ConnectOptions) -> Result<(Self, mpsc::Receiver<ReceivedFrame>)> {
+    pub async fn connect(
+        url: &str,
+        options: ConnectOptions,
+    ) -> Result<(Self, mpsc::Receiver<ReceivedFrame>)> {
         // 对齐 Go gorilla / Node `ws`：握手头用规范大小写（Origin / User-Agent）。
         // tungstenite 会把额外头写成小写，腾讯网关经常直接 400。
         #[allow(deprecated)]
@@ -87,10 +90,7 @@ impl WsClient {
         // Spawn IO task
         tokio::spawn(run_io_task(stream, frame_tx, cmd_rx));
 
-        Ok((
-            Self { tx: cmd_tx },
-            frame_rx,
-        ))
+        Ok((Self { tx: cmd_tx }, frame_rx))
     }
 
     /// 发送一帧
@@ -219,35 +219,26 @@ async fn dial_gateway_ws_inner(
     };
     let host_header = host_header_value(&parsed, tls, port);
     let key = generate_key();
-    let request = build_client_handshake(&host_header, &path, &key, &options.headers, &options.subprotocols);
+    let request =
+        build_client_handshake(&host_header, &path, &key, &options.headers, &options.subprotocols);
 
-    let addrs = parsed
-        .socket_addrs(|| Some(default_port))
-        .map_err(|e| format!("resolve: {e}"))?;
+    let addrs = parsed.socket_addrs(|| Some(default_port)).map_err(|e| format!("resolve: {e}"))?;
     if addrs.is_empty() {
         return Err(format!("no address for {host}"));
     }
-    let tcp = TcpStream::connect(&*addrs)
-        .await
-        .map_err(|e| format!("tcp: {e}"))?;
+    let tcp = TcpStream::connect(&*addrs).await.map_err(|e| format!("tcp: {e}"))?;
     let _ = tcp.set_nodelay(true);
 
     let mut stream = if tls {
         let connector = native_tls::TlsConnector::new().map_err(|e| format!("tls: {e}"))?;
         let connector = tokio_native_tls::TlsConnector::from(connector);
-        let tls_stream = connector
-            .connect(host, tcp)
-            .await
-            .map_err(|e| format!("tls: {e}"))?;
+        let tls_stream = connector.connect(host, tcp).await.map_err(|e| format!("tls: {e}"))?;
         MaybeTlsStream::NativeTls(tls_stream)
     } else {
         MaybeTlsStream::Plain(tcp)
     };
 
-    stream
-        .write_all(request.as_bytes())
-        .await
-        .map_err(|e| format!("write handshake: {e}"))?;
+    stream.write_all(request.as_bytes()).await.map_err(|e| format!("write handshake: {e}"))?;
     stream.flush().await.map_err(|e| format!("flush handshake: {e}"))?;
 
     let (head, leftover) = read_http_head(&mut stream).await?;
@@ -334,7 +325,9 @@ fn header_is_reserved(name: &str) -> bool {
         || name.eq_ignore_ascii_case("sec-websocket-protocol")
 }
 
-async fn read_http_head<S: AsyncRead + Unpin>(stream: &mut S) -> std::result::Result<(Vec<u8>, Vec<u8>), String> {
+async fn read_http_head<S: AsyncRead + Unpin>(
+    stream: &mut S,
+) -> std::result::Result<(Vec<u8>, Vec<u8>), String> {
     let mut buf = Vec::with_capacity(1024);
     let mut tmp = [0u8; 512];
     loop {
@@ -411,9 +404,8 @@ mod tests {
         let (port, _h) = start_mock_ws().await;
         let url = format!("ws://127.0.0.1:{port}/");
 
-        let (client, mut rx) = WsClient::connect(&url, ConnectOptions::default())
-            .await
-            .expect("connect");
+        let (client, mut rx) =
+            WsClient::connect(&url, ConnectOptions::default()).await.expect("connect");
 
         client.send(b"hello").await.expect("send");
         let frame = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())

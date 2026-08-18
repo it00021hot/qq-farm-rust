@@ -83,8 +83,7 @@ impl GidManager {
     /// 是否需要重新同步（达到 sync_interval）
     #[must_use]
     pub fn needs_sync(&self) -> bool {
-        self.since_last_sync()
-            .map_or(true, |d| d >= self.sync_interval)
+        self.since_last_sync().map_or(true, |d| d >= self.sync_interval)
     }
 
     /// 更新缓存（拉取新数据后调用）

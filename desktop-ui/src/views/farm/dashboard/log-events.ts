@@ -40,11 +40,65 @@ const EVENT_LABELS: Record<string, string> = {
   visitor_gid_backfill: '访客补充好友GID',
   bad_action_limit: '放虫放草次数上限',
   heartbeat_timeout: '心跳超时',
-  login: '登录'
+  login: '登录',
+  disconnect_stop: '断开停止',
+  kickout_stop: '踢下线',
+  kickout: '被踢下线',
+  ws_400: '登录失效',
+  ws_close: '连接关闭',
+  offline_delete: '离线删除'
+};
+
+const PHASE_LABELS: Record<string, string> = {
+  online: '在线',
+  login: '登录',
+  connecting: '连接中',
+  closing: '断开中'
 };
 
 export function getLogEventLabel(event?: string | null): string {
   const key = String(event || '').trim();
   if (!key) return '';
   return EVENT_LABELS[key] || key;
+}
+
+/** Tag already says the same thing (e.g. 心跳 + 心跳超时). */
+export function shouldShowEventChip(tag?: string | null, event?: string | null): boolean {
+  const t = String(tag || '').trim();
+  const e = String(event || '').trim();
+  if (!e) return false;
+  if (t === e) return false;
+  if (t === '心跳' && e === '心跳超时') return false;
+  return true;
+}
+
+/** Turn leftover English keys in log text into Chinese labels. */
+export function humanizeLogMessage(message?: string | null): string {
+  let out = String(message || '');
+  if (!out) return '';
+  out = out.replace(
+    /\(\s*source=([a-z0-9_]+)\s*,\s*phase=([a-z0-9_]+)\s*\)/gi,
+    (_m, source: string, phase: string) => {
+      const reason = EVENT_LABELS[source] || source;
+      if (phase === 'online') return `（${reason}）`;
+      const phaseLabel = PHASE_LABELS[phase] || phase;
+      return `（${reason}，${phaseLabel}阶段）`;
+    }
+  );
+  out = out.replace(/\b(source|phase)=([a-z0-9_]+)/gi, (_m, key: string, val: string) => {
+    const mapped = EVENT_LABELS[val] || PHASE_LABELS[val] || val;
+    return String(key).toLowerCase() === 'phase' ? `${mapped}阶段` : mapped;
+  });
+  out = out.replace(/\b(heartbeat_timeout|kickout|ws_close|disconnect_stop|kickout_stop|ws_400)\b/g, token => {
+    return EVENT_LABELS[token] || token;
+  });
+  return out;
+}
+
+export function logText(payload: Record<string, unknown>): string {
+  const raw =
+    (typeof payload.message === 'string' && payload.message) ||
+    (typeof payload.msg === 'string' && payload.msg) ||
+    '';
+  return humanizeLogMessage(raw);
 }

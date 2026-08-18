@@ -144,9 +144,7 @@ pub fn load_login_logs() {
     };
     let data: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
     let logs = data.get("logs").and_then(|v| v.as_array()).map(|arr| {
-        arr.iter()
-            .filter_map(|v| serde_json::from_value::<LoginLogEntry>(v.clone()).ok())
-            .collect()
+        arr.iter().filter_map(|v| serde_json::from_value::<LoginLogEntry>(v.clone()).ok()).collect()
     });
     *LOGIN_LOGS.write() = logs.unwrap_or_default();
 }
@@ -154,7 +152,8 @@ pub fn load_login_logs() {
 pub fn save_login_logs() {
     let _ = crate::config::paths::ensure_data_dir();
     let logs = LOGIN_LOGS.read().clone();
-    let to_save: Vec<_> = logs.into_iter().rev().take(MAX_LOGS).collect::<Vec<_>>().into_iter().rev().collect();
+    let to_save: Vec<_> =
+        logs.into_iter().rev().take(MAX_LOGS).collect::<Vec<_>>().into_iter().rev().collect();
     let body = serde_json::json!({ "logs": to_save });
     if let Ok(s) = serde_json::to_string_pretty(&body) {
         let path = login_logs_file();
@@ -171,16 +170,8 @@ pub fn save_login_logs() {
 /// 添加登录日志
 pub fn add_login_log(entry: serde_json::Value) -> LoginLogEntry {
     load_login_logs();
-    let id = format!(
-        "{}-{}",
-        crate::utils::time::now_ms(),
-        random_id_suffix()
-    );
-    let log_entry = LoginLogEntry {
-        id,
-        timestamp: crate::utils::time::now_secs(),
-        extra: entry,
-    };
+    let id = format!("{}-{}", crate::utils::time::now_ms(), random_id_suffix());
+    let log_entry = LoginLogEntry { id, timestamp: crate::utils::time::now_secs(), extra: entry };
     let mut logs = LOGIN_LOGS.write();
     logs.push(log_entry.clone());
     if logs.len() > MAX_LOGS {
@@ -201,11 +192,7 @@ pub fn get_login_logs(limit: usize, offset: usize) -> (Vec<LoginLogEntry>, usize
     sorted.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     let total = sorted.len();
     let end = (offset + limit).min(total);
-    let sliced = if offset < sorted.len() {
-        sorted[offset..end].to_vec()
-    } else {
-        vec![]
-    };
+    let sliced = if offset < sorted.len() { sorted[offset..end].to_vec() } else { vec![] };
     (sliced, total)
 }
 
@@ -218,9 +205,7 @@ pub fn clear_login_logs() {
 fn random_id_suffix() -> String {
     const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
     let mut rng = rand::thread_rng();
-    (0..9)
-        .map(|_| CHARS[rng.gen_range(0..CHARS.len())] as char)
-        .collect()
+    (0..9).map(|_| CHARS[rng.gen_range(0..CHARS.len())] as char).collect()
 }
 
 // =====================================================================
@@ -262,19 +247,11 @@ pub fn check_rate_limit(ip: &str) -> RateLimitResult {
     if !guard.contains_key(&ip_key) {
         guard.insert(
             ip_key.clone(),
-            LoginAttempt {
-                count: 1,
-                window_start: Some(now),
-                ..Default::default()
-            },
+            LoginAttempt { count: 1, window_start: Some(now), ..Default::default() },
         );
         drop(guard);
         save_login_attempts();
-        return RateLimitResult {
-            allowed: true,
-            remaining_ms: None,
-            message: None,
-        };
+        return RateLimitResult { allowed: true, remaining_ms: None, message: None };
     }
 
     let attempt = guard.get(&ip_key).cloned().unwrap();
@@ -282,19 +259,11 @@ pub fn check_rate_limit(ip: &str) -> RateLimitResult {
     if (now - window_start) > RATE_LIMIT_WINDOW_MS {
         guard.insert(
             ip_key,
-            LoginAttempt {
-                count: 1,
-                window_start: Some(now),
-                ..Default::default()
-            },
+            LoginAttempt { count: 1, window_start: Some(now), ..Default::default() },
         );
         drop(guard);
         save_login_attempts();
-        return RateLimitResult {
-            allowed: true,
-            remaining_ms: None,
-            message: None,
-        };
+        return RateLimitResult { allowed: true, remaining_ms: None, message: None };
     }
 
     if attempt.count >= MAX_ATTEMPTS_PER_IP {
@@ -312,11 +281,7 @@ pub fn check_rate_limit(ip: &str) -> RateLimitResult {
     }
     drop(guard);
     save_login_attempts();
-    RateLimitResult {
-        allowed: true,
-        remaining_ms: None,
-        message: None,
-    }
+    RateLimitResult { allowed: true, remaining_ms: None, message: None }
 }
 
 /// 账号锁定检查
@@ -343,11 +308,7 @@ pub fn check_account_lockout(username: &str) -> LockoutResult {
             save_login_attempts();
         }
     }
-    LockoutResult {
-        locked: false,
-        remaining_ms: None,
-        message: None,
-    }
+    LockoutResult { locked: false, remaining_ms: None, message: None }
 }
 
 /// 记录一次失败尝试
@@ -378,11 +339,7 @@ pub fn record_failed_attempt(username: &str) -> FailedAttemptResult {
     let remaining = MAX_LOGIN_ATTEMPTS - attempt.count;
     drop(guard);
     save_login_attempts();
-    FailedAttemptResult {
-        locked: false,
-        message: None,
-        remaining_attempts: Some(remaining),
-    }
+    FailedAttemptResult { locked: false, message: None, remaining_attempts: Some(remaining) }
 }
 
 /// 清除失败计数
@@ -420,27 +377,19 @@ pub fn validate_password_strength(password: &str) -> PasswordStrengthResult {
     if password.chars().any(|c| c.is_ascii_digit()) {
         type_count += 1;
     }
-    if password
-        .chars()
-        .any(|c| "!@#$%^&*(),.?\":{}|<>_-+=[]\\;'/`~".contains(c))
-    {
+    if password.chars().any(|c| "!@#$%^&*(),.?\":{}|<>_-+=[]\\;'/`~".contains(c)) {
         type_count += 1;
     }
     if type_count < 2 {
         errors.push("密码必须包含大写字母、小写字母、数字、特殊符号中的至少两种".to_string());
     }
 
-    const COMMON: &[&str] = &[
-        "password", "123456", "qwerty", "abc123", "111111", "000000",
-    ];
+    const COMMON: &[&str] = &["password", "123456", "qwerty", "abc123", "111111", "000000"];
     if COMMON.contains(&password.to_ascii_lowercase().as_str()) {
         errors.push("密码过于简单，请使用更复杂的密码".to_string());
     }
 
-    PasswordStrengthResult {
-        valid: errors.is_empty(),
-        errors,
-    }
+    PasswordStrengthResult { valid: errors.is_empty(), errors }
 }
 
 /// 生成密码 hash（PBKDF2-SHA512，`$pbkdf2$<salt>$<iterations>$<hash>`，对齐原 TS）

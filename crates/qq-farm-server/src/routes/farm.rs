@@ -47,7 +47,10 @@ pub fn router() -> Router<Arc<AdminContext>> {
         .route("/api/fertilizer/buy", post(post_fertilizer_buy))
         .route("/api/fertilizer/check-and-buy", post(post_fertilizer_check_and_buy))
         .route("/api/lands", get(get_lands))
-        .route("/api/plant-blacklist", get(get_plant_blacklist).post(post_plant_blacklist).delete(delete_plant_blacklist))
+        .route(
+            "/api/plant-blacklist",
+            get(get_plant_blacklist).post(post_plant_blacklist).delete(delete_plant_blacklist),
+        )
         .route("/api/plant-blacklist/batch", post(post_plant_blacklist_batch))
         .route("/api/plant-blacklist/{seed_id}", delete(delete_plant_blacklist_seed))
         .route("/api/seeds", get(get_seeds))
@@ -187,13 +190,8 @@ async fn post_automation(
         return Err(ApiError::BadRequest("Missing x-account-id".to_string()));
     }
     let extra = serde_json::Value::Object(body.rest);
-    let data = qq_farm_app::farm::set_automation(
-        &ctx.app_context(),
-        &id,
-        &body.key,
-        body.value,
-        extra,
-    )?;
+    let data =
+        qq_farm_app::farm::set_automation(&ctx.app_context(), &id, &body.key, body.value, extra)?;
     ok_data(data)
 }
 
@@ -316,8 +314,14 @@ async fn post_bag_use(
     Json(body): Json<BagUseBody>,
 ) -> ApiResult<serde_json::Value> {
     let id = resolve_id(&ctx, &headers, body.account_id.as_deref())?;
-    match qq_farm_app::farm::bag_use(&ctx.app_context(), &id, body.item_id, body.count.max(1), body.uid)
-        .await
+    match qq_farm_app::farm::bag_use(
+        &ctx.app_context(),
+        &id,
+        body.item_id,
+        body.count.max(1),
+        body.uid,
+    )
+    .await
     {
         Ok(()) => ok(json!({ "ok": true })),
         Err(e) => Ok(Json(json!({ "ok": false, "error": e.to_string() }))),

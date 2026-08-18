@@ -255,12 +255,7 @@ impl CommerceService {
         mystery_shop: Arc<MysteryShopService>,
         warehouse: Arc<WarehouseService>,
     ) -> Self {
-        Self {
-            mall,
-            mystery_shop,
-            warehouse,
-            purchase_lock: Arc::new(AsyncMutex::new(())),
-        }
+        Self { mall, mystery_shop, warehouse, purchase_lock: Arc::new(AsyncMutex::new(())) }
     }
 
     // ----- 商城 -----
@@ -276,10 +271,7 @@ impl CommerceService {
     ) -> Result<MallCatalogDto> {
         let slot_type = bounded_integer(slot_type_input, 1, 1, 100);
         let sub_slot_type = bounded_integer(sub_slot_type_input, 0, 0, 100);
-        let reply = self
-            .mall
-            .get_mall_list_by_slot_type(slot_type, sub_slot_type)
-            .await?;
+        let reply = self.mall.get_mall_list_by_slot_type(slot_type, sub_slot_type).await?;
         let raw_goods: Vec<MallGoods> = reply.goods_list;
         let currency_ids: Vec<i64> = raw_goods
             .iter()
@@ -298,19 +290,14 @@ impl CommerceService {
             .iter()
             .map(|id| {
                 let balance = balances.get(id).copied();
-                let mut dto = item_dto(&CoreItem {
-                    id: *id,
-                    ..Default::default()
-                });
+                let mut dto = item_dto(&CoreItem { id: *id, ..Default::default() });
                 dto.balance = balance;
                 dto.balance_known = balance.is_some();
                 dto
             })
             .collect();
-        let goods: Vec<MallGoodsDto> = raw_goods
-            .iter()
-            .map(|g| mall_goods_dto(g, &balances))
-            .collect();
+        let goods: Vec<MallGoodsDto> =
+            raw_goods.iter().map(|g| mall_goods_dto(g, &balances)).collect();
         Ok(MallCatalogDto {
             slot_type,
             sub_slot_type,
@@ -331,8 +318,10 @@ impl CommerceService {
         goods_id_input: &str,
         count_input: &str,
     ) -> Result<PurchaseResponseDto> {
-        let goods_id = positive_integer(goods_id_input, CommerceErrorCode::InvalidGoodsId, "goodsId")?;
-        let count = positive_integer(count_input, CommerceErrorCode::InvalidPurchaseCount, "count")?;
+        let goods_id =
+            positive_integer(goods_id_input, CommerceErrorCode::InvalidGoodsId, "goodsId")?;
+        let count =
+            positive_integer(count_input, CommerceErrorCode::InvalidPurchaseCount, "count")?;
         if count > 9999 {
             return Err(CommerceError {
                 code: CommerceErrorCode::InvalidPurchaseCount,
@@ -344,13 +333,12 @@ impl CommerceService {
         let _guard = self.purchase_lock.lock().await;
 
         let before = self.get_mall_catalog(Some(1), Some(0)).await?;
-        let target = before
-            .goods
-            .iter()
-            .find(|g| g.id == i64::from(goods_id))
-            .ok_or_else(|| CommerceError {
-                code: CommerceErrorCode::GoodsNotFound,
-                message: "Mall goods not found".to_string(),
+        let target =
+            before.goods.iter().find(|g| g.id == i64::from(goods_id)).ok_or_else(|| {
+                CommerceError {
+                    code: CommerceErrorCode::GoodsNotFound,
+                    message: "Mall goods not found".to_string(),
+                }
             })?;
         if !target.purchasable {
             return Err(CommerceError {
@@ -428,11 +416,7 @@ impl CommerceService {
         price_dto.balance_known = balance.is_some();
 
         let reward = item_dto_with_fallback(
-            &CoreItem {
-                id: npc.reward_item_id,
-                count: reward_count,
-                ..Default::default()
-            },
+            &CoreItem { id: npc.reward_item_id, count: reward_count, ..Default::default() },
             "神秘商品",
         );
 
@@ -460,8 +444,12 @@ impl CommerceService {
     /// - [`CommerceError`]：参数非法 / 商品已下架 / 库存为 0 / 余额不足
     /// - 二次确认失败（购买后库存未减）
     /// - 底层 RPC 错误
-    pub async fn purchase_mystery_offer(&self, npc_id_input: &str) -> Result<MysteryPurchaseResponseDto> {
-        let npc_id = positive_integer(npc_id_input, CommerceErrorCode::InvalidMysteryNpcId, "npcId")?;
+    pub async fn purchase_mystery_offer(
+        &self,
+        npc_id_input: &str,
+    ) -> Result<MysteryPurchaseResponseDto> {
+        let npc_id =
+            positive_integer(npc_id_input, CommerceErrorCode::InvalidMysteryNpcId, "npcId")?;
         let _guard = self.purchase_lock.lock().await;
 
         let before = self.get_mystery_shop().await?;
@@ -548,7 +536,8 @@ impl CommerceService {
             }
         };
         let items = crate::services::warehouse::get_bag_items(&bag);
-        let (normal, organic) = crate::services::warehouse::get_container_hours_from_bag_items(&items);
+        let (normal, organic) =
+            crate::services::warehouse::get_container_hours_from_bag_items(&items);
         let current_hours = match kind {
             MallFertilizerKind::Normal => normal as f64,
             MallFertilizerKind::Organic => organic as f64,
@@ -590,23 +579,19 @@ impl CommerceService {
             Ok(b) => b,
             Err(e) => {
                 tracing::warn!("[商城] 检测化肥容器失败: {}", e);
-                return FertilizerBothResult {
-                    error: Some(e.to_string()),
-                    ..Default::default()
-                };
+                return FertilizerBothResult { error: Some(e.to_string()), ..Default::default() };
             }
         };
         let items = crate::services::warehouse::get_bag_items(&bag);
-        let (normal, organic) = crate::services::warehouse::get_container_hours_from_bag_items(&items);
+        let (normal, organic) =
+            crate::services::warehouse::get_container_hours_from_bag_items(&items);
         let mut result = FertilizerBothResult {
             organic_current_hours: organic as f64,
             normal_current_hours: normal as f64,
             ..Default::default()
         };
 
-        if options.buy_organic
-            && options.organic_count > 0
-            && options.organic_threshold_hours > 0.0
+        if options.buy_organic && options.organic_count > 0 && options.organic_threshold_hours > 0.0
         {
             tracing::info!(
                 "[商城] 检测有机化肥容器: 剩余 {:.1} 小时，阈值 {} 小时",
@@ -621,19 +606,13 @@ impl CommerceService {
             }
         }
 
-        if options.buy_organic
-            && options.buy_normal
-            && result.organic_bought > 0
-        {
+        if options.buy_organic && options.buy_normal && result.organic_bought > 0 {
             // 1000-2000ms 随机延迟，避免双类型购买被风控关联
             let delay_ms = 1000 + (rand::random::<u64>() % 1000);
             tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
         }
 
-        if options.buy_normal
-            && options.normal_count > 0
-            && options.normal_threshold_hours > 0.0
-        {
+        if options.buy_normal && options.normal_count > 0 && options.normal_threshold_hours > 0.0 {
             tracing::info!(
                 "[商城] 检测无机化肥容器: 剩余 {:.1} 小时，阈值 {} 小时",
                 result.normal_current_hours,
@@ -692,28 +671,17 @@ pub fn item_dto(item: &CoreItem) -> ItemDto {
 /// 把 `corepb.Item` 转换为前端 DTO（带 fallback 名称）
 pub fn item_dto_with_fallback(item: &CoreItem, fallback_name: &str) -> ItemDto {
     let id = item.id;
-    let metadata: Option<CatalogItem> = if id > 0 {
-        global_game_config().get_item_by_id(id)
-    } else {
-        None
-    };
+    let metadata: Option<CatalogItem> =
+        if id > 0 { global_game_config().get_item_by_id(id) } else { None };
     let name = if !fallback_name.is_empty() {
-        metadata
-            .as_ref()
-            .map(|m| m.name.clone())
-            .unwrap_or_else(|| fallback_name.to_string())
+        metadata.as_ref().map(|m| m.name.clone()).unwrap_or_else(|| fallback_name.to_string())
     } else if id > 0 {
-        metadata
-            .as_ref()
-            .map(|m| m.name.clone())
-            .unwrap_or_else(|| format!("物品 #{}", id))
+        metadata.as_ref().map(|m| m.name.clone()).unwrap_or_else(|| format!("物品 #{}", id))
     } else {
         "未知物品".to_string()
     };
     let image = if id > 0 {
-        global_game_config()
-            .get_item_image_by_id(id)
-            .unwrap_or_default()
+        global_game_config().get_item_image_by_id(id).unwrap_or_default()
     } else {
         String::new()
     };
@@ -731,20 +699,13 @@ pub fn item_dto_with_fallback(item: &CoreItem, fallback_name: &str) -> ItemDto {
 }
 
 /// 把 `PurchaseLimit` 转换为 DTO
-pub fn limit_dto(limit: &crate::proto::generated::gamepb::mallpb::PurchaseLimit) -> PurchaseLimitDto {
+pub fn limit_dto(
+    limit: &crate::proto::generated::gamepb::mallpb::PurchaseLimit,
+) -> PurchaseLimitDto {
     let bought = limit.bought_count as i64;
     let max = limit.limit_count as i64;
-    let remaining = if max > 0 {
-        Some((max - bought).max(0))
-    } else {
-        None
-    };
-    PurchaseLimitDto {
-        kind: limit.limit_type as i64,
-        bought,
-        max,
-        remaining,
-    }
+    let remaining = if max > 0 { Some((max - bought).max(0)) } else { None };
+    PurchaseLimitDto { kind: limit.limit_type as i64, bought, max, remaining }
 }
 
 /// 把 `MallGoods` 转换为 DTO
@@ -753,17 +714,11 @@ pub fn mall_goods_dto(goods: &MallGoods, balances: &HashMap<i64, i64>) -> MallGo
     let limit = goods.purchase_limit.as_ref().map(limit_dto);
     let is_free = goods.is_free || price.id == 0 || price.count == 0;
     let available = goods.is_available;
-    let balance = if price.id > 0 {
-        balances.get(&price.id).copied()
-    } else {
-        None
-    };
+    let balance = if price.id > 0 { balances.get(&price.id).copied() } else { None };
     let mut price_dto = price;
     price_dto.balance = balance;
-    let purchasable = available
-        && limit
-            .as_ref()
-            .map_or(true, |l| l.remaining.is_none_or(|r| r > 0));
+    let purchasable =
+        available && limit.as_ref().map_or(true, |l| l.remaining.is_none_or(|r| r > 0));
     MallGoodsDto {
         id: goods.goods_id as i64,
         name: goods.name.clone(),
@@ -816,12 +771,7 @@ pub fn positive_integer(
     }
     let n: i64 = match text.parse() {
         Ok(n) => n,
-        Err(_) => {
-            return Err(CommerceError {
-                code,
-                message: format!("{} is too large", label),
-            })
-        }
+        Err(_) => return Err(CommerceError { code, message: format!("{} is too large", label) }),
     };
     if n < 1 {
         return Err(CommerceError {
@@ -830,10 +780,7 @@ pub fn positive_integer(
         });
     }
     if n > i32::MAX as i64 {
-        return Err(CommerceError {
-            code,
-            message: format!("{} is too large", label),
-        });
+        return Err(CommerceError { code, message: format!("{} is too large", label) });
     }
     Ok(n as i32)
 }
@@ -892,7 +839,8 @@ mod tests {
     #[test]
     fn positive_integer_accepts_max_i32() {
         assert_eq!(
-            positive_integer(&i32::MAX.to_string(), CommerceErrorCode::InvalidGoodsId, "goodsId").unwrap(),
+            positive_integer(&i32::MAX.to_string(), CommerceErrorCode::InvalidGoodsId, "goodsId")
+                .unwrap(),
             i32::MAX
         );
     }
@@ -939,11 +887,7 @@ mod tests {
 
     #[test]
     fn item_dto_unknown_id() {
-        let item = CoreItem {
-            id: 0,
-            count: 5,
-            ..Default::default()
-        };
+        let item = CoreItem { id: 0, count: 5, ..Default::default() };
         let dto = item_dto(&item);
         assert_eq!(dto.id, 0);
         assert_eq!(dto.count, 5);
@@ -953,11 +897,7 @@ mod tests {
 
     #[test]
     fn item_dto_negative_count_clamps_to_zero() {
-        let item = CoreItem {
-            id: 1,
-            count: -10,
-            ..Default::default()
-        };
+        let item = CoreItem { id: 1, count: -10, ..Default::default() };
         let dto = item_dto(&item);
         assert_eq!(dto.count, 0);
     }
@@ -977,11 +917,7 @@ mod tests {
     #[test]
     fn limit_dto_with_max() {
         use crate::proto::generated::gamepb::mallpb::PurchaseLimit;
-        let l = PurchaseLimit {
-            limit_type: 1,
-            bought_count: 3,
-            limit_count: 10,
-        };
+        let l = PurchaseLimit { limit_type: 1, bought_count: 3, limit_count: 10 };
         let dto = limit_dto(&l);
         assert_eq!(dto.kind, 1);
         assert_eq!(dto.bought, 3);
@@ -992,11 +928,7 @@ mod tests {
     #[test]
     fn limit_dto_with_zero_max_returns_none_remaining() {
         use crate::proto::generated::gamepb::mallpb::PurchaseLimit;
-        let l = PurchaseLimit {
-            limit_type: 1,
-            bought_count: 0,
-            limit_count: 0,
-        };
+        let l = PurchaseLimit { limit_type: 1, bought_count: 0, limit_count: 0 };
         let dto = limit_dto(&l);
         assert_eq!(dto.remaining, None);
     }
@@ -1008,11 +940,7 @@ mod tests {
             goods_id: 1,
             is_free: true,
             is_available: true,
-            price: Some(CoreItem {
-                id: 0,
-                count: 0,
-                ..Default::default()
-            }),
+            price: Some(CoreItem { id: 0, count: 0, ..Default::default() }),
             ..Default::default()
         };
         let balances = HashMap::new();
@@ -1029,11 +957,7 @@ mod tests {
             goods_id: 1002,
             is_free: false,
             is_available: true,
-            price: Some(CoreItem {
-                id: 1002,
-                count: 2500,
-                ..Default::default()
-            }),
+            price: Some(CoreItem { id: 1002, count: 2500, ..Default::default() }),
             ..Default::default()
         };
         let balances = HashMap::new();
@@ -1047,11 +971,7 @@ mod tests {
 
     #[test]
     fn mall_goods_dto_unavailable() {
-        let goods = MallGoods {
-            goods_id: 1002,
-            is_available: false,
-            ..Default::default()
-        };
+        let goods = MallGoods { goods_id: 1002, is_available: false, ..Default::default() };
         let balances = HashMap::new();
         let dto = mall_goods_dto(&goods, &balances);
         assert!(!dto.purchasable);

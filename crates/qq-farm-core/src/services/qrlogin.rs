@@ -39,28 +39,20 @@ pub struct MpPreset {
 pub const PRESETS: &[(&str, MpPreset)] = &[(
     "farm",
     MpPreset {
-        name: "QQ经典农场 (Farm)",
-        description: "QQ经典农场小程序",
-        appid: "1112386029",
+        name: "QQ经典农场 (Farm)", description: "QQ经典农场小程序", appid: "1112386029"
     },
 )];
 
 /// 通过 appid 查找预设
 #[must_use]
 pub fn find_preset(appid: &str) -> Option<&'static MpPreset> {
-    PRESETS
-        .iter()
-        .map(|(_, p)| p)
-        .find(|p| p.appid == appid)
+    PRESETS.iter().map(|(_, p)| p).find(|p| p.appid == appid)
 }
 
 /// 通过 name 查找预设
 #[must_use]
 pub fn find_preset_by_name(name: &str) -> Option<&'static MpPreset> {
-    PRESETS
-        .iter()
-        .find(|(n, _)| *n == name)
-        .map(|(_, p)| p)
+    PRESETS.iter().find(|(n, _)| *n == name).map(|(_, p)| p)
 }
 
 /// 构造请求头（1:1 对齐 `MiniProgramLoginSession.getHeaders`）
@@ -124,24 +116,12 @@ impl MpStatusResult {
 
     #[must_use]
     pub fn wait() -> Self {
-        Self {
-            status: MpStatus::Wait,
-            ticket: None,
-            uin: None,
-            nickname: None,
-            msg: None,
-        }
+        Self { status: MpStatus::Wait, ticket: None, uin: None, nickname: None, msg: None }
     }
 
     #[must_use]
     pub fn used() -> Self {
-        Self {
-            status: MpStatus::Used,
-            ticket: None,
-            uin: None,
-            nickname: None,
-            msg: None,
-        }
+        Self { status: MpStatus::Used, ticket: None, uin: None, nickname: None, msg: None }
     }
 
     #[must_use]
@@ -225,11 +205,7 @@ impl MiniProgramLoginSession {
         let url = Self::build_login_url(&login_code);
         // 生成 PNG data URL（对齐 TS `QRCode.toDataURL(url, {width:300, margin:1, level:M})`）
         let image = qr_png_data_url(&url);
-        Ok(MpLoginCodeResult {
-            code: login_code,
-            url,
-            image,
-        })
+        Ok(MpLoginCodeResult { code: login_code, url, image })
     }
 
     /// 查询扫码状态
@@ -245,13 +221,8 @@ impl MiniProgramLoginSession {
             );
         }
         let url = format!("{SYNC_STATUS_URL}?code={code}");
-        let resp = self
-            .client
-            .get(&url)
-            .headers(headers)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
+        let resp =
+            self.client.get(&url).headers(headers).send().await.map_err(|e| e.to_string())?;
         if resp.status() != reqwest::StatusCode::OK {
             return Ok(MpStatusResult::error("non-200 status"));
         }
@@ -260,10 +231,7 @@ impl MiniProgramLoginSession {
         match res_code {
             0 => {
                 let data = body.get("data");
-                let ok = data
-                    .and_then(|d| d.get("ok"))
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0);
+                let ok = data.and_then(|d| d.get("ok")).and_then(|v| v.as_i64()).unwrap_or(0);
                 if ok != 1 {
                     Ok(MpStatusResult::wait())
                 } else {
@@ -294,11 +262,7 @@ impl MiniProgramLoginSession {
     ///
     /// # Errors
     /// - 网络错误
-    pub async fn get_auth_code(
-        &self,
-        ticket: &str,
-        appid: &str,
-    ) -> Result<String, String> {
+    pub async fn get_auth_code(&self, ticket: &str, appid: &str) -> Result<String, String> {
         let mut headers = reqwest::header::HeaderMap::new();
         for (k, v) in get_headers() {
             headers.insert(
@@ -321,11 +285,7 @@ impl MiniProgramLoginSession {
             return Ok(String::new());
         }
         let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-        Ok(body
-            .get("code")
-            .and_then(|c| c.as_str())
-            .unwrap_or("")
-            .to_string())
+        Ok(body.get("code").and_then(|c| c.as_str()).unwrap_or("").to_string())
     }
 }
 
@@ -343,8 +303,11 @@ pub fn qr_png_data_url(text: &str) -> String {
     };
     // 生成 300x300 的 PNG（scale 尽量大以接近 300px，再放大到目标尺寸）
     let img = code.render::<image::Luma<u8>>().min_dimensions(300, 300).build();
-    let img = image::DynamicImage::ImageLuma8(img)
-        .resize_exact(300, 300, image::imageops::FilterType::Nearest);
+    let img = image::DynamicImage::ImageLuma8(img).resize_exact(
+        300,
+        300,
+        image::imageops::FilterType::Nearest,
+    );
     let mut buf = std::io::Cursor::new(Vec::new());
     if img.write_to(&mut buf, image::ImageFormat::Png).is_err() {
         return String::new();
@@ -487,9 +450,8 @@ mod tests {
         let data_url = qr_png_data_url("https://example.com/qr");
         assert!(data_url.starts_with("data:image/png;base64,"));
         let b64 = data_url.trim_start_matches("data:image/png;base64,");
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(b64)
-            .expect("应解码出有效 PNG");
+        let bytes =
+            base64::engine::general_purpose::STANDARD.decode(b64).expect("应解码出有效 PNG");
         // PNG 魔数
         assert_eq!(&bytes[0..8], &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
     }

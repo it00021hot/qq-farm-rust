@@ -29,10 +29,8 @@ pub async fn mall_catalog(
 ) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
     let commerce = commerce_from_loop(loop_.as_ref());
-    let dto = commerce
-        .get_mall_catalog(slot_type, sub_slot_type)
-        .await
-        .map_err(AppError::from_core)?;
+    let dto =
+        commerce.get_mall_catalog(slot_type, sub_slot_type).await.map_err(AppError::from_core)?;
     serde_json::to_value(dto).map_err(|e| AppError::Internal(e.to_string()))
 }
 
@@ -56,10 +54,7 @@ pub async fn purchase_mall(
 pub async fn mystery_shop(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
     let commerce = commerce_from_loop(loop_.as_ref());
-    let dto = commerce
-        .get_mystery_shop()
-        .await
-        .map_err(AppError::from_core)?;
+    let dto = commerce.get_mystery_shop().await.map_err(AppError::from_core)?;
     serde_json::to_value(dto).map_err(|e| AppError::Internal(e.to_string()))
 }
 
@@ -71,10 +66,7 @@ pub async fn purchase_mystery(
 ) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
     let commerce = commerce_from_loop(loop_.as_ref());
-    let dto = commerce
-        .purchase_mystery_offer(offer_id)
-        .await
-        .map_err(AppError::from_core)?;
+    let dto = commerce.purchase_mystery_offer(offer_id).await.map_err(AppError::from_core)?;
     serde_json::to_value(dto).map_err(|e| AppError::Internal(e.to_string()))
 }
 

@@ -324,10 +324,8 @@ impl RuntimeConfig {
     #[must_use]
     pub fn default_runtime() -> Self {
         let sys = SystemConfig::default_system();
-        let admin_port = std::env::var("ADMIN_PORT")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(3007);
+        let admin_port =
+            std::env::var("ADMIN_PORT").ok().and_then(|s| s.parse().ok()).unwrap_or(3007);
         let admin_password = std::env::var("ADMIN_PASSWORD").ok();
         Self {
             server_url: sys.server_url,

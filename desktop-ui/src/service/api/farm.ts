@@ -37,6 +37,7 @@ function toAccountRecord(raw: any): Api.Farm.Account {
     runStatus: ((raw?.running || raw?.runStatus === 1) ? 1 : 0) as Api.Farm.RunStatus,
     lastOnlineAt: Number(raw?.lastOnlineAt ?? raw?.updatedAt ?? raw?.updated_at ?? 0),
     status: (String(raw?.status ?? '1') === '2' ? '2' : '1') as Api.Farm.EnableStatus,
+    wxAuthorized: Boolean(raw?.wxAuthorized ?? raw?.wx_authorized),
     createdAt: Number(raw?.createdAt ?? raw?.created_at ?? 0),
     updatedAt: Number(raw?.updatedAt ?? raw?.updated_at ?? 0)
   };
@@ -193,8 +194,10 @@ export async function fetchGetFarmAccountList(params?: Api.Farm.AccountSearchPar
   if (params?.runStatus != null && String(params.runStatus) !== '') {
     records = records.filter((a: Api.Farm.Account) => a.runStatus === Number(params.runStatus));
   }
-  if (params?.status != null && String(params.status) !== '') {
-    records = records.filter((a: Api.Farm.Account) => String(a.status) === String(params.status));
+  if (params?.authStatus === 'authorized') {
+    records = records.filter((a: Api.Farm.Account) => Boolean(a.wxAuthorized));
+  } else if (params?.authStatus === 'unauthorized') {
+    records = records.filter((a: Api.Farm.Account) => !a.wxAuthorized);
   }
   const current = Number(params?.current) || 1;
   const size = Number(params?.size) || 10;
@@ -309,6 +312,34 @@ export function fetchModifyFarmAutomation(data: Api.Farm.AccountAutomationModify
     accountId: aid(accountId),
     snapshot
   });
+}
+
+function toOfflineReminder(raw: any): Api.Farm.OfflineReminder {
+  return {
+    channel: String(raw?.channel ?? 'none'),
+    reloginUrlMode: String(raw?.reloginUrlMode ?? raw?.relogin_url_mode ?? 'none'),
+    endpoint: String(raw?.endpoint ?? ''),
+    token: String(raw?.token ?? ''),
+    title: String(raw?.title ?? ''),
+    msg: String(raw?.msg ?? ''),
+    offlineDeleteSec: Number(raw?.offlineDeleteSec ?? raw?.offline_delete_sec ?? 0)
+  };
+}
+
+export async function fetchGetOfflineReminder() {
+  const res = await invokeFlat<any>('get_offline_reminder');
+  if (res.error) return res as FlatResponseData<any, Api.Farm.OfflineReminder>;
+  return { data: toOfflineReminder(res.data), error: null, response: {} as any };
+}
+
+export async function fetchSaveOfflineReminder(cfg: Api.Farm.OfflineReminder) {
+  const res = await invokeFlat<any>('set_offline_reminder', { cfg });
+  if (res.error) return res as FlatResponseData<any, Api.Farm.OfflineReminder>;
+  return { data: toOfflineReminder(res.data), error: null, response: {} as any };
+}
+
+export async function fetchTestOfflineReminder(cfg: Api.Farm.OfflineReminder) {
+  return invokeFlat<{ ok: boolean; code?: string; msg?: string }>('test_offline_reminder', { cfg });
 }
 
 export function fetchGetFarmLands(accountId: number) {

@@ -28,15 +28,15 @@ export function translateStringOptions<T extends string>(
   }));
 }
 
-/** farm enable status ("1" | "2") */
-export const farmEnableStatusRecord: Record<Api.Farm.EnableStatus, App.I18n.I18nKey> = {
-  '1': 'page.farm.common.status.enable',
-  '2': 'page.farm.common.status.disable'
+/** farm wechat / app-bao authorization status */
+export const farmAuthStatusRecord: Record<'authorized' | 'unauthorized', App.I18n.I18nKey> = {
+  authorized: 'page.farm.common.authStatus.authorized',
+  unauthorized: 'page.farm.common.authStatus.unauthorized'
 };
 
-export const farmEnableStatusOptions: CommonType.Option<Api.Farm.EnableStatus, App.I18n.I18nKey>[] = [
-  { value: '1', label: 'page.farm.common.status.enable' },
-  { value: '2', label: 'page.farm.common.status.disable' }
+export const farmAuthStatusOptions: CommonType.Option<'authorized' | 'unauthorized', App.I18n.I18nKey>[] = [
+  { value: 'authorized', label: 'page.farm.common.authStatus.authorized' },
+  { value: 'unauthorized', label: 'page.farm.common.authStatus.unauthorized' }
 ];
 
 /** farm run status */

@@ -40,6 +40,7 @@ pub struct WxLoginSession {
     pub oauth_code: Option<String>,
     pub openid: Option<String>,
     pub login_buffer: Option<String>,
+    pub access_token: Option<String>,
 }
 
 impl WxLoginSession {
@@ -53,6 +54,7 @@ impl WxLoginSession {
         self.oauth_code = None;
         self.openid = None;
         self.login_buffer = None;
+        self.access_token = None;
     }
 }
 
@@ -60,7 +62,8 @@ const QR_CONNECT_URL: &str = "https://open.weixin.qq.com/connect/qrconnect";
 const QR_IMAGE_BASE: &str = "https://open.weixin.qq.com/connect/qrcode/";
 const QR_POLL_URL: &str = "https://long.open.weixin.qq.com/connect/l/qrconnect";
 const CALLBACK_URL: &str = "https://yybadaccess.3g.qq.com/pc_yyb/pcyyb_oauth";
-const LOGIN_BUFFER_URL: &str = "https://yybadaccess.3g.qq.com/pc_yyb_auth/pcyyb_get_wx_login_buffer_auth";
+const LOGIN_BUFFER_URL: &str =
+    "https://yybadaccess.3g.qq.com/pc_yyb_auth/pcyyb_get_wx_login_buffer_auth";
 const OAUTH_APP_ID: &str = "wxd44977328b36e647";
 const USER_AGENT: &str = "Mozilla/5.0";
 const LOGIN_BUFFER_ACCESS_KEY: &str = "wgrdg373hy26ww2";
@@ -148,9 +151,8 @@ impl WxLoginService {
         }
         let params = [("uuid", session.uuid.as_str()), ("_", &now_ms_string())];
         let query = encode_query(&params);
-        let resp = self
-            .request(&format!("{QR_POLL_URL}?{query}"), &mut session.cookies, None)
-            .await?;
+        let resp =
+            self.request(&format!("{QR_POLL_URL}?{query}"), &mut session.cookies, None).await?;
         if !(200..300).contains(&resp.status) {
             return Err(format!("WeChat QR polling failed (HTTP {})", resp.status));
         }
@@ -162,8 +164,9 @@ impl WxLoginService {
             Some("403") => Ok(ScanStatus::Cancelled),
             Some("402") => Ok(ScanStatus::Expired),
             Some("405") => {
-                let code = extract_pattern(&body, r"wx_code\s*=\s*'([^']+)'")
-                    .ok_or_else(|| "WeChat authorization response did not include a code".to_string())?;
+                let code = extract_pattern(&body, r"wx_code\s*=\s*'([^']+)'").ok_or_else(|| {
+                    "WeChat authorization response did not include a code".to_string()
+                })?;
                 session.oauth_code = Some(code);
                 Ok(ScanStatus::Authorized)
             }
@@ -180,90 +183,68 @@ impl WxLoginService {
             .oauth_code
             .as_ref()
             .ok_or_else(|| "Waiting for scan authorization".to_string())?;
-        let params = [
-            ("login_type", "WX"),
-            ("code", oauth_code.as_str()),
-            ("state", "web"),
-        ];
+        let params = [("login_type", "WX"), ("code", oauth_code.as_str()), ("state", "web")];
         let query = encode_query(&params);
-        let callback = self
-            .request(&format!("{CALLBACK_URL}?{query}"), &mut session.cookies, None)
-            .await?;
+        let callback =
+            self.request(&format!("{CALLBACK_URL}?{query}"), &mut session.cookies, None).await?;
         if callback.status < 200 || callback.status >= 400 {
-            return Err(format!(
-                "WeChat authorization callback failed (HTTP {})",
-                callback.status
-            ));
+            return Err(format!("WeChat authorization callback failed (HTTP {})", callback.status));
         }
         let openid = required_cookie(&session.cookies, "openid")?;
         let access_token = required_cookie(&session.cookies, "accesstoken")?;
-
-        // 构造 JSON payload（用 serde_json 序列化，避免 format! 拼接在特殊字符下出错）
-        let payload = serde_json::json!({
-            "extInfo": {
-                "listS": {
-                    "unionid": { "value": [openid.clone()] },
-                    "user_id": { "value": [openid.clone()] },
-                    "access_token": { "value": [access_token] },
-                },
-                "listI": {
-                    "user_type": { "value": [0] },
-                },
-            },
-        })
-        .to_string();
-        let timestamp = now_ms_string();
-        let nonce = random_int(1000, 10000).to_string();
-        let signature = login_buffer_signature(&payload, &timestamp, &nonce);
-
-        let mut extra_headers = HashMap::new();
-        extra_headers.insert("Content-Type".to_string(), "application/json".to_string());
-        extra_headers.insert("Ual-Access-Businessid".to_string(), "pc_yyb_auth".to_string());
-        extra_headers.insert("Ual-Access-Timestamp".to_string(), timestamp.clone());
-        extra_headers.insert("Ual-Access-Nonce".to_string(), nonce.clone());
-        extra_headers.insert("Ual-Access-Signature".to_string(), signature);
-
-        let response = self
-            .request(
-                LOGIN_BUFFER_URL,
-                &mut session.cookies,
-                Some(RequestInput {
-                    method: "POST",
-                    body: Some(payload.as_bytes().to_vec()),
-                    extra_headers: extra_headers,
-                }),
-            )
-            .await?;
-        if !(200..300).contains(&response.status) {
-            return Err(format!(
-                "Unable to obtain WeChat login buffer (HTTP {})",
-                response.status
-            ));
-        }
-        let body_str = String::from_utf8_lossy(&response.body);
-        let data: serde_json::Value =
-            serde_json::from_str(&body_str).map_err(|e| format!("JSON parse: {e}"))?;
-        let code = data.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
-        let login_buffer = if code == 0 {
-            data.get("ext_info")
-                .and_then(|e| e.get("list_s"))
-                .and_then(|l| l.get("login_buffer"))
-                .and_then(|b| b.get("value"))
-                .and_then(|v| v.as_array())
-                .and_then(|arr| arr.first())
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string()
-        } else {
-            String::new()
-        };
-        if login_buffer.is_empty() {
-            return Err("WeChat login buffer response is invalid".to_string());
-        }
+        let login_buffer =
+            self.post_login_buffer(&mut session.cookies, &openid, &access_token).await?;
         session.cookies.clear();
         session.openid = Some(openid.clone());
+        session.access_token = Some(access_token);
         session.login_buffer = Some(login_buffer.clone());
         Ok((openid, login_buffer))
+    }
+
+    /// 用已保存的应用宝 accesstoken 重新换 login_buffer（无需再扫码）。
+    ///
+    /// # Errors
+    /// - openid / access_token 为空
+    /// - HTTP / 响应解析失败
+    pub async fn refresh_login_buffer(
+        &self,
+        openid: &str,
+        access_token: &str,
+    ) -> Result<String, String> {
+        let openid = openid.trim();
+        let access_token = access_token.trim();
+        if openid.is_empty() || access_token.is_empty() {
+            return Err("Missing Yingyongbao authorization".to_string());
+        }
+        let mut cookies = HashMap::new();
+        self.post_login_buffer(&mut cookies, openid, access_token).await
+    }
+
+    /// 用 login_buffer 换网关 code；失败且有 accesstoken 时先刷新 buffer 再试一次。
+    ///
+    /// 返回 `(wx.login code, login_buffer)`，后者可能被刷新。
+    ///
+    /// # Errors
+    /// - MMTLS / 应用宝换票失败
+    pub async fn mint_gateway_code(
+        &self,
+        login_buffer: &str,
+        openid: &str,
+        access_token: &str,
+        app_id: &str,
+    ) -> Result<(String, String), String> {
+        match native_protocol::get_native_wx_login_code(login_buffer, app_id).await {
+            Ok(code) => Ok((code, login_buffer.to_string())),
+            Err(e) => {
+                if openid.trim().is_empty() || access_token.trim().is_empty() {
+                    return Err(e);
+                }
+                tracing::warn!("login_buffer mint failed, refreshing via Yingyongbao: {e}");
+                let new_buf = self.refresh_login_buffer(openid, access_token).await?;
+                let code = native_protocol::get_native_wx_login_code(&new_buf, app_id).await?;
+                Ok((code, new_buf))
+            }
+        }
     }
 
     /// 真实协议拿 wx.login code
@@ -271,7 +252,11 @@ impl WxLoginService {
     /// # Errors
     /// - login_buffer 缺失（尚未 confirm）
     /// - 原生协议网络 / 握手 / 解密失败
-    pub async fn issue_code(&self, session: &WxLoginSession, app_id: &str) -> Result<String, String> {
+    pub async fn issue_code(
+        &self,
+        session: &WxLoginSession,
+        app_id: &str,
+    ) -> Result<String, String> {
         let buffer = session
             .login_buffer
             .as_ref()
@@ -285,6 +270,41 @@ impl WxLoginService {
         session.clear_sensitive();
     }
 
+    async fn post_login_buffer(
+        &self,
+        cookies: &mut HashMap<String, String>,
+        openid: &str,
+        access_token: &str,
+    ) -> Result<String, String> {
+        let payload = login_buffer_payload(openid, access_token);
+        let timestamp = now_ms_string();
+        let nonce = random_int(1000, 10000).to_string();
+        let signature = login_buffer_signature(&payload, &timestamp, &nonce);
+
+        let mut extra_headers = HashMap::new();
+        extra_headers.insert("Content-Type".to_string(), "application/json".to_string());
+        extra_headers.insert("Ual-Access-Businessid".to_string(), "pc_yyb_auth".to_string());
+        extra_headers.insert("Ual-Access-Timestamp".to_string(), timestamp);
+        extra_headers.insert("Ual-Access-Nonce".to_string(), nonce);
+        extra_headers.insert("Ual-Access-Signature".to_string(), signature);
+
+        let response = self
+            .request(
+                LOGIN_BUFFER_URL,
+                cookies,
+                Some(RequestInput {
+                    method: "POST",
+                    body: Some(payload.as_bytes().to_vec()),
+                    extra_headers,
+                }),
+            )
+            .await?;
+        if !(200..300).contains(&response.status) {
+            return Err(format!("Unable to obtain WeChat login buffer (HTTP {})", response.status));
+        }
+        parse_login_buffer_json(&String::from_utf8_lossy(&response.body))
+    }
+
     // ----- HTTP helper -----
 
     async fn request(
@@ -293,10 +313,8 @@ impl WxLoginService {
         cookies: &mut HashMap<String, String>,
         input: Option<RequestInput>,
     ) -> Result<HttpResult, String> {
-        let mut method = input
-            .as_ref()
-            .map(|i| i.method.to_string())
-            .unwrap_or_else(|| "GET".to_string());
+        let mut method =
+            input.as_ref().map(|i| i.method.to_string()).unwrap_or_else(|| "GET".to_string());
         let mut body = input.as_ref().and_then(|i| i.body.clone());
 
         let mut current_url = url.to_string();
@@ -328,21 +346,14 @@ impl WxLoginService {
             let headers_snapshot = headers_to_map(resp.headers());
             store_cookies(cookies, &resp);
 
-            let location = resp
-                .headers()
-                .get("location")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
+            let location =
+                resp.headers().get("location").and_then(|v| v.to_str().ok()).map(|s| s.to_string());
 
             // 对齐 TS：非 3xx、或 4xx/5xx、或没有 location，则读取 body 并返回。
             // 只有「3xx 且有 location」才会跟随重定向。
             if status < 300 || status >= 400 || location.is_none() {
                 let bytes = resp.bytes().await.map_err(|e| e.to_string())?.to_vec();
-                return Ok(HttpResult {
-                    status,
-                    body: bytes,
-                    headers: headers_snapshot,
-                });
+                return Ok(HttpResult { status, body: bytes, headers: headers_snapshot });
             }
 
             // 跟随重定向
@@ -370,11 +381,7 @@ pub struct RequestInput {
 // =====================================================================
 
 fn cookie_header(cookies: &HashMap<String, String>) -> String {
-    cookies
-        .iter()
-        .map(|(k, v)| format!("{k}={v}"))
-        .collect::<Vec<_>>()
-        .join("; ")
+    cookies.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("; ")
 }
 
 fn store_cookies(cookies: &mut HashMap<String, String>, resp: &reqwest::Response) {
@@ -392,6 +399,45 @@ fn store_cookies(cookies: &mut HashMap<String, String>, resp: &reqwest::Response
             }
         }
     }
+}
+
+fn login_buffer_payload(openid: &str, access_token: &str) -> String {
+    serde_json::json!({
+        "extInfo": {
+            "listS": {
+                "unionid": { "value": [openid] },
+                "user_id": { "value": [openid] },
+                "access_token": { "value": [access_token] },
+            },
+            "listI": {
+                "user_type": { "value": [0] },
+            },
+        },
+    })
+    .to_string()
+}
+
+fn parse_login_buffer_json(body: &str) -> Result<String, String> {
+    let data: serde_json::Value =
+        serde_json::from_str(body).map_err(|e| format!("JSON parse: {e}"))?;
+    let code = data.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
+    let login_buffer = if code == 0 {
+        data.get("ext_info")
+            .and_then(|e| e.get("list_s"))
+            .and_then(|l| l.get("login_buffer"))
+            .and_then(|b| b.get("value"))
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    } else {
+        String::new()
+    };
+    if login_buffer.is_empty() {
+        return Err("WeChat login buffer response is invalid".to_string());
+    }
+    Ok(login_buffer)
 }
 
 fn login_buffer_signature(payload: &str, timestamp: &str, nonce: &str) -> String {
@@ -451,7 +497,9 @@ fn extract_uuid(body: &str) -> Option<String> {
     let marker = "/connect/qrcode/";
     let start = body.find(marker)? + marker.len();
     let end = body[start..]
-        .find(|c: char| c == '"' || c == '\'' || c == '>' || c == ' ' || c == '\t' || c == '\n' || c == '\r')
+        .find(|c: char| {
+            c == '"' || c == '\'' || c == '>' || c == ' ' || c == '\t' || c == '\n' || c == '\r'
+        })
         .map(|i| start + i)
         .unwrap_or(body.len());
     Some(body[start..end].to_string())
@@ -547,38 +595,28 @@ fn random_int(min: i64, max: i64) -> i64 {
 
 fn md5_hex(data: &[u8]) -> String {
     // 简化：实现 MD5（不引外部 crate）
-    md5(data)
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect()
+    md5(data).iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 /// MD5 实现（RFC 1321）
 #[must_use]
 pub fn md5(input: &[u8]) -> [u8; 16] {
     const S: [u32; 64] = [
-        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
-        5,  9, 14, 20, 5,  9, 14, 20, 5,  9, 14, 20, 5,  9, 14, 20,
-        4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
-        6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5,
+        9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10,
+        15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
     ];
     const K: [u32; 64] = [
-        0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee,
-        0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501,
-        0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be,
-        0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821,
-        0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa,
-        0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8,
-        0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed,
-        0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a,
-        0xfffa3942, 0x8771f681, 0x6d9d6122, 0xfde5380c,
-        0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70,
-        0x289b7ec6, 0xeaa127fa, 0xd4ef3085, 0x04881d05,
-        0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665,
-        0xf4292244, 0x432aff97, 0xab9423a7, 0xfc93a039,
-        0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
-        0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1,
-        0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391,
+        0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613,
+        0xfd469501, 0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193,
+        0xa679438e, 0x49b40821, 0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d,
+        0x02441453, 0xd8a1e681, 0xe7d3fbc8, 0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed,
+        0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a, 0xfffa3942, 0x8771f681, 0x6d9d6122,
+        0xfde5380c, 0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70, 0x289b7ec6, 0xeaa127fa,
+        0xd4ef3085, 0x04881d05, 0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665, 0xf4292244,
+        0x432aff97, 0xab9423a7, 0xfc93a039, 0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
+        0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb,
+        0xeb86d391,
     ];
 
     let mut h0: u32 = 0x67452301;
@@ -607,10 +645,7 @@ pub fn md5(input: &[u8]) -> [u8; 16] {
                 32..=47 => (b ^ c ^ d, (3 * i + 5) % 16),
                 _ => (c ^ (b | !d), (7 * i) % 16),
             };
-            let f = f
-                .wrapping_add(a)
-                .wrapping_add(K[i])
-                .wrapping_add(w[g]);
+            let f = f.wrapping_add(a).wrapping_add(K[i]).wrapping_add(w[g]);
             let new_a = d;
             let new_d = c;
             let new_c = b;
@@ -648,7 +683,10 @@ mod tests {
         assert_eq!(QR_IMAGE_BASE, "https://open.weixin.qq.com/connect/qrcode/");
         assert_eq!(QR_POLL_URL, "https://long.open.weixin.qq.com/connect/l/qrconnect");
         assert_eq!(CALLBACK_URL, "https://yybadaccess.3g.qq.com/pc_yyb/pcyyb_oauth");
-        assert_eq!(LOGIN_BUFFER_URL, "https://yybadaccess.3g.qq.com/pc_yyb_auth/pcyyb_get_wx_login_buffer_auth");
+        assert_eq!(
+            LOGIN_BUFFER_URL,
+            "https://yybadaccess.3g.qq.com/pc_yyb_auth/pcyyb_get_wx_login_buffer_auth"
+        );
         assert_eq!(OAUTH_APP_ID, "wxd44977328b36e647");
         assert_eq!(USER_AGENT, "Mozilla/5.0");
         assert_eq!(LOGIN_BUFFER_ACCESS_KEY, "wgrdg373hy26ww2");
@@ -680,10 +718,12 @@ mod tests {
         s.oauth_code = Some("code".into());
         s.openid = Some("openid".into());
         s.login_buffer = Some("buf".into());
+        s.access_token = Some("tok".into());
         s.clear_sensitive();
         assert!(s.oauth_code.is_none());
         assert!(s.openid.is_none());
         assert!(s.login_buffer.is_none());
+        assert!(s.access_token.is_none());
     }
 
     #[test]
@@ -752,10 +792,7 @@ mod tests {
 
     #[test]
     fn resolve_url_relative() {
-        assert_eq!(
-            resolve_url("https://example.com/foo/bar", "/baz"),
-            "https://example.com/baz"
-        );
+        assert_eq!(resolve_url("https://example.com/foo/bar", "/baz"), "https://example.com/baz");
     }
 
     #[test]
@@ -838,10 +875,7 @@ mod tests {
 
     #[test]
     fn issue_code_no_login_buffer() {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
             let svc = WxLoginService::new();
             let s = WxLoginSession::new();
@@ -852,16 +886,13 @@ mod tests {
 
     #[test]
     fn issue_code_with_buffer_invokes_network() {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
             let svc = WxLoginService::new();
             let mut s = WxLoginSession::new();
             s.login_buffer = Some("dGVzdA==".to_string()); // base64 "test"
-            // 真实实现：会尝试 TCP connect 真实 longcloud.weixin.qq.com
-            // 在 CI 沙盒环境会失败，返回网络错误（不是"集成时"占位错误）
+                                                           // 真实实现：会尝试 TCP connect 真实 longcloud.weixin.qq.com
+                                                           // 在 CI 沙盒环境会失败，返回网络错误（不是"集成时"占位错误）
             let r = svc.issue_code(&s, "appid").await;
             // 不论成功 / 失败，调用能跑通即可（不会 panic）
             let _ = r;
@@ -870,10 +901,7 @@ mod tests {
 
     #[test]
     fn confirm_no_oauth_code() {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
             let svc = WxLoginService::new();
             let mut s = WxLoginSession::new();
@@ -885,10 +913,7 @@ mod tests {
 
     #[test]
     fn poll_already_authorized() {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
             let svc = WxLoginService::new();
             let mut s = WxLoginSession::new();
@@ -903,6 +928,27 @@ mod tests {
         assert_eq!(sig.len(), 32);
         assert_eq!(sig, login_buffer_signature("{}", "1", "2"));
         assert_ne!(sig, login_buffer_signature("{}", "1", "3"));
+    }
+
+    #[test]
+    fn parse_login_buffer_json_ok() {
+        let body = r#"{"code":0,"ext_info":{"list_s":{"login_buffer":{"value":["abc"]}}}}"#;
+        assert_eq!(parse_login_buffer_json(body).unwrap(), "abc");
+    }
+
+    #[test]
+    fn parse_login_buffer_json_rejects_empty() {
+        assert!(parse_login_buffer_json(r#"{"code":1}"#).is_err());
+        assert!(parse_login_buffer_json("not-json").is_err());
+    }
+
+    #[tokio::test]
+    async fn refresh_login_buffer_requires_credentials() {
+        let svc = WxLoginService::new();
+        let err = svc.refresh_login_buffer("", "tok").await.unwrap_err();
+        assert!(err.contains("Missing Yingyongbao"));
+        let err = svc.refresh_login_buffer("oid", "  ").await.unwrap_err();
+        assert!(err.contains("Missing Yingyongbao"));
     }
 
     #[test]

@@ -55,10 +55,7 @@ fn with_state_mut<R>(account_id: &str, f: impl FnOnce(&mut FriendRuntimeState) -
 /// 读取账号 quiet hours 配置（进程内覆盖层）
 #[must_use]
 pub fn get_friend_quiet_hours(account_id: &str) -> Option<FriendQuietHours> {
-    FRIEND_STATES
-        .lock()
-        .get(account_id)
-        .and_then(|s| s.quiet_hours.clone())
+    FRIEND_STATES.lock().get(account_id).and_then(|s| s.quiet_hours.clone())
 }
 
 /// 设置账号 quiet hours（线程安全）
@@ -69,10 +66,7 @@ pub fn set_friend_quiet_hours(account_id: &str, cfg: Option<FriendQuietHours>) {
 /// 读取账号好友列表缓存
 #[must_use]
 pub fn get_friends_list_cache(account_id: &str) -> Option<FriendsListCache> {
-    FRIEND_STATES
-        .lock()
-        .get(account_id)
-        .and_then(|s| s.friends_list_cache.clone())
+    FRIEND_STATES.lock().get(account_id).and_then(|s| s.friends_list_cache.clone())
 }
 
 /// 写入账号好友列表缓存

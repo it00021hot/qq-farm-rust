@@ -6,6 +6,7 @@ use tauri::State;
 use qq_farm_app::accounts;
 use qq_farm_app::settings;
 use qq_farm_core::models::store::account_config as cfg;
+use qq_farm_core::models::store::global_config::OfflineReminder;
 
 use crate::error::{IpcError, IpcResult};
 use crate::state::DesktopState;
@@ -45,10 +46,7 @@ pub fn get_settings(
 
 /// 设置面板聚合。
 #[tauri::command]
-pub fn get_settings_panel(
-    state: State<'_, DesktopState>,
-    account_id: String,
-) -> IpcResult<Value> {
+pub fn get_settings_panel(state: State<'_, DesktopState>, account_id: String) -> IpcResult<Value> {
     accounts::ensure_account_access(&state.acl, &account_id).map_err(IpcError::from)?;
     Ok(settings::settings_panel(&account_id, "local"))
 }
@@ -62,4 +60,27 @@ pub fn save_settings(
 ) -> IpcResult<Value> {
     accounts::ensure_account_access(&state.acl, &account_id).map_err(IpcError::from)?;
     settings::save_settings(&state.app, &account_id, snapshot).map_err(IpcError::from)
+}
+
+const DESKTOP_USERNAME: &str = "local";
+
+/// 读取下线提醒（桌面单用户）。
+#[tauri::command]
+pub fn get_offline_reminder() -> IpcResult<OfflineReminder> {
+    Ok(settings::get_offline_reminder(Some(DESKTOP_USERNAME)))
+}
+
+/// 保存下线提醒。
+#[tauri::command]
+pub fn set_offline_reminder(cfg: OfflineReminder) -> IpcResult<OfflineReminder> {
+    let value = serde_json::to_value(&cfg).unwrap_or_default();
+    settings::set_offline_reminder(Some(DESKTOP_USERNAME), value);
+    Ok(settings::get_offline_reminder(Some(DESKTOP_USERNAME)))
+}
+
+/// 测试下线提醒推送（不落盘）。
+#[tauri::command]
+pub async fn test_offline_reminder(cfg: OfflineReminder) -> IpcResult<Value> {
+    let value = serde_json::to_value(&cfg).unwrap_or_default();
+    settings::test_offline_reminder(Some(DESKTOP_USERNAME), value).await.map_err(IpcError::from)
 }

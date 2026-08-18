@@ -90,7 +90,10 @@ impl MonthCardService {
     /// # Errors
     /// - 网络 / 网关错误
     /// - protobuf 解码失败
-    pub async fn claim_month_card_reward(&self, goods_id: i32) -> Result<ClaimMonthCardRewardReply> {
+    pub async fn claim_month_card_reward(
+        &self,
+        goods_id: i32,
+    ) -> Result<ClaimMonthCardRewardReply> {
         let req = ClaimMonthCardRewardRequest { goods_id };
         let body = self
             .gateway
@@ -128,10 +131,7 @@ impl MonthCardService {
             return false;
         }
 
-        let claimable: Vec<_> = infos
-            .iter()
-            .filter(|x| x.can_claim && x.goods_id > 0)
-            .collect();
+        let claimable: Vec<_> = infos.iter().filter(|x| x.can_claim && x.goods_id > 0).collect();
         *self.last_has_claimable.lock() = Some(!claimable.is_empty());
 
         if claimable.is_empty() {
@@ -231,10 +231,7 @@ fn get_date_key() -> String {
 
 fn now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
 // =====================================================================
@@ -262,51 +259,31 @@ mod tests {
 
     #[test]
     fn reward_summary_gold() {
-        let items = vec![Item {
-            id: 1,
-            count: 1000,
-            ..Default::default()
-        }];
+        let items = vec![Item { id: 1, count: 1000, ..Default::default() }];
         assert_eq!(get_reward_summary(&items), "金币1000");
     }
 
     #[test]
     fn reward_summary_ticket() {
-        let items = vec![Item {
-            id: 1002,
-            count: 50,
-            ..Default::default()
-        }];
+        let items = vec![Item { id: 1002, count: 50, ..Default::default() }];
         assert_eq!(get_reward_summary(&items), "点券50");
     }
 
     #[test]
     fn reward_summary_experience() {
-        let items = vec![Item {
-            id: 2,
-            count: 500,
-            ..Default::default()
-        }];
+        let items = vec![Item { id: 2, count: 500, ..Default::default() }];
         assert_eq!(get_reward_summary(&items), "经验500");
     }
 
     #[test]
     fn reward_summary_unknown() {
-        let items = vec![Item {
-            id: 9999,
-            count: 3,
-            ..Default::default()
-        }];
+        let items = vec![Item { id: 9999, count: 3, ..Default::default() }];
         assert_eq!(get_reward_summary(&items), "物品#9999x3");
     }
 
     #[test]
     fn reward_summary_skips_zero_count() {
-        let items = vec![Item {
-            id: 1,
-            count: 0,
-            ..Default::default()
-        }];
+        let items = vec![Item { id: 1, count: 0, ..Default::default() }];
         assert_eq!(get_reward_summary(&items), "");
     }
 

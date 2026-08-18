@@ -24,10 +24,5 @@ pub fn get_snapshot(state: State<'_, DesktopState>) -> IpcResult<DesktopSnapshot
 pub(crate) fn build_snapshot(state: &DesktopState) -> DesktopSnapshot {
     let accounts = build_accounts(state);
     let worker_count = state.app.engine.list_workers().len();
-    DesktopSnapshot {
-        ready: true,
-        worker_count,
-        account_count: accounts.len(),
-        accounts,
-    }
+    DesktopSnapshot { ready: true, worker_count, account_count: accounts.len(), accounts }
 }

@@ -128,14 +128,20 @@ impl RequestManager {
         self.inner.pending.lock().contains_key(&seq)
     }
 
-    /// 偷看 pending 的 service/method（不移除）
+    /// 是否已有指定方法名的 RPC 在等待回包（心跳避免叠发）
     #[must_use]
-    pub fn peek(&self, seq: i64) -> Option<(String, String)> {
+    pub fn has_pending_method(&self, method: &str) -> bool {
         self.inner
             .pending
             .lock()
-            .get(&seq)
-            .map(|p| (p.service_name.clone(), p.method_name.clone()))
+            .values()
+            .any(|p| p.method_name.eq_ignore_ascii_case(method))
+    }
+
+    /// 偷看 pending 的 service/method（不移除）
+    #[must_use]
+    pub fn peek(&self, seq: i64) -> Option<(String, String)> {
+        self.inner.pending.lock().get(&seq).map(|p| (p.service_name.clone(), p.method_name.clone()))
     }
 
     /// 拒绝所有待处理请求（连接断开时调用）
@@ -215,5 +221,18 @@ mod tests {
             receivers.push((seq, rx));
         }
         assert_eq!(mgr.pending_count(), 5);
+    }
+
+    #[tokio::test]
+    async fn has_pending_method_tracks_name() {
+        let mgr = RequestManager::new();
+        let (_seq, rx) = mgr.call("gamepb.userpb.UserService", "Heartbeat");
+        assert!(mgr.has_pending_method("Heartbeat"));
+        assert!(mgr.has_pending_method("heartbeat"));
+        assert!(!mgr.has_pending_method("GetAll"));
+        let info = mgr.cancel(_seq);
+        assert_eq!(info, Some(("gamepb.userpb.UserService".into(), "Heartbeat".into())));
+        drop(rx);
+        assert!(!mgr.has_pending_method("Heartbeat"));
     }
 }

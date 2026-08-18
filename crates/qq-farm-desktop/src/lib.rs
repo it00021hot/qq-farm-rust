@@ -30,14 +30,9 @@ pub fn run() {
     ));
     let _enter = runtime.enter();
 
-    let max_workers = std::env::var("MAX_WORKERS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(16);
-    let app_ctx = Arc::new(qq_farm_app::bootstrap::assemble_app_context(
-        max_workers,
-        "https://game.qq.com",
-    ));
+    let max_workers = std::env::var("MAX_WORKERS").ok().and_then(|s| s.parse().ok()).unwrap_or(16);
+    let app_ctx =
+        Arc::new(qq_farm_app::bootstrap::assemble_app_context(max_workers, "https://game.qq.com"));
     let desktop = DesktopState::new(app_ctx);
 
     tauri::Builder::default()
@@ -46,7 +41,8 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             let state = app.state::<DesktopState>().inner().clone();
-            events::spawn_event_bridge(handle, state);
+            events::spawn_event_bridge(handle, state.clone());
+            state.app.engine.schedule_wx_authorized_start();
             let cfg_dir = qq_farm_core::config::paths::game_config_static_dir();
             tracing::info!(dir = %cfg_dir.display(), "game-config static dir");
             Ok(())
@@ -116,6 +112,9 @@ pub fn run() {
             commands::settings::get_settings,
             commands::settings::get_settings_panel,
             commands::settings::save_settings,
+            commands::settings::get_offline_reminder,
+            commands::settings::set_offline_reminder,
+            commands::settings::test_offline_reminder,
             // config
             commands::config::config_list_seeds,
             commands::config::config_list_fruits,

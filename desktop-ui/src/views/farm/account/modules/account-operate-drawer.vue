@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
-import { farmEnableStatusOptions, farmPlatformOptions, translateStringOptions } from '@/constants/business';
+import { farmPlatformOptions, translateStringOptions } from '@/constants/business';
 import {
   fetchAddFarmAccount,
   fetchConfirmFarmWxLogin,
@@ -76,7 +76,6 @@ const rules = computed<Record<string, App.Global.FormRule | App.Global.FormRule[
   return base;
 });
 
-const statusOptions = computed(() => translateStringOptions(farmEnableStatusOptions));
 const platformOptions = computed(() => translateStringOptions(farmPlatformOptions));
 const isAddMode = computed(() => props.operateType === 'add');
 const isWxQrTab = computed(() => activeLoginTab.value === 'wx_qr');
@@ -446,13 +445,6 @@ onBeforeUnmount(() => {
 
         <NFormItem :label="$t('page.farm.account.remark')" path="remark">
           <NInput v-model:value="model.remark" type="textarea" :placeholder="$t('page.farm.account.remark')" />
-        </NFormItem>
-        <NFormItem v-if="operateType === 'edit'" :label="$t('page.farm.account.status')" path="status">
-          <NRadioGroup v-model:value="model.status">
-            <NSpace>
-              <NRadio v-for="item in statusOptions" :key="item.value" :value="item.value" :label="item.label" />
-            </NSpace>
-          </NRadioGroup>
         </NFormItem>
       </NForm>
       <template #footer>

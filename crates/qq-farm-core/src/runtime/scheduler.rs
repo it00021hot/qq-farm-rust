@@ -50,10 +50,7 @@ pub struct IntervalOptions {
 
 impl Default for IntervalOptions {
     fn default() -> Self {
-        Self {
-            prevent_overlap: true,
-            run_immediately: false,
-        }
+        Self { prevent_overlap: true, run_immediately: false }
     }
 }
 
@@ -167,10 +164,7 @@ impl Scheduler {
             delay_ms: None,
             running: true,
         };
-        self.inner
-            .tasks
-            .lock()
-            .insert(name.to_string(), RegisteredTask { state, abort });
+        self.inner.tasks.lock().insert(name.to_string(), RegisteredTask { state, abort });
     }
 
     /// 注册一个 timeout 任务（一次性延迟执行）
@@ -197,10 +191,7 @@ impl Scheduler {
             delay_ms: Some(delay_ms),
             running: true,
         };
-        self.inner
-            .tasks
-            .lock()
-            .insert(name.to_string(), RegisteredTask { state, abort });
+        self.inner.tasks.lock().insert(name.to_string(), RegisteredTask { state, abort });
     }
 
     /// 取消一个任务
@@ -247,9 +238,8 @@ impl Scheduler {
 #[macro_export]
 macro_rules! task_fn {
     ($f:expr) => {
-        std::sync::Arc::new(|| {
-            Box::pin($f()) as futures::future::BoxFuture<'static, ()>
-        }) as $crate::runtime::scheduler::TaskFn
+        std::sync::Arc::new(|| Box::pin($f()) as futures::future::BoxFuture<'static, ()>)
+            as $crate::runtime::scheduler::TaskFn
     };
 }
 
@@ -270,10 +260,7 @@ impl SchedulerRegistry {
         use std::sync::OnceLock;
         static REG: OnceLock<Arc<SchedulerRegistry>> = OnceLock::new();
         REG.get_or_init(|| {
-            Arc::new(Self {
-                namespaces: Mutex::new(HashMap::new()),
-                notify: Notify::new(),
-            })
+            Arc::new(Self { namespaces: Mutex::new(HashMap::new()), notify: Notify::new() })
         })
         .clone()
     }
@@ -282,9 +269,7 @@ impl SchedulerRegistry {
         let mut map = self.namespaces.lock();
         map.insert(
             namespace.to_string(),
-            SchedulerEntry {
-                created_at_ms: chrono::Utc::now().timestamp_millis(),
-            },
+            SchedulerEntry { created_at_ms: chrono::Utc::now().timestamp_millis() },
         );
         self.notify.notify_waiters();
     }
@@ -344,10 +329,7 @@ mod tests {
                     f.fetch_add(1, Ordering::SeqCst);
                 })
             }),
-            IntervalOptions {
-                prevent_overlap: true,
-                run_immediately: false,
-            },
+            IntervalOptions { prevent_overlap: true, run_immediately: false },
         );
         tokio::time::sleep(Duration::from_millis(300)).await;
         let e = entered.load(Ordering::SeqCst);

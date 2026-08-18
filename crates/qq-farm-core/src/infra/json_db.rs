@@ -80,11 +80,7 @@ pub fn write_text_file_atomic(file_path: impl AsRef<Path>, text: &str) -> io::Re
     let ts = crate::utils::time::now_ms();
     let tmp_path = {
         let mut p = path.to_path_buf();
-        let file_name = p
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("file")
-            .to_string();
+        let file_name = p.file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string();
         p.set_file_name(format!("{file_name}.{pid}.{ts}.tmp"));
         p
     };

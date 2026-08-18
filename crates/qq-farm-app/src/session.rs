@@ -16,10 +16,7 @@ pub struct AppContext {
 impl AppContext {
     #[must_use]
     pub fn new(engine: Arc<RuntimeEngine>) -> Self {
-        Self {
-            engine,
-            wx_login: Arc::new(WxLoginHub::new()),
-        }
+        Self { engine, wx_login: Arc::new(WxLoginHub::new()) }
     }
 
     #[must_use]

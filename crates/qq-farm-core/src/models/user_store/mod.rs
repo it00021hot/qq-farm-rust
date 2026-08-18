@@ -11,19 +11,19 @@ pub mod users;
 pub use auth::{
     add_login_log, check_account_lockout, check_rate_limit, clear_failed_attempts,
     clear_login_logs, get_login_logs, hash_password, needs_rehash, record_failed_attempt,
-    validate_password_strength, verify_password, FailedAttemptResult, LockoutResult,
-    LoginAttempt, LoginLogEntry, PasswordStrengthResult, RateLimitResult,
+    validate_password_strength, verify_password, FailedAttemptResult, LockoutResult, LoginAttempt,
+    LoginLogEntry, PasswordStrengthResult, RateLimitResult,
 };
 pub use card_claim::{
     check_ua_claim_limit, claim_card_by_ua, clear_expired_claim_records, get_card_claim_records,
-    get_card_claim_status, set_card_claim_status, CardClaimRecord, ClaimResult,
-    UaClaimCheckResult,
+    get_card_claim_status, set_card_claim_status, CardClaimRecord, ClaimResult, UaClaimCheckResult,
 };
 pub use users::{
-    change_password, create_card, create_cards_batch, delete_card, delete_cards_batch,
-    delete_user, edit_user, get_all_cards, get_all_users, get_session_user, init_default_admin,
-    register_user, renew_user, update_card, update_user, validate_user, Card, DEFAULT_ACCOUNT_LIMIT,
-    EditResult, EditUpdates, RegisterResult, RenewResult, User, UserCard, UserSummary, ValidationResult,
+    change_password, create_card, create_cards_batch, delete_card, delete_cards_batch, delete_user,
+    edit_user, get_all_cards, get_all_users, get_session_user, init_default_admin, register_user,
+    renew_user, update_card, update_user, validate_user, Card, EditResult, EditUpdates,
+    RegisterResult, RenewResult, User, UserCard, UserSummary, ValidationResult,
+    DEFAULT_ACCOUNT_LIMIT,
 };
 
 /// 初始化用户系统（创建默认 admin 账号 + 加载持久化数据）

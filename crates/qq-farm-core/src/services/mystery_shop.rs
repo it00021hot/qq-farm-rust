@@ -59,13 +59,7 @@ impl MysteryShopService {
     /// - 网络 / 网关错误
     pub async fn buy(&self, npc_id: i64) -> Result<()> {
         let req = BuyRequest { npc_id };
-        self.gateway
-            .send_no_reply(
-                MYSTERY_SHOP_SERVICE,
-                "Buy",
-                &req.encode_to_vec(),
-            )
-            .await?;
+        self.gateway.send_no_reply(MYSTERY_SHOP_SERVICE, "Buy", &req.encode_to_vec()).await?;
         Ok(())
     }
 }

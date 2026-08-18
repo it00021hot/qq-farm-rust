@@ -13,11 +13,10 @@ use tokio::time::sleep;
 
 use crate::error::Result;
 use crate::proto::generated::gamepb::plantpb::PlantItem;
-use crate::services::farm::api::{
-    Api, NORMAL_FERTILIZER_ID,
-};
+use crate::services::farm::api::{Api, NORMAL_FERTILIZER_ID};
 use crate::services::farm::land_analysis::{
-    analyze_lands, build_planting_layouts, resolve_occupied_land_ids, select_non_overlapping_layouts,
+    analyze_lands, build_planting_layouts, resolve_occupied_land_ids,
+    select_non_overlapping_layouts,
 };
 
 /// 种植策略
@@ -208,14 +207,8 @@ pub fn sort_bag_seeds_for_planting(
     }
     let mut sorted = bag_seeds.to_vec();
     sorted.sort_by(|a, b| {
-        let a_idx = index_map
-            .get(&a.seed_id)
-            .copied()
-            .unwrap_or(usize::MAX);
-        let b_idx = index_map
-            .get(&b.seed_id)
-            .copied()
-            .unwrap_or(usize::MAX);
+        let a_idx = index_map.get(&a.seed_id).copied().unwrap_or(usize::MAX);
+        let b_idx = index_map.get(&b.seed_id).copied().unwrap_or(usize::MAX);
         if a_idx != b_idx {
             return a_idx.cmp(&b_idx);
         }
@@ -252,14 +245,13 @@ pub fn confirms_planted_footprint(
     occupied_land_ids: &[i64],
     lands: &[crate::proto::generated::gamepb::plantpb::LandInfo],
 ) -> bool {
-    if !expected_land_ids
-        .iter()
-        .all(|id| occupied_land_ids.contains(id))
-    {
+    if !expected_land_ids.iter().all(|id| occupied_land_ids.contains(id)) {
         return false;
     }
-    let land_map: std::collections::HashMap<i64, &crate::proto::generated::gamepb::plantpb::LandInfo> =
-        lands.iter().map(|l| (l.id, l)).collect();
+    let land_map: std::collections::HashMap<
+        i64,
+        &crate::proto::generated::gamepb::plantpb::LandInfo,
+    > = lands.iter().map(|l| (l.id, l)).collect();
     match land_map.get(&master_land_id) {
         Some(master) => master.plant.is_some(),
         None => false,
@@ -370,13 +362,9 @@ impl PlantingEngine {
         let layouts = land_ids
             .into_iter()
             .filter(|id| *id > 0)
-            .map(|id| PlantingLayout {
-                anchor_land_id: id,
-                land_ids: vec![id],
-            })
+            .map(|id| PlantingLayout { anchor_land_id: id, land_ids: vec![id] })
             .collect();
-        self.plant_seeds_with_layouts(seed_id, layouts, usize::MAX, host_gid)
-            .await
+        self.plant_seeds_with_layouts(seed_id, layouts, usize::MAX, host_gid).await
     }
 
     /// 带布局的种植入口（对齐 TS `plantSeeds(..., { layouts, maxPlantCount })`）
@@ -405,11 +393,8 @@ impl PlantingEngine {
 
         for (index, layout) in selected.iter().enumerate() {
             let land_id = layout.anchor_land_id;
-            let items = vec![PlantItem {
-                seed_id,
-                land_ids: layout.land_ids.clone(),
-                auto_slave: false,
-            }];
+            let items =
+                vec![PlantItem { seed_id, land_ids: layout.land_ids.clone(), auto_slave: false }];
             let reply = match self.api.plant(items).await {
                 Ok(r) => r,
                 Err(e) => {
@@ -426,8 +411,12 @@ impl PlantingEngine {
             }
             let expected: std::collections::HashSet<i64> =
                 layout.land_ids.iter().copied().collect();
-            let mut confirmed =
-                confirms_planted_footprint(&expected, resolved_master, &resolved_occupied, &changed);
+            let mut confirmed = confirms_planted_footprint(
+                &expected,
+                resolved_master,
+                &resolved_occupied,
+                &changed,
+            );
             if !confirmed {
                 match self.api.get_all_lands(host_gid).await {
                     Ok(latest) => {
@@ -483,13 +472,8 @@ impl PlantingEngine {
         planted_land_ids: &[i64],
         host_gid: i64,
     ) -> Result<FertilizeResult> {
-        self.fertilize_by_config_ex(
-            planted_land_ids,
-            host_gid,
-            "",
-            FertilizeOptions::default(),
-        )
-        .await
+        self.fertilize_by_config_ex(planted_land_ids, host_gid, "", FertilizeOptions::default())
+            .await
     }
 
     /// 带账号配置 / skipNormal / 多季原因的施肥
@@ -509,14 +493,10 @@ impl PlantingEngine {
         let auto = if account_id.is_empty() {
             None
         } else {
-            Some(crate::models::store::account_config::get_automation(Some(
-                account_id,
-            )))
+            Some(crate::models::store::account_config::get_automation(Some(account_id)))
         };
-        let mode = auto
-            .as_ref()
-            .map(|a| a.fertilizer)
-            .unwrap_or(match self.config.fertilize_mode {
+        let mode =
+            auto.as_ref().map(|a| a.fertilizer).unwrap_or(match self.config.fertilize_mode {
                 FertilizeMode::None => FertilizerMode::None,
                 FertilizeMode::Normal => FertilizerMode::Normal,
                 FertilizeMode::Organic => FertilizerMode::Organic,
@@ -537,11 +517,7 @@ impl PlantingEngine {
 
         let planted: Vec<i64> = {
             let mut seen = std::collections::HashSet::new();
-            planted_land_ids
-                .iter()
-                .copied()
-                .filter(|id| *id > 0 && seen.insert(*id))
-                .collect()
+            planted_land_ids.iter().copied().filter(|id| *id > 0 && seen.insert(*id)).collect()
         };
         if planted.is_empty()
             && !matches!(
@@ -552,12 +528,7 @@ impl PlantingEngine {
             return Ok(FertilizeResult::default());
         }
 
-        let latest_lands = self
-            .api
-            .get_all_lands(0)
-            .await
-            .map(|r| r.lands)
-            .unwrap_or_default();
+        let latest_lands = self.api.get_all_lands(0).await.map(|r| r.lands).unwrap_or_default();
         // 拉地失败/空列表时 fail-closed：无法确认土地类型则跳过本轮施肥（对齐 bot）
         if latest_lands.is_empty() {
             return Ok(FertilizeResult::default());
@@ -567,19 +538,11 @@ impl PlantingEngine {
 
         let mut result = FertililzeResultBuilder::default();
         if !options.skip_normal
-            && matches!(
-                mode,
-                FertilizerMode::Normal | FertilizerMode::Both | FertilizerMode::Smart
-            )
+            && matches!(mode, FertilizerMode::Normal | FertilizerMode::Both | FertilizerMode::Smart)
             && !normal_targets.is_empty()
         {
             for (i, &land_id) in normal_targets.iter().enumerate() {
-                if self
-                    .api
-                    .fertilize(land_id, NORMAL_FERTILIZER_ID)
-                    .await
-                    .is_err()
-                {
+                if self.api.fertilize(land_id, NORMAL_FERTILIZER_ID).await.is_err() {
                     break;
                 }
                 result.normal += 1;
@@ -593,15 +556,13 @@ impl PlantingEngine {
             let mut organic_targets = planted.clone();
             if !latest_lands.is_empty() {
                 organic_targets = get_organic_fertilizer_targets_from_lands(&latest_lands);
-                organic_targets = filter_ids_by_land_types(&organic_targets, &latest_lands, &selected);
+                organic_targets =
+                    filter_ids_by_land_types(&organic_targets, &latest_lands, &selected);
             }
             result.organic = self.api.fertilize_organic_loop(&organic_targets).await;
         } else if matches!(mode, FertilizerMode::Smart) {
-            let smart_secs = auto
-                .as_ref()
-                .map(|a| a.fertilizer_smart_seconds)
-                .filter(|n| *n > 0)
-                .unwrap_or(300);
+            let smart_secs =
+                auto.as_ref().map(|a| a.fertilizer_smart_seconds).filter(|n| *n > 0).unwrap_or(300);
             let lands = if latest_lands.is_empty() {
                 self.api.get_all_lands(0).await.map(|r| r.lands).unwrap_or_default()
             } else {
@@ -659,11 +620,7 @@ impl PlantingEngine {
     ) -> Result<AutoPlantResult> {
         let mut lands_to_plant: Vec<i64> = {
             let mut seen = std::collections::HashSet::new();
-            empty_land_ids
-                .iter()
-                .copied()
-                .filter(|id| *id > 0 && seen.insert(*id))
-                .collect()
+            empty_land_ids.iter().copied().filter(|id| *id > 0 && seen.insert(*id)).collect()
         };
         if !dead_land_ids.is_empty() {
             if self.api.remove_plant(dead_land_ids.to_vec()).await.is_ok() {
@@ -671,8 +628,9 @@ impl PlantingEngine {
                     account_id,
                     "铲除",
                     format!("清理枯株 {} 块土地", dead_land_ids.len()),
-                    crate::constants::PanelEvent::RemovePlant, Some(serde_json::json!({
-                        "module": "farm", 
+                    crate::constants::PanelEvent::RemovePlant,
+                    Some(serde_json::json!({
+                        "module": "farm",
                         "result": "ok",
                         "count": dead_land_ids.len(),
                         "landIds": dead_land_ids,
@@ -687,12 +645,10 @@ impl PlantingEngine {
             return Ok(AutoPlantResult::default());
         }
 
-        let strategy = crate::models::store::account_config::get_planting_strategy(Some(account_id));
+        let strategy =
+            crate::models::store::account_config::get_planting_strategy(Some(account_id));
         if strategy == crate::models::types::PlantingStrategy::BagPriority {
-            let bag = match self
-                .plant_from_bag_seeds(&lands_to_plant, host_gid, account_id)
-                .await
-            {
+            let bag = match self.plant_from_bag_seeds(&lands_to_plant, host_gid, account_id).await {
                 Ok(b) => b,
                 Err(e) => {
                     tracing::warn!(
@@ -704,17 +660,11 @@ impl PlantingEngine {
             };
             let mut planted = bag.planted_land_ids.clone();
             if bag.fallback_allowed && !bag.remaining_land_ids.is_empty() {
-                let fallback =
-                    crate::models::store::account_config::get_bag_seed_fallback_strategy(Some(
-                        account_id,
-                    ));
+                let fallback = crate::models::store::account_config::get_bag_seed_fallback_strategy(
+                    Some(account_id),
+                );
                 let shop = self
-                    .plant_from_shop(
-                        &bag.remaining_land_ids,
-                        host_gid,
-                        account_id,
-                        Some(fallback),
-                    )
+                    .plant_from_shop(&bag.remaining_land_ids, host_gid, account_id, Some(fallback))
                     .await?;
                 planted.extend(shop.planted_lands);
             }
@@ -733,9 +683,8 @@ impl PlantingEngine {
             return Ok(AutoPlantResult { planted_lands: planted });
         }
 
-        let shop = self
-            .plant_from_shop(&lands_to_plant, host_gid, account_id, Some(strategy))
-            .await?;
+        let shop =
+            self.plant_from_shop(&lands_to_plant, host_gid, account_id, Some(strategy)).await?;
         if !shop.planted_lands.is_empty() {
             let _ = self
                 .fertilize_by_config_ex(
@@ -746,9 +695,7 @@ impl PlantingEngine {
                 )
                 .await;
         }
-        Ok(AutoPlantResult {
-            planted_lands: shop.planted_lands,
-        })
+        Ok(AutoPlantResult { planted_lands: shop.planted_lands })
     }
 
     /// 用背包种子种植
@@ -760,11 +707,7 @@ impl PlantingEngine {
     ) -> Result<BagPlantResult> {
         let mut target: Vec<i64> = {
             let mut seen = std::collections::HashSet::new();
-            lands_to_plant
-                .iter()
-                .copied()
-                .filter(|id| *id > 0 && seen.insert(*id))
-                .collect()
+            lands_to_plant.iter().copied().filter(|id| *id > 0 && seen.insert(*id)).collect()
         };
         if target.is_empty() {
             return Ok(BagPlantResult::default());
@@ -787,7 +730,8 @@ impl PlantingEngine {
         let (usable, level_locked, _) = filter_bag_seeds(&mapped);
         let level_locked_ids: std::collections::HashSet<i64> =
             level_locked.iter().map(|s| s.seed_id).collect();
-        let priority = crate::models::store::account_config::get_bag_seed_priority(Some(account_id));
+        let priority =
+            crate::models::store::account_config::get_bag_seed_priority(Some(account_id));
         let ordered = plan_bag_planting_order(&usable, &priority);
         if ordered.is_empty() {
             return Ok(BagPlantResult {
@@ -808,19 +752,13 @@ impl PlantingEngine {
             }
             let plant_size = seed.plant_size.max(1);
             let all_layouts = build_planting_layouts(&target, plant_size);
-            let layouts =
-                select_non_overlapping_layouts(&all_layouts, seed.count.max(0) as usize);
+            let layouts = select_non_overlapping_layouts(&all_layouts, seed.count.max(0) as usize);
             if layouts.is_empty() {
                 continue;
             }
-            let result = self
-                .plant_seeds_with_layouts(seed.seed_id, layouts, usize::MAX, host_gid)
-                .await?;
-            for id in result
-                .reserved_land_ids
-                .iter()
-                .chain(result.occupied_land_ids.iter())
-            {
+            let result =
+                self.plant_seeds_with_layouts(seed.seed_id, layouts, usize::MAX, host_gid).await?;
+            for id in result.reserved_land_ids.iter().chain(result.occupied_land_ids.iter()) {
                 if *id > 0 {
                     occupied.insert(*id);
                 }
@@ -856,17 +794,10 @@ impl PlantingEngine {
         let candidates = self.find_best_seed(account_id, override_strategy).await?;
         let mut remaining: Vec<i64> = {
             let mut seen = std::collections::HashSet::new();
-            lands_to_plant
-                .iter()
-                .copied()
-                .filter(|id| *id > 0 && seen.insert(*id))
-                .collect()
+            lands_to_plant.iter().copied().filter(|id| *id > 0 && seen.insert(*id)).collect()
         };
         if candidates.is_empty() {
-            return Ok(ShopPlantResult {
-                remaining_land_ids: remaining,
-                ..Default::default()
-            });
+            return Ok(ShopPlantResult { remaining_land_ids: remaining, ..Default::default() });
         }
         let mut planted_lands = Vec::new();
         let mut uncertain = false;
@@ -890,11 +821,7 @@ impl PlantingEngine {
             } else {
                 candidate.max_purchase_count
             };
-            let affordable = if candidate.price > 0 {
-                gold / candidate.price
-            } else {
-                0
-            };
+            let affordable = if candidate.price > 0 { gold / candidate.price } else { 0 };
             let purchase_units = required_purchase.min(max_purchase).min(affordable);
             if purchase_units <= 0 {
                 continue;
@@ -902,17 +829,15 @@ impl PlantingEngine {
             let mut need_count = required_seed_count.min(purchase_units * unit);
             layouts.truncate(need_count as usize);
 
-            let buy = match self
-                .api
-                .buy_goods(candidate.goods_id, purchase_units, candidate.price)
-                .await
-            {
-                Ok(r) => r,
-                Err(_) => {
-                    uncertain = true;
-                    break;
-                }
-            };
+            let buy =
+                match self.api.buy_goods(candidate.goods_id, purchase_units, candidate.price).await
+                {
+                    Ok(r) => r,
+                    Err(_) => {
+                        uncertain = true;
+                        break;
+                    }
+                };
             let mut actual_seed_id = candidate.seed_id;
             if let Some(item) = buy.get_items.first() {
                 if item.id > 0 {
@@ -928,12 +853,7 @@ impl PlantingEngine {
             }
 
             let result = self
-                .plant_seeds_with_layouts(
-                    actual_seed_id,
-                    layouts,
-                    need_count as usize,
-                    host_gid,
-                )
+                .plant_seeds_with_layouts(actual_seed_id, layouts, need_count as usize, host_gid)
                 .await?;
             planted_lands.extend(result.planted_land_ids);
             let consumed: std::collections::HashSet<i64> = result
@@ -950,11 +870,7 @@ impl PlantingEngine {
         }
         planted_lands.sort_unstable();
         planted_lands.dedup();
-        Ok(ShopPlantResult {
-            planted_lands,
-            remaining_land_ids: remaining,
-            uncertain,
-        })
+        Ok(ShopPlantResult { planted_lands, remaining_land_ids: remaining, uncertain })
     }
 
     /// 商店候选种子（analytics 排序 + 金币/限购）
@@ -997,10 +913,9 @@ impl PlantingEngine {
             });
         }
         let available = filter_shop_seeds(&inputs, state_level);
-        let strategy =
-            override_strategy.unwrap_or_else(|| {
-                crate::models::store::account_config::get_planting_strategy(Some(account_id))
-            });
+        let strategy = override_strategy.unwrap_or_else(|| {
+            crate::models::store::account_config::get_planting_strategy(Some(account_id))
+        });
         let strategy_key = planting_strategy_key(strategy);
         let rankings = crate::services::analytics::get_plant_rankings(
             crate::services::analytics::SortBy::from_str_opt(match strategy_key {
@@ -1014,21 +929,12 @@ impl PlantingEngine {
         let ranking_ids: Vec<i64> = rankings
             .into_iter()
             .filter(|r| {
-                r.seed_id > 0
-                    && r.level
-                        .map(|l| l <= 0 || l <= state_level)
-                        .unwrap_or(true)
+                r.seed_id > 0 && r.level.map(|l| l <= 0 || l <= state_level).unwrap_or(true)
             })
             .map(|r| r.seed_id)
             .collect();
-        let preferred =
-            crate::models::store::account_config::get_preferred_seed(Some(account_id));
-        Ok(sort_shop_seeds_by_strategy(
-            available,
-            strategy_key,
-            &ranking_ids,
-            preferred,
-        ))
+        let preferred = crate::models::store::account_config::get_preferred_seed(Some(account_id));
+        Ok(sort_shop_seeds_by_strategy(available, strategy_key, &ranking_ids, preferred))
     }
 }
 
@@ -1058,10 +964,7 @@ struct FertililzeResultBuilder {
 
 impl FertililzeResultBuilder {
     fn build(self) -> FertilizeResult {
-        FertilizeResult {
-            normal: self.normal,
-            organic: self.organic,
-        }
+        FertilizeResult { normal: self.normal, organic: self.organic }
     }
 }
 
@@ -1175,18 +1078,15 @@ pub struct ShopSeedInput {
     pub bought_num: i64,
     pub item_count: i64,
     pub unlocked: bool,
-    pub cond_type: i64,    // 1=等级条件
-    pub cond_param: i64,   // cond_type=1 时是等级阈值
+    pub cond_type: i64,  // 1=等级条件
+    pub cond_param: i64, // cond_type=1 时是等级阈值
 }
 
 /// 过滤商店种子
 ///
 /// 对应原 planting.ts `findBestSeed` 的过滤部分
 #[must_use]
-pub fn filter_shop_seeds(
-    inputs: &[ShopSeedInput],
-    state_level: i64,
-) -> Vec<ShopSeedCandidate> {
+pub fn filter_shop_seeds(inputs: &[ShopSeedInput], state_level: i64) -> Vec<ShopSeedCandidate> {
     let mut out = Vec::new();
     for g in inputs {
         if !g.unlocked {
@@ -1195,11 +1095,7 @@ pub fn filter_shop_seeds(
         if g.cond_type == 1 && state_level < g.cond_param {
             continue;
         }
-        let required_level = if g.cond_type == 1 {
-            g.cond_param
-        } else {
-            g.required_level
-        };
+        let required_level = if g.cond_type == 1 { g.cond_param } else { g.required_level };
         if g.limit_count > 0 && g.bought_num >= g.limit_count {
             continue;
         }
@@ -1239,27 +1135,18 @@ pub fn sort_shop_seeds_by_strategy(
 ) -> Vec<ShopSeedCandidate> {
     let mut c = candidates;
     if matches!(strategy, "max_exp" | "max_profit" | "max_fert_exp" | "max_fert_profit") {
-        let ranking: std::collections::HashMap<i64, usize> = ranking_seed_ids
-            .iter()
-            .enumerate()
-            .map(|(i, &id)| (id, i))
-            .collect();
+        let ranking: std::collections::HashMap<i64, usize> =
+            ranking_seed_ids.iter().enumerate().map(|(i, &id)| (id, i)).collect();
         c.sort_by(|a, b| {
             let ra = ranking.get(&a.seed_id).copied().unwrap_or(usize::MAX);
             let rb = ranking.get(&b.seed_id).copied().unwrap_or(usize::MAX);
             ra.cmp(&rb).then_with(|| {
-                b.required_level
-                    .cmp(&a.required_level)
-                    .then(a.seed_id.cmp(&b.seed_id))
+                b.required_level.cmp(&a.required_level).then(a.seed_id.cmp(&b.seed_id))
             })
         });
     } else {
         // 默认 level desc
-        c.sort_by(|a, b| {
-            b.required_level
-                .cmp(&a.required_level)
-                .then(a.seed_id.cmp(&b.seed_id))
-        });
+        c.sort_by(|a, b| b.required_level.cmp(&a.required_level).then(a.seed_id.cmp(&b.seed_id)));
     }
     if strategy == "preferred" && preferred_seed_id > 0 {
         if let Some(idx) = c.iter().position(|s| s.seed_id == preferred_seed_id) {
@@ -1360,11 +1247,8 @@ pub fn plan_shop_planting(
         if remaining.is_empty() {
             break;
         }
-        let max = if c.max_purchase_count < 0 {
-            remaining.len() as i64
-        } else {
-            c.max_purchase_count
-        };
+        let max =
+            if c.max_purchase_count < 0 { remaining.len() as i64 } else { c.max_purchase_count };
         let anchor_count = std::cmp::min(max as usize, remaining.len());
         if anchor_count == 0 {
             continue;
@@ -1466,10 +1350,7 @@ mod tests {
         let occupied = vec![1, 2, 3];
         let lands = vec![LandInfo {
             id: 1,
-            plant: Some(PlantInfo {
-                id: 100,
-                ..Default::default()
-            }),
+            plant: Some(PlantInfo { id: 100, ..Default::default() }),
             ..Default::default()
         }];
         // master=1 有 plant → true
@@ -1483,10 +1364,7 @@ mod tests {
         expected.insert(1);
         expected.insert(2);
         let occupied = vec![1]; // 缺 2
-        let lands = vec![LandInfo {
-            id: 1,
-            ..Default::default()
-        }];
+        let lands = vec![LandInfo { id: 1, ..Default::default() }];
         assert!(!confirms_planted_footprint(&expected, 1, &occupied, &lands));
     }
 
@@ -1496,11 +1374,7 @@ mod tests {
         let mut expected = std::collections::HashSet::new();
         expected.insert(1);
         let occupied = vec![1];
-        let lands = vec![LandInfo {
-            id: 1,
-            plant: None,
-            ..Default::default()
-        }];
+        let lands = vec![LandInfo { id: 1, plant: None, ..Default::default() }];
         // master=1 没 plant → false
         assert!(!confirms_planted_footprint(&expected, 1, &occupied, &lands));
     }
@@ -1512,11 +1386,7 @@ mod tests {
         let body = encode_plant_request(100, &[1, 2, 3]);
         let expected = crate::proto::generated::gamepb::plantpb::PlantRequest {
             land_and_seed: Default::default(),
-            items: vec![PlantItem {
-                seed_id: 100,
-                land_ids: vec![1, 2, 3],
-                auto_slave: false,
-            }],
+            items: vec![PlantItem { seed_id: 100, land_ids: vec![1, 2, 3], auto_slave: false }],
         }
         .encode_to_vec();
         assert_eq!(body, expected);
@@ -1530,7 +1400,12 @@ mod tests {
 
     // ===== 阶段 2E：背包/商店种植算法 =====
 
-    fn bag_seed(seed_id: i64, count: i64, required_level: i64, state_level: i64) -> BagSeedWithLevel {
+    fn bag_seed(
+        seed_id: i64,
+        count: i64,
+        required_level: i64,
+        state_level: i64,
+    ) -> BagSeedWithLevel {
         BagSeedWithLevel {
             seed_id,
             name: format!("seed-{seed_id}"),
@@ -1571,11 +1446,7 @@ mod tests {
 
     #[test]
     fn plan_bag_planting_order_priority() {
-        let seeds = vec![
-            bag_seed(100, 5, 1, 10),
-            bag_seed(200, 5, 1, 10),
-            bag_seed(300, 5, 1, 10),
-        ];
+        let seeds = vec![bag_seed(100, 5, 1, 10), bag_seed(200, 5, 1, 10), bag_seed(300, 5, 1, 10)];
         // priority: 300 在前
         let plan = plan_bag_planting_order(&seeds, &[300, 100]);
         assert_eq!(plan[0].seed_id, 300);
@@ -1606,33 +1477,73 @@ mod tests {
     fn filter_shop_seeds_basic() {
         let inputs = vec![
             ShopSeedInput {
-                goods_id: 1, seed_id: 100, name: "萝卜".into(), price: 100,
-                required_level: 0, limit_count: 0, bought_num: 0, item_count: 1,
-                unlocked: true, cond_type: 1, cond_param: 1,
+                goods_id: 1,
+                seed_id: 100,
+                name: "萝卜".into(),
+                price: 100,
+                required_level: 0,
+                limit_count: 0,
+                bought_num: 0,
+                item_count: 1,
+                unlocked: true,
+                cond_type: 1,
+                cond_param: 1,
             },
             ShopSeedInput {
-                goods_id: 2, seed_id: 200, name: "白菜".into(), price: 0,  // price=0 应过滤
-                required_level: 0, limit_count: 0, bought_num: 0, item_count: 1,
-                unlocked: true, cond_type: 0, cond_param: 0,
+                goods_id: 2,
+                seed_id: 200,
+                name: "白菜".into(),
+                price: 0, // price=0 应过滤
+                required_level: 0,
+                limit_count: 0,
+                bought_num: 0,
+                item_count: 1,
+                unlocked: true,
+                cond_type: 0,
+                cond_param: 0,
             },
             ShopSeedInput {
-                goods_id: 3, seed_id: 300, name: "玉米".into(), price: 200,
-                required_level: 0, limit_count: 5, bought_num: 5, item_count: 1, // 已限购
-                unlocked: true, cond_type: 0, cond_param: 0,
+                goods_id: 3,
+                seed_id: 300,
+                name: "玉米".into(),
+                price: 200,
+                required_level: 0,
+                limit_count: 5,
+                bought_num: 5,
+                item_count: 1, // 已限购
+                unlocked: true,
+                cond_type: 0,
+                cond_param: 0,
             },
             ShopSeedInput {
-                goods_id: 4, seed_id: 400, name: "南瓜".into(), price: 500,
-                required_level: 0, limit_count: 0, bought_num: 0, item_count: 1,
-                unlocked: false, cond_type: 0, cond_param: 0, // 未解锁
+                goods_id: 4,
+                seed_id: 400,
+                name: "南瓜".into(),
+                price: 500,
+                required_level: 0,
+                limit_count: 0,
+                bought_num: 0,
+                item_count: 1,
+                unlocked: false,
+                cond_type: 0,
+                cond_param: 0, // 未解锁
             },
             ShopSeedInput {
-                goods_id: 5, seed_id: 500, name: "高等级".into(), price: 1000,
-                required_level: 0, limit_count: 0, bought_num: 0, item_count: 1,
-                unlocked: true, cond_type: 1, cond_param: 10, // 等级锁
+                goods_id: 5,
+                seed_id: 500,
+                name: "高等级".into(),
+                price: 1000,
+                required_level: 0,
+                limit_count: 0,
+                bought_num: 0,
+                item_count: 1,
+                unlocked: true,
+                cond_type: 1,
+                cond_param: 10, // 等级锁
             },
         ];
         let cands = filter_shop_seeds(&inputs, 5); // state_level=5
-        // 应该只有 goods_id=1（萝卜）
+                                                   // 应该只有 goods_id=1（萝卜）
         assert_eq!(cands.len(), 1);
         assert_eq!(cands[0].seed_id, 100);
         assert_eq!(cands[0].required_level, 1);
@@ -1642,9 +1553,17 @@ mod tests {
     #[test]
     fn filter_shop_seeds_limit_count() {
         let inputs = vec![ShopSeedInput {
-            goods_id: 1, seed_id: 100, name: "x".into(), price: 100,
-            required_level: 0, limit_count: 10, bought_num: 3, item_count: 1,
-            unlocked: true, cond_type: 0, cond_param: 0,
+            goods_id: 1,
+            seed_id: 100,
+            name: "x".into(),
+            price: 100,
+            required_level: 0,
+            limit_count: 10,
+            bought_num: 3,
+            item_count: 1,
+            unlocked: true,
+            cond_type: 0,
+            cond_param: 0,
         }];
         let cands = filter_shop_seeds(&inputs, 1);
         assert_eq!(cands.len(), 1);
@@ -1654,9 +1573,39 @@ mod tests {
     #[test]
     fn sort_shop_seeds_by_strategy_default_level() {
         let cands = vec![
-            ShopSeedCandidate { goods_id: 1, seed_id: 100, name: "A".into(), price: 100, required_level: 1, unit_item_count: 1, max_purchase_count: -1, bought_num: 0, limit_count: 0 },
-            ShopSeedCandidate { goods_id: 2, seed_id: 200, name: "B".into(), price: 200, required_level: 5, unit_item_count: 1, max_purchase_count: -1, bought_num: 0, limit_count: 0 },
-            ShopSeedCandidate { goods_id: 3, seed_id: 150, name: "C".into(), price: 150, required_level: 3, unit_item_count: 1, max_purchase_count: -1, bought_num: 0, limit_count: 0 },
+            ShopSeedCandidate {
+                goods_id: 1,
+                seed_id: 100,
+                name: "A".into(),
+                price: 100,
+                required_level: 1,
+                unit_item_count: 1,
+                max_purchase_count: -1,
+                bought_num: 0,
+                limit_count: 0,
+            },
+            ShopSeedCandidate {
+                goods_id: 2,
+                seed_id: 200,
+                name: "B".into(),
+                price: 200,
+                required_level: 5,
+                unit_item_count: 1,
+                max_purchase_count: -1,
+                bought_num: 0,
+                limit_count: 0,
+            },
+            ShopSeedCandidate {
+                goods_id: 3,
+                seed_id: 150,
+                name: "C".into(),
+                price: 150,
+                required_level: 3,
+                unit_item_count: 1,
+                max_purchase_count: -1,
+                bought_num: 0,
+                limit_count: 0,
+            },
         ];
         let sorted = sort_shop_seeds_by_strategy(cands, "level", &[], 0);
         // 按 required_level desc: 5, 3, 1
@@ -1668,8 +1617,28 @@ mod tests {
     #[test]
     fn sort_shop_seeds_by_strategy_preferred() {
         let cands = vec![
-            ShopSeedCandidate { goods_id: 1, seed_id: 100, name: "A".into(), price: 100, required_level: 1, unit_item_count: 1, max_purchase_count: -1, bought_num: 0, limit_count: 0 },
-            ShopSeedCandidate { goods_id: 2, seed_id: 200, name: "B".into(), price: 200, required_level: 5, unit_item_count: 1, max_purchase_count: -1, bought_num: 0, limit_count: 0 },
+            ShopSeedCandidate {
+                goods_id: 1,
+                seed_id: 100,
+                name: "A".into(),
+                price: 100,
+                required_level: 1,
+                unit_item_count: 1,
+                max_purchase_count: -1,
+                bought_num: 0,
+                limit_count: 0,
+            },
+            ShopSeedCandidate {
+                goods_id: 2,
+                seed_id: 200,
+                name: "B".into(),
+                price: 200,
+                required_level: 5,
+                unit_item_count: 1,
+                max_purchase_count: -1,
+                bought_num: 0,
+                limit_count: 0,
+            },
         ];
         let sorted = sort_shop_seeds_by_strategy(cands, "preferred", &[], 200);
         assert_eq!(sorted[0].seed_id, 200);
@@ -1678,8 +1647,28 @@ mod tests {
     #[test]
     fn sort_shop_seeds_by_strategy_ranking() {
         let cands = vec![
-            ShopSeedCandidate { goods_id: 1, seed_id: 100, name: "A".into(), price: 100, required_level: 5, unit_item_count: 1, max_purchase_count: -1, bought_num: 0, limit_count: 0 },
-            ShopSeedCandidate { goods_id: 2, seed_id: 200, name: "B".into(), price: 200, required_level: 3, unit_item_count: 1, max_purchase_count: -1, bought_num: 0, limit_count: 0 },
+            ShopSeedCandidate {
+                goods_id: 1,
+                seed_id: 100,
+                name: "A".into(),
+                price: 100,
+                required_level: 5,
+                unit_item_count: 1,
+                max_purchase_count: -1,
+                bought_num: 0,
+                limit_count: 0,
+            },
+            ShopSeedCandidate {
+                goods_id: 2,
+                seed_id: 200,
+                name: "B".into(),
+                price: 200,
+                required_level: 3,
+                unit_item_count: 1,
+                max_purchase_count: -1,
+                bought_num: 0,
+                limit_count: 0,
+            },
         ];
         // ranking: 200 在前
         let sorted = sort_shop_seeds_by_strategy(cands, "max_exp", &[200, 100], 0);
@@ -1689,9 +1678,17 @@ mod tests {
     #[test]
     fn plan_shop_planting_uses_max_purchase() {
         let remaining = vec![1, 2, 3, 4, 5];
-        let cands = vec![
-            ShopSeedCandidate { goods_id: 1, seed_id: 100, name: "A".into(), price: 100, required_level: 1, unit_item_count: 1, max_purchase_count: 2, bought_num: 0, limit_count: 5 },
-        ];
+        let cands = vec![ShopSeedCandidate {
+            goods_id: 1,
+            seed_id: 100,
+            name: "A".into(),
+            price: 100,
+            required_level: 1,
+            unit_item_count: 1,
+            max_purchase_count: 2,
+            bought_num: 0,
+            limit_count: 5,
+        }];
         let plan = plan_shop_planting(&remaining, &cands, "level", &[], 0);
         assert_eq!(plan.shop_phase.len(), 1);
         assert_eq!(plan.shop_phase[0].anchor_count, 2);
@@ -1701,9 +1698,17 @@ mod tests {
     #[test]
     fn plan_shop_planting_unlimited() {
         let remaining = vec![1, 2, 3];
-        let cands = vec![
-            ShopSeedCandidate { goods_id: 1, seed_id: 100, name: "A".into(), price: 100, required_level: 1, unit_item_count: 1, max_purchase_count: -1, bought_num: 0, limit_count: 0 },
-        ];
+        let cands = vec![ShopSeedCandidate {
+            goods_id: 1,
+            seed_id: 100,
+            name: "A".into(),
+            price: 100,
+            required_level: 1,
+            unit_item_count: 1,
+            max_purchase_count: -1,
+            bought_num: 0,
+            limit_count: 0,
+        }];
         let plan = plan_shop_planting(&remaining, &cands, "level", &[], 0);
         assert_eq!(plan.shop_phase[0].anchor_count, 3);
         assert!(plan.remaining_land_ids.is_empty());

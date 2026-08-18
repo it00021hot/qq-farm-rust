@@ -128,8 +128,11 @@ impl PushService {
                 } else {
                     endpoint.to_string()
                 };
-                self.send_form_or_json(&url, serde_json::json!({ "msg": format!("{title}\n{content}") }))
-                    .await
+                self.send_form_or_json(
+                    &url,
+                    serde_json::json!({ "msg": format!("{title}\n{content}") }),
+                )
+                .await
             }
             "serverchan" => {
                 let url = if endpoint.is_empty() {
@@ -137,11 +140,8 @@ impl PushService {
                 } else {
                     endpoint.to_string()
                 };
-                self.send_form_or_json(
-                    &url,
-                    serde_json::json!({ "title": title, "desp": content }),
-                )
-                .await
+                self.send_form_or_json(&url, serde_json::json!({ "title": title, "desp": content }))
+                    .await
             }
             "pushplus" => {
                 let url = if endpoint.is_empty() {
@@ -232,12 +232,7 @@ impl PushService {
                     format!("https://api.telegram.org/bot{token}/sendMessage")
                 };
                 let chat_id = if endpoint.is_empty() || endpoint.contains("api.telegram.org") {
-                    payload
-                        .endpoint
-                        .trim()
-                        .split('/')
-                        .next_back()
-                        .unwrap_or("")
+                    payload.endpoint.trim().split('/').next_back().unwrap_or("")
                 } else {
                     endpoint
                 };
@@ -353,8 +348,8 @@ impl PushService {
             Ok(resp) => {
                 let status = resp.status();
                 let text = resp.text().await.unwrap_or_default();
-                let raw_json: serde_json::Value =
-                    serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!({ "raw": text }));
+                let raw_json: serde_json::Value = serde_json::from_str(&text)
+                    .unwrap_or_else(|_| serde_json::json!({ "raw": text }));
                 let has_error = raw_json.get("error").is_some();
                 let code = raw_json
                     .get("code")
@@ -392,12 +387,7 @@ impl PushService {
                 let ok = !has_error
                     && status.is_success()
                     && (code == "ok" || code == "0" || code.is_empty());
-                PushResult {
-                    ok,
-                    code,
-                    msg: message,
-                    raw: raw_json,
-                }
+                PushResult { ok, code, msg: message, raw: raw_json }
             }
             Err(e) => PushResult {
                 ok: false,
@@ -448,11 +438,7 @@ impl PushService {
         PushResult {
             ok,
             code: if ok { "ok".into() } else { "http_error".into() },
-            msg: if ok {
-                "ok".into()
-            } else {
-                format!("HTTP {}", status.as_u16())
-            },
+            msg: if ok { "ok".into() } else { format!("HTTP {}", status.as_u16()) },
             raw: raw_json,
         }
     }
@@ -570,10 +556,7 @@ mod tests {
                 token: "tok".to_string(),
             };
             let r = svc.send(&p).await;
-            assert_ne!(
-                r.code, "unsupported_channel",
-                "panel channel {ch} must be implemented"
-            );
+            assert_ne!(r.code, "unsupported_channel", "panel channel {ch} must be implemented");
         }
     }
 

@@ -33,8 +33,8 @@
 //! - [`auth`] — security / qrlogin / wx_login / login_url_profile
 //! - [`tasks`] — task / guide / interact / invite / randomdrop
 
-pub mod ace;
 pub mod account_resolver;
+pub mod ace;
 pub mod activity;
 pub mod activity_center;
 pub mod activity_center_state;
@@ -54,8 +54,8 @@ pub mod monthcard;
 pub mod mystery_shop;
 pub mod pay;
 pub mod push;
-pub mod qrlogin;
 pub mod qqvip;
+pub mod qrlogin;
 pub mod randomdrop;
 pub mod security;
 pub mod share;

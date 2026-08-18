@@ -20,7 +20,7 @@ import {
   ORGANIC_FERTILIZER_ID
 } from '@/constants/items';
 import { $t } from '@/locales';
-import { getLogEventLabel } from './log-events';
+import { getLogEventLabel, humanizeLogMessage, logText, shouldShowEventChip } from './log-events';
 
 defineOptions({
   name: 'FarmDashboard'
@@ -95,6 +95,22 @@ const displayName = computed(() => {
   if (nick && remark && nick !== remark) return `${nick} (${remark})`;
   return nick || remark || $t('page.farm.dashboard.notLoggedIn');
 });
+
+const avatarUrl = computed(() => {
+  const raw = status.value?.avatar || currentAccount.value?.avatar || '';
+  if (!raw) return '';
+  if (raw.startsWith('//')) return `https:${raw}`;
+  return raw;
+});
+
+const avatarFailed = ref(false);
+watch(avatarUrl, () => {
+  avatarFailed.value = false;
+});
+
+const canShowAvatar = computed(() => Boolean(avatarUrl.value) && !avatarFailed.value);
+
+const avatarInitial = computed(() => (displayName.value || '?').slice(0, 1));
 
 const levelProgress = computed(() => status.value?.levelProgress || { current: 0, needed: 0 });
 
@@ -249,7 +265,8 @@ function pushLog(tag: string, message: string, event = '', isWarn = false, ts?: 
 
 function applyLogEntries(entries: Api.Farm.LogEntry[]) {
   logSeq = 0;
-  logs.value = (entries || []).map(e => {
+  const list = [...(entries || [])].sort((a, b) => (Number(a.ts) || 0) - (Number(b.ts) || 0));
+  logs.value = list.map(e => {
     const at = Number(e.ts) || (e.time ? dayjs(e.time).valueOf() : Date.now());
     return {
       id: ++logSeq,
@@ -257,7 +274,7 @@ function applyLogEntries(entries: Api.Farm.LogEntry[]) {
       time: dayjs(at).format('HH:mm:ss'),
       tag: e.tag || '系统',
       event: getLogEventLabel(e.meta?.event || ''),
-      message: e.msg || '',
+      message: humanizeLogMessage(e.msg || ''),
       isWarn: Boolean(e.isWarn)
     };
   });
@@ -287,12 +304,14 @@ function formatEventMessage(
   payload: unknown
 ): { tag: string; message: string; event: string; isWarn: boolean } {
   const body = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+  const readable = logText(body);
+  const eventKey = String(body.event || body.action || '');
   // Prefer bot-aligned fields when backend already formats them.
-  if (typeof body.message === 'string' && body.message) {
+  if (readable) {
     return {
       tag: String(body.tag || (body.isWarn ? '错误' : '系统')),
-      event: getLogEventLabel(String(body.event || '')),
-      message: body.message,
+      event: getLogEventLabel(eventKey),
+      message: readable,
       isWarn: Boolean(body.isWarn)
     };
   }
@@ -518,13 +537,7 @@ const { connected, connect } = useFarmWs({
       return;
     }
 
-    if (
-      type === 'log' ||
-      type === 'log:new' ||
-      type === 'account_log' ||
-      type === 'account-log:new' ||
-      type === 'worker_log'
-    ) {
+    if (type === 'log' || type === 'log:new' || type === 'account_log' || type === 'worker_log') {
       if (current && accountId && accountId !== current) return;
       const formatted = formatEventMessage(type, payload);
       pushLog(formatted.tag, formatted.message, formatted.event, formatted.isWarn);
@@ -604,7 +617,15 @@ onUnmounted(() => {
               <NTag size="small" type="info" :bordered="false">Lv.{{ status?.level ?? 0 }}</NTag>
             </div>
             <div class="mb-12px flex-y-center gap-10px">
-              <NAvatar v-if="status?.avatar" round :size="40" :src="status.avatar" />
+              <NAvatar
+                v-if="canShowAvatar"
+                round
+                :size="40"
+                :src="avatarUrl"
+                :img-props="{ referrerpolicy: 'no-referrer' }"
+                @error="avatarFailed = true"
+              />
+              <NAvatar v-else round :size="40">{{ avatarInitial }}</NAvatar>
               <div class="truncate text-16px font-medium" :title="displayName">{{ displayName }}</div>
             </div>
             <div class="mb-4px flex-y-center justify-between text-12px text-gray-500">
@@ -743,7 +764,7 @@ onUnmounted(() => {
               {{ log.tag }}
             </span>
             <span
-              v-if="log.event"
+              v-if="shouldShowEventChip(log.tag, log.event)"
               class="mr-8px rounded-full bg-blue-50 px-6px py-1px text-11px text-blue-500 dark:bg-blue-900/20"
             >
               {{ log.event }}

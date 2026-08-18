@@ -57,10 +57,9 @@ impl SessionStore {
     /// 创建 session
     pub fn create(&self, token: String, username: String, role: String) {
         let now = now_ms();
-        self.inner.write().insert(
-            token,
-            SessionInfo { username, role, created_at: now, last_active: now },
-        );
+        self.inner
+            .write()
+            .insert(token, SessionInfo { username, role, created_at: now, last_active: now });
     }
 
     /// 用已有 info 创建 session（测试 / 迁移用）
@@ -119,11 +118,8 @@ impl SessionStore {
     /// 替换某 username 的所有 session（用于 edit_user 时让其他 token 失效）
     pub fn invalidate_by_username(&self, username: &str) -> usize {
         let mut guard = self.inner.write();
-        let to_remove: Vec<String> = guard
-            .iter()
-            .filter(|(_, s)| s.username == username)
-            .map(|(k, _)| k.clone())
-            .collect();
+        let to_remove: Vec<String> =
+            guard.iter().filter(|(_, s)| s.username == username).map(|(k, _)| k.clone()).collect();
         let n = to_remove.len();
         for k in to_remove {
             guard.remove(&k);
@@ -134,10 +130,7 @@ impl SessionStore {
 
 fn now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
 #[cfg(test)]

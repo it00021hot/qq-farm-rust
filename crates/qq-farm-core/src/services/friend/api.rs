@@ -9,18 +9,20 @@ use prost::Message as _;
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::constants::{
-    DEFAULT_TIMEOUT_MS, FRIEND_GET_ALL_TIMEOUT_MS, FRIEND_LIST_COALESCE_MS, QQ_FRIEND_LIST_BATCH_SIZE,
+    DEFAULT_TIMEOUT_MS, FRIEND_GET_ALL_TIMEOUT_MS, FRIEND_LIST_COALESCE_MS,
+    QQ_FRIEND_LIST_BATCH_SIZE,
 };
 use crate::error::{Error, Result};
 use crate::network::gateway::Gateway;
 use crate::proto::generated::gamepb::friendpb::{
-    GameFriend, GetAllReply, GetAllRequest, GetGameFriendsReply, GetGameFriendsRequest, SyncAllReply,
-    SyncAllRequest,
+    GameFriend, GetAllReply, GetAllRequest, GetGameFriendsReply, GetGameFriendsRequest,
+    SyncAllReply, SyncAllRequest,
 };
 use crate::proto::generated::gamepb::plantpb::OperationLimit;
 use crate::proto::generated::gamepb::visitpb::{EnterReply, EnterRequest, LeaveRequest};
 
-fn last_visitor_gid_sync_at() -> &'static parking_lot::Mutex<std::collections::HashMap<String, Instant>> {
+fn last_visitor_gid_sync_at(
+) -> &'static parking_lot::Mutex<std::collections::HashMap<String, Instant>> {
     use std::sync::OnceLock;
     static MAP: OnceLock<parking_lot::Mutex<std::collections::HashMap<String, Instant>>> =
         OnceLock::new();
@@ -47,12 +49,7 @@ pub struct HelpFarmOutcome {
 impl HelpFarmOutcome {
     #[must_use]
     pub fn noop() -> Self {
-        Self {
-            effect: HelpFarmEffect::Noop,
-            land_ids: vec![],
-            operation_count: 0,
-            code: 0,
-        }
+        Self { effect: HelpFarmEffect::Noop, land_ids: vec![], operation_count: 0, code: 0 }
     }
 }
 
@@ -61,7 +58,8 @@ impl HelpFarmOutcome {
 pub struct FriendApi {
     gateway: Arc<Gateway>,
     account_id: Arc<parking_lot::Mutex<String>>,
-    on_operation_limits_update: Arc<parking_lot::Mutex<Option<crate::services::farm::api::OperationLimitsCallback>>>,
+    on_operation_limits_update:
+        Arc<parking_lot::Mutex<Option<crate::services::farm::api::OperationLimitsCallback>>>,
     /// 捣乱日限门控（对齐 TS schedulerRef）
     bad_is_limit_reached: Arc<parking_lot::Mutex<Option<Arc<dyn Fn() -> bool + Send + Sync>>>>,
     bad_remaining: Arc<parking_lot::Mutex<Option<Arc<dyn Fn() -> i64 + Send + Sync>>>>,
@@ -117,21 +115,13 @@ impl FriendApi {
     }
 
     fn bad_limit_reached(&self) -> bool {
-        self.bad_is_limit_reached
-            .lock()
-            .as_ref()
-            .map(|f| f())
-            .unwrap_or(false)
+        self.bad_is_limit_reached.lock().as_ref().map(|f| f()).unwrap_or(false)
     }
 
     /// 对外：剩余捣乱次数（无门控时返回较大值）
     #[must_use]
     pub fn remaining_bad_times(&self) -> i64 {
-        self.bad_remaining
-            .lock()
-            .as_ref()
-            .map(|f| f())
-            .unwrap_or(999)
+        self.bad_remaining.lock().as_ref().map(|f| f()).unwrap_or(999)
     }
 
     fn mark_bad_limit(&self, method: &str) {
@@ -151,12 +141,7 @@ impl FriendApi {
 
     /// 获取好友列表 GID（内部巡访用）
     pub async fn get_friends_list(&self) -> Result<Vec<i64>> {
-        Ok(self
-            .get_all_game_friends()
-            .await?
-            .into_iter()
-            .map(|f| f.gid)
-            .collect())
+        Ok(self.get_all_game_friends().await?.into_iter().map(|f| f.gid).collect())
     }
 
     /// 完整 GameFriend 列表。WX 走 GetAll；QQ 走 GetGameFriends + 已知 GID。
@@ -181,12 +166,7 @@ impl FriendApi {
         let body = GetAllRequest {}.encode_to_vec();
         match self
             .gateway
-            .request(
-                "gamepb.friendpb.FriendService",
-                "GetAll",
-                &body,
-                FRIEND_GET_ALL_TIMEOUT_MS,
-            )
+            .request("gamepb.friendpb.FriendService", "GetAll", &body, FRIEND_GET_ALL_TIMEOUT_MS)
             .await
         {
             Ok(resp) => Ok(decode_get_all_friends(&resp)),
@@ -199,9 +179,9 @@ impl FriendApi {
                         .into_iter()
                         .filter(|gid| {
                             *gid > 0
-                                && !crate::services::friend::visit_strategy::is_known_friend_gid_invalid(
-                                    *gid,
-                                )
+                        && !crate::services::friend::visit_strategy::is_known_friend_gid_invalid(
+                            *gid,
+                        )
                         })
                         .collect();
                 if known.is_empty() {
@@ -221,10 +201,7 @@ impl FriendApi {
         let account_id = self.account_id.lock().clone();
         let mut all = Vec::new();
         for chunk in known.chunks(QQ_FRIEND_LIST_BATCH_SIZE) {
-            let body = GetGameFriendsRequest {
-                gids: chunk.to_vec(),
-            }
-            .encode_to_vec();
+            let body = GetGameFriendsRequest { gids: chunk.to_vec() }.encode_to_vec();
             match self
                 .gateway
                 .request(
@@ -259,9 +236,7 @@ impl FriendApi {
 
     async fn fetch_qq_friends(&self) -> Result<Vec<GameFriend>> {
         let account_id = self.account_id.lock().clone();
-        let _ = self
-            .sync_known_friend_gids_from_recent_visitors(&account_id)
-            .await;
+        let _ = self.sync_known_friend_gids_from_recent_visitors(&account_id).await;
         let known: Vec<i64> =
             crate::models::store::account_config::get_known_friend_gids(Some(&account_id))
                 .into_iter()
@@ -281,18 +256,10 @@ impl FriendApi {
             return Ok(all);
         }
 
-        let body = SyncAllRequest {
-            open_ids: Vec::new(),
-        }
-        .encode_to_vec();
+        let body = SyncAllRequest { open_ids: Vec::new() }.encode_to_vec();
         match self
             .gateway
-            .request(
-                "gamepb.friendpb.FriendService",
-                "SyncAll",
-                &body,
-                DEFAULT_TIMEOUT_MS,
-            )
+            .request("gamepb.friendpb.FriendService", "SyncAll", &body, DEFAULT_TIMEOUT_MS)
             .await
         {
             Ok(resp) => {
@@ -350,23 +317,16 @@ impl FriendApi {
             Err(e) => {
                 tracing::warn!("同步最近访客 GID 失败: {e}");
                 // 对齐 bot：失败时缩短冷却，允许更快重试
-                let retry = if cooldown > Duration::ZERO {
-                    cooldown / 2
-                } else {
-                    Duration::from_secs(30)
-                };
+                let retry =
+                    if cooldown > Duration::ZERO { cooldown / 2 } else { Duration::from_secs(30) };
                 let adjusted = Instant::now()
                     .checked_sub(cooldown.saturating_sub(retry))
                     .unwrap_or_else(Instant::now);
-                last_visitor_gid_sync_at()
-                    .lock()
-                    .insert(account_id.to_string(), adjusted);
+                last_visitor_gid_sync_at().lock().insert(account_id.to_string(), adjusted);
                 return Ok(());
             }
         };
-        last_visitor_gid_sync_at()
-            .lock()
-            .insert(account_id.to_string(), Instant::now());
+        last_visitor_gid_sync_at().lock().insert(account_id.to_string(), Instant::now());
         let visitor_gids: Vec<i64> = records
             .iter()
             .map(|r| r.visitor_gid)
@@ -391,8 +351,9 @@ impl FriendApi {
                     "已从最近访客自动补充 {added} 个 GID，当前已知好友 GID 共 {} 个",
                     merged.len()
                 ),
-                crate::constants::PanelEvent::VisitorGidBackfill, Some(serde_json::json!({
-                    "module": "friend", 
+                crate::constants::PanelEvent::VisitorGidBackfill,
+                Some(serde_json::json!({
+                    "module": "friend",
                     "result": "ok",
                     "addedFromVisitors": added,
                     "totalKnownGids": merged.len(),
@@ -404,25 +365,17 @@ impl FriendApi {
 
     /// 拉取待处理好友申请（对齐 TS `getApplications`）
     pub async fn get_applications(&self) -> Result<Vec<(i64, String)>> {
-        use crate::proto::generated::gamepb::friendpb::{GetApplicationsReply, GetApplicationsRequest};
+        use crate::proto::generated::gamepb::friendpb::{
+            GetApplicationsReply, GetApplicationsRequest,
+        };
         let _gate = self.rpc_gate.lock().await;
         let body = GetApplicationsRequest {}.encode_to_vec();
         let resp = self
             .gateway
-            .request(
-                "gamepb.friendpb.FriendService",
-                "GetApplications",
-                &body,
-                DEFAULT_TIMEOUT_MS,
-            )
+            .request("gamepb.friendpb.FriendService", "GetApplications", &body, DEFAULT_TIMEOUT_MS)
             .await?;
         let reply = GetApplicationsReply::decode(&*resp)?;
-        Ok(reply
-            .applications
-            .into_iter()
-            .filter(|a| a.gid > 0)
-            .map(|a| (a.gid, a.name))
-            .collect())
+        Ok(reply.applications.into_iter().filter(|a| a.gid > 0).map(|a| (a.gid, a.name)).collect())
     }
 
     /// 接受好友申请（1:1 对齐原 `acceptFriends`，RPC 方法 `AcceptFriends`）
@@ -431,12 +384,7 @@ impl FriendApi {
         let _gate = self.rpc_gate.lock().await;
         let body = AcceptFriendsRequest { friend_gids: gids }.encode_to_vec();
         self.gateway
-            .request(
-                "gamepb.friendpb.FriendService",
-                "AcceptFriends",
-                &body,
-                DEFAULT_TIMEOUT_MS,
-            )
+            .request("gamepb.friendpb.FriendService", "AcceptFriends", &body, DEFAULT_TIMEOUT_MS)
             .await?;
         Ok(())
     }
@@ -462,12 +410,7 @@ impl FriendApi {
         .encode_to_vec();
         let resp = self
             .gateway
-            .request(
-                "gamepb.visitpb.VisitService",
-                "Enter",
-                &body,
-                DEFAULT_TIMEOUT_MS,
-            )
+            .request("gamepb.visitpb.VisitService", "Enter", &body, DEFAULT_TIMEOUT_MS)
             .await?;
         EnterReply::decode(&*resp).map_err(Error::from)
     }
@@ -480,12 +423,7 @@ impl FriendApi {
         // 原 TS：try { ... } catch { /* 离开失败不影响主流程 */ }
         // Rust 端：调用方自己判断
         self.gateway
-            .request(
-                "gamepb.visitpb.VisitService",
-                "Leave",
-                &body,
-                DEFAULT_TIMEOUT_MS,
-            )
+            .request("gamepb.visitpb.VisitService", "Leave", &body, DEFAULT_TIMEOUT_MS)
             .await?;
         Ok(())
     }
@@ -498,29 +436,16 @@ impl FriendApi {
         use crate::proto::generated::gamepb::plantpb::{FarmingReply, FarmingRequest};
         let target: Vec<i64> = {
             let mut seen = std::collections::HashSet::new();
-            land_ids
-                .into_iter()
-                .filter(|id| *id > 0 && seen.insert(*id))
-                .collect()
+            land_ids.into_iter().filter(|id| *id > 0 && seen.insert(*id)).collect()
         };
         if target.is_empty() {
             return Ok(HelpFarmOutcome::noop());
         }
-        let body = FarmingRequest {
-            land_ids: target,
-            host_gid,
-            field_3: 0,
-            field_4: 2,
-        }
-        .encode_to_vec();
+        let body =
+            FarmingRequest { land_ids: target, host_gid, field_3: 0, field_4: 2 }.encode_to_vec();
         let resp = match self
             .gateway
-            .request(
-                "gamepb.plantpb.PlantService",
-                "Farming",
-                &body,
-                DEFAULT_TIMEOUT_MS,
-            )
+            .request("gamepb.plantpb.PlantService", "Farming", &body, DEFAULT_TIMEOUT_MS)
             .await
         {
             Ok(r) => r,
@@ -563,12 +488,7 @@ impl FriendApi {
         let body = WaterLandRequest { land_ids, host_gid }.encode_to_vec();
         let resp = self
             .gateway
-            .request(
-                "gamepb.plantpb.PlantService",
-                "WaterLand",
-                &body,
-                DEFAULT_TIMEOUT_MS,
-            )
+            .request("gamepb.plantpb.PlantService", "WaterLand", &body, DEFAULT_TIMEOUT_MS)
             .await?;
         let reply = WaterLandReply::decode(&*resp)?;
         self.fire_operation_limits(reply.operation_limits);
@@ -578,20 +498,10 @@ impl FriendApi {
     /// 偷好友菜（对应原 `stealHarvest`，`is_all: true`）
     pub async fn steal_farm(&self, host_gid: i64, land_ids: Vec<i64>) -> Result<()> {
         use crate::proto::generated::gamepb::plantpb::{HarvestReply, HarvestRequest};
-        let body = HarvestRequest {
-            land_ids,
-            host_gid,
-            is_all: true,
-        }
-        .encode_to_vec();
+        let body = HarvestRequest { land_ids, host_gid, is_all: true }.encode_to_vec();
         let resp = self
             .gateway
-            .request(
-                "gamepb.plantpb.PlantService",
-                "Harvest",
-                &body,
-                DEFAULT_TIMEOUT_MS,
-            )
+            .request("gamepb.plantpb.PlantService", "Harvest", &body, DEFAULT_TIMEOUT_MS)
             .await?;
         let reply = HarvestReply::decode(&*resp)?;
         self.fire_operation_limits(reply.operation_limits);
@@ -600,37 +510,21 @@ impl FriendApi {
 
     /// 放草（捣乱）—— 对齐 bot `putWeedsDetailed`（按地、日限、1001046）
     pub async fn put_weeds(&self, host_gid: i64, land_ids: Vec<i64>) -> Result<usize> {
-        Ok(self
-            .put_plant_items_detailed(host_gid, land_ids, BadPutKind::Weeds)
-            .await
-            .ok)
+        Ok(self.put_plant_items_detailed(host_gid, land_ids, BadPutKind::Weeds).await.ok)
     }
 
     /// 放虫（捣乱）—— 对齐 bot `putInsectsDetailed`
     pub async fn put_insects(&self, host_gid: i64, land_ids: Vec<i64>) -> Result<usize> {
-        Ok(self
-            .put_plant_items_detailed(host_gid, land_ids, BadPutKind::Insects)
-            .await
-            .ok)
+        Ok(self.put_plant_items_detailed(host_gid, land_ids, BadPutKind::Insects).await.ok)
     }
 
     /// 详细放草/放虫结果
-    pub async fn put_weeds_detailed(
-        &self,
-        host_gid: i64,
-        land_ids: Vec<i64>,
-    ) -> BadPutResult {
-        self.put_plant_items_detailed(host_gid, land_ids, BadPutKind::Weeds)
-            .await
+    pub async fn put_weeds_detailed(&self, host_gid: i64, land_ids: Vec<i64>) -> BadPutResult {
+        self.put_plant_items_detailed(host_gid, land_ids, BadPutKind::Weeds).await
     }
 
-    pub async fn put_insects_detailed(
-        &self,
-        host_gid: i64,
-        land_ids: Vec<i64>,
-    ) -> BadPutResult {
-        self.put_plant_items_detailed(host_gid, land_ids, BadPutKind::Insects)
-            .await
+    pub async fn put_insects_detailed(&self, host_gid: i64, land_ids: Vec<i64>) -> BadPutResult {
+        self.put_plant_items_detailed(host_gid, land_ids, BadPutKind::Insects).await
     }
 
     async fn put_plant_items_detailed(
@@ -678,26 +572,17 @@ impl FriendApi {
             }
 
             let body = match kind {
-                BadPutKind::Weeds => PutWeedsRequest {
-                    host_gid,
-                    land_ids: vec![land_id],
+                BadPutKind::Weeds => {
+                    PutWeedsRequest { host_gid, land_ids: vec![land_id] }.encode_to_vec()
                 }
-                .encode_to_vec(),
-                BadPutKind::Insects => PutInsectsRequest {
-                    host_gid,
-                    land_ids: vec![land_id],
+                BadPutKind::Insects => {
+                    PutInsectsRequest { host_gid, land_ids: vec![land_id] }.encode_to_vec()
                 }
-                .encode_to_vec(),
             };
 
             match self
                 .gateway
-                .request(
-                    "gamepb.plantpb.PlantService",
-                    method,
-                    &body,
-                    DEFAULT_TIMEOUT_MS,
-                )
+                .request("gamepb.plantpb.PlantService", method, &body, DEFAULT_TIMEOUT_MS)
                 .await
             {
                 Ok(resp) => {
@@ -725,10 +610,7 @@ impl FriendApi {
                     }
                 }
                 Err(e) => {
-                    let limit = matches!(
-                        &e,
-                        NetworkError::Gateway { code: 1_001_046, .. }
-                    );
+                    let limit = matches!(&e, NetworkError::Gateway { code: 1_001_046, .. });
                     if limit {
                         self.mark_bad_limit(method);
                         failed.extend(ids[index..].iter().map(|id| BadPutFail {
@@ -737,10 +619,7 @@ impl FriendApi {
                         }));
                         break;
                     }
-                    failed.push(BadPutFail {
-                        land_id,
-                        reason: e.to_string(),
-                    });
+                    failed.push(BadPutFail { land_id, reason: e.to_string() });
                 }
             }
 
@@ -750,11 +629,7 @@ impl FriendApi {
             }
         }
 
-        BadPutResult {
-            ok,
-            failed,
-            limit_reached: self.bad_limit_reached(),
-        }
+        BadPutResult { ok, failed, limit_reached: self.bad_limit_reached() }
     }
 
     /// 检查某操作是否可执行（对应原 `checkCanOperate`）
@@ -765,19 +640,10 @@ impl FriendApi {
         use crate::proto::generated::gamepb::plantpb::{
             CheckCanOperateReply, CheckCanOperateRequest,
         };
-        let body = CheckCanOperateRequest {
-            host_gid,
-            operation_id,
-        }
-        .encode_to_vec();
+        let body = CheckCanOperateRequest { host_gid, operation_id }.encode_to_vec();
         let resp = self
             .gateway
-            .request(
-                "gamepb.plantpb.PlantService",
-                "CheckCanOperate",
-                &body,
-                DEFAULT_TIMEOUT_MS,
-            )
+            .request("gamepb.plantpb.PlantService", "CheckCanOperate", &body, DEFAULT_TIMEOUT_MS)
             .await?;
         let reply = CheckCanOperateReply::decode(&*resp).map_err(Error::from)?;
         Ok((reply.can_operate, reply.can_steal_num))

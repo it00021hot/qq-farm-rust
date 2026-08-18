@@ -29,10 +29,7 @@ static SYNC_MUTEX: Mutex<()> = Mutex::new(());
 /// 当前本地时间（毫秒）
 #[must_use]
 pub fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
 /// 当前本地时间（秒）

@@ -19,11 +19,11 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use crate::models::store::normalize::{
-    default_account_config, normalize_bag_seed_fallback_strategy,
-    normalize_bag_seed_priority, normalize_friends_list_cache_ttl_sec,
+    default_account_config, default_account_config as full_default,
+    normalize_bag_seed_fallback_strategy, normalize_bag_seed_priority,
+    normalize_fertilizer_land_types, normalize_friends_list_cache_ttl_sec, normalize_intervals,
     normalize_known_friend_gid_sync_cooldown_sec, normalize_known_friend_gids,
-    normalize_fertilizer_land_types, normalize_intervals, normalize_positive_int_list,
-    normalize_quiet_hours, default_account_config as full_default,
+    normalize_positive_int_list, normalize_quiet_hours,
 };
 use crate::models::types::{
     AccountConfig, AccountConfigSnapshot, AutomationConfig, BagSeedFallbackStrategy,
@@ -96,11 +96,7 @@ pub fn get_account_config_snapshot(account_id: Option<&str>) -> AccountConfig {
     if id.is_empty() {
         return state.account_fallback_config.clone();
     }
-    state
-        .account_configs
-        .get(&id)
-        .cloned()
-        .unwrap_or_else(|| state.account_fallback_config.clone())
+    state.account_configs.get(&id).cloned().unwrap_or_else(|| state.account_fallback_config.clone())
 }
 
 /// 获取配置快照（`AccountConfig + ui`）。
@@ -109,10 +105,7 @@ pub fn get_account_config_snapshot(account_id: Option<&str>) -> AccountConfig {
 /// runtime_state 中用 `obj.remove("ui")` 把 ui 字段剥掉，注入 `__revision`。
 #[must_use]
 pub fn get_config_snapshot(account_id: Option<&str>) -> AccountConfigSnapshot {
-    AccountConfigSnapshot {
-        config: get_account_config_snapshot(account_id),
-        ui: None,
-    }
+    AccountConfigSnapshot { config: get_account_config_snapshot(account_id), ui: None }
 }
 
 /// 设置单账号配置（persist=true 时会触发 save 钩子，2A 注入）
@@ -235,10 +228,7 @@ pub fn get_known_friend_gids(account_id: Option<&str>) -> Vec<i64> {
 pub fn set_known_friend_gids(account_id: &str, list: Vec<i64>) -> Vec<i64> {
     let normalized = normalize_known_friend_gids(Some(list), &[]);
     let current = get_account_config_snapshot(Some(account_id));
-    let next = AccountConfig {
-        known_friend_gids: normalized.clone(),
-        ..current
-    };
+    let next = AccountConfig { known_friend_gids: normalized.clone(), ..current };
     set_account_config_snapshot(Some(account_id), next, true);
     let _ = crate::models::store::gid_cache::write_cache(account_id, &normalized);
     normalized
@@ -295,10 +285,7 @@ pub fn get_known_friend_gid_sync_cooldown_sec(account_id: Option<&str>) -> i64 {
 pub fn set_known_friend_gid_sync_cooldown_sec(account_id: &str, sec: i64) -> i64 {
     let normalized = normalize_known_friend_gid_sync_cooldown_sec(Some(sec));
     let current = get_account_config_snapshot(Some(account_id));
-    let next = AccountConfig {
-        known_friend_gid_sync_cooldown_sec: normalized,
-        ..current
-    };
+    let next = AccountConfig { known_friend_gid_sync_cooldown_sec: normalized, ..current };
     set_account_config_snapshot(Some(account_id), next, true);
     normalized
 }
@@ -315,10 +302,7 @@ pub fn get_friends_list_cache_ttl_sec(account_id: Option<&str>) -> i64 {
 pub fn set_friends_list_cache_ttl_sec(account_id: &str, sec: i64) -> i64 {
     let normalized = normalize_friends_list_cache_ttl_sec(Some(sec));
     let current = get_account_config_snapshot(Some(account_id));
-    let next = AccountConfig {
-        friends_list_cache_ttl_sec: normalized,
-        ..current
-    };
+    let next = AccountConfig { friends_list_cache_ttl_sec: normalized, ..current };
     set_account_config_snapshot(Some(account_id), next, true);
     normalized
 }
@@ -333,10 +317,7 @@ pub fn get_friend_blacklist(account_id: Option<&str>) -> Vec<i64> {
 pub fn set_friend_blacklist(account_id: &str, list: Vec<i64>) -> Vec<i64> {
     let normalized = normalize_positive_int_list(Some(list));
     let current = get_account_config_snapshot(Some(account_id));
-    let next = AccountConfig {
-        friend_blacklist: normalized.clone(),
-        ..current
-    };
+    let next = AccountConfig { friend_blacklist: normalized.clone(), ..current };
     set_account_config_snapshot(Some(account_id), next, true);
     normalized
 }
@@ -382,10 +363,7 @@ pub fn get_plant_blacklist(account_id: Option<&str>) -> Vec<i64> {
 pub fn set_plant_blacklist(account_id: &str, list: Vec<i64>) -> Vec<i64> {
     let normalized = normalize_positive_int_list(Some(list));
     let current = get_account_config_snapshot(Some(account_id));
-    let next = AccountConfig {
-        plant_blacklist: normalized.clone(),
-        ..current
-    };
+    let next = AccountConfig { plant_blacklist: normalized.clone(), ..current };
     set_account_config_snapshot(Some(account_id), next, true);
     normalized
 }
@@ -446,15 +424,25 @@ pub fn apply_config_snapshot(
                     if let Some(arr) = v.as_array() {
                         let types: Vec<_> = arr
                             .iter()
-                            .filter_map(|x| x.as_str().and_then(crate::models::types::FertilizerLandType::from_str_opt))
+                            .filter_map(|x| {
+                                x.as_str().and_then(
+                                    crate::models::types::FertilizerLandType::from_str_opt,
+                                )
+                            })
                             .collect();
-                        next.automation.fertilizer_land_types =
-                            normalize_fertilizer_land_types(Some(types), &next.automation.fertilizer_land_types);
+                        next.automation.fertilizer_land_types = normalize_fertilizer_land_types(
+                            Some(types),
+                            &next.automation.fertilizer_land_types,
+                        );
                     }
                 }
                 "fertilizer_smart_seconds" => {
-                    next.automation.fertilizer_smart_seconds =
-                        v.as_i64().unwrap_or(crate::models::store::normalize::DEFAULT_FERTILIZER_SMART_SECONDS).clamp(30, 3600);
+                    next.automation.fertilizer_smart_seconds = v
+                        .as_i64()
+                        .unwrap_or(
+                            crate::models::store::normalize::DEFAULT_FERTILIZER_SMART_SECONDS,
+                        )
+                        .clamp(30, 3600);
                 }
                 _ => {
                     if let Some(b) = v.as_bool() {
@@ -466,7 +454,9 @@ pub fn apply_config_snapshot(
     }
 
     if let Some(s) = snapshot.get("plantingStrategy").and_then(|v| v.as_str()) {
-        if let Ok(p) = serde_json::from_value::<PlantingStrategy>(serde_json::Value::String(s.to_string())) {
+        if let Ok(p) =
+            serde_json::from_value::<PlantingStrategy>(serde_json::Value::String(s.to_string()))
+        {
             next.planting_strategy = p;
         }
     }
@@ -495,27 +485,30 @@ pub fn apply_config_snapshot(
 
     if let Some(qh) = snapshot.get("friendQuietHours").and_then(|v| v.as_object()) {
         let input = QuietHoursConfig {
-            enabled: qh.get("enabled").and_then(|v| v.as_bool()).unwrap_or(next.friend_quiet_hours.enabled),
-            start: qh.get("start").and_then(|v| v.as_str()).unwrap_or(&next.friend_quiet_hours.start).to_string(),
-            end: qh.get("end").and_then(|v| v.as_str()).unwrap_or(&next.friend_quiet_hours.end).to_string(),
+            enabled: qh
+                .get("enabled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(next.friend_quiet_hours.enabled),
+            start: qh
+                .get("start")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&next.friend_quiet_hours.start)
+                .to_string(),
+            end: qh
+                .get("end")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&next.friend_quiet_hours.end)
+                .to_string(),
         };
         next.friend_quiet_hours = normalize_quiet_hours(&input, &next.friend_quiet_hours);
     }
 
     if let Some(arr) = snapshot.get("friendBlacklist").and_then(|v| v.as_array()) {
-        next.friend_blacklist = arr
-            .iter()
-            .filter_map(|n| n.as_i64())
-            .filter(|n| *n > 0)
-            .collect();
+        next.friend_blacklist = arr.iter().filter_map(|n| n.as_i64()).filter(|n| *n > 0).collect();
     }
 
     if let Some(arr) = snapshot.get("plantBlacklist").and_then(|v| v.as_array()) {
-        next.plant_blacklist = arr
-            .iter()
-            .filter_map(|n| n.as_i64())
-            .filter(|n| *n > 0)
-            .collect();
+        next.plant_blacklist = arr.iter().filter_map(|n| n.as_i64()).filter(|n| *n > 0).collect();
     }
 
     if let Some(n) = snapshot.get("stealDelaySeconds").and_then(|v| v.as_i64()) {
@@ -549,7 +542,9 @@ pub fn apply_config_snapshot(
     }
 
     if let Some(s) = snapshot.get("bagSeedFallbackStrategy").and_then(|v| v.as_str()) {
-        if let Ok(p) = serde_json::from_value::<BagSeedFallbackStrategy>(serde_json::Value::String(s.to_string())) {
+        if let Ok(p) = serde_json::from_value::<BagSeedFallbackStrategy>(serde_json::Value::String(
+            s.to_string(),
+        )) {
             next.bag_seed_fallback_strategy =
                 normalize_bag_seed_fallback_strategy(Some(p), next.bag_seed_fallback_strategy);
         }
@@ -570,7 +565,9 @@ fn apply_automation_bool(a: &mut AutomationConfig, key: &str, value: bool) {
         "friend" => a.friend = value,
         "friend_help_exp_limit" | "friendHelpExpLimit" => a.friend_help_exp_limit = value,
         "friend_steal" | "friendSteal" => a.friend_steal = value,
-        "friend_steal_activity_only" | "friendStealActivityOnly" => a.friend_steal_activity_only = value,
+        "friend_steal_activity_only" | "friendStealActivityOnly" => {
+            a.friend_steal_activity_only = value
+        }
         "friend_help" | "friendHelp" => a.friend_help = value,
         "friend_bad" | "friendBad" => a.friend_bad = value,
         "task" => a.task = value,

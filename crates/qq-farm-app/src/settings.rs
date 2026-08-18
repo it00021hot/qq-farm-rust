@@ -10,11 +10,7 @@ use crate::session::AppContext;
 #[must_use]
 pub fn settings_panel(account_id: &str, username: &str) -> Value {
     use qq_farm_core::models::store::account_config as cfg;
-    let id = if account_id.is_empty() {
-        None
-    } else {
-        Some(account_id)
-    };
+    let id = if account_id.is_empty() { None } else { Some(account_id) };
     let intervals = cfg::get_intervals(id);
     let strategy = cfg::get_planting_strategy(id);
     let preferred = cfg::get_preferred_seed(id);
@@ -22,8 +18,7 @@ pub fn settings_panel(account_id: &str, username: &str) -> Value {
     let automation = cfg::get_automation(id);
     let snap = cfg::get_config_snapshot(id).config;
     let ui = qq_farm_core::models::store::global_config::get_ui();
-    let offline = qq_farm_core::models::store::global_config::get_user_offline_reminder(username)
-        .unwrap_or_else(qq_farm_core::models::store::global_config::get_offline_reminder);
+    let offline = get_offline_reminder(Some(username));
     json!({
         "intervals": {
             "farm": intervals.farm,
@@ -35,6 +30,7 @@ pub fn settings_panel(account_id: &str, username: &str) -> Value {
             "stealMax": intervals.steal_max,
         },
         "strategy": strategy,
+        "plantingStrategy": strategy,
         "preferredSeed": preferred,
         "friendQuietHours": quiet,
         "automation": automation,
@@ -56,11 +52,7 @@ pub fn settings_panel(account_id: &str, username: &str) -> Value {
 }
 
 /// 保存设置快照并可选 reload worker。
-pub fn save_settings(
-    ctx: &AppContext,
-    account_id: &str,
-    snapshot: Value,
-) -> AppResult<Value> {
+pub fn save_settings(ctx: &AppContext, account_id: &str, snapshot: Value) -> AppResult<Value> {
     if account_id.is_empty() {
         return Err(AppError::BadRequest("Missing account id".into()));
     }
@@ -78,10 +70,7 @@ pub fn save_settings(
     if let Some(obj) = data.as_object_mut() {
         obj.insert("saved".to_string(), json!(true));
         obj.insert("configRevision".to_string(), json!(rev));
-        obj.insert(
-            "status".to_string(),
-            json!(if running { "confirmed" } else { "stopped" }),
-        );
+        obj.insert("status".to_string(), json!(if running { "confirmed" } else { "stopped" }));
         obj.insert("stopped".to_string(), json!(!running));
         obj.insert("confirmed".to_string(), json!(running));
     }
@@ -105,6 +94,17 @@ pub fn set_theme(theme: &str) {
     qq_farm_core::models::store::global_config::set_ui_theme(theme);
 }
 
+/// 读取离线提醒（用户覆盖优先，否则全局默认）。
+#[must_use]
+pub fn get_offline_reminder(username: Option<&str>) -> OfflineReminder {
+    if let Some(u) = username.filter(|s| !s.is_empty()) {
+        qq_farm_core::models::store::global_config::get_user_offline_reminder(u)
+            .unwrap_or_else(qq_farm_core::models::store::global_config::get_offline_reminder)
+    } else {
+        qq_farm_core::models::store::global_config::get_offline_reminder()
+    }
+}
+
 /// 设置离线提醒（全局或用户）。
 pub fn set_offline_reminder(username: Option<&str>, cfg: Value) {
     let reminder: OfflineReminder = serde_json::from_value(cfg).unwrap_or_default();
@@ -117,12 +117,7 @@ pub fn set_offline_reminder(username: Option<&str>, cfg: Value) {
 
 /// 测试离线提醒推送。
 pub async fn test_offline_reminder(username: Option<&str>, cfg: Value) -> AppResult<Value> {
-    let base = if let Some(u) = username.filter(|s| !s.is_empty()) {
-        qq_farm_core::models::store::global_config::get_user_offline_reminder(u)
-            .unwrap_or_else(qq_farm_core::models::store::global_config::get_offline_reminder)
-    } else {
-        qq_farm_core::models::store::global_config::get_offline_reminder()
-    };
+    let base = get_offline_reminder(username);
     let merged: OfflineReminder = serde_json::from_value(cfg).unwrap_or(base);
     let push = qq_farm_core::services::push::PushService::new();
     let result = push

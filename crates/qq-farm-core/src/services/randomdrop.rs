@@ -68,11 +68,7 @@ impl RandomDropService {
             )
             .await?;
         let reply = GetActivityInfoReply::decode(&body[..])?;
-        Ok(reply
-            .activities
-            .iter()
-            .map(activity_info_lite)
-            .collect())
+        Ok(reply.activities.iter().map(activity_info_lite).collect())
     }
 }
 
@@ -96,7 +92,9 @@ pub fn activity_info_lite(a: &DropActivityInfo) -> ActivityInfoLite {
 }
 
 #[must_use]
-pub fn drop_reward_lite(r: &crate::proto::generated::gamepb::randomdroppb::DropReward) -> DropRewardLite {
+pub fn drop_reward_lite(
+    r: &crate::proto::generated::gamepb::randomdroppb::DropReward,
+) -> DropRewardLite {
     DropRewardLite {
         item_id: r.item_id,
         count: r.count,
@@ -149,41 +147,25 @@ mod tests {
 
     #[test]
     fn reward_summary_gold() {
-        let items = vec![Item {
-            id: 1,
-            count: 100,
-            ..Default::default()
-        }];
+        let items = vec![Item { id: 1, count: 100, ..Default::default() }];
         assert_eq!(get_reward_summary(&items), "金币100");
     }
 
     #[test]
     fn reward_summary_ticket() {
-        let items = vec![Item {
-            id: 1002,
-            count: 50,
-            ..Default::default()
-        }];
+        let items = vec![Item { id: 1002, count: 50, ..Default::default() }];
         assert_eq!(get_reward_summary(&items), "点券50");
     }
 
     #[test]
     fn reward_summary_skips_zero() {
-        let items = vec![Item {
-            id: 1,
-            count: 0,
-            ..Default::default()
-        }];
+        let items = vec![Item { id: 1, count: 0, ..Default::default() }];
         assert_eq!(get_reward_summary(&items), "");
     }
 
     #[test]
     fn reward_summary_unknown() {
-        let items = vec![Item {
-            id: 9999,
-            count: 1,
-            ..Default::default()
-        }];
+        let items = vec![Item { id: 9999, count: 1, ..Default::default() }];
         assert_eq!(get_reward_summary(&items), "物品#9999x1");
     }
 
@@ -197,12 +179,7 @@ mod tests {
             end_time: 2000,
             drop_count: 3,
             max_drop_count: 10,
-            rewards: vec![DropReward {
-                item_id: 1,
-                count: 100,
-                probability: 5000,
-                claimed: false,
-            }],
+            rewards: vec![DropReward { item_id: 1, count: 100, probability: 5000, claimed: false }],
         };
         let lite = activity_info_lite(&a);
         assert_eq!(lite.activity_id, 100);
@@ -215,12 +192,7 @@ mod tests {
 
     #[test]
     fn drop_reward_lite_basic() {
-        let r = DropReward {
-            item_id: 42,
-            count: 7,
-            probability: 100,
-            claimed: true,
-        };
+        let r = DropReward { item_id: 42, count: 7, probability: 100, claimed: true };
         let lite = drop_reward_lite(&r);
         assert_eq!(lite.item_id, 42);
         assert_eq!(lite.count, 7);

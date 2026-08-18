@@ -7,8 +7,8 @@
 use std::collections::HashSet;
 
 use crate::models::types::{
-    AccountConfig, AutomationConfig, BagSeedFallbackStrategy, FertilizerLandType,
-    IntervalConfig, PlantingStrategy, QuietHoursConfig,
+    AccountConfig, AutomationConfig, BagSeedFallbackStrategy, FertilizerLandType, IntervalConfig,
+    PlantingStrategy, QuietHoursConfig,
 };
 
 /// 间隔上限
@@ -43,9 +43,25 @@ pub const ALLOWED_BAG_SEED_FALLBACK_STRATEGIES: [BagSeedFallbackStrategy; 6] = [
 
 /// 推送渠道白名单
 pub const PUSHOO_CHANNELS: &[&str] = &[
-    "webhook", "qmsg", "serverchan", "pushplus", "pushplushxtrip", "dingtalk", "wecom",
-    "bark", "gocqhttp", "onebot", "atri", "pushdeer", "igot", "telegram", "feishu",
-    "ifttt", "wecombot", "discord", "wxpusher",
+    "webhook",
+    "qmsg",
+    "serverchan",
+    "pushplus",
+    "pushplushxtrip",
+    "dingtalk",
+    "wecom",
+    "bark",
+    "gocqhttp",
+    "onebot",
+    "atri",
+    "pushdeer",
+    "igot",
+    "telegram",
+    "feishu",
+    "ifttt",
+    "wecombot",
+    "discord",
+    "wxpusher",
 ];
 
 /// 默认施肥土地类型
@@ -58,9 +74,8 @@ pub const DEFAULT_FERTILIZER_LAND_TYPES: &[FertilizerLandType] = &[
 ];
 
 /// 默认植物黑名单（id 列表，对应原 TS plantBlacklist）
-pub const DEFAULT_PLANT_BLACKLIST: &[i64] = &[
-    20_002, 20_003, 20_059, 20_065, 20_064, 20_060, 20_061,
-];
+pub const DEFAULT_PLANT_BLACKLIST: &[i64] =
+    &[20_002, 20_003, 20_059, 20_065, 20_064, 20_060, 20_061];
 
 /// 默认 bag seed priority（对齐 bot：空列表）
 pub const DEFAULT_BAG_SEED_PRIORITY: &[i64] = &[];
@@ -69,7 +84,10 @@ pub const DEFAULT_BAG_SEED_PRIORITY: &[i64] = &[];
 pub const DEFAULT_FERTILIZER_SMART_SECONDS: i64 = 360;
 
 /// 规范化已知 GID 列表
-pub fn normalize_known_friend_gids(input: impl Into<Option<Vec<i64>>>, fallback: &[i64]) -> Vec<i64> {
+pub fn normalize_known_friend_gids(
+    input: impl Into<Option<Vec<i64>>>,
+    fallback: &[i64],
+) -> Vec<i64> {
     let source = input.into().unwrap_or_else(|| fallback.to_vec());
     let mut normalized = Vec::new();
     let mut seen = HashSet::new();
@@ -275,12 +293,7 @@ pub fn normalize_quiet_hours(input: &QuietHoursConfig, old: &QuietHoursConfig) -
 
 /// 规范化正整数列表
 pub fn normalize_positive_int_list(input: impl Into<Option<Vec<i64>>>) -> Vec<i64> {
-    input
-        .into()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|n| *n > 0)
-        .collect()
+    input.into().unwrap_or_default().into_iter().filter(|n| *n > 0).collect()
 }
 
 // =====================================================================
@@ -301,7 +314,10 @@ mod tests {
     fn known_friend_gids_clamp_range() {
         assert_eq!(normalize_known_friend_gid_sync_cooldown_sec(Some(5)), 30);
         assert_eq!(normalize_known_friend_gid_sync_cooldown_sec(Some(999_999)), INTERVAL_MAX_SEC);
-        assert_eq!(normalize_known_friend_gid_sync_cooldown_sec(None), DEFAULT_KNOWN_FRIEND_GID_SYNC_COOLDOWN_SEC);
+        assert_eq!(
+            normalize_known_friend_gid_sync_cooldown_sec(None),
+            DEFAULT_KNOWN_FRIEND_GID_SYNC_COOLDOWN_SEC
+        );
     }
 
     #[test]

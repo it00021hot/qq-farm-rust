@@ -15,9 +15,6 @@ pub struct DesktopState {
 impl DesktopState {
     #[must_use]
     pub fn new(app: Arc<AppContext>) -> Self {
-        Self {
-            app,
-            acl: AclPolicy::LocalOwner,
-        }
+        Self { app, acl: AclPolicy::LocalOwner }
     }
 }

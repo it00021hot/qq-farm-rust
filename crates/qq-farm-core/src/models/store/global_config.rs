@@ -22,9 +22,7 @@ pub struct UIConfig {
 
 impl Default for UIConfig {
     fn default() -> Self {
-        Self {
-            theme: "light".to_string(),
-        }
+        Self { theme: "light".to_string() }
     }
 }
 
@@ -41,6 +39,20 @@ pub struct OfflineReminder {
     pub msg: String,
     #[serde(alias = "offline_delete_sec")]
     pub offline_delete_sec: i64,
+}
+
+impl OfflineReminder {
+    /// 是否已填到可尝试推送。
+    ///
+    /// 出厂默认 `channel=webhook` 但地址/token 都空，不算已配置，避免刷运行日志。
+    #[must_use]
+    pub fn is_configured(&self) -> bool {
+        let channel = self.channel.trim().to_ascii_lowercase();
+        if channel.is_empty() || channel == "none" {
+            return false;
+        }
+        !self.endpoint.trim().is_empty() || !self.token.trim().is_empty()
+    }
 }
 
 /// 默认 OfflineReminder
@@ -172,10 +184,7 @@ pub fn get_user_offline_reminder(username: &str) -> Option<OfflineReminder> {
 
 /// 设置某用户离线提醒
 pub fn set_user_offline_reminder(username: &str, reminder: OfflineReminder) {
-    STATE
-        .write()
-        .user_offline_reminders
-        .insert(username.to_string(), reminder);
+    STATE.write().user_offline_reminders.insert(username.to_string(), reminder);
     let _ = save_global_config();
 }
 
@@ -223,12 +232,7 @@ pub fn set_announcement(ann: Announcement) {
 /// 获取用户公告已读时间
 #[must_use]
 pub fn get_announcement_read_record(username: &str) -> i64 {
-    STATE
-        .read()
-        .announcement_read_records
-        .get(username)
-        .copied()
-        .unwrap_or(0)
+    STATE.read().announcement_read_records.get(username).copied().unwrap_or(0)
 }
 
 /// 标记公告已读
@@ -332,11 +336,8 @@ pub fn load_global_config() -> std::io::Result<()> {
         if let Ok(parsed) = serde_json::from_value::<UIConfig>(ui.clone()) {
             new_global.ui = parsed;
             let theme = new_global.ui.theme.to_ascii_lowercase();
-            new_global.ui.theme = if UI_THEMES.contains(&theme.as_str()) {
-                theme
-            } else {
-                "dark".to_string()
-            };
+            new_global.ui.theme =
+                if UI_THEMES.contains(&theme.as_str()) { theme } else { "dark".to_string() };
         }
     }
     if let Some(rem) = data.get("offlineReminder") {
@@ -379,13 +380,17 @@ pub fn load_global_config() -> std::io::Result<()> {
         let mut new_acc = crate::models::store::account_config::AccountConfigState::new();
         let mut migrated = false;
         for (k, v) in map {
-            if let Ok(mut parsed) = serde_json::from_value::<crate::models::types::AccountConfig>(v.clone()) {
+            if let Ok(mut parsed) =
+                serde_json::from_value::<crate::models::types::AccountConfig>(v.clone())
+            {
                 if crate::models::store::normalize::migrate_legacy_bot_automation_defaults(
                     &mut parsed.automation,
                 ) {
                     migrated = true;
                 }
                 new_acc.account_configs.insert(k.clone(), parsed);
+            } else {
+                tracing::warn!(account_id = %k, "账号配置无法解析，已跳过");
             }
         }
         crate::models::store::account_config::set_state(new_acc);
@@ -473,6 +478,30 @@ mod tests {
         assert!(get_user_offline_reminder("alice").is_some());
         assert!(delete_user_offline_reminder("alice"));
         assert!(get_user_offline_reminder("alice").is_none());
+    }
+
+    #[test]
+    fn factory_offline_reminder_is_not_configured() {
+        assert!(!default_offline_reminder().is_configured());
+        assert!(!OfflineReminder::default().is_configured());
+        assert!(OfflineReminder {
+            channel: "webhook".into(),
+            endpoint: "https://example.com/hook".into(),
+            ..Default::default()
+        }
+        .is_configured());
+        assert!(OfflineReminder {
+            channel: "bark".into(),
+            token: "key".into(),
+            ..Default::default()
+        }
+        .is_configured());
+        assert!(!OfflineReminder {
+            channel: "none".into(),
+            token: "key".into(),
+            ..Default::default()
+        }
+        .is_configured());
     }
 
     #[test]

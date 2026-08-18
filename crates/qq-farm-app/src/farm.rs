@@ -15,9 +15,7 @@ pub fn require_worker_loop(ctx: &AppContext, account_id: &str) -> AppResult<Arc<
     if account_id.is_empty() {
         return Err(AppError::BadRequest("missing account id".to_string()));
     }
-    ctx.engine
-        .worker_loop(account_id)
-        .ok_or(AppError::AccountNotRunning)
+    ctx.engine.worker_loop(account_id).ok_or(AppError::AccountNotRunning)
 }
 
 /// 面板状态 + 等级进度（扁平 DTO）。
@@ -27,8 +25,8 @@ pub fn panel_status_with_progress(ctx: &AppContext, account_id: &str) -> PanelSt
     if let Some(status) = data.get("status") {
         let level = status.get("level").and_then(|v| v.as_i64()).unwrap_or(0);
         let exp = status.get("exp").and_then(|v| v.as_i64()).unwrap_or(0);
-        let (current, needed) = qq_farm_core::config::game_config::global()
-            .get_level_exp_progress(level, exp);
+        let (current, needed) =
+            qq_farm_core::config::game_config::global().get_level_exp_progress(level, exp);
         if let Some(obj) = data.as_object_mut() {
             obj.insert(
                 "levelProgress".to_string(),
@@ -36,7 +34,19 @@ pub fn panel_status_with_progress(ctx: &AppContext, account_id: &str) -> PanelSt
             );
         }
     }
-    PanelStatus::from_engine_value(&data, account_id, ctx.engine.has_worker(account_id))
+    let running = ctx.engine.has_worker(account_id);
+    let mut panel = PanelStatus::from_engine_value(&data, account_id, running);
+    if panel.avatar.is_empty() {
+        if let Some(acc) = qq_farm_core::models::store::accounts::get_accounts()
+            .into_iter()
+            .find(|a| a.id == account_id)
+        {
+            if !acc.avatar.is_empty() {
+                panel.avatar = acc.avatar;
+            }
+        }
+    }
+    panel
 }
 
 /// 钻石余额。
@@ -80,19 +90,13 @@ pub fn set_automation(
         true,
     );
     ctx.engine.reload_worker_config(account_id);
-    Ok(json!(
-        qq_farm_core::models::store::account_config::get_automation(Some(account_id))
-    ))
+    Ok(json!(qq_farm_core::models::store::account_config::get_automation(Some(account_id))))
 }
 
 /// 地块详情。
 pub async fn lands(ctx: &AppContext, account_id: &str) -> AppResult<LandsPayload> {
     let loop_ = require_worker_loop(ctx, account_id)?;
-    let (lands, summary) = loop_
-        .farm()
-        .get_lands_detail()
-        .await
-        .map_err(AppError::from_core)?;
+    let (lands, summary) = loop_.farm().get_lands_detail().await.map_err(AppError::from_core)?;
     Ok(LandsPayload::from_values(lands, summary))
 }
 
@@ -102,11 +106,7 @@ pub async fn bag(
     account_id: &str,
 ) -> AppResult<qq_farm_core::services::warehouse::BagDetail> {
     let loop_ = require_worker_loop(ctx, account_id)?;
-    loop_
-        .warehouse()
-        .get_bag_detail()
-        .await
-        .map_err(AppError::from_core)
+    loop_.warehouse().get_bag_detail().await.map_err(AppError::from_core)
 }
 
 /// 使用背包物品。
@@ -133,22 +133,13 @@ pub async fn bag_sell(
     items: &[(i64, i64, i64)],
 ) -> AppResult<()> {
     let loop_ = require_worker_loop(ctx, account_id)?;
-    loop_
-        .warehouse()
-        .sell_items(items)
-        .await
-        .map(|_| ())
-        .map_err(AppError::from_core)
+    loop_.warehouse().sell_items(items).await.map(|_| ()).map_err(AppError::from_core)
 }
 
 /// 背包种子。
 pub async fn bag_seeds(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
-    let seeds = loop_
-        .warehouse()
-        .get_bag_seeds()
-        .await
-        .map_err(AppError::from_core)?;
+    let seeds = loop_.warehouse().get_bag_seeds().await.map_err(AppError::from_core)?;
     serde_json::to_value(seeds).map_err(|e| AppError::Internal(e.to_string()))
 }
 
@@ -181,48 +172,33 @@ pub async fn operate(ctx: &AppContext, account_id: &str, op: &str) -> AppResult<
     let farm = loop_.farm();
     let op = op.to_lowercase();
     let result: Result<Value, qq_farm_core::error::Error> = match op.as_str() {
-        "harvest" => farm
-            .op_harvest()
-            .await
-            .map(|n| json!({ "ok": true, "op": "harvest", "count": n })),
-        "water" => farm
-            .op_water()
-            .await
-            .map(|n| json!({ "ok": true, "op": "water", "count": n })),
-        "weed" => farm
-            .op_weed()
-            .await
-            .map(|n| json!({ "ok": true, "op": "weed", "count": n })),
+        "harvest" => {
+            farm.op_harvest().await.map(|n| json!({ "ok": true, "op": "harvest", "count": n }))
+        }
+        "water" => farm.op_water().await.map(|n| json!({ "ok": true, "op": "water", "count": n })),
+        "weed" => farm.op_weed().await.map(|n| json!({ "ok": true, "op": "weed", "count": n })),
         "insecticide" | "bug" => farm
             .op_insecticide()
             .await
             .map(|n| json!({ "ok": true, "op": "insecticide", "count": n })),
-        "fertilize" => farm.op_fertilize().await.map(|r| {
-            json!({ "ok": true, "op": "fertilize", "normal": r.normal, "organic": r.organic })
-        }),
-        "plant" => farm
-            .op_plant()
-            .await
-            .map(|n| json!({ "ok": true, "op": "plant", "count": n })),
-        "remove" | "clear" => farm
-            .op_remove()
-            .await
-            .map(|n| json!({ "ok": true, "op": "remove", "count": n })),
-        "upgrade" => farm
-            .op_upgrade()
-            .await
-            .map(|id| json!({ "ok": true, "op": "upgrade", "land_id": id })),
+        "fertilize" => farm.op_fertilize().await.map(
+            |r| json!({ "ok": true, "op": "fertilize", "normal": r.normal, "organic": r.organic }),
+        ),
+        "plant" => farm.op_plant().await.map(|n| json!({ "ok": true, "op": "plant", "count": n })),
+        "remove" | "clear" => {
+            farm.op_remove().await.map(|n| json!({ "ok": true, "op": "remove", "count": n }))
+        }
+        "upgrade" => {
+            farm.op_upgrade().await.map(|id| json!({ "ok": true, "op": "upgrade", "land_id": id }))
+        }
         "unlock" => farm
             .op_unlock(false)
             .await
             .map(|id| json!({ "ok": true, "op": "unlock", "land_id": id })),
-        "cycle" | "all" => farm
-            .run_farm_operation()
-            .await
-            .map(|()| json!({ "ok": true, "op": "cycle" })),
-        other => Err(qq_farm_core::error::Error::Protocol(format!(
-            "unknown op: {other}"
-        ))),
+        "cycle" | "all" => {
+            farm.run_farm_operation().await.map(|()| json!({ "ok": true, "op": "cycle" }))
+        }
+        other => Err(qq_farm_core::error::Error::Protocol(format!("unknown op: {other}"))),
     };
     result.map_err(AppError::from_core)
 }
@@ -238,18 +214,12 @@ pub fn analytics(sort_by: Option<&str>) -> Value {
 /// 偷菜作物黑名单。
 #[must_use]
 pub fn plant_blacklist(account_id: &str) -> Value {
-    let id = if account_id.is_empty() {
-        None
-    } else {
-        Some(account_id)
-    };
+    let id = if account_id.is_empty() { None } else { Some(account_id) };
     json!(qq_farm_core::models::store::account_config::get_plant_blacklist(id))
 }
 
 pub fn set_plant_blacklist(account_id: &str, seed_ids: Vec<i64>) -> Value {
-    json!(qq_farm_core::models::store::account_config::set_plant_blacklist(
-        account_id, seed_ids
-    ))
+    json!(qq_farm_core::models::store::account_config::set_plant_blacklist(account_id, seed_ids))
 }
 
 pub fn add_plant_blacklist(account_id: &str, seed_id: i64) -> Value {
@@ -279,10 +249,7 @@ pub async fn fertilizer_buy(
         "normal" => qq_farm_core::services::mall::MallFertilizerKind::Normal,
         _ => qq_farm_core::services::mall::MallFertilizerKind::Organic,
     };
-    Ok(loop_
-        .mall()
-        .auto_buy_fertilizer(true, kind, count)
-        .await)
+    Ok(loop_.mall().auto_buy_fertilizer(true, kind, count).await)
 }
 
 /// 检查并购买双化肥。
@@ -387,7 +354,7 @@ pub async fn daily_gift_overview(ctx: &AppContext, account_id: &str) -> AppResul
     }))
 }
 
-/// 从引擎读取全局日志（最近 limit 条，新→旧）。
+/// 从引擎读取全局日志（最近 limit 条，旧→新）。
 #[must_use]
 pub fn engine_global_logs(
     ctx: &AppContext,
@@ -396,16 +363,12 @@ pub fn engine_global_logs(
 ) -> Vec<qq_farm_core::runtime::runtime_state::LogEntry> {
     let state = ctx.engine.runtime_state();
     let logs = state.global_logs.lock().clone();
-    let mut filtered: Vec<_> = if let Some(id) = account_id.filter(|s| !s.is_empty()) {
-        logs.into_iter()
-            .filter(|l| l.account_id.as_deref() == Some(id))
-            .collect()
+    let filtered: Vec<_> = if let Some(id) = account_id.filter(|s| !s.is_empty()) {
+        logs.into_iter().filter(|l| l.account_id.as_deref() == Some(id)).collect()
     } else {
         logs
     };
-    filtered.sort_by(|a, b| b.ts.cmp(&a.ts));
-    filtered.truncate(limit.max(1));
-    filtered
+    qq_farm_core::runtime::runtime_state::RuntimeState::take_last_n_ascending(filtered, limit)
 }
 
 /// 账号日志。

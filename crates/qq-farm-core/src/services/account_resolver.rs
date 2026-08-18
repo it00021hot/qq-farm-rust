@@ -22,14 +22,9 @@ pub fn normalize_account_ref(raw_ref: Option<&serde_json::Value>) -> String {
         return String::new();
     }
     if let Some(arr) = v.as_array() {
-        return arr
-            .first()
-            .and_then(|x| normalize_account_ref(Some(x)).into())
-            .unwrap_or_default();
+        return arr.first().and_then(|x| normalize_account_ref(Some(x)).into()).unwrap_or_default();
     }
-    v.as_str()
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| v.to_string().trim().to_string())
+    v.as_str().map(|s| s.trim().to_string()).unwrap_or_else(|| v.to_string().trim().to_string())
 }
 
 /// 构造账号的 key 集合（id/uin/qq 都算"自身"）
@@ -45,7 +40,10 @@ pub fn build_account_keys(account: &AccountSession) -> std::collections::HashSet
 }
 
 /// 在账号列表中按多 key 匹配
-pub fn find_account_by_ref(accounts: &[AccountSession], raw_ref: Option<&serde_json::Value>) -> Option<AccountSession> {
+pub fn find_account_by_ref(
+    accounts: &[AccountSession],
+    raw_ref: Option<&serde_json::Value>,
+) -> Option<AccountSession> {
     let key = normalize_account_ref(raw_ref);
     if key.is_empty() {
         return None;
@@ -59,7 +57,10 @@ pub fn find_account_by_ref(accounts: &[AccountSession], raw_ref: Option<&serde_j
 }
 
 /// 组合：find + 归一化返回 id
-pub fn resolve_account_id(accounts: &[AccountSession], raw_ref: Option<&serde_json::Value>) -> String {
+pub fn resolve_account_id(
+    accounts: &[AccountSession],
+    raw_ref: Option<&serde_json::Value>,
+) -> String {
     find_account_by_ref(accounts, raw_ref)
         .map(|a| normalize_account_ref(Some(&serde_json::Value::String(a.id.clone()))))
         .unwrap_or_default()
@@ -71,7 +72,8 @@ mod tests {
     use crate::models::AccountSession;
 
     fn acc_with(id: &str, uin: &str, qq: &str) -> AccountSession {
-        let mut a = AccountSession::new(id.to_string(), "openid-1".to_string(), "name-1".to_string());
+        let mut a =
+            AccountSession::new(id.to_string(), "openid-1".to_string(), "name-1".to_string());
         a.uin = uin.to_string();
         a.qq = qq.to_string();
         a

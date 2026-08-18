@@ -30,9 +30,7 @@ pub fn farm_status_detail(
 #[tauri::command]
 pub async fn farm_diamond(state: State<'_, DesktopState>, account_id: String) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
-    let diamond = farm::diamond_balance(&state.app, &account_id)
-        .await
-        .map_err(IpcError::from)?;
+    let diamond = farm::diamond_balance(&state.app, &account_id).await.map_err(IpcError::from)?;
     Ok(serde_json::json!({ "diamond": diamond }))
 }
 
@@ -43,9 +41,7 @@ pub async fn farm_lands(
     account_id: String,
 ) -> IpcResult<qq_farm_app::dto::LandsPayload> {
     ensure(&state, &account_id)?;
-    farm::lands(&state.app, &account_id)
-        .await
-        .map_err(IpcError::from)
+    farm::lands(&state.app, &account_id).await.map_err(IpcError::from)
 }
 
 /// 农场手动操作。
@@ -56,9 +52,7 @@ pub async fn farm_operate(
     op: String,
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
-    farm::operate(&state.app, &account_id, &op)
-        .await
-        .map_err(IpcError::from)
+    farm::operate(&state.app, &account_id, &op).await.map_err(IpcError::from)
 }
 
 /// 背包详情。
@@ -68,9 +62,7 @@ pub async fn farm_bag(
     account_id: String,
 ) -> IpcResult<qq_farm_core::services::warehouse::BagDetail> {
     ensure(&state, &account_id)?;
-    farm::bag(&state.app, &account_id)
-        .await
-        .map_err(IpcError::from)
+    farm::bag(&state.app, &account_id).await.map_err(IpcError::from)
 }
 
 /// 出售背包物品。
@@ -81,13 +73,9 @@ pub async fn farm_bag_sell(
     items: Vec<BagSellItem>,
 ) -> IpcResult<()> {
     ensure(&state, &account_id)?;
-    let tuples: Vec<(i64, i64, i64)> = items
-        .into_iter()
-        .map(|i| (i.item_id, i.count, i.uid))
-        .collect();
-    farm::bag_sell(&state.app, &account_id, &tuples)
-        .await
-        .map_err(IpcError::from)
+    let tuples: Vec<(i64, i64, i64)> =
+        items.into_iter().map(|i| (i.item_id, i.count, i.uid)).collect();
+    farm::bag_sell(&state.app, &account_id, &tuples).await.map_err(IpcError::from)
 }
 
 /// 使用背包物品。
@@ -117,9 +105,7 @@ pub async fn farm_seeds(
         return Ok(farm::seeds_catalog());
     }
     ensure(&state, &id)?;
-    farm::bag_seeds(&state.app, &id)
-        .await
-        .map_err(IpcError::from)
+    farm::bag_seeds(&state.app, &id).await.map_err(IpcError::from)
 }
 
 /// 每日礼包概览。
@@ -129,17 +115,12 @@ pub async fn farm_daily_gifts(
     account_id: String,
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
-    farm::daily_gift_overview(&state.app, &account_id)
-        .await
-        .map_err(IpcError::from)
+    farm::daily_gift_overview(&state.app, &account_id).await.map_err(IpcError::from)
 }
 
 /// 读取自动化配置。
 #[tauri::command]
-pub fn farm_get_automation(
-    state: State<'_, DesktopState>,
-    account_id: String,
-) -> IpcResult<Value> {
+pub fn farm_get_automation(state: State<'_, DesktopState>, account_id: String) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
     Ok(serde_json::to_value(cfg::get_automation(Some(&account_id))).unwrap_or(Value::Null))
 }
@@ -154,14 +135,8 @@ pub fn farm_set_automation(
     extra: Option<Value>,
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
-    farm::set_automation(
-        &state.app,
-        &account_id,
-        &key,
-        value,
-        extra.unwrap_or(Value::Null),
-    )
-    .map_err(IpcError::from)
+    farm::set_automation(&state.app, &account_id, &key, value, extra.unwrap_or(Value::Null))
+        .map_err(IpcError::from)
 }
 
 /// 全局 / 账号日志。
@@ -201,10 +176,7 @@ pub fn farm_clear_logs(
 
 /// 种植分析排名。
 #[tauri::command]
-pub fn farm_analytics(
-    state: State<'_, DesktopState>,
-    sort_by: Option<String>,
-) -> IpcResult<Value> {
+pub fn farm_analytics(state: State<'_, DesktopState>, sort_by: Option<String>) -> IpcResult<Value> {
     let _ = &state.acl;
     Ok(farm::analytics(sort_by.as_deref()))
 }

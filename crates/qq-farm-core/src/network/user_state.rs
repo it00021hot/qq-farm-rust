@@ -78,12 +78,7 @@ mod tests {
     #[test]
     fn replace_full() {
         let s = UserStateStore::new();
-        s.replace(UserState {
-            gid: 12345,
-            name: "tester".into(),
-            level: 10,
-            ..Default::default()
-        });
+        s.replace(UserState { gid: 12345, name: "tester".into(), level: 10, ..Default::default() });
         let snap = s.snapshot();
         assert_eq!(snap.gid, 12345);
         assert_eq!(snap.name, "tester");

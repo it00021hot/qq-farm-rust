@@ -423,10 +423,7 @@ mod tests {
         use crate::proto::generated::gamepb::plantpb::PlantInfo;
         let land = LandInfo {
             id: 1,
-            plant: Some(PlantInfo {
-                id: 9999999,
-                ..Default::default()
-            }),
+            plant: Some(PlantInfo { id: 9999999, ..Default::default() }),
             ..Default::default()
         };
         assert!(!is_activity_plant("acc-act", &land));
@@ -438,10 +435,7 @@ mod tests {
         mark_activity_plant("acc-act", 8888);
         let land = LandInfo {
             id: 1,
-            plant: Some(PlantInfo {
-                id: 8888,
-                ..Default::default()
-            }),
+            plant: Some(PlantInfo { id: 8888, ..Default::default() }),
             ..Default::default()
         };
         assert!(is_activity_plant("acc-act", &land));
@@ -466,18 +460,11 @@ mod tests {
     fn can_i_still_steal_respects_stealers_and_cap() {
         use crate::proto::generated::gamepb::plantpb::{PlantInfo, StealPlayer};
         use prost::Message;
-        let mut plant = PlantInfo {
-            stealable: true,
-            steal_num: vec![2].into(),
-            ..Default::default()
-        };
+        let mut plant =
+            PlantInfo { stealable: true, steal_num: vec![2].into(), ..Default::default() };
         assert!(can_i_still_steal_plant(&plant, 100));
 
-        let encoded = StealPlayer {
-            gid: 100,
-            num: 2,
-        }
-        .encode_to_vec();
+        let encoded = StealPlayer { gid: 100, num: 2 }.encode_to_vec();
         plant.stealers = encoded.into();
         assert!(!can_i_still_steal_plant(&plant, 100));
         assert!(can_i_still_steal_plant(&plant, 200));

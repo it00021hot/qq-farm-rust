@@ -24,8 +24,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::Result;
 use crate::network::gateway::Gateway;
 use crate::proto::generated::gamepb::emailpb::{
-    BatchClaimEmailRequest, BatchClaimEmailReply, BatchDeleteEmailRequest, BatchDeleteEmailReply,
-    ClaimEmailRequest, ClaimEmailReply, EmailItem, GetEmailListRequest, GetEmailListReply,
+    BatchClaimEmailReply, BatchClaimEmailRequest, BatchDeleteEmailReply, BatchDeleteEmailRequest,
+    ClaimEmailReply, ClaimEmailRequest, EmailItem, GetEmailListReply, GetEmailListRequest,
 };
 
 const DAILY_KEY: &str = "email_rewards";
@@ -41,11 +41,7 @@ pub struct EmailService {
 impl EmailService {
     #[must_use]
     pub fn new(gateway: Arc<Gateway>) -> Self {
-        Self {
-            gateway,
-            done_date_key: Mutex::new(String::new()),
-            last_check_at: Mutex::new(0),
-        }
+        Self { gateway, done_date_key: Mutex::new(String::new()), last_check_at: Mutex::new(0) }
     }
 
     /// 拉取邮箱列表
@@ -65,10 +61,7 @@ impl EmailService {
 
     /// 单封领取
     pub async fn claim_email(&self, box_type: i32, email_id: &str) -> Result<ClaimEmailReply> {
-        let req = ClaimEmailRequest {
-            box_type,
-            email_id: email_id.to_string(),
-        };
+        let req = ClaimEmailRequest { box_type, email_id: email_id.to_string() };
         let body = self
             .gateway
             .request(
@@ -87,10 +80,7 @@ impl EmailService {
         box_type: i32,
         email_id: &str,
     ) -> Result<BatchClaimEmailReply> {
-        let req = BatchClaimEmailRequest {
-            box_type,
-            email_id: email_id.to_string(),
-        };
+        let req = BatchClaimEmailRequest { box_type, email_id: email_id.to_string() };
         let body = self
             .gateway
             .request(
@@ -109,10 +99,7 @@ impl EmailService {
         box_type: i32,
         email_ids: Vec<String>,
     ) -> Result<BatchDeleteEmailReply> {
-        let req = BatchDeleteEmailRequest {
-            box_type,
-            email_ids,
-        };
+        let req = BatchDeleteEmailRequest { box_type, email_ids };
         let body = self
             .gateway
             .request(
@@ -130,19 +117,13 @@ impl EmailService {
         let today = get_date_key();
         {
             if !force && *self.done_date_key.lock() == today {
-                return EmailClaimResult {
-                    claimed: 0,
-                    reward_items: 0,
-                };
+                return EmailClaimResult { claimed: 0, reward_items: 0 };
             }
         }
         let now = crate::utils::time::now_ms();
         {
             if !force && (now - *self.last_check_at.lock()) < CHECK_COOLDOWN_MS {
-                return EmailClaimResult {
-                    claimed: 0,
-                    reward_items: 0,
-                };
+                return EmailClaimResult { claimed: 0, reward_items: 0 };
             }
         }
         *self.last_check_at.lock() = now;
@@ -158,12 +139,7 @@ impl EmailService {
                 continue;
             }
             let id = x.id.clone();
-            merged
-                .entry(id)
-                .or_insert_with(|| MergedEmail {
-                    item: x.clone(),
-                    box_type: 1,
-                });
+            merged.entry(id).or_insert_with(|| MergedEmail { item: x.clone(), box_type: 1 });
         }
         for x in box2.emails.iter() {
             if x.id.is_empty() {
@@ -174,37 +150,20 @@ impl EmailService {
             if let Some(old) = merged.get(&id).cloned() {
                 let old_claimable = old.item.has_reward && !old.item.claimed;
                 if !old_claimable && now_claimable {
-                    merged.insert(
-                        id,
-                        MergedEmail {
-                            item: x.clone(),
-                            box_type: 2,
-                        },
-                    );
+                    merged.insert(id, MergedEmail { item: x.clone(), box_type: 2 });
                 }
             } else {
-                merged.insert(
-                    id,
-                    MergedEmail {
-                        item: x.clone(),
-                        box_type: 2,
-                    },
-                );
+                merged.insert(id, MergedEmail { item: x.clone(), box_type: 2 });
             }
         }
 
-        let claimable: Vec<&MergedEmail> = merged
-            .values()
-            .filter(|m| m.item.has_reward && !m.item.claimed)
-            .collect();
+        let claimable: Vec<&MergedEmail> =
+            merged.values().filter(|m| m.item.has_reward && !m.item.claimed).collect();
 
         if claimable.is_empty() {
             *self.done_date_key.lock() = today;
             tracing::info!("[邮箱] 今日暂无可领取邮箱奖励");
-            return EmailClaimResult {
-                claimed: 0,
-                reward_items: 0,
-            };
+            return EmailClaimResult { claimed: 0, reward_items: 0 };
         }
 
         // 按 boxType 分组
@@ -251,19 +210,12 @@ impl EmailService {
             tracing::info!(
                 "[邮箱] 领取成功 {} 封 → {}",
                 claimed,
-                if summary.is_empty() {
-                    String::new()
-                } else {
-                    summary
-                }
+                if summary.is_empty() { String::new() } else { summary }
             );
             *self.done_date_key.lock() = today;
         }
 
-        EmailClaimResult {
-            claimed,
-            reward_items: rewards.len(),
-        }
+        EmailClaimResult { claimed, reward_items: rewards.len() }
     }
 
     /// 获取每日状态
@@ -321,10 +273,7 @@ fn claim_reply_items_from_single(reply: &ClaimEmailReply) -> Vec<RewardItem> {
     reply
         .items
         .iter()
-        .map(|i| RewardItem {
-            id: i.id,
-            count: i.count,
-        })
+        .map(|i| RewardItem { id: i.id, count: i.count })
         .filter(|r| r.count > 0)
         .collect()
 }
@@ -412,11 +361,11 @@ mod tests {
     #[test]
     fn reward_summary_with_items() {
         let items = vec![
-            RewardItem { id: 1, count: 100 },       // 金币
-            RewardItem { id: 1002, count: 50 },     // 点券
-            RewardItem { id: 2, count: 200 },       // 经验
-            RewardItem { id: 9999, count: 3 },      // 物品
-            RewardItem { id: 1, count: 0 },         // 跳过
+            RewardItem { id: 1, count: 100 },   // 金币
+            RewardItem { id: 1002, count: 50 }, // 点券
+            RewardItem { id: 2, count: 200 },   // 经验
+            RewardItem { id: 9999, count: 3 },  // 物品
+            RewardItem { id: 1, count: 0 },     // 跳过
         ];
         assert_eq!(get_reward_summary(&items), "金币100/点券50/经验200/物品#9999x3");
     }

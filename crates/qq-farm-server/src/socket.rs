@@ -26,8 +26,8 @@ use socketioxide::{
     SocketIo,
 };
 
-use qq_farm_core::runtime::runtime_state::{LogEntry, RuntimeEvent};
 use crate::context::AdminContext;
+use qq_farm_core::runtime::runtime_state::{LogEntry, RuntimeEvent};
 
 #[derive(Debug, Deserialize)]
 struct HandshakeAuth {
@@ -62,16 +62,13 @@ pub fn setup_socketio(ctx: Arc<AdminContext>) -> (socketioxide::layer::SocketIoL
 
             let ctx_sub = ctx.clone();
             let token = auth.token.clone();
-            s.on(
-                "subscribe",
-                move |s: SocketRef, Data::<SubscribePayload>(payload)| {
-                    let ctx_sub = ctx_sub.clone();
-                    let token = token.clone();
-                    async move {
-                        apply_subscription(&s, &ctx_sub, &payload.account_id, &token);
-                    }
-                },
-            );
+            s.on("subscribe", move |s: SocketRef, Data::<SubscribePayload>(payload)| {
+                let ctx_sub = ctx_sub.clone();
+                let token = token.clone();
+                async move {
+                    apply_subscription(&s, &ctx_sub, &payload.account_id, &token);
+                }
+            });
         }
     });
     (layer, io)
@@ -94,11 +91,7 @@ pub fn spawn_socket_forwarder(io: SocketIo, ctx: Arc<AdminContext>) {
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
             match event {
-                RuntimeEvent::Status {
-                    account_id,
-                    status,
-                    ..
-                } => {
+                RuntimeEvent::Status { account_id, status, .. } => {
                     if account_id.is_empty() {
                         continue;
                     }
@@ -121,11 +114,7 @@ pub fn spawn_socket_forwarder(io: SocketIo, ctx: Arc<AdminContext>) {
                     let room = format!("account:{}", entry.account_id);
                     let _ = io.to(room).emit("account-log:new", &entry).await;
                 }
-                RuntimeEvent::WorkerLog {
-                    entry,
-                    account_id,
-                    ..
-                } => {
+                RuntimeEvent::WorkerLog { entry, account_id, .. } => {
                     if account_id.is_empty() {
                         continue;
                     }
@@ -142,11 +131,8 @@ fn apply_subscription(socket: &SocketRef, ctx: &AdminContext, account_ref: &str,
     let sess = ctx.sessions.get(token);
     let is_admin = sess.as_ref().is_some_and(|s| s.role == "admin");
     let username = sess.as_ref().map(|s| s.username.clone()).unwrap_or_default();
-    let resolved = if incoming.is_empty() || incoming == "all" {
-        String::new()
-    } else {
-        incoming.to_string()
-    };
+    let resolved =
+        if incoming.is_empty() || incoming == "all" { String::new() } else { incoming.to_string() };
 
     if !resolved.is_empty() && !is_admin {
         let owned = qq_farm_core::models::store::accounts::get_accounts()
@@ -208,11 +194,7 @@ fn push_snapshots(
             all
         } else {
             all.into_iter()
-                .filter(|l| {
-                    l.account_id
-                        .as_deref()
-                        .is_some_and(|id| owned.contains(id))
-                })
+                .filter(|l| l.account_id.as_deref().is_some_and(|id| owned.contains(id)))
                 .collect()
         }
     } else {
@@ -224,7 +206,7 @@ fn push_snapshots(
             .cloned()
             .collect()
     };
-    let logs: Vec<_> = logs.into_iter().rev().take(100).collect();
+    let logs: Vec<_> = logs.into_iter().rev().take(100).rev().collect();
     let logs_payload = json!({
         "accountId": if account_id.is_empty() { "all" } else { account_id },
         "logs": logs
@@ -254,10 +236,7 @@ fn push_snapshots(
 /// 兼容旧 `/ws`（E2E / 调试）。须带 `?token=` 或 `x-admin-token`，与 Socket.IO 鉴权对齐。
 ///
 /// 鉴权在 `WebSocketUpgrade` 提取之前完成，避免无 Upgrade 头时直接 426。
-pub async fn ws_handler(
-    State(ctx): State<Arc<AdminContext>>,
-    req: Request<Body>,
-) -> Response {
+pub async fn ws_handler(State(ctx): State<Arc<AdminContext>>, req: Request<Body>) -> Response {
     let (mut parts, body) = req.into_parts();
     let token = match extract_ws_token(&mut parts).await {
         Ok(t) => t,
@@ -277,18 +256,14 @@ async fn extract_ws_token(parts: &mut Parts) -> Result<String, Response> {
     let q = Query::<WsAuthQuery>::from_request_parts(parts, &mut ())
         .await
         .map_err(|_| (StatusCode::BAD_REQUEST, "bad query").into_response())?;
-    let token = q
-        .token
-        .clone()
-        .filter(|t| !t.is_empty())
-        .or_else(|| {
-            parts
-                .headers
-                .get("x-admin-token")
-                .and_then(|v| v.to_str().ok())
-                .map(str::to_string)
-                .filter(|t| !t.is_empty())
-        });
+    let token = q.token.clone().filter(|t| !t.is_empty()).or_else(|| {
+        parts
+            .headers
+            .get("x-admin-token")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+            .filter(|t| !t.is_empty())
+    });
     token.ok_or_else(|| (StatusCode::UNAUTHORIZED, "missing token").into_response())
 }
 

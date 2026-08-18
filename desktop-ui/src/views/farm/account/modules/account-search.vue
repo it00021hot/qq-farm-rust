@@ -2,7 +2,7 @@
 import { computed, toRaw } from 'vue';
 import { jsonClone } from '@sa/utils';
 import {
-  farmEnableStatusOptions,
+  farmAuthStatusOptions,
   farmPlatformOptions,
   farmRunStatusOptions,
   translateNumberOptions,
@@ -41,7 +41,7 @@ async function search() {
   emit('search');
 }
 
-const statusOptions = computed(() => translateStringOptions(farmEnableStatusOptions));
+const statusOptions = computed(() => translateStringOptions(farmAuthStatusOptions));
 const runStatusOptions = computed(() => translateNumberOptions(farmRunStatusOptions));
 const platformOptions = computed(() => translateStringOptions(farmPlatformOptions));
 </script>
@@ -71,12 +71,12 @@ const platformOptions = computed(() => translateStringOptions(farmPlatformOption
                 :placeholder="$t('page.farm.account.runStatus')"
               />
             </NFormItemGi>
-            <NFormItemGi span="24 s:12 m:6" :label="$t('page.farm.account.status')" path="status">
+            <NFormItemGi span="24 s:12 m:6" :label="$t('page.farm.account.authStatus')" path="authStatus">
               <NSelect
-                v-model:value="model.status"
+                v-model:value="model.authStatus"
                 :options="statusOptions"
                 clearable
-                :placeholder="$t('page.farm.account.status')"
+                :placeholder="$t('page.farm.account.authStatus')"
               />
             </NFormItemGi>
             <NFormItemGi span="24">

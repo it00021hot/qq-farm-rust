@@ -14,6 +14,8 @@ pub struct AccountSummary {
     pub qq: String,
     pub avatar: String,
     pub running: bool,
+    /// 是否已持久化应用宝授权（可换码重连）
+    pub wx_authorized: bool,
 }
 
 /// 概览快照。

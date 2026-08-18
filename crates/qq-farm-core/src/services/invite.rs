@@ -100,9 +100,7 @@ impl InviteService {
         share_source: Option<&str>,
     ) -> Result<ReportArkClickReply> {
         let sharer_id_num: i64 = sharer_id.and_then(|s| s.parse().ok()).unwrap_or(0);
-        let share_cfg_id_num: i64 = share_source
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
+        let share_cfg_id_num: i64 = share_source.and_then(|s| s.parse().ok()).unwrap_or(0);
         let req = ReportArkClickRequest {
             sharer_id: sharer_id_num,
             sharer_open_id: sharer_open_id.unwrap_or("").to_string(),
@@ -111,12 +109,7 @@ impl InviteService {
         };
         let body = self
             .gateway
-            .request(
-                USER_SERVICE,
-                "ReportArkClick",
-                &req.encode_to_vec(),
-                10_000,
-            )
+            .request(USER_SERVICE, "ReportArkClick", &req.encode_to_vec(), 10_000)
             .await?;
         Ok(ReportArkClickReply::decode(&body[..])?)
     }
@@ -133,15 +126,9 @@ impl InviteService {
             return InviteProcessResult::default();
         }
 
-        tracing::info!(
-            "[邀请] 读取到 {} 个邀请码（已去重），开始逐个处理...",
-            invites.len()
-        );
+        tracing::info!("[邀请] 读取到 {} 个邀请码（已去重），开始逐个处理...", invites.len());
 
-        let mut result = InviteProcessResult {
-            attempted: invites.len(),
-            ..Default::default()
-        };
+        let mut result = InviteProcessResult { attempted: invites.len(), ..Default::default() };
         for (i, invite) in invites.iter().enumerate() {
             match self
                 .send_report_ark_click(
@@ -177,11 +164,7 @@ impl InviteService {
             }
         }
 
-        tracing::info!(
-            "[邀请] 处理完成: 成功 {}, 失败 {}",
-            result.succeeded,
-            result.failed
-        );
+        tracing::info!("[邀请] 处理完成: 成功 {}, 失败 {}", result.succeeded, result.failed);
 
         Self::clear_share_file();
         result

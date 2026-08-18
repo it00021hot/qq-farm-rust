@@ -51,10 +51,7 @@ impl Api {
     /// 创建 API 客户端
     #[must_use]
     pub fn new(gateway: Arc<Gateway>) -> Self {
-        Self {
-            gateway,
-            on_operation_limits_update: Arc::new(Mutex::new(None)),
-        }
+        Self { gateway, on_operation_limits_update: Arc::new(Mutex::new(None)) }
     }
 
     /// 设置操作限制更新回调
@@ -87,11 +84,7 @@ impl Api {
     ///
     /// `items` 按种子分组：每组一个 `PlantItem { seed_id, land_ids }`。
     pub async fn plant(&self, items: Vec<PlantItem>) -> Result<PlantReply> {
-        let body = PlantRequest {
-            land_and_seed: Default::default(),
-            items,
-        }
-        .encode_to_vec();
+        let body = PlantRequest { land_and_seed: Default::default(), items }.encode_to_vec();
         let resp = self
             .gateway
             .request("gamepb.plantpb.PlantService", "Plant", &body, DEFAULT_TIMEOUT_MS)
@@ -106,12 +99,7 @@ impl Api {
         let body = AllLandsRequest { host_gid: 0 }.encode_to_vec();
         let resp = self
             .gateway
-            .request(
-                "gamepb.plantpb.PlantService",
-                "AllLands",
-                &body,
-                DEFAULT_TIMEOUT_MS,
-            )
+            .request("gamepb.plantpb.PlantService", "AllLands", &body, DEFAULT_TIMEOUT_MS)
             .await?;
         let reply = AllLandsReply::decode(&*resp).map_err(Error::from)?;
         if !reply.operation_limits.is_empty() {
@@ -123,40 +111,26 @@ impl Api {
     }
 
     /// 收获
-    pub async fn harvest(&self, land_ids: Vec<i64>, host_gid: i64, all: bool) -> Result<HarvestReply> {
-        let body = HarvestRequest {
-            land_ids,
-            host_gid,
-            is_all: all,
-        }
-        .encode_to_vec();
+    pub async fn harvest(
+        &self,
+        land_ids: Vec<i64>,
+        host_gid: i64,
+        all: bool,
+    ) -> Result<HarvestReply> {
+        let body = HarvestRequest { land_ids, host_gid, is_all: all }.encode_to_vec();
         let resp = self
             .gateway
-            .request(
-                "gamepb.plantpb.PlantService",
-                "Harvest",
-                &body,
-                DEFAULT_TIMEOUT_MS,
-            )
+            .request("gamepb.plantpb.PlantService", "Harvest", &body, DEFAULT_TIMEOUT_MS)
             .await?;
         HarvestReply::decode(&*resp).map_err(Error::from)
     }
 
     /// 浇水
     pub async fn water_land(&self, land_ids: Vec<i64>, host_gid: i64) -> Result<WaterLandReply> {
-        let body = WaterLandRequest {
-            land_ids,
-            host_gid,
-        }
-        .encode_to_vec();
+        let body = WaterLandRequest { land_ids, host_gid }.encode_to_vec();
         let resp = self
             .gateway
-            .request(
-                "gamepb.plantpb.PlantService",
-                "WaterLand",
-                &body,
-                DEFAULT_TIMEOUT_MS,
-            )
+            .request("gamepb.plantpb.PlantService", "WaterLand", &body, DEFAULT_TIMEOUT_MS)
             .await?;
         WaterLandReply::decode(&*resp).map_err(Error::from)
     }
@@ -165,38 +139,19 @@ impl Api {
     ///
     /// 对齐 TS `farming()`：只带 `land_ids` + `host_gid`，不传 field_3/field_4。
     pub async fn farming(&self, land_ids: Vec<i64>, host_gid: i64) -> Result<FarmingReply> {
-        let body = FarmingRequest {
-            land_ids,
-            host_gid,
-            ..Default::default()
-        }
-        .encode_to_vec();
+        let body = FarmingRequest { land_ids, host_gid, ..Default::default() }.encode_to_vec();
         let resp = self
             .gateway
-            .request(
-                "gamepb.plantpb.PlantService",
-                "Farming",
-                &body,
-                DEFAULT_TIMEOUT_MS,
-            )
+            .request("gamepb.plantpb.PlantService", "Farming", &body, DEFAULT_TIMEOUT_MS)
             .await?;
         FarmingReply::decode(&*resp).map_err(Error::from)
     }
 
     /// 施肥（单块）
     pub async fn fertilize(&self, land_id: i64, fertilizer_id: i64) -> Result<()> {
-        let body = FertilizeRequest {
-            land_ids: vec![land_id],
-            fertilizer_id,
-        }
-        .encode_to_vec();
+        let body = FertilizeRequest { land_ids: vec![land_id], fertilizer_id }.encode_to_vec();
         self.gateway
-            .request(
-                "gamepb.plantpb.PlantService",
-                "Fertilize",
-                &body,
-                DEFAULT_TIMEOUT_MS,
-            )
+            .request("gamepb.plantpb.PlantService", "Fertilize", &body, DEFAULT_TIMEOUT_MS)
             .await?;
         Ok(())
     }
@@ -210,11 +165,7 @@ impl Api {
         let mut success = 0usize;
         let mut idx = 0usize;
         loop {
-            if self
-                .fertilize(ids[idx], ORGANIC_FERTILIZER_ID)
-                .await
-                .is_err()
-            {
+            if self.fertilize(ids[idx], ORGANIC_FERTILIZER_ID).await.is_err() {
                 break;
             }
             success += 1;
@@ -230,12 +181,7 @@ impl Api {
         let body = RemovePlantRequest { land_ids }.encode_to_vec();
         let resp = self
             .gateway
-            .request(
-                "gamepb.plantpb.PlantService",
-                "RemovePlant",
-                &body,
-                DEFAULT_TIMEOUT_MS,
-            )
+            .request("gamepb.plantpb.PlantService", "RemovePlant", &body, DEFAULT_TIMEOUT_MS)
             .await?;
         RemovePlantReply::decode(&*resp).map_err(Error::from)
     }
@@ -245,31 +191,17 @@ impl Api {
         let body = UpgradeLandRequest { land_id }.encode_to_vec();
         let resp = self
             .gateway
-            .request(
-                "gamepb.plantpb.PlantService",
-                "UpgradeLand",
-                &body,
-                DEFAULT_TIMEOUT_MS,
-            )
+            .request("gamepb.plantpb.PlantService", "UpgradeLand", &body, DEFAULT_TIMEOUT_MS)
             .await?;
         UpgradeLandReply::decode(&*resp).map_err(Error::from)
     }
 
     /// 解锁土地
     pub async fn unlock_land(&self, land_id: i64, do_shared: bool) -> Result<UnlockLandReply> {
-        let body = UnlockLandRequest {
-            land_id,
-            do_shared,
-        }
-        .encode_to_vec();
+        let body = UnlockLandRequest { land_id, do_shared }.encode_to_vec();
         let resp = self
             .gateway
-            .request(
-                "gamepb.plantpb.PlantService",
-                "UnlockLand",
-                &body,
-                DEFAULT_TIMEOUT_MS,
-            )
+            .request("gamepb.plantpb.PlantService", "UnlockLand", &body, DEFAULT_TIMEOUT_MS)
             .await?;
         UnlockLandReply::decode(&*resp).map_err(Error::from)
     }
@@ -286,12 +218,7 @@ impl Api {
 
     /// 购买商品
     pub async fn buy_goods(&self, goods_id: i64, num: i64, price: i64) -> Result<BuyGoodsReply> {
-        let body = BuyGoodsRequest {
-            goods_id,
-            num,
-            price,
-        }
-        .encode_to_vec();
+        let body = BuyGoodsRequest { goods_id, num, price }.encode_to_vec();
         let resp = self
             .gateway
             .request("gamepb.shoppb.ShopService", "BuyGoods", &body, DEFAULT_TIMEOUT_MS)
@@ -318,28 +245,16 @@ mod tests {
 
     #[test]
     fn own_farming_omits_scene_fields() {
-        let with_defaults = FarmingRequest {
-            land_ids: vec![1, 2],
-            host_gid: 123,
-            ..Default::default()
-        }
-        .encode_to_vec();
-        let explicit_zeros = FarmingRequest {
-            land_ids: vec![1, 2],
-            host_gid: 123,
-            field_3: 0,
-            field_4: 0,
-        }
-        .encode_to_vec();
+        let with_defaults =
+            FarmingRequest { land_ids: vec![1, 2], host_gid: 123, ..Default::default() }
+                .encode_to_vec();
+        let explicit_zeros =
+            FarmingRequest { land_ids: vec![1, 2], host_gid: 123, field_3: 0, field_4: 0 }
+                .encode_to_vec();
         assert_eq!(with_defaults, explicit_zeros);
         // field 4 = 2 (帮好友) 必须出现在 wire 上
-        let help = FarmingRequest {
-            land_ids: vec![1, 2],
-            host_gid: 123,
-            field_3: 0,
-            field_4: 2,
-        }
-        .encode_to_vec();
+        let help = FarmingRequest { land_ids: vec![1, 2], host_gid: 123, field_3: 0, field_4: 2 }
+            .encode_to_vec();
         assert_ne!(with_defaults, help);
     }
 }

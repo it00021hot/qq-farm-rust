@@ -27,14 +27,8 @@ fn persist_accounts() {
 }
 
 fn username_from_headers(ctx: &AdminContext, headers: &axum::http::HeaderMap) -> String {
-    let token = headers
-        .get("x-admin-token")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    ctx.sessions
-        .get_username(token)
-        .filter(|u| !u.is_empty())
-        .unwrap_or_else(|| token.to_string())
+    let token = headers.get("x-admin-token").and_then(|v| v.to_str().ok()).unwrap_or("");
+    ctx.sessions.get_username(token).filter(|u| !u.is_empty()).unwrap_or_else(|| token.to_string())
 }
 
 /// 构造 account 路由
@@ -143,11 +137,7 @@ async fn list_accounts(
     let Some(sess) = current_session(&ctx, &headers) else {
         return ok_data(json!({ "accounts": [], "nextId": 1 }));
     };
-    let filter = if sess.role == "admin" {
-        None
-    } else {
-        Some(sess.username)
-    };
+    let filter = if sess.role == "admin" { None } else { Some(sess.username) };
     ok_data(accounts_list_payload(&ctx, filter.as_deref()))
 }
 
@@ -164,10 +154,7 @@ async fn create_account(
         .or_else(|| sess.as_ref().map(|s| s.username.clone()))
         .unwrap_or_else(|| username_from_headers(&ctx, &headers));
     let policy = sess.as_ref().map(acl_policy_from_session).unwrap_or_else(|| {
-        qq_farm_app::accounts::AclPolicy::PanelUser {
-            username: owner.clone(),
-            role: "user".into(),
-        }
+        qq_farm_app::accounts::AclPolicy::PanelUser { username: owner.clone(), role: "user".into() }
     });
     let account_limit = sess.as_ref().and_then(|s| {
         if s.role == "admin" {
@@ -195,13 +182,8 @@ async fn create_account(
             account_limit,
         },
     )?;
-    let list_filter = sess.as_ref().and_then(|s| {
-        if s.role == "admin" {
-            None
-        } else {
-            Some(s.username.clone())
-        }
-    });
+    let list_filter =
+        sess.as_ref().and_then(|s| if s.role == "admin" { None } else { Some(s.username.clone()) });
     ok_data(accounts_list_payload(&ctx, list_filter.as_deref()))
 }
 
@@ -216,10 +198,7 @@ async fn remark_account(
         .into_iter()
         .find(|a| a.id == body.id)
         .ok_or_else(|| ApiError::NotFound(format!("account not found: {}", body.id)))?;
-    let updated = qq_farm_core::models::store::accounts::AccountRecord {
-        name: body.name,
-        ..acc
-    };
+    let updated = qq_farm_core::models::store::accounts::AccountRecord { name: body.name, ..acc };
     let _saved = qq_farm_core::models::store::accounts::add_or_update_account(updated);
     persist_accounts();
     let list_filter = current_session(&ctx, &headers).and_then(|s| {
@@ -256,9 +235,8 @@ async fn post_account_start(
     headers: axum::http::HeaderMap,
     Path(id): Path<String>,
 ) -> ApiResult<serde_json::Value> {
-    let sess = current_session(&ctx, &headers).ok_or_else(|| {
-        ApiError::Forbidden("无权访问该账号".to_string())
-    })?;
+    let sess = current_session(&ctx, &headers)
+        .ok_or_else(|| ApiError::Forbidden("无权访问该账号".to_string()))?;
     let policy = acl_policy_from_session(&sess);
     let acc = qq_farm_app::accounts::start_account(&ctx.app_context(), &policy, &id)?;
     ok(json!({ "ok": true, "accountId": acc.id, "started": true }))
@@ -269,9 +247,8 @@ async fn post_account_stop(
     headers: axum::http::HeaderMap,
     Path(id): Path<String>,
 ) -> ApiResult<serde_json::Value> {
-    let sess = current_session(&ctx, &headers).ok_or_else(|| {
-        ApiError::Forbidden("无权访问该账号".to_string())
-    })?;
+    let sess = current_session(&ctx, &headers)
+        .ok_or_else(|| ApiError::Forbidden("无权访问该账号".to_string()))?;
     let policy = acl_policy_from_session(&sess);
     qq_farm_app::accounts::stop_account(&ctx.app_context(), &policy, &id)?;
     ok(json!({ "ok": true, "accountId": id, "stopped": true }))
@@ -340,14 +317,12 @@ async fn get_logs(
             })
             .collect()
     } else {
-        logs.into_iter()
-            .filter(|l| l.account_id.as_deref() == Some(id.as_str()))
-            .collect()
+        logs.into_iter().filter(|l| l.account_id.as_deref() == Some(id.as_str())).collect()
     };
-    let mut filtered = state.filter_logs(&scoped, &filters);
-    filtered.sort_by(|a, b| b.ts.cmp(&a.ts));
+    let filtered = state.filter_logs(&scoped, &filters);
     let limit = q.limit.unwrap_or(100).max(1);
-    filtered.truncate(limit);
+    let filtered =
+        qq_farm_core::runtime::runtime_state::RuntimeState::take_last_n_ascending(filtered, limit);
     ok_data(filtered)
 }
 
@@ -377,9 +352,7 @@ async fn get_settings(
     Query(q): Query<AccountQuery>,
 ) -> ApiResult<serde_json::Value> {
     let id = resolve_account_id(&ctx, &headers, q.account_id.as_deref());
-    let username = current_session(&ctx, &headers)
-        .map(|s| s.username)
-        .unwrap_or_default();
+    let username = current_session(&ctx, &headers).map(|s| s.username).unwrap_or_default();
     ok_data(settings_panel_payload(&id, &username))
 }
 
@@ -407,7 +380,10 @@ async fn save_settings(
         obj.insert("saved".to_string(), json!(true));
         obj.insert("configRevision".to_string(), json!(rev));
         obj.insert("strategy".to_string(), obj.get("strategy").cloned().unwrap_or(json!(null)));
-        obj.insert("preferredSeed".to_string(), obj.get("preferredSeed").cloned().unwrap_or(json!(0)));
+        obj.insert(
+            "preferredSeed".to_string(),
+            obj.get("preferredSeed").cloned().unwrap_or(json!(0)),
+        );
         obj.insert("status".to_string(), json!(if running { "confirmed" } else { "stopped" }));
         obj.insert("stopped".to_string(), json!(!running));
         obj.insert("confirmed".to_string(), json!(running));
@@ -446,9 +422,7 @@ async fn set_offline_reminder(
 ) -> ApiResult<serde_json::Value> {
     let cfg: qq_farm_core::models::store::global_config::OfflineReminder =
         serde_json::from_value(body.cfg).unwrap_or_default();
-    let username = current_session(&ctx, &headers)
-        .map(|s| s.username)
-        .unwrap_or_default();
+    let username = current_session(&ctx, &headers).map(|s| s.username).unwrap_or_default();
     if username.is_empty() {
         qq_farm_core::models::store::global_config::set_offline_reminder(cfg);
     } else {
@@ -462,9 +436,7 @@ async fn test_offline_reminder(
     headers: axum::http::HeaderMap,
     Json(body): Json<OfflineReminderBody>,
 ) -> ApiResult<serde_json::Value> {
-    let username = current_session(&ctx, &headers)
-        .map(|s| s.username)
-        .unwrap_or_default();
+    let username = current_session(&ctx, &headers).map(|s| s.username).unwrap_or_default();
     let cfg = if username.is_empty() {
         qq_farm_core::models::store::global_config::get_offline_reminder()
     } else {
@@ -502,9 +474,7 @@ async fn get_announcement(
     State(ctx): State<Arc<AdminContext>>,
     headers: axum::http::HeaderMap,
 ) -> ApiResult<serde_json::Value> {
-    let username = current_session(&ctx, &headers)
-        .map(|s| s.username)
-        .unwrap_or_default();
+    let username = current_session(&ctx, &headers).map(|s| s.username).unwrap_or_default();
     let ann = qq_farm_core::models::store::global_config::get_announcement();
     let should_show =
         qq_farm_core::models::store::global_config::should_show_announcement(&username);

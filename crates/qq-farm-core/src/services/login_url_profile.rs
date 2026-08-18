@@ -63,7 +63,9 @@ pub fn find_device_preset_by_os(os: &str) -> Option<PresetLite> {
             });
         }
         for (canon, list) in &aliases {
-            if list.contains(&needle.as_str()) && (preset_os == *canon || list.contains(&preset_os.as_str())) {
+            if list.contains(&needle.as_str())
+                && (preset_os == *canon || list.contains(&preset_os.as_str()))
+            {
                 return Some(PresetLite {
                     name: preset.name.to_string(),
                     os: preset_os,
@@ -83,11 +85,7 @@ pub fn apply_login_client_hints_to_system_config(
     hints: Option<&LoginClientHints>,
 ) -> Option<SystemConfig> {
     let hints = hints?;
-    let platform_str = hints
-        .platform
-        .as_deref()
-        .map(normalize_login_platform)
-        .unwrap_or("");
+    let platform_str = hints.platform.as_deref().map(normalize_login_platform).unwrap_or("");
     let os = hints.os.as_deref().unwrap_or("").trim().to_string();
     let ver = hints.ver.as_deref().unwrap_or("").trim().to_string();
     let has_ver = !ver.is_empty() && is_valid_version(&ver) && ver.len() > 4;
@@ -101,10 +99,7 @@ pub fn apply_login_client_hints_to_system_config(
 
     if !os.is_empty() {
         if let Some(preset) = find_device_preset_by_os(&os) {
-            current_device = DeviceInfo {
-                os: os.clone(),
-                ..preset.device_info
-            };
+            current_device = DeviceInfo { os: os.clone(), ..preset.device_info };
         } else {
             current_device.os = os.clone();
             if current_device.sys_software.is_empty() {
@@ -126,11 +121,8 @@ pub fn apply_login_client_hints_to_system_config(
     } else {
         "Windows".to_string()
     };
-    let resolved_client_version = if has_ver {
-        ver.clone()
-    } else {
-        current_device.client_version.clone()
-    };
+    let resolved_client_version =
+        if has_ver { ver.clone() } else { current_device.client_version.clone() };
     let resolved_platform = if !platform_str.is_empty() {
         platform_str.to_string()
     } else if !current.platform.is_empty() {
@@ -146,11 +138,8 @@ pub fn apply_login_client_hints_to_system_config(
         current_device.client_version.clone()
     };
 
-    let next_device = DeviceInfo {
-        os: resolved_os,
-        client_version: resolved_client_version,
-        ..current_device
-    };
+    let next_device =
+        DeviceInfo { os: resolved_os, client_version: resolved_client_version, ..current_device };
 
     let next = SystemConfig {
         server_url: current.server_url.clone(),
@@ -170,8 +159,7 @@ pub fn is_valid_version(s: &str) -> bool {
     if s.is_empty() {
         return false;
     }
-    s.chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
+    s.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
 }
 
 // =====================================================================
@@ -215,30 +203,21 @@ mod tests {
     #[test]
     fn invalid_version_too_short() {
         // ver="1.0" 长度 3，不满足 > 4
-        let h = LoginClientHints {
-            ver: Some("1.0".to_string()),
-            ..Default::default()
-        };
+        let h = LoginClientHints { ver: Some("1.0".to_string()), ..Default::default() };
         let r = apply_login_client_hints_to_system_config(Some(&h));
         assert!(r.is_none());
     }
 
     #[test]
     fn invalid_version_chars() {
-        let h = LoginClientHints {
-            ver: Some("1.0.0!".to_string()),
-            ..Default::default()
-        };
+        let h = LoginClientHints { ver: Some("1.0.0!".to_string()), ..Default::default() };
         let r = apply_login_client_hints_to_system_config(Some(&h));
         assert!(r.is_none());
     }
 
     #[test]
     fn platform_only_applies() {
-        let h = LoginClientHints {
-            platform: Some("wx".to_string()),
-            ..Default::default()
-        };
+        let h = LoginClientHints { platform: Some("wx".to_string()), ..Default::default() };
         let r = apply_login_client_hints_to_system_config(Some(&h));
         assert!(r.is_some());
         assert_eq!(r.unwrap().platform, "wx");
@@ -246,10 +225,7 @@ mod tests {
 
     #[test]
     fn os_only_applies() {
-        let h = LoginClientHints {
-            os: Some("iOS".to_string()),
-            ..Default::default()
-        };
+        let h = LoginClientHints { os: Some("iOS".to_string()), ..Default::default() };
         let r = apply_login_client_hints_to_system_config(Some(&h));
         assert!(r.is_some());
         let cfg = r.unwrap();
@@ -258,10 +234,7 @@ mod tests {
 
     #[test]
     fn os_unknown_no_preset_keeps_sys_software() {
-        let h = LoginClientHints {
-            os: Some("Plan 9".to_string()),
-            ..Default::default()
-        };
+        let h = LoginClientHints { os: Some("Plan 9".to_string()), ..Default::default() };
         let r = apply_login_client_hints_to_system_config(Some(&h));
         // OS 不在预设里也应返回 Some
         assert!(r.is_some());
@@ -269,10 +242,8 @@ mod tests {
 
     #[test]
     fn ver_only_applies() {
-        let h = LoginClientHints {
-            ver: Some("1.13.1.6_20260723".to_string()),
-            ..Default::default()
-        };
+        let h =
+            LoginClientHints { ver: Some("1.13.1.6_20260723".to_string()), ..Default::default() };
         let r = apply_login_client_hints_to_system_config(Some(&h));
         assert!(r.is_some());
         let cfg = r.unwrap();

@@ -17,9 +17,7 @@ use prost::Message;
 
 use crate::error::Result;
 use crate::network::gateway::Gateway;
-use crate::proto::generated::gamepb::paypb::{
-    GetRechargeInfoReply, GetRechargeInfoRequest,
-};
+use crate::proto::generated::gamepb::paypb::{GetRechargeInfoReply, GetRechargeInfoRequest};
 
 const PAY_SERVICE: &str = "gamepb.paypb.PayService";
 /// 默认 `source` 字段，1:1 对齐原 TS `DEFAULT_RECHARGE_SOURCE = 'MallUI'`
@@ -42,9 +40,7 @@ impl PayService {
     /// - 网络 / 网关错误
     /// - protobuf 解码失败
     pub async fn get_recharge_info(&self, source: &str) -> Result<GetRechargeInfoReply> {
-        let req = GetRechargeInfoRequest {
-            source: source.to_string(),
-        };
+        let req = GetRechargeInfoRequest { source: source.to_string() };
         let body = self
             .gateway
             .request(PAY_SERVICE, "GetRechargeInfo", &req.encode_to_vec(), 10_000)
@@ -87,10 +83,7 @@ mod tests {
     #[test]
     fn encode_decode_roundtrip() {
         let mut reply = GetRechargeInfoReply::default();
-        reply.recharge_infos.push(RechargeInfo {
-            balance: 1024,
-            field_3: 0,
-        });
+        reply.recharge_infos.push(RechargeInfo { balance: 1024, field_3: 0 });
         let bytes = reply.encode_to_vec();
         let back = GetRechargeInfoReply::decode(bytes.as_slice()).unwrap();
         assert_eq!(back.recharge_infos.len(), 1);
@@ -109,14 +102,8 @@ mod tests {
     #[test]
     fn diamond_balance_takes_first() {
         let mut reply = GetRechargeInfoReply::default();
-        reply.recharge_infos.push(RechargeInfo {
-            balance: 100,
-            field_3: 0,
-        });
-        reply.recharge_infos.push(RechargeInfo {
-            balance: 999,
-            field_3: 0,
-        });
+        reply.recharge_infos.push(RechargeInfo { balance: 100, field_3: 0 });
+        reply.recharge_infos.push(RechargeInfo { balance: 999, field_3: 0 });
         let first = reply.recharge_infos.first();
         let raw = first.map_or(0, |info| info.balance);
         assert_eq!(raw.max(0), 100);

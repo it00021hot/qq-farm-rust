@@ -300,11 +300,7 @@ pub fn register_user(username: &str, password: &str) -> RegisterResult {
 }
 
 /// 管理员创建用户（指定 role）
-pub fn create_user_with_role(
-    username: &str,
-    password: &str,
-    role: &str,
-) -> RegisterResult {
+pub fn create_user_with_role(username: &str, password: &str, role: &str) -> RegisterResult {
     load_users();
 
     if USERS.read().iter().any(|u| u.username == username) {
@@ -313,11 +309,7 @@ pub fn create_user_with_role(
     create_user_internal(username, password, role)
 }
 
-fn create_user_internal(
-    username: &str,
-    password: &str,
-    role: &str,
-) -> RegisterResult {
+fn create_user_internal(username: &str, password: &str, role: &str) -> RegisterResult {
     let pw = auth::validate_password_strength(password);
     if !pw.valid {
         return Err(pw.errors.join("；"));
@@ -327,11 +319,7 @@ fn create_user_internal(
     let new_user = User {
         username: username.to_string(),
         password: auth::hash_password(password, None),
-        role: if role == "admin" {
-            "admin".to_string()
-        } else {
-            "user".to_string()
-        },
+        role: if role == "admin" { "admin".to_string() } else { "user".to_string() },
         card_code: None,
         card: None,
         account_limit: DEFAULT_ACCOUNT_LIMIT,
@@ -383,10 +371,12 @@ pub fn renew_user(username: &str, card_code: &str) -> Result<RenewResult, String
 
     let now_secs = crate::utils::time::now_secs();
     let now_ms = crate::utils::time::now_ms();
-    let card_type = if card.card_type.is_empty() { "time".to_string() } else { card.card_type.clone() };
+    let card_type =
+        if card.card_type.is_empty() { "time".to_string() } else { card.card_type.clone() };
 
     if card_type == "quota" {
-        let current_limit = if user.account_limit == 0 { DEFAULT_ACCOUNT_LIMIT } else { user.account_limit };
+        let current_limit =
+            if user.account_limit == 0 { DEFAULT_ACCOUNT_LIMIT } else { user.account_limit };
         user.account_limit = current_limit + card.days;
     } else {
         if user.card.is_none() {
@@ -452,7 +442,11 @@ pub fn get_all_users() -> Vec<UserSummary> {
             username: u.username.clone(),
             role: u.role.clone(),
             card: u.card.clone(),
-            account_limit: if u.account_limit == 0 { DEFAULT_ACCOUNT_LIMIT } else { u.account_limit },
+            account_limit: if u.account_limit == 0 {
+                DEFAULT_ACCOUNT_LIMIT
+            } else {
+                u.account_limit
+            },
             must_change_password: u.must_change_password,
         })
         .collect()
@@ -460,7 +454,11 @@ pub fn get_all_users() -> Vec<UserSummary> {
 
 /// 更新用户卡密（expiresAt / enabled）
 #[must_use]
-pub fn update_user(username: &str, expires_at: Option<Option<i64>>, enabled: Option<bool>) -> Option<UserSummary> {
+pub fn update_user(
+    username: &str,
+    expires_at: Option<Option<i64>>,
+    enabled: Option<bool>,
+) -> Option<UserSummary> {
     load_users();
     let mut users = USERS.write();
     let user = users.iter_mut().find(|u| u.username == username)?;
@@ -720,7 +718,12 @@ pub fn create_cards_batch(description: &str, days: i64, count: i64, card_type: &
 }
 
 /// 更新卡密
-pub fn update_card(code: &str, enabled: Option<bool>, days: Option<i64>, description: Option<String>) -> Option<Card> {
+pub fn update_card(
+    code: &str,
+    enabled: Option<bool>,
+    days: Option<i64>,
+    description: Option<String>,
+) -> Option<Card> {
     load_cards();
     let mut cards = CARDS.write();
     let card = cards.iter_mut().find(|c| c.code == code)?;
@@ -848,10 +851,7 @@ mod tests {
         let quota_card = create_card("q", 3, "quota");
         let r = renew_user("alice", &quota_card.code);
         assert!(r.is_ok(), "error = {:?}", r.err());
-        assert_eq!(
-            r.as_ref().unwrap().account_limit,
-            Some(DEFAULT_ACCOUNT_LIMIT + 3)
-        );
+        assert_eq!(r.as_ref().unwrap().account_limit, Some(DEFAULT_ACCOUNT_LIMIT + 3));
     }
 
     #[test]

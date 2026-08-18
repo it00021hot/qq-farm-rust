@@ -136,10 +136,7 @@ fn activity_error_json(err: &qq_farm_core::error::Error) -> Value {
     let protocol_code = raw
         .split("code=")
         .nth(1)
-        .and_then(|s| {
-            s.split(|c: char| c.is_whitespace() || c == ',' || c == ')')
-                .next()
-        })
+        .and_then(|s| s.split(|c: char| c.is_whitespace() || c == ',' || c == ')').next())
         .unwrap_or("")
         .to_string();
     let business_code = raw
@@ -153,14 +150,10 @@ fn activity_error_json(err: &qq_farm_core::error::Error) -> Value {
         .to_string();
 
     let (code, message) = match protocol_code.as_str() {
-        "1034014" => (
-            "1034014",
-            "今日青梅种子已经领取，无需重复领取",
-        ),
-        "1034038" => (
-            "1034038",
-            "当前没有可点亮或可领取的星宿奖励，可能已经领取过，请稍后或明天再来看看",
-        ),
+        "1034014" => ("1034014", "今日青梅种子已经领取，无需重复领取"),
+        "1034038" => {
+            ("1034038", "当前没有可点亮或可领取的星宿奖励，可能已经领取过，请稍后或明天再来看看")
+        }
         "1034001" => ("1034001", "当前活动暂不可操作，请稍后再试"),
         "1034002" => ("1034002", "活动尚未开放或已经结束"),
         _ if business_code == "INVALID_EXCHANGE_COUNT"
@@ -174,7 +167,9 @@ fn activity_error_json(err: &qq_farm_core::error::Error) -> Value {
         _ if business_code == "SHOP_GOODS_NOT_FOUND" || raw.contains("SHOP_GOODS_NOT_FOUND") => {
             ("SHOP_GOODS_NOT_FOUND", "该商品已不在当前商店目录中，请刷新后重试")
         }
-        _ if business_code == "SHOP_GOODS_UNAVAILABLE" || raw.contains("SHOP_GOODS_UNAVAILABLE") => {
+        _ if business_code == "SHOP_GOODS_UNAVAILABLE"
+            || raw.contains("SHOP_GOODS_UNAVAILABLE") =>
+        {
             ("SHOP_GOODS_UNAVAILABLE", "该商品当前不可兑换，请刷新商店后重试")
         }
         _ if business_code == "SHOP_BALANCE_UNAVAILABLE"
@@ -182,7 +177,9 @@ fn activity_error_json(err: &qq_farm_core::error::Error) -> Value {
         {
             ("SHOP_BALANCE_UNAVAILABLE", "暂时无法确认星砂余额，请稍后重试")
         }
-        _ if business_code == "INSUFFICIENT_STAR_SAND" || raw.contains("INSUFFICIENT_STAR_SAND") => {
+        _ if business_code == "INSUFFICIENT_STAR_SAND"
+            || raw.contains("INSUFFICIENT_STAR_SAND") =>
+        {
             ("INSUFFICIENT_STAR_SAND", "星砂余额不足，无法完成本次兑换")
         }
         _ if business_code == "SHOP_RESPONSE_INVALID" || raw.contains("SHOP_RESPONSE_INVALID") => {
@@ -194,14 +191,12 @@ fn activity_error_json(err: &qq_farm_core::error::Error) -> Value {
         {
             ("SHOP_UNAVAILABLE", "星砂商店暂未开放，请稍后再来看看")
         }
-        _ if raw.contains("当前没有可领取的游记奖励") => (
-            "NO_PASS_REWARD",
-            "当前没有可领取的游记奖励，请完成新的游记等级后再试",
-        ),
-        _ if raw.contains("指定节令当前不可领取") => (
-            "SOLAR_TERM_UNAVAILABLE",
-            "当前节令奖励暂不可领取，请在开放后再试",
-        ),
+        _ if raw.contains("当前没有可领取的游记奖励") => {
+            ("NO_PASS_REWARD", "当前没有可领取的游记奖励，请完成新的游记等级后再试")
+        }
+        _ if raw.contains("指定节令当前不可领取") => {
+            ("SOLAR_TERM_UNAVAILABLE", "当前节令奖励暂不可领取，请在开放后再试")
+        }
         _ if raw.contains("服务端未发现星座活动") || raw.contains("CONSTELLATION") => {
             ("CONSTELLATION_UNAVAILABLE", "观星礼录活动暂未开放或已经结束")
         }
@@ -250,9 +245,7 @@ fn activity_error_json(err: &qq_farm_core::error::Error) -> Value {
             ("ACTIVITY_DATA_CHANGED", "活动数据已经更新，请刷新页面后再试")
         }
         _ if !business_code.is_empty()
-            && business_code
-                .chars()
-                .all(|c| c.is_ascii_uppercase() || c == '_') =>
+            && business_code.chars().all(|c| c.is_ascii_uppercase() || c == '_') =>
         {
             let msg = raw
                 .rsplit("business error: ")
@@ -317,7 +310,9 @@ async fn start_qingmei_brew(
 ) -> ApiResult<Value> {
     let id = resolve_account_id(&ctx, &headers, None)?;
     let input = body.ingredients.or(body.count).unwrap_or(Value::Null);
-    activity_app_result(qq_farm_app::activity::start_qingmei_brew(&ctx.app_context(), &id, input).await)
+    activity_app_result(
+        qq_farm_app::activity::start_qingmei_brew(&ctx.app_context(), &id, input).await,
+    )
 }
 
 async fn continue_qingmei_brew(

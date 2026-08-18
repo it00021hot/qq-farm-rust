@@ -24,6 +24,8 @@ use crate::config::game_config::global as global_game_config;
 pub struct StatusData {
     pub platform: String,
     pub name: String,
+    #[serde(default)]
+    pub avatar: String,
     pub level: i64,
     pub gold: i64,
     pub exp: i64,
@@ -32,10 +34,7 @@ pub struct StatusData {
 impl StatusData {
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            platform: "qq".to_string(),
-            ..Default::default()
-        }
+        Self { platform: "qq".to_string(), ..Default::default() }
     }
 }
 
@@ -187,18 +186,8 @@ pub fn render_status_bar() {
     let line2 = format!("{DIM}{}{RESET}", "─".repeat(width.min(80)));
 
     let _ = write_all_stdout(SAVE_CURSOR);
-    let _ = write_all_stdout(&format!(
-        "{}{}{}",
-        move_to(1, 1),
-        CLEAR_LINE,
-        line1
-    ));
-    let _ = write_all_stdout(&format!(
-        "{}{}{}",
-        move_to(2, 1),
-        CLEAR_LINE,
-        line2
-    ));
+    let _ = write_all_stdout(&format!("{}{}{}", move_to(1, 1), CLEAR_LINE, line1));
+    let _ = write_all_stdout(&format!("{}{}{}", move_to(2, 1), CLEAR_LINE, line2));
     let _ = write_all_stdout(RESTORE_CURSOR);
 }
 
@@ -251,6 +240,10 @@ pub fn update_status(data: &StatusData) {
     }
     if current.name != data.name {
         current.name = data.name.clone();
+        changed = true;
+    }
+    if current.avatar != data.avatar {
+        current.avatar = data.avatar.clone();
         changed = true;
     }
     if current.level != data.level {
@@ -315,6 +308,15 @@ fn apply_login_fields(s: &mut StatusData, basic: &serde_json::Value) {
     }
     if let Some(exp) = obj.get("exp").and_then(|v| v.as_i64()) {
         s.exp = exp;
+    }
+    let avatar = obj
+        .get("avatar")
+        .or_else(|| obj.get("avatarUrl"))
+        .or_else(|| obj.get("avatar_url"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    if let Some(url) = avatar {
+        s.avatar = url.to_string();
     }
 }
 
@@ -500,6 +502,20 @@ mod tests {
         assert_eq!(s.level, 10);
         assert_eq!(s.gold, 500);
         assert_eq!(s.exp, 1000);
+    }
+
+    #[test]
+    fn update_status_from_login_extracts_avatar() {
+        reset();
+        let basic = serde_json::json!({
+            "name": "bob",
+            "avatar_url": "https://q1.qlogo.cn/g?b=qq&nk=1&s=640",
+        });
+        update_status_from_login(&basic);
+        assert_eq!(status_data().avatar, "https://q1.qlogo.cn/g?b=qq&nk=1&s=640");
+
+        update_status_from_login(&serde_json::json!({"avatarUrl": "https://cdn.example/a.png"}));
+        assert_eq!(status_data().avatar, "https://cdn.example/a.png");
     }
 
     #[test]

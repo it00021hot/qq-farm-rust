@@ -90,16 +90,12 @@ async fn set_announcement(
     ok_data(ann)
 }
 
-async fn get_device_presets(
-    State(_ctx): State<Arc<AdminContext>>,
-) -> ApiResult<serde_json::Value> {
+async fn get_device_presets(State(_ctx): State<Arc<AdminContext>>) -> ApiResult<serde_json::Value> {
     let presets = qq_farm_core::config::system_config::get_device_presets();
     ok_data(presets)
 }
 
-async fn get_system_config(
-    State(_ctx): State<Arc<AdminContext>>,
-) -> ApiResult<serde_json::Value> {
+async fn get_system_config(State(_ctx): State<Arc<AdminContext>>) -> ApiResult<serde_json::Value> {
     let saved = qq_farm_core::models::store::global_config::get_system_config();
     let default = qq_farm_core::config::get_default_system_config();
     let current = qq_farm_core::config::get_runtime_config();
@@ -132,9 +128,7 @@ async fn reset_system_config(
     ok_data(json!({ "saved": saved, "current": current }))
 }
 
-async fn list_users(
-    State(_ctx): State<Arc<AdminContext>>,
-) -> ApiResult<serde_json::Value> {
+async fn list_users(State(_ctx): State<Arc<AdminContext>>) -> ApiResult<serde_json::Value> {
     let users = qq_farm_core::models::user_store::users::get_all_users();
     ok_data(users)
 }
@@ -156,11 +150,7 @@ async fn create_user(
         Some(serde_json::Value::Null) => Some(None),
         Some(v) => Some(v.as_i64()),
     };
-    match qq_farm_core::models::user_store::users::update_user(
-        &username,
-        expires,
-        body.enabled,
-    ) {
+    match qq_farm_core::models::user_store::users::update_user(&username, expires, body.enabled) {
         Some(u) => ok_data(u),
         None => Err(ApiError::NotFound("用户不存在".to_string())),
     }

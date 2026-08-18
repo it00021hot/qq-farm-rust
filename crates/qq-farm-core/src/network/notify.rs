@@ -25,25 +25,13 @@ pub enum NotifyEvent {
         changed_count: usize,
     },
     /// 物品变化
-    ItemChanged {
-        event_type: String,
-        items: Vec<ItemChgLite>,
-    },
+    ItemChanged { event_type: String, items: Vec<ItemChgLite> },
     /// 基本信息变化（升级 / 金币 / 经验）
-    BasicChanged {
-        event_type: String,
-        level: Option<i64>,
-        gold: Option<i64>,
-        exp: Option<i64>,
-    },
+    BasicChanged { event_type: String, level: Option<i64>, gold: Option<i64>, exp: Option<i64> },
     /// 未知 / 未处理的事件类型
-    Unknown {
-        event_type: String,
-    },
+    Unknown { event_type: String },
     /// 好友申请
-    FriendApplications {
-        applications: Vec<(i64, String)>,
-    },
+    FriendApplications { applications: Vec<(i64, String)> },
 }
 
 /// ItemNotify 里一条物品变化（对齐 network.ts handleNotify）
@@ -61,14 +49,8 @@ pub fn parse_event(event: &EventMessage) -> NotifyEvent {
 
     if event_type.contains("Kickout") {
         match crate::proto::generated::gatepb::KickoutNotify::decode(body) {
-            Ok(notify) => NotifyEvent::Kickout {
-                event_type,
-                reason: notify.reason_message,
-            },
-            Err(_) => NotifyEvent::Kickout {
-                event_type,
-                reason: String::from("未知"),
-            },
+            Ok(notify) => NotifyEvent::Kickout { event_type, reason: notify.reason_message },
+            Err(_) => NotifyEvent::Kickout { event_type, reason: String::from("未知") },
         }
     } else if event_type.contains("LandsNotify") {
         match crate::proto::generated::gamepb::plantpb::LandsNotify::decode(body) {
@@ -77,11 +59,7 @@ pub fn parse_event(event: &EventMessage) -> NotifyEvent {
                 host_gid: notify.host_gid,
                 changed_count: notify.lands.len(),
             },
-            Err(_) => NotifyEvent::LandsChanged {
-                event_type,
-                host_gid: 0,
-                changed_count: 0,
-            },
+            Err(_) => NotifyEvent::LandsChanged { event_type, host_gid: 0, changed_count: 0 },
         }
     } else if event_type.contains("ItemNotify") {
         match crate::proto::generated::gamepb::itempb::ItemNotify::decode(body) {
@@ -92,18 +70,11 @@ pub fn parse_event(event: &EventMessage) -> NotifyEvent {
                     .into_iter()
                     .filter_map(|chg| {
                         let item = chg.item?;
-                        Some(ItemChgLite {
-                            id: item.id,
-                            count: item.count,
-                            delta: chg.delta,
-                        })
+                        Some(ItemChgLite { id: item.id, count: item.count, delta: chg.delta })
                     })
                     .collect(),
             },
-            Err(_) => NotifyEvent::ItemChanged {
-                event_type,
-                items: Vec::new(),
-            },
+            Err(_) => NotifyEvent::ItemChanged { event_type, items: Vec::new() },
         }
     } else if event_type.contains("BasicNotify") {
         // proto3 缺省就是 0。必须按 wire tag 判断字段是否真的在包里，
@@ -124,34 +95,25 @@ pub fn parse_event(event: &EventMessage) -> NotifyEvent {
                     exp: basic.as_ref().and_then(|b| has_exp.then_some(b.exp)),
                 }
             }
-            Err(_) => NotifyEvent::BasicChanged {
-                event_type,
-                level: None,
-                gold: None,
-                exp: None,
-            },
+            Err(_) => NotifyEvent::BasicChanged { event_type, level: None, gold: None, exp: None },
         }
     } else if event_type.contains("FriendApplicationReceivedNotify") {
-        match crate::proto::generated::gamepb::friendpb::FriendApplicationReceivedNotify::decode(body)
-        {
+        match crate::proto::generated::gamepb::friendpb::FriendApplicationReceivedNotify::decode(
+            body,
+        ) {
             Ok(notify) => NotifyEvent::FriendApplications {
                 applications: notify
                     .applications
                     .into_iter()
                     .filter(|a| a.gid > 0)
                     .map(|a| {
-                        let name = if a.name.is_empty() {
-                            format!("GID:{}", a.gid)
-                        } else {
-                            a.name
-                        };
+                        let name =
+                            if a.name.is_empty() { format!("GID:{}", a.gid) } else { a.name };
                         (a.gid, name)
                     })
                     .collect(),
             },
-            Err(_) => NotifyEvent::FriendApplications {
-                applications: Vec::new(),
-            },
+            Err(_) => NotifyEvent::FriendApplications { applications: Vec::new() },
         }
     } else {
         NotifyEvent::Unknown { event_type }
@@ -256,10 +218,7 @@ mod tests {
 
     #[test]
     fn unknown_event() {
-        let ev = EventMessage {
-            message_type: "FooNotify".to_string(),
-            body: b"".to_vec().into(),
-        };
+        let ev = EventMessage { message_type: "FooNotify".to_string(), body: b"".to_vec().into() };
         match parse_event(&ev) {
             NotifyEvent::Unknown { event_type } => assert_eq!(event_type, "FooNotify"),
             _ => panic!("expected Unknown"),
@@ -287,15 +246,9 @@ mod tests {
 
     #[test]
     fn item_notify_extracts_changes() {
-        let item = crate::proto::generated::corepb::Item {
-            id: 1001,
-            count: 50,
-            ..Default::default()
-        };
-        let chg = crate::proto::generated::corepb::ItemChg {
-            item: Some(item),
-            delta: 10,
-        };
+        let item =
+            crate::proto::generated::corepb::Item { id: 1001, count: 50, ..Default::default() };
+        let chg = crate::proto::generated::corepb::ItemChg { item: Some(item), delta: 10 };
         let notify = crate::proto::generated::gamepb::itempb::ItemNotify { items: vec![chg] };
         let ev = EventMessage {
             message_type: "ItemNotify".to_string(),
@@ -314,21 +267,15 @@ mod tests {
 
     #[test]
     fn basic_notify_level_only_does_not_zero_gold_or_exp() {
-        let basic = crate::proto::generated::gamepb::userpb::BasicInfo {
-            level: 12,
-            ..Default::default()
-        };
-        let notify = crate::proto::generated::gamepb::userpb::BasicNotify {
-            basic: Some(basic),
-        };
+        let basic =
+            crate::proto::generated::gamepb::userpb::BasicInfo { level: 12, ..Default::default() };
+        let notify = crate::proto::generated::gamepb::userpb::BasicNotify { basic: Some(basic) };
         let ev = EventMessage {
             message_type: "BasicNotify".to_string(),
             body: notify.encode_to_vec().into(),
         };
         match parse_event(&ev) {
-            NotifyEvent::BasicChanged {
-                level, gold, exp, ..
-            } => {
+            NotifyEvent::BasicChanged { level, gold, exp, .. } => {
                 assert_eq!(level, Some(12));
                 assert_eq!(gold, None, "缺 gold 的包不得写成 Some(0)");
                 assert_eq!(exp, None, "缺 exp 的包不得写成 Some(0)");
@@ -350,14 +297,9 @@ mod tests {
         let inner = [0x20, 42, 0x28, 0];
         let mut body = vec![0x0a, inner.len() as u8];
         body.extend_from_slice(&inner);
-        let ev = EventMessage {
-            message_type: "BasicNotify".to_string(),
-            body: body.into(),
-        };
+        let ev = EventMessage { message_type: "BasicNotify".to_string(), body: body.into() };
         match parse_event(&ev) {
-            NotifyEvent::BasicChanged {
-                level, gold, exp, ..
-            } => {
+            NotifyEvent::BasicChanged { level, gold, exp, .. } => {
                 assert_eq!(level, None);
                 assert_eq!(gold, Some(0));
                 assert_eq!(exp, Some(42));

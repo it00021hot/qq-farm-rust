@@ -62,7 +62,7 @@
 |------|------|------------------|-------------------|
 | 连网进游戏 | 齐 | 经 Gateway + TSDK 登录并维持心跳 | `network/*`, `crypto/tsdk.rs` |
 | QQ 小程序扫码拿码 | 齐 | 面板可走 QQ 码登录流程 | `services/qrlogin.rs` |
-| 微信扫码拿码并启动 | 齐 | 扫码 → auth_code → worker；用过的码不可重连 | `services/wx_login/*`, `routes/wx_login.rs` |
+| 微信扫码拿码并启动 | 齐 | 扫码 → 应用宝 login_buffer 落盘 → 换一次性网关 code 启动；掉线/重启可用授权再换码重连 | `services/wx_login/*`, `routes/wx_login.rs` |
 | 本田务农循环 | 齐 | 除草除虫浇水 → 收获 → 铲除 → 种植（含多格）→ 施肥/解锁升级；默认策略/skip_own_weed_bug/smart 秒数对齐 bot | `services/farm/*`, `runtime/worker_loop.rs` |
 | 好友帮助 / 偷菜 / 捣乱 | 齐 | 列表、访问、帮助（经验门控）、偷菜（stealers/空访跳过）、静默、黑名单落盘；捣乱按日限/启动筛选/`1001046` 停 | `services/friend/*` |
 | 背包展示与操作 | 齐 | 按 UID 堆分行；含 `key`/`uid`/`mutantTypes`/`groupKey`；系统物品分离 | `services/warehouse.rs` |
@@ -329,3 +329,55 @@
 - 原因：`tauri dev` 无 `devUrl` 时 CLI 用内置静态站托管 `desktop-ui/dist`（`http://127.0.0.1`）。前端把 localhost 当成 Vite，请求 `/game-config/…`，但 `dist` 里没有这些 PNG（原 Vite 中间件也不会跑）
 - 修复：`pnpm build` 把 `assets/game_config` 拷进 `dist/game-config`；`resolveCatalogImage` 一律同源 `/game-config/…`（打包 `tauri://` 同样走前端资源）
 - 能力状态：策略对比 / 背包 / 好友田应显示作物图；需重新 `pnpm build` 或重启 `cargo tauri dev`
+
+### 2026-08-18 — 看板日志顺序 / 头像 / 游戏配置入口
+
+- 日志：刷新后看板倒序。Rust `engine_global_logs` / HTTP `get_logs` 按新→旧截断，直播 `pushLog` 却是旧→新追加。改为 last N、旧→新（对齐 Go `hub.Logs.Query`）；Socket `logs:snapshot` 同样升序；看板 `applyLogEntries` 再按 `ts` 升序
+- 头像：登录回包 `BasicInfo.avatar_url` 未进 `StatusData` / `get_stats` / `PanelStatus`，看板 `v-if="status?.avatar"` 不渲染。登录写入 avatar，status JSON 带出，DTO 读 nested + `AccountRecord` 兜底；看板补 `https:`、`no-referrer` 与字母占位
+- 游戏配置：Tauri 无 `devUrl` 托管 `dist`，history 路由会撞 `dist/game-config/` 静态目录。桌面改为 hash（对齐 Go `.env.desktop`）；页面仍 `/farm/game-config`，资源仍 `/game-config/*`
+- 能力状态：刷新看板日志新在下；在线账号个人信息有头像或字母占位；侧栏能进游戏配置（需重新 `pnpm build` / `cargo tauri dev`）
+
+### 2026-08-18 — 看板断线日志可读化
+
+- 现象：心跳超时后看板出现英文 `(source=heartbeat_timeout, phase=online)`，并把 `account-log:new` JSON 原样刷成系统日志
+- 修复：断开原因改中文（心跳超时 / 被踢下线 / 连接关闭）；`account-log:new` 补 `message`/`event`；看板不再把账号审计日志当运行日志展示（避免与系统日志重复）
+- 能力状态：断线应显示「连接已断开，不再使用旧 Code 重连（心跳超时）」；不再出现 `account-log:new {json}`
+
+### 2026-08-18 — 应用宝授权落盘与掉线换码重连
+
+- 网关 `code` 仍一次性；扫码 confirm 后把应用宝 `openid` / `login_buffer` / `accesstoken` 写入 `accounts.json`
+- 连网关前用 `login_buffer` 换新 code；buffer 失效时用 accesstoken 向应用宝换票再试
+- 传输断开 / HTTP 400 / 踢号 / 进程重启自动换码重连（最多 3 次）；仅手动停止不重连
+- 列表 API 脱敏，不返回 buffer/token，仅 `wxAuthorized`
+- 相对 Go：这是 Rust 增强，不是缺口
+- 能力状态：微信扫码账号掉线后应自动重连；授权失效才提示重新扫码
+
+### 2026-08-18 — 授权状态列 / 5 分钟再重连 / 策略落盘
+
+- 账号列表「启用」改为「授权状态」（应用宝 login_buffer 是否在）
+- 已授权账号：桌面/服务重启后先打日志，等 5 分钟再自动换码重连；踢号/断线同样等 5 分钟（最多 3 次）
+- 重连开始、换码成功/失败、启动失败都写入运行日志
+- 策略页保存补上偷菜黑名单；账号配置反序列化加 default，解析失败打 warn，避免整份配置被跳过看起来像「重启重置」
+- 能力状态：列表应显示已授权/未授权；重启后看板出现「将在 5 分钟后自动重连」，到期后有成功或失败日志；改策略保存后再重启应保持
+
+### 2026-08-18 — 下线提醒可配置
+
+- 现象：踢号/掉线后运行日志报「下线提醒配置不完整：channel=webhook, token=未设置」，桌面设置页没有入口
+- 原因：全局默认 `channel=webhook` 且标题/正文已填，但 endpoint/token 为空；触发逻辑把这当成「已配置但不完整」写错误日志。桌面 IPC 也没有保存/测试命令
+- 修复：endpoint 与 token 都空（或渠道为 none）视为未配置，静默跳过；Webhook 只校验接口地址。自动化设置增加「下线提醒」页，IPC `get/set/test_offline_reminder`
+- 能力状态：未填 webhook 不再刷运行日志；设置页可保存渠道并测试推送
+
+### 2026-08-18 — 心跳 RPC 超时不再当掉线刷屏
+
+- 现象：重连后看板反复出现「心跳心跳超时 Heartbeat 失败: 请求超时: Heartbeat (seq=…, pending=1)」
+- 原因：不是旧 socket 没关。单条 WS 上 GetAll 等大包占着通道时，Heartbeat 20s 等不到回包；interval 里 `tokio::spawn` 不受 preventOverlap 约束会叠发。`pending=1` 是取消本心跳后还有别的 RPC 在路上。原 bot `catch(() => {})` 吞掉，Rust 曾把这类超时写进看板
+- 修复：socket 忙或已有 Heartbeat 在路上则跳过本次发送；RPC 超时只打 debug，不记 `HeartbeatTimeout`。真掉线仍走 30s 无响应且 pending=0 的静默杀
+- 能力状态：忙时运行日志不应刷 Heartbeat 请求超时；连接真死仍出现「连接可能已断开」并停止账号
+
+### 2026-08-18 — 手动启动写运行日志 / 微信会换码
+
+- 现象：点启动连上后看板没有启动/登录成功日志
+- 原因：`启动账号` 只进账号审计日志（看板不展示）；换码成功走 `WorkerEvent` 且发生在 panel_log 注册之前；`WorkerEvent::Started` 被事件桥忽略；登录成功只打 tracing
+- 行为：已授权微信账号每次启动都会用应用宝 login_buffer 换一次性网关 code（失败则刷新 buffer 再试）。无授权则用已保存 code
+- 修复：启动立刻写运行日志；换码中/成功/失败、网关已连接、登录成功（昵称+等级）写入看板
+- 能力状态：点启动后应出现「开始启动」→「换码成功」→「登录成功：… Lv…」；无授权账号则走「用已保存的登录码连接」

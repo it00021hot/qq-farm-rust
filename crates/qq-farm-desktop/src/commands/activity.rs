@@ -27,9 +27,7 @@ pub async fn activity_snapshot(
     account_id: String,
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
-    activity::snapshot(&state.app, &account_id)
-        .await
-        .map_err(IpcError::from)
+    activity::snapshot(&state.app, &account_id).await.map_err(IpcError::from)
 }
 
 /// 领取战令奖励。
@@ -39,9 +37,7 @@ pub async fn activity_claim_battle_pass(
     account_id: String,
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
-    activity::claim_battle_pass(&state.app, &account_id)
-        .await
-        .map_err(IpcError::from)
+    activity::claim_battle_pass(&state.app, &account_id).await.map_err(IpcError::from)
 }
 
 /// 点亮星座。
@@ -51,9 +47,7 @@ pub async fn activity_light_constellation(
     account_id: String,
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
-    activity::light_constellation(&state.app, &account_id)
-        .await
-        .map_err(IpcError::from)
+    activity::light_constellation(&state.app, &account_id).await.map_err(IpcError::from)
 }
 
 /// 星沙兑换。
@@ -78,9 +72,7 @@ pub async fn activity_claim_solar_term(
     term_id: String,
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
-    activity::claim_solar_term(&state.app, &account_id, &term_id)
-        .await
-        .map_err(IpcError::from)
+    activity::claim_solar_term(&state.app, &account_id, &term_id).await.map_err(IpcError::from)
 }
 
 /// 领取青梅每日种子。
@@ -90,9 +82,7 @@ pub async fn activity_claim_qingmei_seed(
     account_id: String,
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
-    activity::claim_qingmei_seed(&state.app, &account_id)
-        .await
-        .map_err(IpcError::from)
+    activity::claim_qingmei_seed(&state.app, &account_id).await.map_err(IpcError::from)
 }
 
 /// 开始青梅酿造。
@@ -115,9 +105,7 @@ pub async fn activity_qingmei_brew_continue(
     account_id: String,
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
-    activity::continue_qingmei_brew(&state.app, &account_id)
-        .await
-        .map_err(IpcError::from)
+    activity::continue_qingmei_brew(&state.app, &account_id).await.map_err(IpcError::from)
 }
 
 /// 结算青梅酿造。
@@ -127,7 +115,5 @@ pub async fn activity_qingmei_brew_settle(
     account_id: String,
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
-    activity::settle_qingmei_brew(&state.app, &account_id)
-        .await
-        .map_err(IpcError::from)
+    activity::settle_qingmei_brew(&state.app, &account_id).await.map_err(IpcError::from)
 }

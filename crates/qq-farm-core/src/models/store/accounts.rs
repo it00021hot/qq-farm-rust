@@ -28,7 +28,7 @@ pub fn accounts_file() -> PathBuf {
 }
 
 /// 账号持久化记录（store 形态，与 runtime [`AccountSession`](crate::models::account::AccountSession) 分离）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AccountRecord {
     /// 账号唯一 ID
     pub id: String,
@@ -51,6 +51,23 @@ pub struct AccountRecord {
     pub username: String,
     pub created_at: i64,
     pub updated_at: i64,
+    /// 应用宝 / 微信开放平台 openid
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub wx_openid: String,
+    /// 应用宝 login_buffer，可多次换取一次性网关 code
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub wx_login_buffer: String,
+    /// 应用宝 accesstoken，login_buffer 失效时换票
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub wx_access_token: String,
+}
+
+impl AccountRecord {
+    /// 是否已持久化应用宝授权（可换新的网关 code）。
+    #[must_use]
+    pub fn has_wx_auth(&self) -> bool {
+        !self.wx_login_buffer.trim().is_empty()
+    }
 }
 
 /// 兼容旧名；请改用 [`AccountRecord`]。
@@ -202,11 +219,8 @@ mod tests {
             platform: "qq".to_string(),
             uin: "u123".to_string(),
             qq: "12345".to_string(),
-            avatar: String::new(),
             username: username.to_string(),
-            nick: String::new(),
-            created_at: 0,
-            updated_at: 0,
+            ..Default::default()
         }
     }
 
@@ -286,7 +300,48 @@ mod tests {
         let loaded = load_from_file().expect("load");
         assert_eq!(loaded.accounts.len(), 1);
         assert_eq!(loaded.accounts[0].id, "1");
+        assert!(!loaded.accounts[0].has_wx_auth());
         // 清理
         let _ = fs::remove_file(accounts_file());
+    }
+
+    #[test]
+    fn has_wx_auth_requires_login_buffer() {
+        let mut acc = make_account("1", "wx", "u1");
+        acc.platform = "wx".into();
+        assert!(!acc.has_wx_auth());
+        acc.wx_login_buffer = "buf".into();
+        assert!(acc.has_wx_auth());
+        acc.wx_login_buffer = "  ".into();
+        assert!(!acc.has_wx_auth());
+    }
+
+    #[test]
+    fn old_json_without_wx_auth_deserializes() {
+        let raw = r#"{"id":"1","name":"n","code":"c","platform":"wx","uin":"","qq":"","avatar":"","username":"u","created_at":1,"updated_at":2}"#;
+        let acc: AccountRecord = serde_json::from_str(raw).expect("legacy account json");
+        assert_eq!(acc.id, "1");
+        assert_eq!(acc.platform, "wx");
+        assert!(acc.wx_openid.is_empty());
+        assert!(acc.wx_login_buffer.is_empty());
+        assert!(acc.wx_access_token.is_empty());
+        assert!(!acc.has_wx_auth());
+    }
+
+    #[test]
+    fn wx_auth_roundtrip_omits_empty() {
+        let mut acc = make_account("1", "wx", "u1");
+        acc.wx_openid = "oid".into();
+        acc.wx_login_buffer = "buf".into();
+        acc.wx_access_token = "tok".into();
+        let json = serde_json::to_value(&acc).unwrap();
+        assert_eq!(json["wx_openid"], "oid");
+        assert_eq!(json["wx_login_buffer"], "buf");
+        assert_eq!(json["wx_access_token"], "tok");
+
+        let qq = make_account("2", "qq", "u1");
+        let qq_json = serde_json::to_value(&qq).unwrap();
+        assert!(qq_json.get("wx_login_buffer").is_none());
+        assert!(qq_json.get("wx_access_token").is_none());
     }
 }

@@ -510,10 +510,7 @@ impl GameConfig {
     #[must_use]
     pub fn get_land_config_by_coordinate(&self, grid_x: i64, grid_y: i64) -> Option<Land> {
         self.land_map.read().as_ref().and_then(|lands| {
-            lands
-                .iter()
-                .find(|l| l.grid_x == grid_x && l.grid_y == grid_y)
-                .cloned()
+            lands.iter().find(|l| l.grid_x == grid_x && l.grid_y == grid_y).cloned()
         })
     }
 
@@ -566,10 +563,7 @@ impl GameConfig {
         if let Some(price) = self.parse_sells_price(seed_id) {
             return price;
         }
-        self.get_plant_by_seed_id(seed_id)
-            .and_then(|p| p.fruit)
-            .map(|f| f.count * 10)
-            .unwrap_or(0)
+        self.get_plant_by_seed_id(seed_id).and_then(|p| p.fruit).map(|f| f.count * 10).unwrap_or(0)
     }
 
     /// 果实出售价格（从 ItemInfo.json 的 sells 字段读取）
@@ -578,10 +572,7 @@ impl GameConfig {
         if let Some(price) = self.parse_sells_price(fruit_id) {
             return price;
         }
-        self.get_item_by_id(fruit_id)
-            .and_then(|i| i.level)
-            .unwrap_or(1)
-            * 8
+        self.get_item_by_id(fruit_id).and_then(|i| i.level).unwrap_or(1) * 8
     }
 
     fn parse_sells_price(&self, item_id: i64) -> Option<i64> {
@@ -672,12 +663,7 @@ impl GameConfig {
                 sells: vec![],
             };
         }
-        EffectiveSellInfo {
-            sellable: false,
-            status: "unavailable",
-            condition,
-            sells: vec![],
-        }
+        EffectiveSellInfo { sellable: false, status: "unavailable", condition, sells: vec![] }
     }
 
     /// 按物品 id 解析可售信息
@@ -801,10 +787,7 @@ pub fn load_item_types_config() -> std::collections::HashMap<i64, i64> {
 pub fn load_fruits_config() -> Vec<PlantFruit> {
     let cfg = GameConfig::new();
     let _ = cfg.load();
-    cfg.get_all_plants()
-        .into_iter()
-        .filter_map(|p| p.fruit)
-        .collect()
+    cfg.get_all_plants().into_iter().filter_map(|p| p.fruit).collect()
 }
 
 #[cfg(test)]
@@ -888,9 +871,7 @@ mod tests {
         let land = gc.get_land_config_by_id(1).expect("land 1");
         assert_eq!(land.grid_x, 0);
         assert_eq!(land.grid_y, 5);
-        let by_coord = gc
-            .get_land_config_by_coordinate(land.grid_x, land.grid_y)
-            .expect("coord");
+        let by_coord = gc.get_land_config_by_coordinate(land.grid_x, land.grid_y).expect("coord");
         assert_eq!(by_coord.id, 1);
     }
 

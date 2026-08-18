@@ -154,18 +154,10 @@ impl MallService {
         slot_type: i32,
         sub_slot_type: i32,
     ) -> Result<GetMallListBySlotTypeResponse> {
-        let req = GetMallListBySlotTypeRequest {
-            slot_type,
-            sub_slot_type,
-        };
+        let req = GetMallListBySlotTypeRequest { slot_type, sub_slot_type };
         let body = self
             .gateway
-            .request(
-                MALL_SERVICE,
-                "GetMallListBySlotType",
-                &req.encode_to_vec(),
-                10_000,
-            )
+            .request(MALL_SERVICE, "GetMallListBySlotType", &req.encode_to_vec(), 10_000)
             .await?;
         Ok(GetMallListBySlotTypeResponse::decode(&body[..])?)
     }
@@ -176,11 +168,7 @@ impl MallService {
     /// - 同 [`Self::get_mall_list_by_slot_type`]
     pub async fn get_mall_goods_list(&self, slot_type: i32) -> Result<Vec<MallGoods>> {
         let reply = self.get_mall_list_by_slot_type(slot_type, 0).await?;
-        Ok(reply
-            .goods_list
-            .into_iter()
-            .filter(|g| g.goods_id > 0)
-            .collect())
+        Ok(reply.goods_list.into_iter().filter(|g| g.goods_id > 0).collect())
     }
 
     /// 购买商品
@@ -191,10 +179,8 @@ impl MallService {
     /// - 余额不足等业务错误（`code=1000019`）— 由调用方识别
     pub async fn purchase_mall_goods(&self, goods_id: i32, count: i32) -> Result<PurchaseResponse> {
         let req = PurchaseRequest { goods_id, count };
-        let body = self
-            .gateway
-            .request(MALL_SERVICE, "Purchase", &req.encode_to_vec(), 10_000)
-            .await?;
+        let body =
+            self.gateway.request(MALL_SERVICE, "Purchase", &req.encode_to_vec(), 10_000).await?;
         Ok(PurchaseResponse::decode(&body[..])?)
     }
 
@@ -205,8 +191,7 @@ impl MallService {
     /// # Errors
     /// - 同 [`Self::purchase_mall_goods`]
     pub async fn auto_buy_organic_fertilizer_via_mall(&self) -> Result<i32> {
-        self.auto_buy_fertilizer_via_mall(MallFertilizerKind::Organic, 0)
-            .await
+        self.auto_buy_fertilizer_via_mall(MallFertilizerKind::Organic, 0).await
     }
 
     /// 通过商城自动购买指定类型化肥
@@ -256,10 +241,7 @@ impl MallService {
                 }
                 Err(e) => {
                     let msg = e.to_string();
-                    tracing::warn!(
-                        "[商城] 购买化肥失败: {}",
-                        msg
-                    );
+                    tracing::warn!("[商城] 购买化肥失败: {}", msg);
                     if is_insufficient_balance(&msg) {
                         if per_round > 1 {
                             per_round = 1;
@@ -275,10 +257,7 @@ impl MallService {
         }
 
         if total_bought > 0 {
-            tracing::info!(
-                "[商城] 购买化肥成功，共购买 {} 个",
-                total_bought
-            );
+            tracing::info!("[商城] 购买化肥成功，共购买 {} 个", total_bought);
         }
 
         Ok(total_bought)
@@ -352,10 +331,8 @@ impl MallService {
             }
         };
 
-        let free: Vec<&MallGoods> = goods_list
-            .iter()
-            .filter(|g| g.is_free && g.goods_id > 0)
-            .collect();
+        let free: Vec<&MallGoods> =
+            goods_list.iter().filter(|g| g.is_free && g.goods_id > 0).collect();
 
         if free.is_empty() {
             *self.free_gift_done_date_key.lock() = get_date_key();
@@ -484,7 +461,10 @@ pub fn parse_mall_price_value_from_bytes(price_field_bytes: &[u8]) -> i32 {
 }
 
 /// 从商品列表中按 kind 找化肥商品
-pub fn find_fertilizer_mall_goods(goods_list: &[MallGoods], kind: MallFertilizerKind) -> Option<MallGoods> {
+pub fn find_fertilizer_mall_goods(
+    goods_list: &[MallGoods],
+    kind: MallFertilizerKind,
+) -> Option<MallGoods> {
     let target = match kind {
         MallFertilizerKind::Organic => ORGANIC_FERTILIZER_MALL_GOODS_ID,
         MallFertilizerKind::Normal => INORGANIC_FERTILIZER_MALL_GOODS_ID,
@@ -494,9 +474,7 @@ pub fn find_fertilizer_mall_goods(goods_list: &[MallGoods], kind: MallFertilizer
 
 /// 判断错误信息是否表示"余额不足"
 fn is_insufficient_balance(msg: &str) -> bool {
-    msg.contains("余额不足")
-        || msg.contains("点券不足")
-        || msg.contains("code=1000019")
+    msg.contains("余额不足") || msg.contains("点券不足") || msg.contains("code=1000019")
 }
 
 fn get_date_key() -> String {
@@ -508,10 +486,7 @@ fn get_date_key() -> String {
 
 fn now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
 // =====================================================================
@@ -546,21 +521,13 @@ mod tests {
 
     #[test]
     fn parse_price_from_item_count() {
-        let item = CoreItem {
-            id: 1002,
-            count: 2500,
-            ..Default::default()
-        };
+        let item = CoreItem { id: 1002, count: 2500, ..Default::default() };
         assert_eq!(parse_mall_price_value(Some(&item)), 2500);
     }
 
     #[test]
     fn parse_price_negative_clamped_to_zero() {
-        let item = CoreItem {
-            id: 1002,
-            count: -5,
-            ..Default::default()
-        };
+        let item = CoreItem { id: 1002, count: -5, ..Default::default() };
         assert_eq!(parse_mall_price_value(Some(&item)), 0);
     }
 
@@ -587,14 +554,8 @@ mod tests {
     #[test]
     fn find_fertilizer_goods_organic() {
         let mut list = vec![];
-        list.push(MallGoods {
-            goods_id: 9999,
-            ..Default::default()
-        });
-        list.push(MallGoods {
-            goods_id: ORGANIC_FERTILIZER_MALL_GOODS_ID,
-            ..Default::default()
-        });
+        list.push(MallGoods { goods_id: 9999, ..Default::default() });
+        list.push(MallGoods { goods_id: ORGANIC_FERTILIZER_MALL_GOODS_ID, ..Default::default() });
         let found = find_fertilizer_mall_goods(&list, MallFertilizerKind::Organic);
         assert!(found.is_some());
         assert_eq!(found.unwrap().goods_id, ORGANIC_FERTILIZER_MALL_GOODS_ID);
@@ -603,10 +564,7 @@ mod tests {
     #[test]
     fn find_fertilizer_goods_normal() {
         let mut list = vec![];
-        list.push(MallGoods {
-            goods_id: INORGANIC_FERTILIZER_MALL_GOODS_ID,
-            ..Default::default()
-        });
+        list.push(MallGoods { goods_id: INORGANIC_FERTILIZER_MALL_GOODS_ID, ..Default::default() });
         let found = find_fertilizer_mall_goods(&list, MallFertilizerKind::Normal);
         assert!(found.is_some());
     }
@@ -641,10 +599,7 @@ mod tests {
 
     #[test]
     fn purchase_request_roundtrip() {
-        let req = PurchaseRequest {
-            goods_id: 1002,
-            count: 10,
-        };
+        let req = PurchaseRequest { goods_id: 1002, count: 10 };
         let bytes = req.encode_to_vec();
         let back = PurchaseRequest::decode(&bytes[..]).unwrap();
         assert_eq!(back.goods_id, 1002);
@@ -653,22 +608,14 @@ mod tests {
 
     #[test]
     fn mall_goods_keeps_is_free_flag() {
-        let g = MallGoods {
-            goods_id: 1,
-            is_free: true,
-            ..Default::default()
-        };
+        let g = MallGoods { goods_id: 1, is_free: true, ..Default::default() };
         assert!(g.is_free);
     }
 
     #[test]
     fn item_with_price_field_used_in_mall() {
         // 模拟原 TS 中 goods.price 来自 corepb.Item 的场景
-        let price = Item {
-            id: 1002,
-            count: 2500,
-            ..Default::default()
-        };
+        let price = Item { id: 1002, count: 2500, ..Default::default() };
         let _ = price; // 演示：业务侧读取 price.count
     }
 }

@@ -169,13 +169,7 @@ async fn e2e_health_and_ping() {
     // /health
     let resp = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/health")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(Request::builder().method("GET").uri("/health").body(Body::empty()).unwrap())
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -187,13 +181,7 @@ async fn e2e_health_and_ping() {
     // /api/ping
     let resp = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/api/ping")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(Request::builder().method("GET").uri("/api/ping").body(Body::empty()).unwrap())
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -227,11 +215,7 @@ async fn e2e_game_version() {
     let resp = app
         .clone()
         .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/api/game-version")
-                .body(Body::empty())
-                .unwrap(),
+            Request::builder().method("GET").uri("/api/game-version").body(Body::empty()).unwrap(),
         )
         .await
         .unwrap();
@@ -239,10 +223,7 @@ async fn e2e_game_version() {
     let bytes = to_bytes(resp.into_body(), 1024).await.unwrap();
     let v: Value = serde_json::from_slice(&bytes).unwrap();
     // game-version 至少返回 version 字段
-    assert!(
-        v["version"].is_string() || v["ok"] == true,
-        "game-version 响应格式: {v}"
-    );
+    assert!(v["version"].is_string() || v["ok"] == true, "game-version 响应格式: {v}");
 }
 
 #[tokio::test]
@@ -253,11 +234,7 @@ async fn e2e_change_password_invalidates_old_token() {
     let password = "OldPass123!";
 
     // 注册 + 登录
-    let _ = app
-        .clone()
-        .oneshot(register_req(&username, password))
-        .await
-        .unwrap();
+    let _ = app.clone().oneshot(register_req(&username, password)).await.unwrap();
     let login_resp = app.clone().oneshot(login_req(&username, password)).await.unwrap();
     assert_eq!(login_resp.status(), StatusCode::OK);
     let bytes = to_bytes(login_resp.into_body(), 4096).await.unwrap();
@@ -301,11 +278,7 @@ async fn e2e_change_password_invalidates_old_token() {
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 
     // 新密码应能登录
-    let resp = app
-        .clone()
-        .oneshot(login_req(&username, new_password))
-        .await
-        .unwrap();
+    let resp = app.clone().oneshot(login_req(&username, new_password)).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
@@ -315,19 +288,11 @@ async fn e2e_register_duplicate_username() {
     let app = build_test_app(TestApp::default()).await;
     let username = format!("user_dup_{}", std::process::id());
 
-    let r1 = app
-        .clone()
-        .oneshot(register_req(&username, "Pass123!"))
-        .await
-        .unwrap();
+    let r1 = app.clone().oneshot(register_req(&username, "Pass123!")).await.unwrap();
     assert_eq!(r1.status(), StatusCode::OK);
 
     // 重复注册 → 失败
-    let r2 = app
-        .clone()
-        .oneshot(register_req(&username, "Pass456!"))
-        .await
-        .unwrap();
+    let r2 = app.clone().oneshot(register_req(&username, "Pass456!")).await.unwrap();
     assert_eq!(r2.status(), StatusCode::OK, "duplicate 应该 200 但 ok=false");
     let bytes = to_bytes(r2.into_body(), 1024).await.unwrap();
     let v: Value = serde_json::from_slice(&bytes).unwrap();
@@ -341,11 +306,7 @@ async fn e2e_logout_invalidates_token() {
     let app = build_test_app(TestApp::default()).await;
     let username = format!("user_lo_{}", std::process::id());
 
-    let reg_resp = app
-        .clone()
-        .oneshot(register_req(&username, "Pass123!"))
-        .await
-        .unwrap();
+    let reg_resp = app.clone().oneshot(register_req(&username, "Pass123!")).await.unwrap();
     let reg_body = to_bytes(reg_resp.into_body(), 1024).await.unwrap();
     let reg_v: Value = serde_json::from_slice(&reg_body).unwrap();
     assert_eq!(reg_v["ok"], true, "register 应成功: {reg_v}");
@@ -354,10 +315,7 @@ async fn e2e_logout_invalidates_token() {
     let bytes = to_bytes(login.into_body(), 4096).await.unwrap();
     let v: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(status, StatusCode::OK, "login 应成功: {v}");
-    let token = v["data"]["token"]
-        .as_str()
-        .expect("login 应返回 token")
-        .to_string();
+    let token = v["data"]["token"].as_str().expect("login 应返回 token").to_string();
 
     // 登出
     let resp = app
@@ -398,11 +356,7 @@ async fn e2e_admin_login_logs() {
     let admin_password = "admin";
 
     // admin 登录（默认账号 admin/admin）
-    let resp = app
-        .clone()
-        .oneshot(login_req(admin_username, admin_password))
-        .await
-        .unwrap();
+    let resp = app.clone().oneshot(login_req(admin_username, admin_password)).await.unwrap();
     let status = resp.status();
     let bytes = to_bytes(resp.into_body(), 4096).await.unwrap();
     let v: Value = serde_json::from_slice(&bytes).unwrap();
@@ -437,11 +391,7 @@ async fn e2e_account_creation_returns_account_id() {
     let username = format!("user_acc_{}", std::process::id());
     let password = "Pass123!";
 
-    let resp = app
-        .clone()
-        .oneshot(register_req(&username, password))
-        .await
-        .unwrap();
+    let resp = app.clone().oneshot(register_req(&username, password)).await.unwrap();
     let body = to_bytes(resp.into_body(), 1024).await.unwrap();
     let v: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(v["ok"], true, "register 应成功: {v}");
@@ -461,14 +411,11 @@ async fn e2e_account_acl_blocks_cross_user_mutate() {
     let password = "Pass123!";
 
     // 注册并登录 A
-    let resp = app
-        .clone()
-        .oneshot(register_req(&user_a, password))
-        .await
-        .unwrap();
+    let resp = app.clone().oneshot(register_req(&user_a, password)).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let resp = app.clone().oneshot(login_req(&user_a, password)).await.unwrap();
-    let v: Value = serde_json::from_slice(&to_bytes(resp.into_body(), 4096).await.unwrap()).unwrap();
+    let v: Value =
+        serde_json::from_slice(&to_bytes(resp.into_body(), 4096).await.unwrap()).unwrap();
     let token_a = v["data"]["token"].as_str().unwrap().to_string();
 
     // A 创建账号
@@ -492,7 +439,8 @@ async fn e2e_account_acl_blocks_cross_user_mutate() {
         )
         .await
         .unwrap();
-    let v: Value = serde_json::from_slice(&to_bytes(resp.into_body(), 8192).await.unwrap()).unwrap();
+    let v: Value =
+        serde_json::from_slice(&to_bytes(resp.into_body(), 8192).await.unwrap()).unwrap();
     assert_eq!(v["ok"], true, "A create account: {v}");
     let account_id = v["data"]["accounts"]
         .as_array()
@@ -502,14 +450,11 @@ async fn e2e_account_acl_blocks_cross_user_mutate() {
         .to_string();
 
     // 注册并登录 B
-    let resp = app
-        .clone()
-        .oneshot(register_req(&user_b, password))
-        .await
-        .unwrap();
+    let resp = app.clone().oneshot(register_req(&user_b, password)).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let resp = app.clone().oneshot(login_req(&user_b, password)).await.unwrap();
-    let v: Value = serde_json::from_slice(&to_bytes(resp.into_body(), 4096).await.unwrap()).unwrap();
+    let v: Value =
+        serde_json::from_slice(&to_bytes(resp.into_body(), 4096).await.unwrap()).unwrap();
     let token_b = v["data"]["token"].as_str().unwrap().to_string();
 
     // B 不能 remark A 的账号
@@ -563,13 +508,7 @@ async fn e2e_account_acl_blocks_cross_user_mutate() {
     // 无 token 访问 /ws 应 401（不带 Upgrade，避免 extractor 先返回 426）
     let resp = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/ws")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(Request::builder().method("GET").uri("/ws").body(Body::empty()).unwrap())
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);

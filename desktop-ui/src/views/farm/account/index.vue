@@ -2,11 +2,7 @@
 import { onMounted, ref } from 'vue';
 import dayjs from 'dayjs';
 import { NButton, NPopconfirm, NTag } from 'naive-ui';
-import {
-  farmEnableStatusRecord,
-  farmPlatformRecord,
-  farmRunStatusRecord
-} from '@/constants/business';
+import { farmAuthStatusRecord, farmPlatformRecord, farmRunStatusRecord } from '@/constants/business';
 import {
   fetchDeleteFarmAccount,
   fetchGetFarmAccountList,
@@ -34,11 +30,11 @@ const searchParams = ref<Api.Farm.AccountSearchParams>({
   keyword: null,
   platform: null,
   runStatus: null,
-  status: null
+  authStatus: null
 });
 
-function normalizeEnableStatus(status: Api.Farm.EnableStatus | number | string): Api.Farm.EnableStatus {
-  return String(status) as Api.Farm.EnableStatus;
+function authStatusOf(row: Api.Farm.Account): 'authorized' | 'unauthorized' {
+  return row.wxAuthorized ? 'authorized' : 'unauthorized';
 }
 
 const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagination } =
@@ -91,16 +87,16 @@ const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagi
       }
     },
     {
-      key: 'status',
-      title: $t('page.farm.account.status'),
+      key: 'wxAuthorized',
+      title: $t('page.farm.account.authStatus'),
       align: 'center',
       render: row => {
-        const status = normalizeEnableStatus(row.status);
-        const tagMap: Record<Api.Farm.EnableStatus, NaiveUI.ThemeColor> = {
-          '1': 'success',
-          '2': 'warning'
+        const status = authStatusOf(row);
+        const tagMap: Record<'authorized' | 'unauthorized', NaiveUI.ThemeColor> = {
+          authorized: 'success',
+          unauthorized: 'warning'
         };
-        return <NTag type={tagMap[status]}>{$t(farmEnableStatusRecord[status])}</NTag>;
+        return <NTag type={tagMap[status]}>{$t(farmAuthStatusRecord[status])}</NTag>;
       }
     },
     {

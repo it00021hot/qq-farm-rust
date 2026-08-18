@@ -38,10 +38,11 @@ pub use dto::{
 
 // 兼容旧 `services::activity_center::*` 导入路径
 pub use crate::constants::{
-    CLAIM_QINGMEI_SEED_OPERATE_TYPE, CONSTELLATION_ACTIVITY_TYPE, CONTINUE_QINGMEI_BREW_OPERATE_TYPE,
-    EXCHANGE_SHOP_OPERATE_TYPE, LIGHT_CONSTELLATION_OPERATE_TYPE, QINGMEI_BREW_ACTIVITY_ID,
-    QINGMEI_DAILY_ACTIVITY_ID, QINGMEI_DAILY_ALREADY_CLAIMED_CODE, QINGMEI_DAILY_GRANT_ID,
-    QINGMEI_ITEM_ID, QINGMEI_SHARE_SCENE, QINGMEI_SHARE_SOURCE, QINGMEI_SHARED_SETTLEMENT_MODE,
+    CLAIM_QINGMEI_SEED_OPERATE_TYPE, CONSTELLATION_ACTIVITY_TYPE,
+    CONTINUE_QINGMEI_BREW_OPERATE_TYPE, EXCHANGE_SHOP_OPERATE_TYPE,
+    LIGHT_CONSTELLATION_OPERATE_TYPE, QINGMEI_BREW_ACTIVITY_ID, QINGMEI_DAILY_ACTIVITY_ID,
+    QINGMEI_DAILY_ALREADY_CLAIMED_CODE, QINGMEI_DAILY_GRANT_ID, QINGMEI_ITEM_ID,
+    QINGMEI_SHARED_SETTLEMENT_MODE, QINGMEI_SHARE_SCENE, QINGMEI_SHARE_SOURCE,
     QUERY_QINGMEI_OPERATE_TYPE, QUERY_SHOP_OPERATE_TYPE, SELL_QINGMEI_BREW_OPERATE_TYPE,
     SHOP_ACTIVITY_TYPE, START_QINGMEI_BREW_OPERATE_TYPE,
 };
@@ -60,8 +61,8 @@ use crate::services::activity_center_state::ConstellationActivityState;
 use crate::services::warehouse::WarehouseService;
 
 pub(crate) use dto::{
-    beijing_date_key, build_actions, load_qingmei_seed_claimed_date, persist_qingmei_seed_claimed_date,
-    settled_error,
+    beijing_date_key, build_actions, load_qingmei_seed_claimed_date,
+    persist_qingmei_seed_claimed_date, settled_error,
 };
 
 /// 活动中心服务
@@ -145,19 +146,14 @@ impl ActivityCenterService {
         let shop_result = if let Some(shop) = shop_override {
             Ok(shop)
         } else if let Ok(ref reply) = season_reply_result {
-            self.shop_from_season_reply(reply, warehouse.as_deref())
-                .await
+            self.shop_from_season_reply(reply, warehouse.as_deref()).await
         } else {
-            Err(Error::Business(
-                "赛季查询失败，无法发现活动商店 ID".to_string(),
-            ))
+            Err(Error::Business("赛季查询失败，无法发现活动商店 ID".to_string()))
         };
         let shop = shop_result.as_ref().ok().cloned();
         let solar_terms = solar_result.as_ref().ok().cloned();
         let qingmei = qingmei_result.as_ref().ok().cloned();
-        let constellation = season
-            .as_ref()
-            .and_then(|s| self.build_constellation_dto(s, None));
+        let constellation = season.as_ref().and_then(|s| self.build_constellation_dto(s, None));
         let actions = build_actions(&season, &solar_terms, constellation.as_ref(), shop.as_ref());
         Ok(serde_json::json!({
             "season": season,

@@ -21,10 +21,7 @@ pub fn list_seeds() -> Value {
                 .unwrap_or_default();
             let mut val = serde_json::to_value(&s).unwrap_or(json!({}));
             if let Some(obj) = val.as_object_mut() {
-                obj.insert(
-                    "priceId".into(),
-                    json!(sells.first().map(|p| p.0).unwrap_or(0)),
-                );
+                obj.insert("priceId".into(), json!(sells.first().map(|p| p.0).unwrap_or(0)));
                 if !obj.contains_key("image") {
                     obj.insert(
                         "image".into(),

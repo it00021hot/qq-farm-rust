@@ -1,7 +1,7 @@
 //! IPC 错误：`AppError` → 可序列化结构。
 
-use serde::Serialize;
 use qq_farm_app::error::AppError;
+use serde::Serialize;
 
 /// 前端可解析的统一错误体。
 #[derive(Debug, Clone, Serialize)]
@@ -20,10 +20,7 @@ impl From<AppError> for IpcError {
             AppError::Internal(_) | AppError::Core(_) => "internal",
             AppError::AccountNotRunning => "account_not_running",
         };
-        Self {
-            code: code.to_string(),
-            message: err.to_string(),
-        }
+        Self { code: code.to_string(), message: err.to_string() }
     }
 }
 

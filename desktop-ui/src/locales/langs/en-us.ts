@@ -332,6 +332,10 @@ const local: App.I18n.Schema = {
           running: 'Running',
           error: 'Error'
         },
+        authStatus: {
+          authorized: 'Authorized',
+          unauthorized: 'Unauthorized'
+        },
         fertilizerMode: {
           none: 'None',
           normal: 'Normal fertilizer only',
@@ -480,6 +484,7 @@ const local: App.I18n.Schema = {
         qq: 'QQ',
         remark: 'Remark',
         runStatus: 'Run Status',
+        authStatus: 'Authorization',
         status: 'Status',
         lastOnlineAt: 'Last Online',
         addAccount: 'Add Account',
@@ -790,7 +795,28 @@ const local: App.I18n.Schema = {
         strategyMaxFertExp: 'Max Normal Fert Exp/h',
         strategyMaxProfit: 'Max Net Profit/h',
         strategyMaxFertProfit: 'Max Normal Fert Net Profit/h',
-        strategyBagPriority: 'Bag Seed Priority'
+        strategyBagPriority: 'Bag Seed Priority',
+        offlineReminder: 'Offline Alert',
+        saveOffline: 'Save Offline Alert',
+        saveOfflineSuccess: 'Offline alert saved',
+        testOffline: 'Test Notification',
+        testOfflineSuccess: 'Test message sent',
+        testOfflineFail: 'Test failed',
+        channel: 'Push Channel',
+        channelDocs: 'Docs',
+        channelNone: 'Disabled',
+        reloginUrl: 'Relogin Link',
+        reloginNone: 'None',
+        reloginQqLink: 'QQ Direct Link',
+        reloginQrLink: 'QR Code Link',
+        endpoint: 'Endpoint',
+        token: 'Token',
+        reminderTitle: 'Title',
+        reminderMsg: 'Message',
+        offlineDeleteSec: 'Delete Offline Account (sec)',
+        offlineDeleteHint: '0 means never delete',
+        offlineHint:
+          'Push when an account goes offline. Webhook needs an endpoint; other channels need a token. Empty endpoint and token means no push and no error in the run log.'
       },
       gameConfig: {
         title: 'Game Config',

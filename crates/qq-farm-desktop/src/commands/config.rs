@@ -11,10 +11,8 @@ use crate::state::DesktopState;
 
 fn maybe_save_image(payload: &Value) -> Option<String> {
     let name = payload.get("imageName").and_then(|v| v.as_str())?;
-    let b64 = payload
-        .get("imageBase64")
-        .or_else(|| payload.get("image"))
-        .and_then(|v| v.as_str())?;
+    let b64 =
+        payload.get("imageBase64").or_else(|| payload.get("image")).and_then(|v| v.as_str())?;
     if name.is_empty() || b64.is_empty() {
         return None;
     }
@@ -81,15 +79,10 @@ pub fn config_modify(
 
 /// 删除配置项（仅 overlay）。
 #[tauri::command]
-pub fn config_delete(
-    state: State<'_, DesktopState>,
-    kind: String,
-    id: String,
-) -> IpcResult<Value> {
+pub fn config_delete(state: State<'_, DesktopState>, kind: String, id: String) -> IpcResult<Value> {
     let _ = &state.acl;
-    let id_num: i64 = id
-        .parse()
-        .map_err(|_| IpcError::from(AppError::BadRequest("invalid id".into())))?;
+    let id_num: i64 =
+        id.parse().map_err(|_| IpcError::from(AppError::BadRequest("invalid id".into())))?;
     let gc = qq_farm_core::config::game_config::global();
     let removed = match kind.as_str() {
         "seed" | "plant" => gc
@@ -98,11 +91,7 @@ pub fn config_delete(
         "fruit" | "item" => gc
             .delete_item_overlay(id_num)
             .map_err(|e| IpcError::from(AppError::Internal(e.to_string())))?,
-        _ => {
-            return Err(IpcError::from(AppError::BadRequest(format!(
-                "unknown kind: {kind}"
-            ))))
-        }
+        _ => return Err(IpcError::from(AppError::BadRequest(format!("unknown kind: {kind}")))),
     };
     Ok(json!({ "ok": true, "removed": removed }))
 }
@@ -153,9 +142,7 @@ fn mutate_config(kind: &str, id: Option<String>, mut payload: Value) -> IpcResul
                 serde_json::from_value(payload)
                     .map_err(|e| IpcError::from(AppError::BadRequest(e.to_string())))?;
             if plant.id <= 0 {
-                return Err(IpcError::from(AppError::BadRequest(
-                    "plant id required".into(),
-                )));
+                return Err(IpcError::from(AppError::BadRequest("plant id required".into())));
             }
             if let Some(url) = img {
                 plant.harvest_animation = Some(url);
@@ -167,21 +154,14 @@ fn mutate_config(kind: &str, id: Option<String>, mut payload: Value) -> IpcResul
             let mut item: qq_farm_core::config::game_config::Item = serde_json::from_value(payload)
                 .map_err(|e| IpcError::from(AppError::BadRequest(e.to_string())))?;
             if item.id <= 0 {
-                return Err(IpcError::from(AppError::BadRequest(
-                    "item id required".into(),
-                )));
+                return Err(IpcError::from(AppError::BadRequest("item id required".into())));
             }
             if let Some(url) = img {
                 item.asset_name = Some(url);
             }
-            gc.upsert_item(item)
-                .map_err(|e| IpcError::from(AppError::Internal(e.to_string())))?;
+            gc.upsert_item(item).map_err(|e| IpcError::from(AppError::Internal(e.to_string())))?;
         }
-        _ => {
-            return Err(IpcError::from(AppError::BadRequest(format!(
-                "unknown kind: {kind}"
-            ))))
-        }
+        _ => return Err(IpcError::from(AppError::BadRequest(format!("unknown kind: {kind}")))),
     }
     Ok(json!({ "ok": true }))
 }

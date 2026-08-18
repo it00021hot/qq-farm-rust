@@ -10,8 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::services::json_db::{read_json_or, write_text_file_atomic};
 use crate::config::paths::get_data_file;
+use crate::services::json_db::{read_json_or, write_text_file_atomic};
 
 /// 状态文件版本号（必须 == 1，rust 端 schema 改变时升 2）
 pub const STATE_FILE_VERSION: i32 = 1;
@@ -84,13 +84,13 @@ pub fn normalize_catalog_version(value: Option<i64>) -> i32 {
     }
 }
 
-pub fn normalize_identity(
-    identity: Option<&ActivityStateIdentity>,
-) -> ActivityStateIdentity {
+pub fn normalize_identity(identity: Option<&ActivityStateIdentity>) -> ActivityStateIdentity {
     ActivityStateIdentity {
         season_id: normalize_id(identity.and_then(|i| i.season_id.as_str().into())),
         activity_id: normalize_id(identity.and_then(|i| i.activity_id.as_str().into())),
-        catalog_version: normalize_catalog_version(Some(identity.map(|i| i.catalog_version as i64).unwrap_or(0))),
+        catalog_version: normalize_catalog_version(Some(
+            identity.map(|i| i.catalog_version as i64).unwrap_or(0),
+        )),
     }
 }
 
@@ -132,22 +132,13 @@ pub fn normalize_no_claimable_days(
                 Some(o) => o,
                 None => continue,
             };
-            let observed_at = obs
-                .get("observedAt")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            let server_time = normalize_id(
-                obs.get("serverTime").and_then(|v| v.as_str()).into(),
-            );
+            let observed_at =
+                obs.get("observedAt").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            let server_time = normalize_id(obs.get("serverTime").and_then(|v| v.as_str()).into());
             if observed_at.is_empty() || server_time.is_empty() {
                 continue;
             }
-            out.insert(day.to_string(), NoClaimableDayObservation {
-                observed_at,
-                server_time,
-            });
+            out.insert(day.to_string(), NoClaimableDayObservation { observed_at, server_time });
         }
     }
     out
@@ -194,9 +185,7 @@ pub fn normalize_constellation_state(
                 .or_else(|| obj.get("confirmed_opened_node_ids"))
                 .and_then(|v| v.as_array())
                 .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect::<Vec<_>>()
+                    arr.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>()
                 })
                 .unwrap_or_default(),
         ),
@@ -205,9 +194,7 @@ pub fn normalize_constellation_state(
                 .or_else(|| obj.get("confirmed_lit_node_ids"))
                 .and_then(|v| v.as_array())
                 .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect::<Vec<_>>()
+                    arr.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>()
                 })
                 .unwrap_or_default(),
         ),
@@ -273,10 +260,7 @@ pub fn state_record_key(identity: &ActivityStateIdentity) -> String {
 
 pub fn resolve_account_id(account_id: Option<&str>) -> String {
     let from_env = std::env::var("FARM_ACCOUNT_ID").ok();
-    let raw = account_id
-        .map(String::from)
-        .or(from_env)
-        .unwrap_or_default();
+    let raw = account_id.map(String::from).or(from_env).unwrap_or_default();
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         "default".to_string()
@@ -304,16 +288,11 @@ pub fn get_activity_center_state_file(
         return p.clone();
     }
     let token = safe_account_file_token(account_id);
-    get_data_file(&format!("{STATE_FILE_PREFIX}-{token}.json"))
-        .to_string_lossy()
-        .into_owned()
+    get_data_file(&format!("{STATE_FILE_PREFIX}-{token}.json")).to_string_lossy().into_owned()
 }
 
 fn empty_state_file() -> ActivityCenterStateFile {
-    ActivityCenterStateFile {
-        version: STATE_FILE_VERSION,
-        records: BTreeMap::new(),
-    }
+    ActivityCenterStateFile { version: STATE_FILE_VERSION, records: BTreeMap::new() }
 }
 
 pub fn normalize_state_file(value: serde_json::Value) -> ActivityCenterStateFile {
@@ -324,10 +303,8 @@ pub fn normalize_state_file(value: serde_json::Value) -> ActivityCenterStateFile
     if version != STATE_FILE_VERSION as i64 {
         return empty_state_file();
     }
-    let records_raw = obj
-        .get("records")
-        .cloned()
-        .unwrap_or(serde_json::Value::Object(Default::default()));
+    let records_raw =
+        obj.get("records").cloned().unwrap_or(serde_json::Value::Object(Default::default()));
     let Some(rec_obj) = records_raw.as_object() else {
         return empty_state_file();
     };
@@ -337,10 +314,7 @@ pub fn normalize_state_file(value: serde_json::Value) -> ActivityCenterStateFile
             records.insert(k.clone(), state);
         }
     }
-    ActivityCenterStateFile {
-        version: STATE_FILE_VERSION,
-        records,
-    }
+    ActivityCenterStateFile { version: STATE_FILE_VERSION, records }
 }
 
 pub fn load_constellation_state(
@@ -348,9 +322,8 @@ pub fn load_constellation_state(
     account_id: Option<&str>,
     options: &StateFileOptions,
 ) -> ConstellationActivityState {
-    let file = normalize_state_file(read_json_or(
-        &get_activity_center_state_file(account_id, options),
-    ));
+    let file =
+        normalize_state_file(read_json_or(&get_activity_center_state_file(account_id, options)));
     let key = state_record_key(identity);
     let raw = serde_json::to_value(file.records.get(&key)).unwrap_or(serde_json::Value::Null);
     normalize_constellation_state(raw, identity)
@@ -366,7 +339,8 @@ pub fn persist_constellation_state(
     let raw = read_json_or(&file_path);
     let mut file = normalize_state_file(raw);
     let key = state_record_key(identity);
-    let existing_value = serde_json::to_value(file.records.get(&key)).unwrap_or(serde_json::Value::Null);
+    let existing_value =
+        serde_json::to_value(file.records.get(&key)).unwrap_or(serde_json::Value::Null);
     let merged = merge_constellation_states(identity, &[existing_value, state_value]);
     file.records.insert(key, merged.clone());
     if let Ok(text) = serde_json::to_string_pretty(&file) {
@@ -376,10 +350,7 @@ pub fn persist_constellation_state(
 }
 
 fn json_node_id(node: &serde_json::Value) -> Option<String> {
-    let value = node
-        .get("node_id")
-        .or_else(|| node.get("nodeId"))
-        .or_else(|| node.get("id"))?;
+    let value = node.get("node_id").or_else(|| node.get("nodeId")).or_else(|| node.get("id"))?;
     if let Some(s) = value.as_str() {
         let t = s.trim();
         if t.is_empty() {
@@ -449,9 +420,7 @@ pub fn state_with_no_claimable_day(
     let normalized_day = day;
     let mut day_state = create_empty_constellation_state(identity);
     if (1..=28).contains(&normalized_day) {
-        let observed = observed_at
-            .map(String::from)
-            .unwrap_or_else(|| chrono_like_now_iso());
+        let observed = observed_at.map(String::from).unwrap_or_else(|| chrono_like_now_iso());
         day_state.no_claimable_days.insert(
             normalized_day.to_string(),
             NoClaimableDayObservation {
@@ -468,10 +437,7 @@ pub fn state_with_no_claimable_day(
 
 fn chrono_like_now_iso() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
     // 简化：原 TS `new Date().toISOString()`，我们用 RFC3339
     format_unix_to_iso8601(now)
 }
@@ -484,9 +450,7 @@ fn format_unix_to_iso8601(secs: i64) -> String {
     let m = (secs_of_day % 3_600) / 60;
     let s = secs_of_day % 60;
     let (y, mo, d) = civil_from_days(days);
-    format!(
-        "{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}Z",
-    )
+    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}Z",)
 }
 
 fn civil_from_days(days_since_epoch: i64) -> (i32, u32, u32) {
@@ -666,9 +630,6 @@ mod tests {
             "noClaimableDays": {"3": {"observedAt": "b", "serverTime": "200"}},
         });
         let merged = merge_constellation_states(&id, &[a, b]);
-        assert_eq!(
-            merged.no_claimable_days.get("3").unwrap().server_time,
-            "200"
-        );
+        assert_eq!(merged.no_claimable_days.get("3").unwrap().server_time, "200");
     }
 }

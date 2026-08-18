@@ -74,11 +74,8 @@ async fn login(
     Json(body): Json<LoginBody>,
 ) -> Response {
     let client_ip = crate::middleware::extract_client_ip(&headers);
-    let user_agent = headers
-        .get("user-agent")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("unknown")
-        .to_string();
+    let user_agent =
+        headers.get("user-agent").and_then(|v| v.to_str().ok()).unwrap_or("unknown").to_string();
 
     let username = body.username.clone();
     let password = body.password.clone();
@@ -98,10 +95,7 @@ async fn login(
                 .into_response();
         }
     };
-    tracing::info!(
-        elapsed_ms = started.elapsed().as_millis() as u64,
-        "登录密码校验完成"
-    );
+    tracing::info!(elapsed_ms = started.elapsed().as_millis() as u64, "登录密码校验完成");
 
     // 失败分支：error 字段 + 写失败日志
     if let Some(err) = &validation.error {
@@ -160,9 +154,9 @@ async fn login(
 
     tracing::info!(username = %username, role = %role, ip = %client_ip, "登录成功");
 
-    let account_limit = validation.account_limit.unwrap_or(
-        qq_farm_core::models::user_store::users::DEFAULT_ACCOUNT_LIMIT,
-    );
+    let account_limit = validation
+        .account_limit
+        .unwrap_or(qq_farm_core::models::user_store::users::DEFAULT_ACCOUNT_LIMIT);
     let user_obj = qq_farm_core::models::user_store::users::get_session_user(&username);
     let user_json = user_obj
         .as_ref()
@@ -215,10 +209,7 @@ async fn get_me(
     State(ctx): State<Arc<AdminContext>>,
     headers: HeaderMap,
 ) -> ApiResult<serde_json::Value> {
-    let token = headers
-        .get("x-admin-token")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
+    let token = headers.get("x-admin-token").and_then(|v| v.to_str().ok()).unwrap_or("");
     if let Some(info) = ctx.sessions.get(token) {
         let user = qq_farm_core::models::user_store::users::get_session_user(&info.username);
         let user_json = user
@@ -293,10 +284,7 @@ async fn validate(
     State(ctx): State<Arc<AdminContext>>,
     headers: HeaderMap,
 ) -> ApiResult<serde_json::Value> {
-    let token = headers
-        .get("x-admin-token")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
+    let token = headers.get("x-admin-token").and_then(|v| v.to_str().ok()).unwrap_or("");
     match ctx.sessions.get(token) {
         Some(_) => {
             ctx.sessions.touch(token);
@@ -334,9 +322,7 @@ async fn get_login_logs(
     ok_data(json!({ "logs": logs, "total": total }))
 }
 
-async fn delete_login_logs(
-    State(_ctx): State<Arc<AdminContext>>,
-) -> ApiResult<serde_json::Value> {
+async fn delete_login_logs(State(_ctx): State<Arc<AdminContext>>) -> ApiResult<serde_json::Value> {
     qq_farm_core::models::user_store::auth::clear_login_logs();
     ok_empty()
 }

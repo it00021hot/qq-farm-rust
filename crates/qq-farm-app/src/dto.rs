@@ -72,18 +72,15 @@ impl PanelStatus {
             .or_else(|| raw.get("nick").and_then(Value::as_str))
             .unwrap_or("")
             .to_string();
-        let level_progress = raw
-            .get("levelProgress")
-            .cloned()
-            .and_then(|v| serde_json::from_value(v).ok());
+        let avatar = json_nonempty_str(&nested, &["avatar", "avatarUrl", "avatar_url"])
+            .or_else(|| json_nonempty_str(raw, &["avatar", "avatarUrl", "avatar_url"]))
+            .unwrap_or_default();
+        let level_progress =
+            raw.get("levelProgress").cloned().and_then(|v| serde_json::from_value(v).ok());
         let operations = raw
             .get("operations")
             .and_then(Value::as_object)
-            .map(|m| {
-                m.iter()
-                    .filter_map(|(k, v)| v.as_i64().map(|n| (k.clone(), n)))
-                    .collect()
-            })
+            .map(|m| m.iter().filter_map(|(k, v)| v.as_i64().map(|n| (k.clone(), n))).collect())
             .unwrap_or_default();
         let ws_error = raw
             .get("wsError")
@@ -96,11 +93,7 @@ impl PanelStatus {
             online: connected,
             run_status: if running { 1 } else { 0 },
             nick,
-            avatar: raw
-                .get("avatar")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string(),
+            avatar,
             level: raw
                 .get("level")
                 .and_then(Value::as_i64)
@@ -205,23 +198,52 @@ pub struct LandsPayload {
 impl LandsPayload {
     #[must_use]
     pub fn from_values(lands: Vec<Value>, summary: LandDetailSummary) -> Self {
-        let rows = lands
-            .into_iter()
-            .filter_map(|v| serde_json::from_value(v).ok())
-            .collect();
-        Self {
-            lands: rows,
-            summary,
-        }
+        let rows = lands.into_iter().filter_map(|v| serde_json::from_value(v).ok()).collect();
+        Self { lands: rows, summary }
     }
 }
 
 pub fn friend_summaries_from_values(values: Vec<Value>) -> Vec<FriendSummary> {
-    values
-        .into_iter()
-        .filter_map(|v| serde_json::from_value(v).ok())
-        .collect()
+    values.into_iter().filter_map(|v| serde_json::from_value(v).ok()).collect()
 }
 
 pub use BagDetail as PanelBagDetail;
 pub use FriendSummary as PanelFriendSummary;
+
+fn json_nonempty_str(v: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|k| {
+        v.get(*k).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn from_engine_value_reads_nested_avatar() {
+        let raw = json!({
+            "connection": { "connected": true },
+            "status": {
+                "name": "bob",
+                "avatar": "https://cdn.example/a.png",
+                "level": 3,
+                "exp": 10,
+                "gold": 20
+            }
+        });
+        let status = PanelStatus::from_engine_value(&raw, "acc1", true);
+        assert_eq!(status.avatar, "https://cdn.example/a.png");
+        assert_eq!(status.nick, "bob");
+    }
+
+    #[test]
+    fn from_engine_value_reads_avatar_url_alias() {
+        let raw = json!({
+            "status": { "avatarUrl": "https://cdn.example/b.png" }
+        });
+        let status = PanelStatus::from_engine_value(&raw, "acc1", false);
+        assert_eq!(status.avatar, "https://cdn.example/b.png");
+    }
+}

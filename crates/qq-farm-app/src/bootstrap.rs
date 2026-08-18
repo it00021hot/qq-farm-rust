@@ -57,12 +57,8 @@ pub fn gateway_template_from_env(gateway_origin: &str) -> GatewayConfigTemplate 
         } else {
             rt.device_info.user_agent.clone()
         };
-        gateway_template
-            .headers
-            .insert("User-Agent".to_string(), ua);
-        gateway_template
-            .headers
-            .insert("Origin".to_string(), gateway_origin.to_string());
+        gateway_template.headers.insert("User-Agent".to_string(), ua);
+        gateway_template.headers.insert("Origin".to_string(), gateway_origin.to_string());
     }
     gateway_template
 }
@@ -77,9 +73,7 @@ pub fn assemble_app_context(max_workers: usize, gateway_origin: &str) -> AppCont
         gateway_template,
         tsdk_wasm_path: std::env::var("TSDK_WASM_PATH")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                qq_farm_core::config::get_resource_path(&["assets", "tsdk.wasm"])
-            }),
+            .unwrap_or_else(|_| qq_farm_core::config::get_resource_path(&["assets", "tsdk.wasm"])),
         data_root: qq_farm_core::config::get_data_dir(),
         ..Default::default()
     }));

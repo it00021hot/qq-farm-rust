@@ -29,16 +29,24 @@ async fn main() -> Result<()> {
     if accounts.is_empty() {
         info!("未发现账号，请访问管理面板添加账号");
     } else {
-        info!(count = accounts.len(), "发现账号，正在启动");
+        info!(count = accounts.len(), "发现账号");
+        let mut started = 0u32;
         for acc in accounts {
+            if acc.has_wx_auth() {
+                continue;
+            }
             if acc.code.trim().is_empty() {
                 continue;
             }
             let models_acc = qq_farm_core::models::AccountSession::from_store(&acc);
             if let Err(e) = ctx.engine.start_worker(models_acc) {
                 tracing::warn!(account_id = %acc.id, "启动 worker 失败: {e}");
+            } else {
+                started += 1;
             }
         }
+        info!(started, "已启动填了 Code 的 QQ 账号");
+        ctx.engine.schedule_wx_authorized_start();
     }
 
     let app = Router::new()

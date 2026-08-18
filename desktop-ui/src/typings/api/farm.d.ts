@@ -30,12 +30,14 @@ declare namespace Api {
       runStatus: RunStatus;
       lastOnlineAt: number;
       status: EnableStatus;
+      wxAuthorized?: boolean;
       createdAt: number;
       updatedAt: number;
     };
 
     type AccountSearchParams = CommonType.RecordNullable<
-      Pick<Account, 'status' | 'runStatus' | 'platform'> & CommonSearchParams & { keyword?: string }
+      Pick<Account, 'runStatus' | 'platform'> &
+        CommonSearchParams & { keyword?: string; authStatus?: 'authorized' | 'unauthorized' }
     >;
 
     type AccountList = Common.PaginatingQueryRecord<Account>;
@@ -108,6 +110,16 @@ declare namespace Api {
       enabled?: boolean;
       start?: string;
       end?: string;
+    };
+
+    type OfflineReminder = {
+      channel: string;
+      reloginUrlMode: string;
+      endpoint: string;
+      token: string;
+      title: string;
+      msg: string;
+      offlineDeleteSec: number;
     };
 
     type AccountAutomationDetail = {

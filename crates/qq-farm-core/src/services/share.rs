@@ -110,10 +110,7 @@ impl ShareService {
 
     /// ReportShare RPC（每日礼包：field_1=1 / field_4=42）
     pub async fn report_share(&self) -> Result<ReportShareReply> {
-        let req = ReportShareRequest {
-            field_1: 1,
-            field_4: 42,
-        };
+        let req = ReportShareRequest { field_1: 1, field_4: 42 };
         let body = self
             .gateway
             .request(
@@ -128,10 +125,7 @@ impl ShareService {
 
     /// 对齐原 `reportActivityShare`：只发送不等待回包（青梅酿 field_1=11 / field_4=215）。
     pub async fn report_activity_share(&self, source: i32, scene: i32) -> Result<()> {
-        let req = ReportShareRequest {
-            field_1: source,
-            field_4: scene,
-        };
+        let req = ReportShareRequest { field_1: source, field_4: scene };
         self.gateway
             .send_no_reply(
                 "gamepb.sharepb.ShareService",
@@ -312,8 +306,8 @@ mod tests {
 
     #[test]
     fn share_service_construction() {
-        use crate::network::gateway::{Gateway, GatewayConfig};
         use crate::network::encryptor::NoopEncryptor;
+        use crate::network::gateway::{Gateway, GatewayConfig};
         let cfg = GatewayConfig {
             server_url: "ws://127.0.0.1:0".into(),
             platform: "test".into(),

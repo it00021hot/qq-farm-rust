@@ -1,5 +1,6 @@
 use prost::Message;
 
+use crate::constants::{SEASON_SERVICE, SOLAR_TERMS_SERVICE};
 use crate::error::{Error, Result};
 use crate::proto::generated::gamepb::seasonpb::{
     ClaimBattlePassRewardsReply, ClaimBattlePassRewardsRequest, GetSeasonInfoReply,
@@ -8,7 +9,6 @@ use crate::proto::generated::gamepb::seasonpb::{
 use crate::proto::generated::gamepb::solartermspb::{
     ClaimSolarTermsReply, ClaimSolarTermsRequest, GetSolarTermsReply, GetSolarTermsRequest,
 };
-use crate::constants::{SEASON_SERVICE, SOLAR_TERMS_SERVICE};
 
 use super::dto::{
     normalize_season, normalize_solar_terms, pass_dto, positive_decimal, season_item_dto,
@@ -41,21 +41,20 @@ impl ActivityCenterService {
     }
     pub async fn get_current_season_event(&self) -> Result<SeasonDto> {
         let reply = self.query_season().await?;
-        normalize_season(&reply).ok_or_else(|| ActivityError {
-            code: ActivityErrorCode::SeasonDataEmpty,
-            message: "当前赛季数据为空".to_string(),
-        }.into())
+        normalize_season(&reply).ok_or_else(|| {
+            ActivityError {
+                code: ActivityErrorCode::SeasonDataEmpty,
+                message: "当前赛季数据为空".to_string(),
+            }
+            .into()
+        })
     }
 
     /// 领取战斗通行证奖励
     pub async fn claim_battle_pass_rewards(&self) -> Result<serde_json::Value> {
         let _guard = self.mutation_lock.lock().await;
         let season_reply = self.query_season().await?;
-        let pass = season_reply
-            .season_info
-            .as_ref()
-            .and_then(|s| s.pass.as_ref())
-            .map(pass_dto);
+        let pass = season_reply.season_info.as_ref().and_then(|s| s.pass.as_ref()).map(pass_dto);
         let Some(pass) = pass else {
             return Err(Error::Business("服务端未发现可用游记".into()));
         };
@@ -129,12 +128,7 @@ impl ActivityCenterService {
         let req = ClaimSolarTermsRequest { term_id: parsed };
         let body = self
             .gateway
-            .request(
-                SOLAR_TERMS_SERVICE,
-                "ClaimSolarTerms",
-                &req.encode_to_vec(),
-                10_000,
-            )
+            .request(SOLAR_TERMS_SERVICE, "ClaimSolarTerms", &req.encode_to_vec(), 10_000)
             .await?;
         let reply = ClaimSolarTermsReply::decode(&body[..])?;
         Ok(serde_json::json!({
@@ -143,5 +137,4 @@ impl ActivityCenterService {
             "snapshot": self.snapshot_with_shop(None).await.ok(),
         }))
     }
-
 }

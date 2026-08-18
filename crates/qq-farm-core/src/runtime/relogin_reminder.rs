@@ -230,10 +230,7 @@ impl ReloginReminderService {
             qq: uin.to_string(),
             uin: uin.to_string(),
             avatar,
-            username: String::new(),
-            nick: String::new(),
-            created_at: 0,
-            updated_at: 0,
+            ..Default::default()
         };
         let new_acc = accounts::add_or_update_account(new_acc);
         self.worker_controls.start_worker(&new_acc);
@@ -269,11 +266,8 @@ impl ReloginReminderService {
         }
         let account_id = account_id.to_string();
         let account_name = account_name.to_string();
-        let key = format!(
-            "{}:{}",
-            if account_id.is_empty() { "unknown" } else { &account_id },
-            code
-        );
+        let key =
+            format!("{}:{}", if account_id.is_empty() { "unknown" } else { &account_id }, code);
 
         // 同步抢占：避免重复启动
         let should_spawn = match self.relogin_watchers.try_lock() {
@@ -281,10 +275,7 @@ impl ReloginReminderService {
                 if guard.contains_key(&key) {
                     false
                 } else {
-                    guard.insert(
-                        key.clone(),
-                        WatcherState { started_at: now_ms() },
-                    );
+                    guard.insert(key.clone(), WatcherState { started_at: now_ms() });
                     true
                 }
             }
@@ -345,11 +336,8 @@ impl ReloginReminderService {
     pub async fn trigger_offline_reminder(self: Arc<Self>, payload: OfflineReminderPayload) {
         let account_id = payload.account_id.trim().to_string();
         let account_name = payload.account_name.trim().to_string();
-        let reason = if payload.reason.is_empty() {
-            "unknown".to_string()
-        } else {
-            payload.reason.clone()
-        };
+        let reason =
+            if payload.reason.is_empty() { "unknown".to_string() } else { payload.reason.clone() };
 
         self.logger.log(
             "系统",
@@ -384,7 +372,7 @@ impl ReloginReminderService {
         }
 
         let cfg = self.get_offline_reminder_config(&username);
-        if cfg.channel.is_empty() && cfg.token.is_empty() && cfg.title.is_empty() && cfg.msg.is_empty() {
+        if !cfg.is_configured() {
             tracing::debug!(account_id = %account_id, "未配置下线提醒，跳过");
             return;
         }
@@ -411,7 +399,12 @@ impl ReloginReminderService {
         };
         let mut content = cfg.msg.trim().to_string();
 
-        if channel.is_empty() || token.is_empty() || title.is_empty() || content.is_empty() {
+        let needs_token = channel != "webhook";
+        if channel.is_empty()
+            || (needs_token && token.is_empty())
+            || title.is_empty()
+            || content.is_empty()
+        {
             self.logger.log(
                 "错误",
                 &format!(
@@ -441,7 +434,8 @@ impl ReloginReminderService {
                         if relogin_url_mode == "qq_link" {
                             content = format!("{content}\n\n重登录链接: {qq_url}");
                         } else {
-                            let qrcode_text = if !qr_code_url.is_empty() { qr_code_url } else { qq_url };
+                            let qrcode_text =
+                                if !qr_code_url.is_empty() { qr_code_url } else { qq_url };
                             content = format!("{content}\n\n重登录二维码链接: {qrcode_text}");
                         }
                     }
@@ -477,11 +471,7 @@ impl ReloginReminderService {
             self.logger.log("系统", &format!("下线提醒发送成功: {acc_name}"), None);
         } else {
             let msg = if ret.msg.is_empty() { "unknown" } else { ret.msg.as_str() };
-            self.logger.log(
-                "错误",
-                &format!("下线提醒发送失败: {msg}"),
-                None,
-            );
+            self.logger.log("错误", &format!("下线提醒发送失败: {msg}"), None);
         }
     }
 
@@ -517,11 +507,7 @@ async fn poll_relogin_status(
             continue;
         }
         if status.status == MpStatus::Used {
-            logger.log(
-                "系统",
-                &format!("重登录二维码已失效: {acc_label}"),
-                None,
-            );
+            logger.log("系统", &format!("重登录二维码已失效: {acc_label}"), None);
             return None;
         }
         if status.status == MpStatus::OK {
@@ -551,20 +537,13 @@ async fn poll_relogin_status(
         // 其它状态（Error 等）继续轮询
         sleep(Duration::from_millis(WATCHER_INTERVAL_MS)).await;
     }
-    logger.log(
-        "系统",
-        &format!("重登录监听超时: {acc_label}"),
-        None,
-    );
+    logger.log("系统", &format!("重登录监听超时: {acc_label}"), None);
     None
 }
 
 fn now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
 // =====================================================================
@@ -574,8 +553,8 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use parking_lot::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// 测试用 logger
     #[derive(Default)]
@@ -595,9 +574,7 @@ mod tests {
             _account_name: Option<&str>,
             _extra: Option<serde_json::Value>,
         ) {
-            self.account_logs
-                .lock()
-                .push((action.to_string(), msg.to_string()));
+            self.account_logs.lock().push((action.to_string(), msg.to_string()));
         }
     }
 
@@ -619,11 +596,7 @@ mod tests {
     }
 
     /// 构造一个 service（测试辅助）
-    fn make_service() -> (
-        Arc<ReloginReminderService>,
-        Arc<TestLogger>,
-        Arc<CountingControls>,
-    ) {
+    fn make_service() -> (Arc<ReloginReminderService>, Arc<TestLogger>, Arc<CountingControls>) {
         let mp = Arc::new(MiniProgramLoginSession::new());
         let push = Arc::new(PushService::new());
         let controls = Arc::new(CountingControls::default());
@@ -687,10 +660,7 @@ mod tests {
         });
         global_config::set_user_offline_reminder(
             "alice",
-            OfflineReminder {
-                channel: "user".to_string(),
-                ..Default::default()
-            },
+            OfflineReminder { channel: "user".to_string(), ..Default::default() },
         );
         let cfg = svc.get_offline_reminder_config("alice");
         assert_eq!(cfg.channel, "user");
@@ -721,10 +691,7 @@ mod tests {
 
     #[test]
     fn start_relogin_watcher_empty_code_noop() {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let (svc, logger, _) = make_service();
         rt.block_on(async {
             let svc2 = svc.clone();
@@ -737,10 +704,7 @@ mod tests {
 
     #[test]
     fn start_relogin_watcher_logs_started() {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let (svc, logger, _) = make_service();
         rt.block_on(async {
             svc.start_relogin_watcher("code-xyz", "acc1", "测试账号");
@@ -755,10 +719,7 @@ mod tests {
     #[test]
     #[serial_test::serial(relogin)]
     fn offline_reminder_incomplete_config_no_push() {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         global_config::set_offline_reminder(OfflineReminder::default());
         let (svc, logger, _) = make_service();
         // 留默认空配置
@@ -779,11 +740,29 @@ mod tests {
 
     #[test]
     #[serial_test::serial(relogin)]
+    fn offline_reminder_factory_default_skips_without_error() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        global_config::set_offline_reminder(global_config::default_offline_reminder());
+        let (svc, logger, _) = make_service();
+        rt.block_on(async {
+            svc.trigger_offline_reminder(OfflineReminderPayload {
+                account_id: "a1".to_string(),
+                account_name: "大号".to_string(),
+                reason: "kickout".to_string(),
+                ..Default::default()
+            })
+            .await;
+            let logs = logger.logs.lock().clone();
+            assert!(logs.iter().any(|(_, m)| m.contains("触发下线提醒")));
+            assert!(!logs.iter().any(|(_, m)| m.contains("下线提醒配置不完整")));
+            assert!(!logs.iter().any(|(_, m)| m.contains("下线提醒配置: 渠道=")));
+        });
+    }
+
+    #[test]
+    #[serial_test::serial(relogin)]
     fn offline_reminder_webhook_missing_endpoint_blocks() {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         global_config::set_offline_reminder(OfflineReminder::default());
         let (svc, logger, _) = make_service();
         global_config::set_offline_reminder(OfflineReminder {
@@ -809,10 +788,7 @@ mod tests {
     #[test]
     #[serial_test::serial(relogin)]
     fn offline_reminder_logs_trigger() {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         global_config::set_offline_reminder(OfflineReminder::default());
         let (svc, logger, _) = make_service();
         global_config::set_offline_reminder(OfflineReminder {
@@ -861,11 +837,7 @@ mod tests {
             platform: "qq".to_string(),
             uin: "u".to_string(),
             qq: "q".to_string(),
-            avatar: String::new(),
-            username: String::new(),
-            nick: String::new(),
-            created_at: 0,
-            updated_at: 0,
+            ..Default::default()
         };
         assert!(c.start_worker(&acc).is_none());
         assert!(c.restart_worker(&acc).is_none());

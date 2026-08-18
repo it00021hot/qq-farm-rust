@@ -52,9 +52,7 @@ fn maybe_save_image(body: &ConfigImageBody) -> Option<String> {
     qq_farm_core::config::game_config::GameConfig::save_config_image_base64(&name, b64).ok()
 }
 
-async fn get_config_seeds(
-    State(_ctx): State<Arc<AdminContext>>,
-) -> ApiResult<serde_json::Value> {
+async fn get_config_seeds(State(_ctx): State<Arc<AdminContext>>) -> ApiResult<serde_json::Value> {
     let gc = qq_farm_core::config::game_config::global();
     let data: Vec<serde_json::Value> = gc
         .get_all_seeds()
@@ -69,10 +67,7 @@ async fn get_config_seeds(
                 .unwrap_or_default();
             let mut val = serde_json::to_value(&s).unwrap_or(json!({}));
             if let Some(obj) = val.as_object_mut() {
-                obj.insert(
-                    "priceId".into(),
-                    json!(sells.first().map(|p| p.0).unwrap_or(0)),
-                );
+                obj.insert("priceId".into(), json!(sells.first().map(|p| p.0).unwrap_or(0)));
                 if !obj.contains_key("image") {
                     obj.insert(
                         "image".into(),
@@ -86,9 +81,7 @@ async fn get_config_seeds(
     ok_data(data)
 }
 
-async fn get_config_fruits(
-    State(_ctx): State<Arc<AdminContext>>,
-) -> ApiResult<serde_json::Value> {
+async fn get_config_fruits(State(_ctx): State<Arc<AdminContext>>) -> ApiResult<serde_json::Value> {
     let gc = qq_farm_core::config::game_config::global();
     let data: Vec<serde_json::Value> = gc
         .get_all_items()
@@ -123,9 +116,7 @@ async fn get_config_fruits(
     ok_data(data)
 }
 
-async fn get_config_items(
-    State(_ctx): State<Arc<AdminContext>>,
-) -> ApiResult<serde_json::Value> {
+async fn get_config_items(State(_ctx): State<Arc<AdminContext>>) -> ApiResult<serde_json::Value> {
     let gc = qq_farm_core::config::game_config::global();
     let data: Vec<serde_json::Value> = gc
         .get_all_items()
@@ -166,9 +157,7 @@ async fn get_config_item_types(
     ok(json!({ "ok": true, "itemTypes": cfg }))
 }
 
-async fn get_config_plants(
-    State(_ctx): State<Arc<AdminContext>>,
-) -> ApiResult<serde_json::Value> {
+async fn get_config_plants(State(_ctx): State<Arc<AdminContext>>) -> ApiResult<serde_json::Value> {
     let gc = qq_farm_core::config::game_config::global();
     let data: Vec<serde_json::Value> = gc
         .get_all_plants()

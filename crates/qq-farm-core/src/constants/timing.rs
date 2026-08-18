@@ -21,6 +21,23 @@ pub const MAX_PENDING_RPC: usize = 32;
 
 /// 微信扫码任务默认存活
 pub const WX_LOGIN_TASK_TTL_MS: u64 = 110_000;
+/// 扫码换出的 code 尚未绑定账号时，应用宝授权暂存时长
+pub const WX_LOGIN_PENDING_AUTH_TTL_MS: u64 = 10 * 60 * 1000;
+/// 掉线后用应用宝授权换码重连的最大次数
+pub const WX_RECONNECT_MAX_ATTEMPTS: u32 = 3;
+/// 换码重连等待（踢号 / 断线 / 进程重启后均先等再连）
+pub const WX_RECONNECT_DELAY_MS: u64 = 5 * 60 * 1000;
+
+/// 运行日志用的等待文案（「5 分钟」）。
+#[must_use]
+pub fn wx_reconnect_delay_zh() -> String {
+    let secs = WX_RECONNECT_DELAY_MS / 1000;
+    if secs >= 60 && secs % 60 == 0 {
+        format!("{} 分钟", secs / 60)
+    } else {
+        format!("{secs} 秒")
+    }
+}
 
 /// 网关心跳（对齐 Go / 原 TS）
 pub const HEARTBEAT_INTERVAL_MS: u64 = 25_000;

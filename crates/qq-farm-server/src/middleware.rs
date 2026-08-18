@@ -22,16 +22,9 @@ use crate::context::AdminContext;
 use crate::sessions::SessionStore;
 
 /// 注入 CORS headers（允许列表来自 [`ServerConfig`]，缺省走 Default）
-pub async fn cors_layer(
-    headers_in: HeaderMap,
-    mut req: Request,
-    next: Next,
-) -> Response {
+pub async fn cors_layer(headers_in: HeaderMap, mut req: Request, next: Next) -> Response {
     let cfg = ServerConfig::from_env();
-    let origin = headers_in
-        .get(header::ORIGIN)
-        .and_then(|v| v.to_str().ok())
-        .map(String::from);
+    let origin = headers_in.get(header::ORIGIN).and_then(|v| v.to_str().ok()).map(String::from);
     let allow_origin = match &origin {
         Some(o) if cfg.allows_origin(o) => o.clone(),
         None => "*".to_string(),
@@ -43,9 +36,15 @@ pub async fn cors_layer(
         let mut resp = Response::new(axum::body::Body::empty());
         let h = resp.headers_mut();
         if !allow_origin.is_empty() {
-            h.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_str(&allow_origin).unwrap());
+            h.insert(
+                header::ACCESS_CONTROL_ALLOW_ORIGIN,
+                HeaderValue::from_str(&allow_origin).unwrap(),
+            );
         }
-        h.insert(header::ACCESS_CONTROL_ALLOW_METHODS, HeaderValue::from_static("GET, POST, DELETE, OPTIONS, PUT"));
+        h.insert(
+            header::ACCESS_CONTROL_ALLOW_METHODS,
+            HeaderValue::from_static("GET, POST, DELETE, OPTIONS, PUT"),
+        );
         h.insert(
             header::ACCESS_CONTROL_ALLOW_HEADERS,
             HeaderValue::from_static("Content-Type, x-account-id, x-admin-token, x-proxy-api-key, x-proxy-api-url, x-proxy-app-id"),
@@ -62,9 +61,15 @@ pub async fn cors_layer(
     let mut resp = next.run(req).await;
     let h = resp.headers_mut();
     if !allow_origin.is_empty() {
-        h.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_str(&allow_origin).unwrap_or(HeaderValue::from_static("")));
+        h.insert(
+            header::ACCESS_CONTROL_ALLOW_ORIGIN,
+            HeaderValue::from_str(&allow_origin).unwrap_or(HeaderValue::from_static("")),
+        );
     }
-    h.insert(header::ACCESS_CONTROL_ALLOW_METHODS, HeaderValue::from_static("GET, POST, DELETE, OPTIONS, PUT"));
+    h.insert(
+        header::ACCESS_CONTROL_ALLOW_METHODS,
+        HeaderValue::from_static("GET, POST, DELETE, OPTIONS, PUT"),
+    );
     h.insert(
         header::ACCESS_CONTROL_ALLOW_HEADERS,
         HeaderValue::from_static("Content-Type, x-account-id, x-admin-token, x-proxy-api-key, x-proxy-api-url, x-proxy-app-id"),
@@ -89,15 +94,9 @@ pub async fn auth_required_strict_ext(
     req: Request,
     next: Next,
 ) -> Result<Response, crate::context::ApiError> {
-    let token = req
-        .headers()
-        .get("x-admin-token")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
+    let token = req.headers().get("x-admin-token").and_then(|v| v.to_str().ok()).unwrap_or("");
     if token.is_empty() {
-        return Err(crate::context::ApiError::Unauthorized(
-            "missing x-admin-token".to_string(),
-        ));
+        return Err(crate::context::ApiError::Unauthorized("missing x-admin-token".to_string()));
     }
     match ctx.sessions.get(token) {
         Some(info) => {
@@ -105,9 +104,7 @@ pub async fn auth_required_strict_ext(
             let _ = info;
             Ok(next.run(req).await)
         }
-        None => Err(crate::context::ApiError::Unauthorized(
-            "invalid or expired token".to_string(),
-        )),
+        None => Err(crate::context::ApiError::Unauthorized("invalid or expired token".to_string())),
     }
 }
 
@@ -126,38 +123,24 @@ pub async fn admin_required_strict_ext(
     req: Request,
     next: Next,
 ) -> Result<Response, crate::context::ApiError> {
-    let token = req
-        .headers()
-        .get("x-admin-token")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
+    let token = req.headers().get("x-admin-token").and_then(|v| v.to_str().ok()).unwrap_or("");
     if token.is_empty() {
-        return Err(crate::context::ApiError::Unauthorized(
-            "missing x-admin-token".to_string(),
-        ));
+        return Err(crate::context::ApiError::Unauthorized("missing x-admin-token".to_string()));
     }
     match ctx.sessions.get(token) {
         Some(info) if info.role == "admin" => {
             ctx.sessions.touch(token);
             Ok(next.run(req).await)
         }
-        Some(_) => Err(crate::context::ApiError::Unauthorized(
-            "admin role required".to_string(),
-        )),
-        None => Err(crate::context::ApiError::Unauthorized(
-            "invalid or expired token".to_string(),
-        )),
+        Some(_) => Err(crate::context::ApiError::Unauthorized("admin role required".to_string())),
+        None => Err(crate::context::ApiError::Unauthorized("invalid or expired token".to_string())),
     }
 }
 
 /// 校验账号访问权限（admin 全放行；普通用户只能访问自己的）
 #[must_use]
 pub fn check_account_access(ctx: &AdminContext, req: &Request, account_id: &str) -> bool {
-    let token = req
-        .headers()
-        .get("x-admin-token")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
+    let token = req.headers().get("x-admin-token").and_then(|v| v.to_str().ok()).unwrap_or("");
     if token.is_empty() {
         return false;
     }
@@ -168,9 +151,7 @@ pub fn check_account_access(ctx: &AdminContext, req: &Request, account_id: &str)
         return true;
     }
     // 普通用户：账号.username == session.username
-    accounts_username_lookup(account_id)
-        .map(|u| u == info.username)
-        .unwrap_or(false)
+    accounts_username_lookup(account_id).map(|u| u == info.username).unwrap_or(false)
 }
 
 /// 查账号的 username 字段
@@ -183,12 +164,7 @@ fn accounts_username_lookup(account_id: &str) -> Option<String> {
 
 /// 提取 client IP（按 X-Forwarded-For / CF-Connecting-IP）
 pub fn extract_client_ip(headers: &HeaderMap) -> String {
-    for k in [
-        "cf-connecting-ip",
-        "x-forwarded-for",
-        "x-real-ip",
-        "x-client-ip",
-    ] {
+    for k in ["cf-connecting-ip", "x-forwarded-for", "x-real-ip", "x-client-ip"] {
         if let Some(v) = headers.get(k).and_then(|v| v.to_str().ok()) {
             return v.split(',').next().unwrap_or(v).trim().to_string();
         }

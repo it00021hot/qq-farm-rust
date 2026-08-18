@@ -48,9 +48,7 @@ impl Default for RecentHelpCache {
 impl RecentHelpCache {
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            inner: PMutex::new(HashMap::new()),
-        }
+        Self { inner: PMutex::new(HashMap::new()) }
     }
 
     #[must_use]
@@ -73,18 +71,10 @@ impl RecentHelpCache {
         lands
             .iter()
             .map(|land| {
-                let weeds = land
-                    .weed_owners
-                    .iter()
-                    .map(|v| v.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",");
-                let insects = land
-                    .insect_owners
-                    .iter()
-                    .map(|v| v.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",");
+                let weeds =
+                    land.weed_owners.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",");
+                let insects =
+                    land.insect_owners.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",");
                 format!(
                     "{}:{}:{}:{}:{}:{}",
                     land.id, land.plant_id, land.phase, land.dry_num, weeds, insects
@@ -170,10 +160,7 @@ impl RecentHelpCache {
 
     #[must_use]
     pub fn get(&self, host_gid: i64, land_id: i64) -> Option<RecentHelpEntry> {
-        self.inner
-            .lock()
-            .get(&Self::make_key(host_gid, land_id))
-            .cloned()
+        self.inner.lock().get(&Self::make_key(host_gid, land_id)).cloned()
     }
 }
 
@@ -192,10 +179,7 @@ impl LandSnapshot {
     pub fn from_land(land: &crate::proto::generated::gamepb::plantpb::LandInfo) -> Self {
         let plant = land.plant.as_ref();
         let phases = plant.map(|p| &p.phases);
-        let phase = phases
-            .and_then(|p| p.last())
-            .map(|p| p.phase as i64)
-            .unwrap_or(0);
+        let phase = phases.and_then(|p| p.last()).map(|p| p.phase as i64).unwrap_or(0);
         Self {
             id: land.id,
             plant_id: plant.map(|p| p.id).unwrap_or(0),
@@ -269,20 +253,14 @@ pub fn empty_farming_outcome(effect: FarmingEffect) -> FarmingOutcome {
 
 #[must_use]
 pub fn merge_farming_outcomes(outcomes: &[FarmingOutcome]) -> FarmingOutcome {
-    let confirmed: Vec<&FarmingOutcome> = outcomes
-        .iter()
-        .filter(|o| o.effect == FarmingEffect::Confirmed)
-        .collect();
-    let mut land_ids: Vec<i64> = confirmed
-        .iter()
-        .flat_map(|o| o.land_ids.iter().copied())
-        .collect();
+    let confirmed: Vec<&FarmingOutcome> =
+        outcomes.iter().filter(|o| o.effect == FarmingEffect::Confirmed).collect();
+    let mut land_ids: Vec<i64> =
+        confirmed.iter().flat_map(|o| o.land_ids.iter().copied()).collect();
     land_ids.sort_unstable();
     land_ids.dedup();
-    let mut operation_limits: Vec<serde_json::Value> = confirmed
-        .iter()
-        .flat_map(|o| o.operation_limits.iter().cloned())
-        .collect();
+    let mut operation_limits: Vec<serde_json::Value> =
+        confirmed.iter().flat_map(|o| o.operation_limits.iter().cloned()).collect();
     operation_limits.sort_by_key(|v| serde_json::to_string(v).unwrap_or_default());
     operation_limits.dedup_by(|a, b| {
         serde_json::to_string(a).unwrap_or_default() == serde_json::to_string(b).unwrap_or_default()
@@ -350,11 +328,8 @@ pub async fn run_farming_with_fallback(
                 snapshot_key,
                 now_ms(),
             );
-            let unconfirmed: Vec<i64> = target
-                .iter()
-                .copied()
-                .filter(|id| !confirmed_ids.contains(id))
-                .collect();
+            let unconfirmed: Vec<i64> =
+                target.iter().copied().filter(|id| !confirmed_ids.contains(id)).collect();
             recent_help.release(host_gid, &unconfirmed);
             FarmingOutcome {
                 effect: if confirmed_ids.is_empty() {
@@ -382,10 +357,7 @@ pub async fn run_farming_with_fallback(
                     now_ms(),
                 );
                 let outcome = match api.help_farm(host_gid, vec![land_id]).await {
-                    Ok(HelpFarmOutcome {
-                        effect: HelpFarmEffect::Noop,
-                        ..
-                    }) => {
+                    Ok(HelpFarmOutcome { effect: HelpFarmEffect::Noop, .. }) => {
                         recent_help.release(host_gid, &[land_id]);
                         empty_farming_outcome(FarmingEffect::Noop)
                     }
@@ -445,36 +417,24 @@ pub async fn visit_friend(
             let msg = format!("{e}");
             let kind = handle_friend_enter_error(account_id, friend_gid, &friend_name, &msg);
             if kind != FriendEnterErrorKind::Error {
-                return VisitResult {
-                    acted: false,
-                    entered: false,
-                };
+                return VisitResult { acted: false, entered: false };
             }
             tracing::warn!(friend_gid, error = %msg, "进入好友农场失败");
-            return VisitResult {
-                acted: false,
-                entered: false,
-            };
+            return VisitResult { acted: false, entered: false };
         }
     };
 
     let lands = enter_reply.lands.clone();
     if lands.is_empty() {
         let _ = api.leave_farm(friend_gid).await;
-        return VisitResult {
-            acted: false,
-            entered: true,
-        };
+        return VisitResult { acted: false, entered: true };
     }
 
     let plant_blacklist = get_plant_blacklist(account_id);
     let friend_blacklist = get_account_friend_blacklist(account_id);
     if friend_blacklist.contains(&friend_gid) {
         let _ = api.leave_farm(friend_gid).await;
-        return VisitResult {
-            acted: false,
-            entered: true,
-        };
+        return VisitResult { acted: false, entered: true };
     }
     let status = analyze_friend_lands(&lands, my_gid, &plant_blacklist, false, account_id);
     let snapshot_key = RecentHelpCache::make_snapshot_key(
@@ -542,13 +502,7 @@ pub async fn visit_friend(
             let plant_names: Vec<String> = steal_result
                 .stolen_infos
                 .iter()
-                .filter_map(|i| {
-                    if i.name.is_empty() {
-                        None
-                    } else {
-                        Some(i.name.clone())
-                    }
-                })
+                .filter_map(|i| if i.name.is_empty() { None } else { Some(i.name.clone()) })
                 .collect::<HashSet<_>>()
                 .into_iter()
                 .collect();
@@ -577,12 +531,8 @@ pub async fn visit_friend(
     {
         if api.remaining_bad_times() > 0 && !status.can_put_weed.is_empty() {
             let remaining = api.remaining_bad_times() as usize;
-            let to_process: Vec<i64> = status
-                .can_put_weed
-                .iter()
-                .copied()
-                .take(remaining)
-                .collect();
+            let to_process: Vec<i64> =
+                status.can_put_weed.iter().copied().take(remaining).collect();
             let n = api.put_weeds(friend_gid, to_process).await.unwrap_or(0);
             if n > 0 {
                 actions.push(format!("放草{n}"));
@@ -594,12 +544,7 @@ pub async fn visit_friend(
         }
         if api.remaining_bad_times() > 0 && !status.can_put_bug.is_empty() {
             let remaining = api.remaining_bad_times() as usize;
-            let to_process: Vec<i64> = status
-                .can_put_bug
-                .iter()
-                .copied()
-                .take(remaining)
-                .collect();
+            let to_process: Vec<i64> = status.can_put_bug.iter().copied().take(remaining).collect();
             let n = api.put_insects(friend_gid, to_process).await.unwrap_or(0);
             if n > 0 {
                 actions.push(format!("放虫{n}"));
@@ -619,8 +564,9 @@ pub async fn visit_friend(
             account_id,
             "好友",
             format!("{friend_name}: {}", actions.join("/")),
-            crate::constants::PanelEvent::CareFriend, Some(serde_json::json!({
-                "module": "friend", 
+            crate::constants::PanelEvent::CareFriend,
+            Some(serde_json::json!({
+                "module": "friend",
                 "friendName": friend_name,
                 "friendGid": friend_gid,
                 "actions": actions,
@@ -629,10 +575,7 @@ pub async fn visit_friend(
     }
 
     let _ = api.leave_farm(friend_gid).await;
-    VisitResult {
-        acted: !actions.is_empty(),
-        entered: true,
-    }
+    VisitResult { acted: !actions.is_empty(), entered: true }
 }
 
 /// 拜访好友 - 仅帮助
@@ -655,10 +598,7 @@ pub async fn visit_friend_for_help(
     if !stop_when_exp_limit {
         help_auto_disabled.store(false, std::sync::atomic::Ordering::Release);
     } else if help_auto_disabled.load(std::sync::atomic::Ordering::Acquire) {
-        return Some(VisitResult {
-            acted: false,
-            entered: false,
-        });
+        return Some(VisitResult { acted: false, entered: false });
     }
 
     let enter_reply = match api.enter_farm(friend_gid).await {
@@ -667,25 +607,16 @@ pub async fn visit_friend_for_help(
             let msg = format!("{e}");
             let kind = handle_friend_enter_error(account_id, friend_gid, &friend_name, &msg);
             if kind != FriendEnterErrorKind::Error {
-                return Some(VisitResult {
-                    acted: false,
-                    entered: false,
-                });
+                return Some(VisitResult { acted: false, entered: false });
             }
-            return Some(VisitResult {
-                acted: false,
-                entered: false,
-            });
+            return Some(VisitResult { acted: false, entered: false });
         }
     };
 
     let lands = enter_reply.lands.clone();
     if lands.is_empty() {
         let _ = api.leave_farm(friend_gid).await;
-        return Some(VisitResult {
-            acted: false,
-            entered: true,
-        });
+        return Some(VisitResult { acted: false, entered: true });
     }
 
     let status = analyze_friend_lands(&lands, my_gid, &[], false, account_id);
@@ -732,8 +663,9 @@ pub async fn visit_friend_for_help(
                         account_id,
                         "好友",
                         "今日帮助经验已达上限，自动停止帮忙",
-                        crate::constants::PanelEvent::FriendCycle, Some(serde_json::json!({
-                            "module": "friend", 
+                        crate::constants::PanelEvent::FriendCycle,
+                        Some(serde_json::json!({
+                            "module": "friend",
                             "result": "ok",
                         })),
                     );
@@ -747,8 +679,9 @@ pub async fn visit_friend_for_help(
             account_id,
             "好友",
             format!("{}: {}", friend_name, actions.join("/")),
-            crate::constants::PanelEvent::VisitFriend, Some(serde_json::json!({
-                "module": "friend", 
+            crate::constants::PanelEvent::VisitFriend,
+            Some(serde_json::json!({
+                "module": "friend",
                 "result": "ok",
                 "friendName": friend_name,
                 "friendGid": friend_gid,
@@ -758,10 +691,7 @@ pub async fn visit_friend_for_help(
     }
 
     let _ = api.leave_farm(friend_gid).await;
-    Some(VisitResult {
-        acted: !actions.is_empty(),
-        entered: true,
-    })
+    Some(VisitResult { acted: !actions.is_empty(), entered: true })
 }
 
 /// 总操作计数器（与原 TS `totalActions` 一致）
@@ -792,8 +722,12 @@ pub async fn do_friend_operation(
         Ok(r) => r,
         Err(e) => {
             let msg = format!("{e}");
-            let kind =
-                handle_friend_enter_error(account_id, friend_gid, &format!("GID:{friend_gid}"), &msg);
+            let kind = handle_friend_enter_error(
+                account_id,
+                friend_gid,
+                &format!("GID:{friend_gid}"),
+                &msg,
+            );
             match kind {
                 FriendEnterErrorKind::Blacklist => {
                     return serde_json::json!({"ok": true, "opType": op_str, "count": 0, "message": "好友已自动加入黑名单"});
@@ -810,21 +744,14 @@ pub async fn do_friend_operation(
 
     let result = match op {
         crate::models::types::FriendOperation::Steal => {
-            super::steal::do_steal_op(api, recent_help, friend_gid, &enter_reply.lands, my_gid).await
+            super::steal::do_steal_op(api, recent_help, friend_gid, &enter_reply.lands, my_gid)
+                .await
         }
         crate::models::types::FriendOperation::Farming
         | crate::models::types::FriendOperation::Water
         | crate::models::types::FriendOperation::Weed
         | crate::models::types::FriendOperation::Insecticide => {
-            do_farm_op(
-                api,
-                recent_help,
-                friend_gid,
-                op,
-                &enter_reply.lands,
-                my_gid,
-            )
-            .await
+            do_farm_op(api, recent_help, friend_gid, op, &enter_reply.lands, my_gid).await
         }
         crate::models::types::FriendOperation::Bad => {
             do_bad_op(api, friend_gid, &enter_reply.lands, my_gid).await
@@ -867,15 +794,9 @@ async fn do_farm_op(
     let snapshot_key = RecentHelpCache::make_snapshot_key(
         &lands.iter().map(LandSnapshot::from_land).collect::<Vec<_>>(),
     );
-    let outcome = run_farming_with_fallback(
-        api,
-        recent_help,
-        friend_gid,
-        &land_ids,
-        false,
-        &snapshot_key,
-    )
-    .await;
+    let outcome =
+        run_farming_with_fallback(api, recent_help, friend_gid, &land_ids, false, &snapshot_key)
+            .await;
     serde_json::json!({
         "ok": true,
         "opType": op.as_str(),
@@ -901,24 +822,14 @@ pub async fn do_bad_op(
     }
     let weed_count = if api.remaining_bad_times() > 0 && !status.can_put_weed.is_empty() {
         let remaining = api.remaining_bad_times() as usize;
-        let to_process: Vec<i64> = status
-            .can_put_weed
-            .iter()
-            .copied()
-            .take(remaining)
-            .collect();
+        let to_process: Vec<i64> = status.can_put_weed.iter().copied().take(remaining).collect();
         api.put_weeds(friend_gid, to_process).await.unwrap_or(0)
     } else {
         0
     };
     let bug_count = if api.remaining_bad_times() > 0 && !status.can_put_bug.is_empty() {
         let remaining = api.remaining_bad_times() as usize;
-        let to_process: Vec<i64> = status
-            .can_put_bug
-            .iter()
-            .copied()
-            .take(remaining)
-            .collect();
+        let to_process: Vec<i64> = status.can_put_bug.iter().copied().take(remaining).collect();
         api.put_insects(friend_gid, to_process).await.unwrap_or(0)
     } else {
         0

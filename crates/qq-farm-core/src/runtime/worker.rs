@@ -11,8 +11,8 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::models::AccountSession;
-use crate::network::gateway::{Gateway, GatewayConfig};
 use crate::network::encryptor::Encryptor;
+use crate::network::gateway::{Gateway, GatewayConfig};
 use crate::proto::generated::gamepb::userpb::{DeviceInfo, ReportData};
 use crate::runtime::events::WorkerEvent;
 use crate::runtime::scheduler::Scheduler;
@@ -95,8 +95,23 @@ impl Worker {
         let scheduler = self.scheduler.clone();
         let msg_rx = self.take_msg_rx();
         let account = self.account;
+        let has_wx_auth = account.has_wx_auth();
 
         tokio::spawn(async move {
+            if let Some(eng) = &engine {
+                crate::services::panel_log::register_with_runtime(
+                    &account_id,
+                    &account_name,
+                    eng.runtime_state(),
+                );
+            } else {
+                crate::services::panel_log::register(
+                    &account_id,
+                    &account_name,
+                    event_tx.clone(),
+                );
+            }
+
             let tsdk_data_dir = config.data_dir.join(account_id.as_str());
             let wasm_path = config.tsdk_wasm_path.clone();
             let data_dir_s = tsdk_data_dir.to_string_lossy().to_string();
@@ -108,13 +123,16 @@ impl Worker {
                 Ok(Ok(rt)) => Arc::new(rt),
                 Ok(Err(e)) => {
                     tracing::error!(account_id = %account_id, "TSDK 加载失败: {e}");
+                    emit_login_log(&account_id, &format!("TSDK 加载失败: {e}"), true);
                     emit_terminal_stop(
                         &event_tx,
                         &account_id,
                         &account_name,
                         &format!("TSDK 加载失败: {e}"),
                         "tsdk_load",
+                        false,
                     );
+                    crate::services::panel_log::unregister(&account_id);
                     if let Some(eng) = &engine {
                         eng.release_worker(&account_id);
                     }
@@ -122,12 +140,14 @@ impl Worker {
                 }
                 Err(e) => {
                     tracing::error!(account_id = %account_id, "TSDK 加载任务失败: {e}");
+                    emit_login_log(&account_id, &format!("TSDK 加载失败: {e}"), true);
                     emit_terminal_stop(
                         &event_tx,
                         &account_id,
                         &account_name,
                         &format!("TSDK 加载失败: {e}"),
                         "tsdk_load",
+                        false,
                     );
                     crate::services::panel_log::unregister(&account_id);
                     if let Some(eng) = &engine {
@@ -136,25 +156,60 @@ impl Worker {
                     return;
                 }
             };
-            let encryptor: Arc<dyn Encryptor> = Arc::new(crate::network::encryptor::TsdkEncryptor::new(tsdk.clone()));
+            let encryptor: Arc<dyn Encryptor> =
+                Arc::new(crate::network::encryptor::TsdkEncryptor::new(tsdk.clone()));
+
+            let mut config = config;
+            if account.has_wx_auth() {
+                emit_login_log(&account_id, "正在用应用宝授权换取新的登录码", false);
+                match prepare_wx_gateway_code(&account).await {
+                    Ok((code, login_buffer)) => {
+                        persist_wx_gateway_credentials(&account_id, &code, &login_buffer);
+                        config.gateway.auth_code = code;
+                        emit_login_log(&account_id, "换码成功，正在连接网关", false);
+                    }
+                    Err(e) => {
+                        tracing::warn!(account_id = %account_id, "应用宝换码失败: {e}");
+                        emit_login_log(&account_id, &format!("应用宝换码失败，请重新扫码: {e}"), true);
+                        emit_terminal_stop(
+                            &event_tx,
+                            &account_id,
+                            &account_name,
+                            &format!("应用宝授权已失效，请重新扫码: {e}"),
+                            "wx_auth_failed",
+                            has_wx_auth,
+                        );
+                        crate::services::panel_log::unregister(&account_id);
+                        if let Some(eng) = &engine {
+                            eng.release_worker(&account_id);
+                        }
+                        return;
+                    }
+                }
+            } else {
+                emit_login_log(&account_id, "正在用已保存的登录码连接网关", false);
+            }
 
             // 构造 Gateway
             let gateway = Arc::new(Gateway::new(config.gateway.clone(), encryptor));
 
             // 构造所有 service + WorkerLoop，注册到 engine
             if let Some(eng) = &engine {
-                let farm = Arc::new(crate::services::farm::scheduler::FarmService::new(gateway.clone()));
+                let farm =
+                    Arc::new(crate::services::farm::scheduler::FarmService::new(gateway.clone()));
                 let friend = Arc::new(crate::services::friend::scheduler::FriendService::new(
                     gateway.clone(),
                     5,
                 ));
                 let email = Arc::new(crate::services::email::EmailService::new(gateway.clone()));
                 let share = Arc::new(crate::services::share::ShareService::new(gateway.clone()));
-                let monthcard = Arc::new(crate::services::monthcard::MonthCardService::new(gateway.clone()));
+                let monthcard =
+                    Arc::new(crate::services::monthcard::MonthCardService::new(gateway.clone()));
                 let qqvip = Arc::new(crate::services::qqvip::QQVipService::new(gateway.clone()));
                 let mall = Arc::new(crate::services::mall::MallService::new(gateway.clone()));
                 let task = Arc::new(crate::services::task::TaskService::new(gateway.clone()));
-                let warehouse = Arc::new(crate::services::warehouse::WarehouseService::new(gateway.clone()));
+                let warehouse =
+                    Arc::new(crate::services::warehouse::WarehouseService::new(gateway.clone()));
                 let mystery_shop = Arc::new(
                     crate::services::mystery_shop::MysteryShopService::new(gateway.clone()),
                 );
@@ -164,19 +219,6 @@ impl Worker {
 
                 let mut loop_cfg = crate::runtime::worker_loop::WorkerLoopConfig::default();
                 loop_cfg.status_interval = config.status_interval;
-                if let Some(eng) = &engine {
-                    crate::services::panel_log::register_with_runtime(
-                        &account_id,
-                        &account_name,
-                        eng.runtime_state(),
-                    );
-                } else {
-                    crate::services::panel_log::register(
-                        &account_id,
-                        &account_name,
-                        event_tx.clone(),
-                    );
-                }
                 let rt = crate::config::get_runtime_config();
                 loop_cfg.client_version = if rt.client_version.is_empty() {
                     config.gateway.client_version.clone()
@@ -238,12 +280,14 @@ impl Worker {
                         &account_name,
                         &err_s,
                         "ws_connect",
+                        has_wx_auth,
                     );
                     gateway.force_disconnect();
                     crate::services::panel_log::unregister(&account_id);
                     eng.release_worker(&account_id);
                     return;
                 }
+                emit_login_log(&account_id, "网关已连接，正在登录", false);
                 tracing::info!(account_id = %account_id, "WS 已连接，开始登录");
 
                 {
@@ -253,6 +297,7 @@ impl Worker {
                     let tx = event_tx.clone();
                     let acc_id = account_id.clone();
                     let acc_name = account_name.clone();
+                    let kick_wx_auth = has_wx_auth;
                     tokio::spawn(async move {
                         while let Some(ev) = notify_rx.recv().await {
                             match ev {
@@ -267,14 +312,25 @@ impl Worker {
                                         account_name: acc_name.clone(),
                                         level: "info".to_string(),
                                         module: "system".to_string(),
-                                        message: format!("检测到踢下线，准备自动停止账号。原因: {why}"),
+                                        message: format!(
+                                            "检测到踢下线，准备自动停止账号。原因: {why}"
+                                        ),
                                     });
                                     wl.on_kickout(&why);
-                                    emit_terminal_stop(&tx, &acc_id, &acc_name, &why, "kickout");
+                                    emit_terminal_stop(
+                                        &tx,
+                                        &acc_id,
+                                        &acc_name,
+                                        &why,
+                                        "kickout",
+                                        kick_wx_auth,
+                                    );
                                     gw.force_disconnect_with_reason("kickout");
                                     break;
                                 }
-                                crate::network::notify::NotifyEvent::ItemChanged { items, .. } => {
+                                crate::network::notify::NotifyEvent::ItemChanged {
+                                    items, ..
+                                } => {
                                     wl.apply_item_notify(&items);
                                 }
                                 crate::network::notify::NotifyEvent::BasicChanged {
@@ -286,7 +342,8 @@ impl Worker {
                                     wl.apply_basic_notify(level, gold, exp);
                                 }
                                 crate::network::notify::NotifyEvent::LandsChanged {
-                                    changed_count, ..
+                                    changed_count,
+                                    ..
                                 } => {
                                     wl.on_lands_changed(changed_count);
                                 }
@@ -334,16 +391,29 @@ impl Worker {
 
                 match gateway.login(&device_info, &report_data, &tsdk).await {
                     Ok(reply) => {
+                        let login_msg = if let Some(basic) = &reply.basic {
+                            let nick = if basic.name.is_empty() {
+                                account_name.as_str()
+                            } else {
+                                basic.name.as_str()
+                            };
+                            format!("登录成功：{nick} Lv{}", basic.level)
+                        } else {
+                            "登录成功".to_string()
+                        };
+                        emit_login_log(&account_id, &login_msg, false);
                         if let Some(basic) = &reply.basic {
                             worker_loop.set_gid(basic.gid);
                             crate::services::status::update_status_from_login_for(
                                 &account_id,
                                 &serde_json::json!({
-                                "name": basic.name,
-                                "level": basic.level,
-                                "gold": basic.gold,
-                                "exp": basic.exp,
-                            }));
+                                    "name": basic.name,
+                                    "level": basic.level,
+                                    "gold": basic.gold,
+                                    "exp": basic.exp,
+                                    "avatar": basic.avatar_url,
+                                }),
+                            );
                         }
                         // 对齐 sendLogin 成功后的顺序：ACE → 金豆/设置 → 心跳/状态 → onLoginSuccess
                         let ace = Arc::new(crate::services::ace::AceShared::new());
@@ -375,12 +445,14 @@ impl Worker {
                     }
                     Err(e) => {
                         tracing::warn!(account_id = %account_id, "登录失败: {e}");
+                        emit_login_log(&account_id, &format!("登录失败: {e}"), true);
                         emit_terminal_stop(
                             &event_tx,
                             &account_id,
                             &account_name,
                             &format!("登录失败: {e}"),
                             "login",
+                            has_wx_auth,
                         );
                         gateway.force_disconnect();
                         crate::services::panel_log::unregister(&account_id);
@@ -407,10 +479,7 @@ impl Worker {
                 eng.release_worker(&account_id);
             }
 
-            let _ = event_tx.send(WorkerEvent::Stopped {
-                account_id,
-                reason: exit.reason,
-            });
+            let _ = event_tx.send(WorkerEvent::Stopped { account_id, reason: exit.reason });
         });
 
         handle
@@ -463,12 +532,12 @@ async fn run_worker_loop(
             } => {
                 scheduler.shutdown();
                 let source = session_gw.take_disconnect_reason();
-                let phase = "online";
                 emit_disconnect_log(
                     &event_tx,
                     &account.id,
                     &account.display_name,
-                    &format!("source={source}, phase={phase}"),
+                    &source,
+                    account.has_wx_auth(),
                 );
                 return WorkerExit {
                     reason: format!("disconnect:{source}"),
@@ -513,18 +582,59 @@ fn parse_ws_http_code(msg: &str) -> Option<i64> {
     digits.parse().ok().filter(|c| *c > 0)
 }
 
+fn disconnect_reason_label(source: &str) -> &str {
+    match source {
+        "heartbeat_timeout" => "心跳超时",
+        "kickout" => "被踢下线",
+        "ws_close" => "连接关闭",
+        "" => "未知原因",
+        other => other,
+    }
+}
+
+fn emit_login_log(account_id: &str, msg: &str, warn: bool) {
+    if warn {
+        crate::services::panel_log::log_warn(
+            account_id,
+            "系统",
+            msg,
+            crate::constants::PanelEvent::Login,
+            Some(serde_json::json!({ "module": "system" })),
+        );
+    } else {
+        crate::services::panel_log::log(
+            account_id,
+            "系统",
+            msg,
+            crate::constants::PanelEvent::Login,
+            Some(serde_json::json!({ "module": "system" })),
+        );
+    }
+}
+
 fn emit_disconnect_log(
     event_tx: &tokio::sync::broadcast::Sender<WorkerEvent>,
     account_id: &str,
     account_name: &str,
-    detail: &str,
+    source: &str,
+    has_wx_auth: bool,
 ) {
+    let reason = disconnect_reason_label(source);
+    let wx_reconnect = has_wx_auth;
+    let message = if wx_reconnect {
+        format!(
+            "连接已断开，将在 {}后用应用宝授权重连（{reason}）",
+            crate::constants::wx_reconnect_delay_zh()
+        )
+    } else {
+        format!("连接已断开，不再使用旧 Code 重连（{reason}）")
+    };
     let _ = event_tx.send(WorkerEvent::Log {
         account_id: account_id.to_string(),
         account_name: account_name.to_string(),
         level: "info".to_string(),
         module: "system".to_string(),
-        message: format!("连接已断开，不再使用旧 Code 重连 ({detail})"),
+        message,
     });
 }
 
@@ -532,14 +642,53 @@ fn emit_terminal_stop(
     event_tx: &tokio::sync::broadcast::Sender<WorkerEvent>,
     account_id: &str,
     account_name: &str,
-    detail: &str,
+    _detail: &str,
     source: &str,
+    has_wx_auth: bool,
 ) {
-    emit_disconnect_log(event_tx, account_id, account_name, detail);
+    emit_disconnect_log(event_tx, account_id, account_name, source, has_wx_auth);
     let _ = event_tx.send(WorkerEvent::Stopped {
         account_id: account_id.to_string(),
         reason: format!("disconnect:{source}"),
     });
+}
+
+async fn prepare_wx_gateway_code(account: &AccountSession) -> Result<(String, String), String> {
+    let svc = crate::services::wx_login::service::WxLoginService::new();
+    svc.mint_gateway_code(
+        &account.wx_login_buffer,
+        &account.wx_openid,
+        &account.wx_access_token,
+        crate::constants::WX_MINI_APP_ID,
+    )
+    .await
+}
+
+fn persist_wx_gateway_credentials(account_id: &str, code: &str, login_buffer: &str) {
+    use crate::models::store::accounts;
+    let Some(mut acc) = accounts::get_accounts().into_iter().find(|a| a.id == account_id) else {
+        return;
+    };
+    acc.code = code.to_string();
+    if !login_buffer.trim().is_empty() {
+        acc.wx_login_buffer = login_buffer.to_string();
+    }
+    accounts::add_or_update_account(acc);
+    accounts::persist_global();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::disconnect_reason_label;
+
+    #[test]
+    fn disconnect_reason_uses_chinese_labels() {
+        assert_eq!(disconnect_reason_label("heartbeat_timeout"), "心跳超时");
+        assert_eq!(disconnect_reason_label("kickout"), "被踢下线");
+        assert_eq!(disconnect_reason_label("ws_close"), "连接关闭");
+        assert_eq!(disconnect_reason_label(""), "未知原因");
+        assert_eq!(disconnect_reason_label("自定义原因"), "自定义原因");
+    }
 }
 
 // Worker 持有 `Arc<Gateway>`；网关本身是具体类型而非 trait object。

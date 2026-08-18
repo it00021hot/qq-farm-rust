@@ -121,9 +121,7 @@ pub fn mark_known_friend_gid_invalid(friend_gid: i64) {
         return;
     }
     let until = now_ms().saturating_add(INVALID_KNOWN_FRIEND_GID_COOLDOWN_MS);
-    invalid_known_friend_gid_cooldown()
-        .lock()
-        .insert(friend_gid, until);
+    invalid_known_friend_gid_cooldown().lock().insert(friend_gid, until);
 }
 
 /// 是否在失效冷却期
@@ -168,11 +166,10 @@ pub fn is_invalid_friend_access_error(error_message: &str) -> bool {
         return false;
     }
     let lower = error_message.to_lowercase();
-    let has_keyword = [
-        "无效", "不存在", "删除", "关系", "not found", "invalid", "not friend", "friend",
-    ]
-    .iter()
-    .any(|k| lower.contains(&k.to_lowercase()));
+    let has_keyword =
+        ["无效", "不存在", "删除", "关系", "not found", "invalid", "not friend", "friend"]
+            .iter()
+            .any(|k| lower.contains(&k.to_lowercase()));
     has_keyword && parse_rpc_error_code(error_message) > 0
 }
 
@@ -217,9 +214,7 @@ pub fn plant_blacklist() -> &'static PMutex<std::collections::HashMap<String, Ve
 
 /// 设置植物黑名单（内存镜像 + 账号配置落盘）
 pub fn set_plant_blacklist(account_id: &str, seeds: Vec<i64>) {
-    plant_blacklist()
-        .lock()
-        .insert(account_id.to_string(), seeds.clone());
+    plant_blacklist().lock().insert(account_id.to_string(), seeds.clone());
     if !account_id.is_empty() {
         let _ = crate::models::store::account_config::set_plant_blacklist(account_id, seeds);
     }
@@ -229,11 +224,7 @@ pub fn set_plant_blacklist(account_id: &str, seeds: Vec<i64>) {
 #[must_use]
 pub fn get_plant_blacklist(account_id: &str) -> Vec<i64> {
     if account_id.is_empty() {
-        return plant_blacklist()
-            .lock()
-            .get(account_id)
-            .cloned()
-            .unwrap_or_default();
+        return plant_blacklist().lock().get(account_id).cloned().unwrap_or_default();
     }
     crate::models::store::account_config::get_plant_blacklist(Some(account_id))
 }
@@ -247,9 +238,7 @@ pub fn account_friend_blacklist() -> &'static PMutex<std::collections::HashMap<S
 
 /// 设置好友黑名单（内存镜像 + 账号配置落盘）
 pub fn set_account_friend_blacklist(account_id: &str, gids: Vec<i64>) {
-    account_friend_blacklist()
-        .lock()
-        .insert(account_id.to_string(), gids.clone());
+    account_friend_blacklist().lock().insert(account_id.to_string(), gids.clone());
     if !account_id.is_empty() {
         let _ = crate::models::store::account_config::set_friend_blacklist(account_id, gids);
     }
@@ -259,11 +248,7 @@ pub fn set_account_friend_blacklist(account_id: &str, gids: Vec<i64>) {
 #[must_use]
 pub fn get_account_friend_blacklist(account_id: &str) -> Vec<i64> {
     if account_id.is_empty() {
-        return account_friend_blacklist()
-            .lock()
-            .get(account_id)
-            .cloned()
-            .unwrap_or_default();
+        return account_friend_blacklist().lock().get(account_id).cloned().unwrap_or_default();
     }
     crate::models::store::account_config::get_friend_blacklist(Some(account_id))
 }

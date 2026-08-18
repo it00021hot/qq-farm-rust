@@ -45,16 +45,13 @@ fn to_href(raw: &str) -> String {
         return format!("wss://{FALLBACK_GATE_HOST}/?{raw}");
     }
     // 裸 query
-    let has_query_param = raw
-        .split(|c: char| c == '?' || c == '&')
-        .skip(1)
-        .any(|s| {
-            let lower = s.to_ascii_lowercase();
-            lower.starts_with("platform=")
-                || lower.starts_with("os=")
-                || lower.starts_with("ver=")
-                || lower.starts_with("code=")
-        });
+    let has_query_param = raw.split(|c: char| c == '?' || c == '&').skip(1).any(|s| {
+        let lower = s.to_ascii_lowercase();
+        lower.starts_with("platform=")
+            || lower.starts_with("os=")
+            || lower.starts_with("ver=")
+            || lower.starts_with("code=")
+    });
     if has_query_param {
         let q = raw.trim_start_matches('?');
         return format!("wss://{FALLBACK_GATE_HOST}/prod/ws?{q}");
@@ -112,10 +109,7 @@ pub fn extract_code(raw_input: &str) -> String {
     }
 
     // 裸字符串（无 / ? & = 空白）
-    if !raw
-        .chars()
-        .any(|c| c.is_whitespace() || c == '/' || c == '?' || c == '&' || c == '=')
-    {
+    if !raw.chars().any(|c| c.is_whitespace() || c == '/' || c == '?' || c == '&' || c == '=') {
         return raw.to_string();
     }
 
@@ -159,12 +153,8 @@ pub fn extract_client_hints(raw_input: &str) -> LoginClientHints {
         hints.platform = query_param(&href, "platform")
             .map(|v| decode_param(&v).to_ascii_lowercase())
             .unwrap_or_default();
-        hints.os = query_param(&href, "os")
-            .map(|v| decode_param(&v))
-            .unwrap_or_default();
-        hints.ver = query_param(&href, "ver")
-            .map(|v| decode_param(&v))
-            .unwrap_or_default();
+        hints.os = query_param(&href, "os").map(|v| decode_param(&v)).unwrap_or_default();
+        hints.ver = query_param(&href, "ver").map(|v| decode_param(&v)).unwrap_or_default();
         return hints;
     }
 
@@ -172,12 +162,8 @@ pub fn extract_client_hints(raw_input: &str) -> LoginClientHints {
     hints.platform = query_param(raw, "platform")
         .map(|v| decode_param(&v).to_ascii_lowercase())
         .unwrap_or_default();
-    hints.os = query_param(raw, "os")
-        .map(|v| decode_param(&v))
-        .unwrap_or_default();
-    hints.ver = query_param(raw, "ver")
-        .map(|v| decode_param(&v))
-        .unwrap_or_default();
+    hints.os = query_param(raw, "os").map(|v| decode_param(&v)).unwrap_or_default();
+    hints.ver = query_param(raw, "ver").map(|v| decode_param(&v)).unwrap_or_default();
     hints
 }
 
@@ -205,18 +191,12 @@ mod tests {
 
     #[test]
     fn extract_code_from_path() {
-        assert_eq!(
-            extract_code("/prod/ws?code=hello123&platform=qq"),
-            "hello123"
-        );
+        assert_eq!(extract_code("/prod/ws?code=hello123&platform=qq"), "hello123");
     }
 
     #[test]
     fn extract_code_from_full_url() {
-        assert_eq!(
-            extract_code("wss://gate-obt.nqf.qq.com/prod/ws?code=ABC&platform=qq"),
-            "ABC"
-        );
+        assert_eq!(extract_code("wss://gate-obt.nqf.qq.com/prod/ws?code=ABC&platform=qq"), "ABC");
     }
 
     #[test]

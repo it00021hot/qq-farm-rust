@@ -14,8 +14,7 @@ const DEFAULT_ENABLED: bool = true;
 /// `account_id` → (`category` → enabled)
 static FLAGS: RwLock<Option<HashMap<String, HashMap<String, bool>>>> = RwLock::new(None);
 
-fn flags() -> std::sync::RwLockReadGuard<'static, Option<HashMap<String, HashMap<String, bool>>>>
-{
+fn flags() -> std::sync::RwLockReadGuard<'static, Option<HashMap<String, HashMap<String, bool>>>> {
     FLAGS.read().unwrap_or_else(|p| p.into_inner())
 }
 
@@ -25,9 +24,7 @@ fn flags_mut(
 }
 
 fn account_flags(account_id: &str) -> Option<HashMap<String, bool>> {
-    flags()
-        .as_ref()
-        .and_then(|all| all.get(account_id).cloned())
+    flags().as_ref().and_then(|all| all.get(account_id).cloned())
 }
 
 fn account_flag(account_id: &str, category: &str) -> Option<bool> {
@@ -77,9 +74,7 @@ pub fn is_automation_on_for(account_id: &str, category: &str) -> bool {
 pub fn set_automation_flag(account_id: &str, category: &str, enabled: bool) {
     let mut guard = flags_mut();
     let all = guard.get_or_insert_with(HashMap::new);
-    all.entry(account_id.to_string())
-        .or_default()
-        .insert(category.to_string(), enabled);
+    all.entry(account_id.to_string()).or_default().insert(category.to_string(), enabled);
 }
 
 /// 批量设置某账号的开关
@@ -198,10 +193,7 @@ mod tests {
     #[serial]
     fn bulk_set() {
         clear_automation_flags();
-        set_all_automation_flags(
-            TEST_ACCOUNT,
-            vec![("a", false), ("b", true)],
-        );
+        set_all_automation_flags(TEST_ACCOUNT, vec![("a", false), ("b", true)]);
         assert!(!is_automation_on_for(TEST_ACCOUNT, "a"));
         assert!(is_automation_on_for(TEST_ACCOUNT, "b"));
         clear_automation_flags();

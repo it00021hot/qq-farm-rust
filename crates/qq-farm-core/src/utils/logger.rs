@@ -36,10 +36,8 @@ pub fn sanitize_meta(value: serde_json::Value, depth: usize) -> serde_json::Valu
         serde_json::Value::Number(n) => serde_json::Value::Number(n),
         serde_json::Value::String(s) => serde_json::Value::String(redact_string(&s)),
         serde_json::Value::Array(arr) => {
-            let new_arr: Vec<serde_json::Value> = arr
-                .into_iter()
-                .map(|v| sanitize_meta(v, depth + 1))
-                .collect();
+            let new_arr: Vec<serde_json::Value> =
+                arr.into_iter().map(|v| sanitize_meta(v, depth + 1)).collect();
             serde_json::Value::Array(new_arr)
         }
         serde_json::Value::Object(map) => {
@@ -78,8 +76,7 @@ pub fn redact_string_v2(input: &str) -> String {
             if key_end > key_start && key_end < bytes.len() && bytes[key_end] == b'=' {
                 let key = &input[key_start..key_end];
                 let lower = key.to_ascii_lowercase();
-                if matches!(lower.as_str(), "code" | "token" | "ticket" | "password")
-                {
+                if matches!(lower.as_str(), "code" | "token" | "ticket" | "password") {
                     // 输出 ?key=
                     out.push(bytes[i] as char);
                     out.push_str(key);
@@ -133,7 +130,12 @@ fn scan_ident_end(bytes: &[u8], start: usize) -> usize {
 
 fn scan_value_end(bytes: &[u8], start: usize) -> usize {
     let mut i = start;
-    while i < bytes.len() && bytes[i] != b'&' && bytes[i] != b' ' && bytes[i] != b'\n' && bytes[i] != b'\t' {
+    while i < bytes.len()
+        && bytes[i] != b'&'
+        && bytes[i] != b' '
+        && bytes[i] != b'\n'
+        && bytes[i] != b'\t'
+    {
         i += 1;
     }
     i
@@ -192,9 +194,7 @@ pub struct ModuleLogger {
 
 impl ModuleLogger {
     fn new(name: &str) -> Self {
-        Self {
-            name: name.to_string(),
-        }
+        Self { name: name.to_string() }
     }
 
     fn write(&self, level: &str, message: &str, meta: serde_json::Value) {
@@ -249,18 +249,14 @@ pub fn create_module_logger(name: &str) -> ModuleLogger {
 fn append_fallback_log(level: &str, line: &str) {
     let _guard = log_append_lock().lock();
     let dir = ensure_log_dir();
-    if let Ok(mut combined) = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("combined.log"))
+    if let Ok(mut combined) =
+        fs::OpenOptions::new().create(true).append(true).open(dir.join("combined.log"))
     {
         let _ = combined.write_all(line.as_bytes());
     }
     if level == "error" {
-        if let Ok(mut err) = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(dir.join("error.log"))
+        if let Ok(mut err) =
+            fs::OpenOptions::new().create(true).append(true).open(dir.join("error.log"))
         {
             let _ = err.write_all(line.as_bytes());
         }
@@ -276,10 +272,7 @@ fn log_append_lock() -> &'static Mutex<()> {
 
 fn chrono_like_now_iso() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
     format_unix_to_iso8601(now)
 }
 
@@ -312,11 +305,7 @@ pub fn write_to_path(path: &Path, line: &str) {
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    if let Ok(mut f) = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-    {
+    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = f.write_all(line.as_bytes());
     }
 }

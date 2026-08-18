@@ -32,11 +32,7 @@ pub fn register(account_id: &str, account_name: &str, tx: broadcast::Sender<Work
 }
 
 /// Worker 启动时挂上，日志直接进 RuntimeState（对齐 TS `GLOBAL_LOGS.push`）。
-pub fn register_with_runtime(
-    account_id: &str,
-    account_name: &str,
-    state: Arc<RuntimeState>,
-) {
+pub fn register_with_runtime(account_id: &str, account_name: &str, state: Arc<RuntimeState>) {
     register_inner(account_id, account_name, None, Some(state));
 }
 
@@ -112,8 +108,7 @@ fn emit(
         .unwrap_or_else(|| event.module().to_string());
     let mut meta = extra.unwrap_or_else(|| serde_json::json!({}));
     if let Some(obj) = meta.as_object_mut() {
-        obj.entry("accountId".to_string())
-            .or_insert_with(|| serde_json::json!(hook.account_id));
+        obj.entry("accountId".to_string()).or_insert_with(|| serde_json::json!(hook.account_id));
         obj.entry("accountName".to_string())
             .or_insert_with(|| serde_json::json!(hook.account_name));
         obj.insert("module".to_string(), serde_json::json!(module));
@@ -128,11 +123,7 @@ fn emit(
         let _ = tx.send(WorkerEvent::Log {
             account_id: hook.account_id.clone(),
             account_name: hook.account_name.clone(),
-            level: if is_warn {
-                "warn".to_string()
-            } else {
-                "info".to_string()
-            },
+            level: if is_warn { "warn".to_string() } else { "info".to_string() },
             module,
             message: msg.to_string(),
         });
@@ -156,12 +147,7 @@ mod tests {
         );
         let ev = rx.try_recv().expect("log event");
         match ev {
-            WorkerEvent::Log {
-                account_id,
-                module,
-                message,
-                ..
-            } => {
+            WorkerEvent::Log { account_id, module, message, .. } => {
                 assert_eq!(account_id, "acc-log");
                 assert_eq!(module, "farm");
                 assert!(message.contains("收获完成"));

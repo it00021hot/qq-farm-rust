@@ -1,10 +1,12 @@
 use prost::Message;
 
+use crate::constants::{
+    ACTIVITY_SERVICE, CONSTELLATION_ACTIVITY_TYPE, LIGHT_CONSTELLATION_OPERATE_TYPE,
+};
 use crate::error::{Error, Result};
 use crate::proto::generated::gamepb::activitypb::{
     ActivityOperateReply, ConstellationData, OperateConstellationRequest,
 };
-use crate::constants::{ACTIVITY_SERVICE, CONSTELLATION_ACTIVITY_TYPE, LIGHT_CONSTELLATION_OPERATE_TYPE};
 use crate::services::activity_center_state::{
     load_constellation_state, merge_constellation_states, persist_constellation_state,
     state_from_dynamic_nodes, state_record_key, state_with_no_claimable_day, ActivityStateIdentity,
@@ -16,8 +18,8 @@ use super::dto::{
     find_season_activity, normalize_season,
 };
 use super::error::{ActivityError, ActivityErrorCode};
-use super::{ConstellationDto, SeasonDto};
 use super::ActivityCenterService;
+use super::{ConstellationDto, SeasonDto};
 
 impl ActivityCenterService {
     // ----- 星座 -----
@@ -141,11 +143,7 @@ impl ActivityCenterService {
         incoming: ConstellationActivityState,
     ) {
         let account_id = self.account_id.lock().clone();
-        let memory = self
-            .last_constellation_memory
-            .lock()
-            .get(state_key)
-            .cloned();
+        let memory = self.last_constellation_memory.lock().get(state_key).cloned();
         let file = load_constellation_state(
             identity,
             Some(account_id.as_str()).filter(|s| !s.is_empty()),
@@ -159,9 +157,7 @@ impl ActivityCenterService {
                 serde_json::to_value(&incoming).unwrap_or(serde_json::Value::Null),
             ],
         );
-        self.last_constellation_memory
-            .lock()
-            .insert(state_key.to_string(), merged.clone());
+        self.last_constellation_memory.lock().insert(state_key.to_string(), merged.clone());
         if !account_id.is_empty() {
             let _ = persist_constellation_state(
                 serde_json::to_value(&merged).unwrap_or(serde_json::Value::Null),
@@ -198,5 +194,4 @@ impl ActivityCenterService {
         );
         Some(constellation_dto(act, season.server_time, dynamic.as_ref(), &confirmed))
     }
-
 }

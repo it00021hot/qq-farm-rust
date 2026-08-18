@@ -89,11 +89,7 @@ impl FrameBuilder {
             error_message: String::new(),
             metadata: Default::default(),
         };
-        let msg = Message {
-            meta: Some(meta),
-            body: self.body.clone(),
-            token: self.token.clone(),
-        };
+        let msg = Message { meta: Some(meta), body: self.body.clone(), token: self.token.clone() };
         Ok(msg.encode_to_vec())
     }
 }
@@ -134,10 +130,7 @@ impl FrameParser {
     /// 消息类型（None 表示 meta 缺失或枚举值未知）
     #[must_use]
     pub fn message_type(&self) -> Option<MessageType> {
-        self.inner
-            .meta
-            .as_ref()
-            .and_then(|m| MessageType::try_from(m.message_type).ok())
+        self.inner.meta.as_ref().and_then(|m| MessageType::try_from(m.message_type).ok())
     }
 
     #[must_use]
@@ -152,18 +145,12 @@ impl FrameParser {
 
     #[must_use]
     pub fn service_name(&self) -> &str {
-        self.inner
-            .meta
-            .as_ref()
-            .map_or("", |m| m.service_name.as_str())
+        self.inner.meta.as_ref().map_or("", |m| m.service_name.as_str())
     }
 
     #[must_use]
     pub fn method_name(&self) -> &str {
-        self.inner
-            .meta
-            .as_ref()
-            .map_or("", |m| m.method_name.as_str())
+        self.inner.meta.as_ref().map_or("", |m| m.method_name.as_str())
     }
 
     #[must_use]
@@ -173,10 +160,7 @@ impl FrameParser {
 
     #[must_use]
     pub fn error_message(&self) -> &str {
-        self.inner
-            .meta
-            .as_ref()
-            .map_or("", |m| m.error_message.as_str())
+        self.inner.meta.as_ref().map_or("", |m| m.error_message.as_str())
     }
 }
 

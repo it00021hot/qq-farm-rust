@@ -33,8 +33,8 @@ use crate::services::friend::api::FriendApi;
 use crate::services::friend::gid_manager::GidManager;
 use crate::services::friend::visit_strategy::{
     analyze_friend_lands, is_enter_farm_banned_error, is_transient_network_error, now_ms,
-    parse_rpc_error_code, steal_lands_with_reward_log, HelpState, LandSnapshot, RecentHelpCache,
-    FriendSummary, HELP_RESULT_TTL_MS,
+    parse_rpc_error_code, steal_lands_with_reward_log, FriendSummary, HelpState, LandSnapshot,
+    RecentHelpCache, HELP_RESULT_TTL_MS,
 };
 
 /// 巡访类型
@@ -182,12 +182,7 @@ const BAD_SHARED_LIMIT_ID: i64 = 10003;
 #[derive(Debug, Clone)]
 pub enum FriendEvent {
     /// 巡访完成
-    Checked {
-        batch_size: usize,
-        helped: usize,
-        stolen: usize,
-        banned: usize,
-    },
+    Checked { batch_size: usize, helped: usize, stolen: usize, banned: usize },
     /// GID 列表已同步
     GidsSynced { count: usize },
     /// 进入农场被封（黑名单）
@@ -270,15 +265,15 @@ impl FriendService {
                 &acc,
                 "好友",
                 "新的一天已开始，自动恢复帮忙操作功能",
-                crate::constants::PanelEvent::FriendCycle, Some(serde_json::json!({
-                    "module": "friend", 
+                crate::constants::PanelEvent::FriendCycle,
+                Some(serde_json::json!({
+                    "module": "friend",
                     "result": "ok",
                 })),
             );
         }
         let stopped = load_bad_daily_stop(&self.account_id.lock(), &today);
-        self.bad_operation_limit_reached
-            .store(stopped, Ordering::Release);
+        self.bad_operation_limit_reached.store(stopped, Ordering::Release);
         *last = today;
     }
 
@@ -309,18 +304,11 @@ impl FriendService {
     /// 对齐 TS `markBadOperationLimitReached`
     pub fn mark_bad_operation_limit_reached(&self, method: &str) -> bool {
         self.check_daily_reset();
-        if self
-            .bad_operation_limit_reached
-            .swap(true, Ordering::AcqRel)
-        {
+        if self.bad_operation_limit_reached.swap(true, Ordering::AcqRel) {
             return false;
         }
         let today = self.last_reset_date.lock().clone();
-        let today = if today.is_empty() {
-            beijing_date_key()
-        } else {
-            today
-        };
+        let today = if today.is_empty() { beijing_date_key() } else { today };
         if let Err(e) = persist_bad_daily_stop(&self.account_id.lock(), &today) {
             tracing::warn!("保存当日捣乱停用状态失败: {e}");
         }
@@ -329,8 +317,9 @@ impl FriendService {
             &acc,
             "好友",
             "今日放虫/放草次数已达上限，停止两类操作",
-            crate::constants::PanelEvent::BadActionLimit, Some(serde_json::json!({
-                "module": "friend", 
+            crate::constants::PanelEvent::BadActionLimit,
+            Some(serde_json::json!({
+                "module": "friend",
                 "result": "limit",
                 "code": 1001046,
                 "method": method,
@@ -445,8 +434,9 @@ impl FriendService {
             &acc,
             "好友",
             "今日帮助经验已达上限，自动停止帮忙",
-            crate::constants::PanelEvent::FriendCycle, Some(serde_json::json!({
-                "module": "friend", 
+            crate::constants::PanelEvent::FriendCycle,
+            Some(serde_json::json!({
+                "module": "friend",
                 "result": "ok",
             })),
         );
@@ -463,7 +453,8 @@ impl FriendService {
                 &acc,
                 "申请",
                 format!("收到 {} 个好友申请: {}", names.len(), names.join(", ")),
-                crate::constants::PanelEvent::FriendRequest, Some(serde_json::json!({ "module": "friend"})),
+                crate::constants::PanelEvent::FriendRequest,
+                Some(serde_json::json!({ "module": "friend"})),
             );
         }
         match self.api.accept_applications(gids).await {
@@ -478,7 +469,8 @@ impl FriendService {
                 &acc,
                 "申请",
                 format!("同意失败: {e}"),
-                crate::constants::PanelEvent::AcceptFriendRequest, Some(serde_json::json!({ "module": "friend", "event": "同意好友申请" })),
+                crate::constants::PanelEvent::AcceptFriendRequest,
+                Some(serde_json::json!({ "module": "friend", "event": "同意好友申请" })),
             ),
         }
     }
@@ -493,13 +485,7 @@ impl FriendService {
         }
         let names: Vec<String> = apps
             .iter()
-            .map(|(gid, name)| {
-                if name.is_empty() {
-                    format!("GID:{gid}")
-                } else {
-                    name.clone()
-                }
-            })
+            .map(|(gid, name)| if name.is_empty() { format!("GID:{gid}") } else { name.clone() })
             .collect();
         let gids: Vec<i64> = apps.into_iter().map(|(g, _)| g).collect();
         let acc = self.account_id.lock().clone();
@@ -507,7 +493,8 @@ impl FriendService {
             &acc,
             "申请",
             format!("发现 {} 个待处理申请: {}", names.len(), names.join(", ")),
-            crate::constants::PanelEvent::PendingFriendRequest, Some(serde_json::json!({ "module": "friend"})),
+            crate::constants::PanelEvent::PendingFriendRequest,
+            Some(serde_json::json!({ "module": "friend"})),
         );
         self.accept_friend_applications(gids, &[]).await;
     }
@@ -562,23 +549,24 @@ impl FriendService {
                     account_id,
                     "好友",
                     format!("巡查异常: {msg}"),
-                    crate::constants::PanelEvent::FriendCycle, Some(serde_json::json!({
-                        "module": "friend", 
+                    crate::constants::PanelEvent::FriendCycle,
+                    Some(serde_json::json!({
+                        "module": "friend",
                         "result": "error",
                     })),
                 );
                 return Err(e);
             }
         };
-        self.gid_manager
-            .update(friends.iter().map(|f| f.gid).collect());
+        self.gid_manager.update(friends.iter().map(|f| f.gid).collect());
         if friends.is_empty() {
             crate::services::panel_log::log(
                 account_id,
                 "好友",
                 "没有好友",
-                crate::constants::PanelEvent::FriendScan, Some(serde_json::json!({
-                    "module": "friend", 
+                crate::constants::PanelEvent::FriendScan,
+                Some(serde_json::json!({
+                    "module": "friend",
                     "result": "empty",
                 })),
             );
@@ -603,18 +591,10 @@ impl FriendService {
             {
                 continue;
             }
-            let summary =
-                crate::services::friend::visit_strategy::game_friend_to_summary(f);
-            let steal_num = summary
-                .plant
-                .as_ref()
-                .map(|p| p.steal_num)
-                .unwrap_or(0);
-            let help_need = summary
-                .plant
-                .as_ref()
-                .map(|p| p.dry_num + p.weed_num + p.insect_num)
-                .unwrap_or(0);
+            let summary = crate::services::friend::visit_strategy::game_friend_to_summary(f);
+            let steal_num = summary.plant.as_ref().map(|p| p.steal_num).unwrap_or(0);
+            let help_need =
+                summary.plant.as_ref().map(|p| p.dry_num + p.weed_num + p.insect_num).unwrap_or(0);
             if kind == VisitKind::Steal && steal_num > 0 {
                 // 上次进场无可偷且 steal_plant_num 未变 → 跳过，避免空转刷日志
                 let skip_noop = self
@@ -646,12 +626,7 @@ impl FriendService {
             for friend in &steal_friends {
                 let list_steal_num = friend.plant.as_ref().map(|p| p.steal_num).unwrap_or(0);
                 let visit = crate::services::friend::visit_strategy::visit_friend_for_steal(
-                    &self.api,
-                    recent,
-                    friend,
-                    &mut total,
-                    my_gid,
-                    account_id,
+                    &self.api, recent, friend, &mut total, my_gid, account_id,
                 )
                 .await;
                 match visit {
@@ -661,14 +636,10 @@ impl FriendService {
                     }
                     // 已进场但无可偷 / 偷失败，或黑名单滤光（None）：记下当前列表指标，避免每 tick 重入
                     Some(r) if r.entered && !r.acted => {
-                        self.steal_noop_markers
-                            .lock()
-                            .insert(friend.gid, list_steal_num);
+                        self.steal_noop_markers.lock().insert(friend.gid, list_steal_num);
                     }
                     None => {
-                        self.steal_noop_markers
-                            .lock()
-                            .insert(friend.gid, list_steal_num);
+                        self.steal_noop_markers.lock().insert(friend.gid, list_steal_num);
                     }
                     _ => {}
                 }
@@ -681,8 +652,9 @@ impl FriendService {
                 account_id,
                 "好友",
                 format!("开始批量帮助，共 {} 个好友需要帮助", help_friends.len()),
-                crate::constants::PanelEvent::VisitFriend, Some(serde_json::json!({
-                    "module": "friend", 
+                crate::constants::PanelEvent::VisitFriend,
+                Some(serde_json::json!({
+                    "module": "friend",
                     "count": help_friends.len(),
                 })),
             );
@@ -696,8 +668,9 @@ impl FriendService {
                         account_id,
                         "好友",
                         "批量帮助中断：经验已达上限",
-                        crate::constants::PanelEvent::FriendCycle, Some(serde_json::json!({
-                            "module": "friend", 
+                        crate::constants::PanelEvent::FriendCycle,
+                        Some(serde_json::json!({
+                            "module": "friend",
                             "reason": "exp_limit",
                         })),
                     );
@@ -706,14 +679,10 @@ impl FriendService {
                 crate::services::panel_log::log(
                     account_id,
                     "好友",
-                    format!(
-                        "批量帮助第 {}/{} 个好友: {}",
-                        i + 1,
-                        help_friends.len(),
-                        friend.name
-                    ),
-                    crate::constants::PanelEvent::VisitFriend, Some(serde_json::json!({
-                        "module": "friend", 
+                    format!("批量帮助第 {}/{} 个好友: {}", i + 1, help_friends.len(), friend.name),
+                    crate::constants::PanelEvent::VisitFriend,
+                    Some(serde_json::json!({
+                        "module": "friend",
                         "index": i + 1,
                         "total": help_friends.len(),
                         "friendName": friend.name,
@@ -754,8 +723,9 @@ impl FriendService {
                 account_id,
                 "好友",
                 format!("巡查完成 → {}", summary.join("/")),
-                crate::constants::PanelEvent::FriendCycle, Some(serde_json::json!({
-                    "module": "friend", 
+                crate::constants::PanelEvent::FriendCycle,
+                Some(serde_json::json!({
+                    "module": "friend",
                     "result": "ok",
                     "visited": steal_friends.len() + help_friends.len(),
                     "summary": summary,
@@ -763,11 +733,7 @@ impl FriendService {
             );
         }
 
-        Ok(if kind == VisitKind::Steal {
-            total.steal
-        } else {
-            total.farming
-        })
+        Ok(if kind == VisitKind::Steal { total.steal } else { total.farming })
     }
 
     /// 启动时执行一次放虫放草（对齐 TS `runBadOnceOnStartup`）
@@ -795,8 +761,7 @@ impl FriendService {
             Vec::new();
         let mut seen = std::collections::HashSet::new();
         for f in friends {
-            let summary =
-                crate::services::friend::visit_strategy::game_friend_to_summary(f);
+            let summary = crate::services::friend::visit_strategy::game_friend_to_summary(f);
             if summary.gid == my_gid || summary.gid <= 0 || !seen.insert(summary.gid) {
                 continue;
             }
@@ -834,13 +799,7 @@ impl FriendService {
             }
             let can_exp = self.can_get_exp_by_candidates(&[10005, 10006, 10007]);
             let _ = crate::services::friend::visit_strategy::visit_friend(
-                &self.api,
-                recent,
-                friend,
-                &mut total,
-                my_gid,
-                account_id,
-                can_exp,
+                &self.api, recent, friend, &mut total, my_gid, account_id, can_exp,
             )
             .await;
             processed += 1;
@@ -885,9 +844,8 @@ impl FriendService {
                     }
                     let gid = *host_gid.lock();
                     if gid == 0 {
-                        let _ = event_tx.send(FriendEvent::Error {
-                            message: "host_gid not set".into(),
-                        });
+                        let _ = event_tx
+                            .send(FriendEvent::Error { message: "host_gid not set".into() });
                         return;
                     }
                     let acc = account_id.lock().clone();
@@ -956,7 +914,8 @@ impl FriendService {
                 account_id,
                 "好友",
                 "没有好友",
-                crate::constants::PanelEvent::FriendScan, Some(serde_json::json!({ "module": "friend",  "result": "empty" })),
+                crate::constants::PanelEvent::FriendScan,
+                Some(serde_json::json!({ "module": "friend",  "result": "empty" })),
             );
             return Ok((0, 0, 0, 0));
         }
@@ -990,18 +949,15 @@ impl FriendService {
             };
 
             // 3b. 构造 land snapshot key
-            let land_snapshots: Vec<_> = enter_reply.lands.iter().map(LandSnapshot::from_land).collect();
+            let land_snapshots: Vec<_> =
+                enter_reply.lands.iter().map(LandSnapshot::from_land).collect();
             let snapshot_key = RecentHelpCache::make_snapshot_key(&land_snapshots);
             let now = now_ms();
 
             // 3c. 找"需要帮"的 land（去重 RecentHelp）
             let all_land_ids: Vec<i64> = enter_reply.lands.iter().map(|l| l.id).collect();
-            let to_help = strategy.recent_help().filter(
-                friend_gid,
-                &all_land_ids,
-                &snapshot_key,
-                now,
-            );
+            let to_help =
+                strategy.recent_help().filter(friend_gid, &all_land_ids, &snapshot_key, now);
 
             // 3d. 帮（锄草）
             if !to_help.is_empty() {
@@ -1027,18 +983,9 @@ impl FriendService {
             }
 
             // 3e. 偷菜：分析哪些可偷 → 真调 steal_farm
-            let land_snapshots: Vec<LandSnapshot> = enter_reply
-                .lands
-                .iter()
-                .map(LandSnapshot::from_land)
-                .collect();
-            let status = analyze_friend_lands(
-                &enter_reply.lands,
-                host_gid,
-                &[],
-                false,
-                account_id,
-            );
+            let land_snapshots: Vec<LandSnapshot> =
+                enter_reply.lands.iter().map(LandSnapshot::from_land).collect();
+            let status = analyze_friend_lands(&enter_reply.lands, host_gid, &[], false, account_id);
             if !status.stealable.is_empty() {
                 let summary = FriendSummary {
                     gid: friend_gid,
@@ -1073,8 +1020,9 @@ impl FriendService {
             account_id,
             "好友",
             format!("巡查完成 → 帮{helped}/偷{stolen}/封{banned}"),
-            crate::constants::PanelEvent::PatrolDone, Some(serde_json::json!({
-                "module": "friend", 
+            crate::constants::PanelEvent::PatrolDone,
+            Some(serde_json::json!({
+                "module": "friend",
                 "helped": helped,
                 "stolen": stolen,
                 "banned": banned,
@@ -1093,11 +1041,7 @@ impl FriendService {
     pub async fn get_friends_list(&self, force: bool) -> Result<Vec<serde_json::Value>> {
         let account_id = self.account_id.lock().clone();
         let ttl_ms = crate::models::store::account_config::get_friends_list_cache_ttl_sec(
-            if account_id.is_empty() {
-                None
-            } else {
-                Some(account_id.as_str())
-            },
+            if account_id.is_empty() { None } else { Some(account_id.as_str()) },
         )
         .max(10) as u64
             * 1000;
@@ -1115,7 +1059,8 @@ impl FriendService {
             &account_id,
             "好友",
             "开始获取好友列表",
-            crate::constants::PanelEvent::GetFriendList, Some(serde_json::json!({ "module": "friend"})),
+            crate::constants::PanelEvent::GetFriendList,
+            Some(serde_json::json!({ "module": "friend"})),
         );
         let friends = match self.api.get_all_game_friends().await {
             Ok(f) => f,
@@ -1126,7 +1071,8 @@ impl FriendService {
                     &account_id,
                     "好友",
                     format!("获取好友列表失败: {msg}"),
-                    crate::constants::PanelEvent::GetFriendList, Some(serde_json::json!({ "module": "friend",  "result": "error" })),
+                    crate::constants::PanelEvent::GetFriendList,
+                    Some(serde_json::json!({ "module": "friend",  "result": "error" })),
                 );
                 // 对齐 Go List：直播失败仍返回已有列表，不把面板点开变成空表/掉线。
                 if let Some((_, cached)) = self.friends_list_cache.lock().as_ref() {
@@ -1144,35 +1090,28 @@ impl FriendService {
             .map(crate::services::friend::visit_strategy::game_friend_to_summary)
             .collect();
         result.sort_by(|a, b| a.name.cmp(&b.name).then(a.gid.cmp(&b.gid)));
-        self.gid_manager
-            .update(result.iter().map(|f| f.gid).collect());
+        self.gid_manager.update(result.iter().map(|f| f.gid).collect());
         crate::services::panel_log::log(
             &account_id,
             "好友",
             format!("获取好友列表成功，共 {} 位好友", result.len()),
-            crate::constants::PanelEvent::GetFriendList, Some(serde_json::json!({
-                "module": "friend", 
+            crate::constants::PanelEvent::GetFriendList,
+            Some(serde_json::json!({
+                "module": "friend",
                 "result": "ok",
                 "count": result.len(),
             })),
         );
-        let mut json: Vec<serde_json::Value> = result
-            .into_iter()
-            .filter_map(|f| serde_json::to_value(f).ok())
-            .collect();
+        let mut json: Vec<serde_json::Value> =
+            result.into_iter().filter_map(|f| serde_json::to_value(f).ok()).collect();
         // 诊断：人机「小果」GID 10001 头像是否由游戏下发
         if let Some(npc) = json.iter().find(|f| {
             f.get("gid").and_then(|v| v.as_i64()) == Some(10001)
-                || f.get("name")
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|n| n.contains("小果"))
+                || f.get("name").and_then(|v| v.as_str()).is_some_and(|n| n.contains("小果"))
         }) {
             let gid = npc.get("gid").and_then(|v| v.as_i64()).unwrap_or(0);
             let name = npc.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            let avatar = npc
-                .get("avatarUrl")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let avatar = npc.get("avatarUrl").and_then(|v| v.as_str()).unwrap_or("");
             crate::services::panel_log::log(
                 &account_id,
                 "好友",
@@ -1180,8 +1119,9 @@ impl FriendService {
                     "人机头像诊断: name={name} gid={gid} avatarUrl={}",
                     if avatar.is_empty() { "<empty>" } else { avatar }
                 ),
-                crate::constants::PanelEvent::AvatarProbe, Some(serde_json::json!({
-                    "module": "friend", 
+                crate::constants::PanelEvent::AvatarProbe,
+                Some(serde_json::json!({
+                    "module": "friend",
                     "gid": gid,
                     "name": name,
                     "avatarUrl": avatar,
@@ -1326,12 +1266,7 @@ fn beijing_date_key() -> String {
     use chrono::{Datelike, FixedOffset, Utc};
     let offset = FixedOffset::east_opt(8 * 3600).expect("bj offset");
     let now = Utc::now().with_timezone(&offset);
-    format!(
-        "{}-{:02}-{:02}",
-        now.year(),
-        now.month(),
-        now.day()
-    )
+    format!("{}-{:02}-{:02}", now.year(), now.month(), now.day())
 }
 
 fn bad_daily_state_path(account_id: &str) -> std::path::PathBuf {
@@ -1341,11 +1276,7 @@ fn bad_daily_state_path(account_id: &str) -> std::path::PathBuf {
 }
 
 fn load_bad_daily_stop(account_id: &str, today: &str) -> bool {
-    let path = bad_daily_state_path(if account_id.is_empty() {
-        "default"
-    } else {
-        account_id
-    });
+    let path = bad_daily_state_path(if account_id.is_empty() { "default" } else { account_id });
     let state: serde_json::Value =
         crate::services::json_db::read_json_with_default(&path, || serde_json::json!({}));
     state.get("version").and_then(|v| v.as_i64()) == Some(BAD_DAILY_STATE_VERSION)
@@ -1354,11 +1285,7 @@ fn load_bad_daily_stop(account_id: &str, today: &str) -> bool {
 }
 
 fn persist_bad_daily_stop(account_id: &str, today: &str) -> std::io::Result<()> {
-    let path = bad_daily_state_path(if account_id.is_empty() {
-        "default"
-    } else {
-        account_id
-    });
+    let path = bad_daily_state_path(if account_id.is_empty() { "default" } else { account_id });
     crate::services::json_db::write_json_file_atomic(
         &path,
         &serde_json::json!({

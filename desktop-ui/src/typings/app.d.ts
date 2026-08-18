@@ -570,6 +570,10 @@ declare namespace App {
               running: string;
               error: string;
             };
+            authStatus: {
+              authorized: string;
+              unauthorized: string;
+            };
             fertilizerMode: {
               none: string;
               normal: string;
@@ -718,6 +722,7 @@ declare namespace App {
             qq: string;
             remark: string;
             runStatus: string;
+            authStatus: string;
             status: string;
             lastOnlineAt: string;
             addAccount: string;
@@ -1026,6 +1031,26 @@ declare namespace App {
             strategyMaxProfit: string;
             strategyMaxFertProfit: string;
             strategyBagPriority: string;
+            offlineReminder: string;
+            saveOffline: string;
+            saveOfflineSuccess: string;
+            testOffline: string;
+            testOfflineSuccess: string;
+            testOfflineFail: string;
+            channel: string;
+            channelDocs: string;
+            channelNone: string;
+            reloginUrl: string;
+            reloginNone: string;
+            reloginQqLink: string;
+            reloginQrLink: string;
+            endpoint: string;
+            token: string;
+            reminderTitle: string;
+            reminderMsg: string;
+            offlineDeleteSec: string;
+            offlineDeleteHint: string;
+            offlineHint: string;
           };
           gameConfig: {
             title: string;

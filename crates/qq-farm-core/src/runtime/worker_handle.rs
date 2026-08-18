@@ -23,12 +23,18 @@ pub struct WorkerHandle {
 
 impl WorkerHandle {
     /// 异步发消息（不关心结果）
-    pub async fn send(&self, msg: WorkerMessage) -> Result<(), mpsc::error::SendError<WorkerMessage>> {
+    pub async fn send(
+        &self,
+        msg: WorkerMessage,
+    ) -> Result<(), mpsc::error::SendError<WorkerMessage>> {
         self.msg_tx.send(msg).await
     }
 
     /// 同步尝试发（不阻塞）
-    pub fn try_send(&self, msg: WorkerMessage) -> Result<(), mpsc::error::TrySendError<WorkerMessage>> {
+    pub fn try_send(
+        &self,
+        msg: WorkerMessage,
+    ) -> Result<(), mpsc::error::TrySendError<WorkerMessage>> {
         self.msg_tx.try_send(msg)
     }
 

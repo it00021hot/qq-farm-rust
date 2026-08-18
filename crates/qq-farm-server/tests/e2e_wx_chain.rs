@@ -81,12 +81,8 @@ async fn e2e_create_account_with_code_returns_account_id() {
         .expect("account.id 应存在")
         .to_string();
     assert!(!account_id.is_empty());
-    let account = v["data"]["accounts"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|a| a["id"] == account_id)
-        .unwrap();
+    let account =
+        v["data"]["accounts"].as_array().unwrap().iter().find(|a| a["id"] == account_id).unwrap();
     assert_eq!(account["code"], "fake_auth_code_12345_abcdef");
     assert_eq!(account["platform"], "wx");
     assert_eq!(account["username"], "admin");
@@ -190,10 +186,7 @@ async fn e2e_list_accounts_includes_created() {
     let bytes = to_bytes(resp.into_body(), 65536).await.unwrap();
     let v: Value = serde_json::from_slice(&bytes).unwrap();
     let accounts = v["data"]["accounts"].as_array().expect("accounts 数组");
-    assert!(
-        accounts.iter().any(|a| a["id"] == new_id),
-        "新创建的账号 {new_id} 应在列表中"
-    );
+    assert!(accounts.iter().any(|a| a["id"] == new_id), "新创建的账号 {new_id} 应在列表中");
 
     let _ = accounts_store::delete_account(&new_id);
 }

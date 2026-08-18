@@ -153,39 +153,21 @@ pub fn get_plant_rankings(sort_by: SortBy) -> Vec<PlantRanking> {
 
         let seasons = plant.seasons.unwrap_or(1);
         let is_two_season = seasons == 2;
-        let grow_time = if is_two_season {
-            base_grow_time * 3 / 2
-        } else {
-            base_grow_time
-        };
+        let grow_time = if is_two_season { base_grow_time * 3 / 2 } else { base_grow_time };
 
         // 经验
         let harvest_exp_base = plant.exp.unwrap_or(0);
-        let harvest_exp = if is_two_season {
-            harvest_exp_base * 2
-        } else {
-            harvest_exp_base
-        };
-        let exp_per_hour = if grow_time > 0 {
-            (harvest_exp as f64 / grow_time as f64) * 3600.0
-        } else {
-            0.0
-        };
+        let harvest_exp = if is_two_season { harvest_exp_base * 2 } else { harvest_exp_base };
+        let exp_per_hour =
+            if grow_time > 0 { (harvest_exp as f64 / grow_time as f64) * 3600.0 } else { 0.0 };
 
         // 化肥减时
         let reduce_sec_base = parse_normal_fertilizer_reduce_sec(grow_phases);
-        let reduce_sec_applied = if is_two_season {
-            reduce_sec_base * 2
-        } else {
-            reduce_sec_base
-        };
+        let reduce_sec_applied = if is_two_season { reduce_sec_base * 2 } else { reduce_sec_base };
         let fertilized_grow_time = grow_time - reduce_sec_applied;
-        let safe_fertilized_time = if fertilized_grow_time > 0 {
-            fertilized_grow_time
-        } else {
-            1
-        };
-        let normal_fertilizer_exp_per_hour = (harvest_exp as f64 / safe_fertilized_time as f64) * 3600.0;
+        let safe_fertilized_time = if fertilized_grow_time > 0 { fertilized_grow_time } else { 1 };
+        let normal_fertilizer_exp_per_hour =
+            (harvest_exp as f64 / safe_fertilized_time as f64) * 3600.0;
 
         // 果实 / 种子
         let (fruit_id, fruit_count) = match &plant.fruit {
@@ -198,25 +180,16 @@ pub fn get_plant_rankings(sort_by: SortBy) -> Vec<PlantRanking> {
         // 单次收获毛收入 / 净收入
         let income = fruit_count * fruit_price * if is_two_season { 2 } else { 1 };
         let net_profit = income - seed_price;
-        let gold_per_hour = if grow_time > 0 {
-            (income as f64 / grow_time as f64) * 3600.0
-        } else {
-            0.0
-        };
-        let profit_per_hour = if grow_time > 0 {
-            (net_profit as f64 / grow_time as f64) * 3600.0
-        } else {
-            0.0
-        };
+        let gold_per_hour =
+            if grow_time > 0 { (income as f64 / grow_time as f64) * 3600.0 } else { 0.0 };
+        let profit_per_hour =
+            if grow_time > 0 { (net_profit as f64 / grow_time as f64) * 3600.0 } else { 0.0 };
         let normal_fertilizer_profit_per_hour =
             (net_profit as f64 / safe_fertilized_time as f64) * 3600.0;
 
         // 优先从 ItemInfo.json 获取种子等级（Plant.json 的 land_level_need 全为 1，不可用）
-        let cfg_level = gc
-            .get_item_by_id(seed_id)
-            .and_then(|i| i.level)
-            .or(plant.land_level_need)
-            .unwrap_or(0);
+        let cfg_level =
+            gc.get_item_by_id(seed_id).and_then(|i| i.level).or(plant.land_level_need).unwrap_or(0);
         let required_level = if cfg_level > 0 { Some(cfg_level) } else { None };
 
         results.push(PlantRanking {
@@ -247,9 +220,7 @@ pub fn get_plant_rankings(sort_by: SortBy) -> Vec<PlantRanking> {
     // 排序
     match sort_by {
         SortBy::Exp => results.sort_by(|a, b| {
-            b.exp_per_hour
-                .partial_cmp(&a.exp_per_hour)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            b.exp_per_hour.partial_cmp(&a.exp_per_hour).unwrap_or(std::cmp::Ordering::Equal)
         }),
         SortBy::Fert => results.sort_by(|a, b| {
             b.normal_fertilizer_exp_per_hour
@@ -257,14 +228,10 @@ pub fn get_plant_rankings(sort_by: SortBy) -> Vec<PlantRanking> {
                 .unwrap_or(std::cmp::Ordering::Equal)
         }),
         SortBy::Gold => results.sort_by(|a, b| {
-            b.gold_per_hour
-                .partial_cmp(&a.gold_per_hour)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            b.gold_per_hour.partial_cmp(&a.gold_per_hour).unwrap_or(std::cmp::Ordering::Equal)
         }),
         SortBy::Profit => results.sort_by(|a, b| {
-            b.profit_per_hour
-                .partial_cmp(&a.profit_per_hour)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            b.profit_per_hour.partial_cmp(&a.profit_per_hour).unwrap_or(std::cmp::Ordering::Equal)
         }),
         SortBy::FertProfit => results.sort_by(|a, b| {
             b.normal_fertilizer_profit_per_hour

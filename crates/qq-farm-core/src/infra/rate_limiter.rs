@@ -117,8 +117,10 @@ impl TokenBucket {
 // PriorityQueue
 // =====================================================================
 
-type TaskFn =
-    Box<dyn FnMut() -> futures::future::BoxFuture<'static, crate::error::Result<serde_json::Value>> + Send>;
+type TaskFn = Box<
+    dyn FnMut() -> futures::future::BoxFuture<'static, crate::error::Result<serde_json::Value>>
+        + Send,
+>;
 
 /// 任务条目
 pub struct TaskEntry {
@@ -143,20 +145,15 @@ impl std::fmt::Debug for TaskEntry {
 
 impl TaskEntry {
     pub fn new(
-        f: impl FnMut() -> futures::future::BoxFuture<'static, crate::error::Result<serde_json::Value>> + Send + 'static,
+        f: impl FnMut() -> futures::future::BoxFuture<'static, crate::error::Result<serde_json::Value>>
+            + Send
+            + 'static,
         resolve: tokio::sync::oneshot::Sender<serde_json::Value>,
         label: String,
         priority: i32,
         retries: u32,
     ) -> Self {
-        Self {
-            fn_run: Box::new(f),
-            resolve,
-            retries,
-            attempts: 0,
-            label,
-            priority,
-        }
+        Self { fn_run: Box::new(f), resolve, retries, attempts: 0, label, priority }
     }
 }
 
@@ -184,16 +181,8 @@ impl PriorityQueue {
     }
 
     pub fn enqueue(&mut self, task: TaskEntry, priority: i32) {
-        let entry = QueueEntry {
-            task,
-            priority,
-            added_at: crate::utils::time::now_ms(),
-        };
-        let idx = self
-            .queue
-            .iter()
-            .position(|e| e.priority < priority)
-            .unwrap_or(self.queue.len());
+        let entry = QueueEntry { task, priority, added_at: crate::utils::time::now_ms() };
+        let idx = self.queue.iter().position(|e| e.priority < priority).unwrap_or(self.queue.len());
         self.queue.insert(idx, entry);
     }
 
@@ -243,11 +232,8 @@ pub struct RequestQueue {
 impl RequestQueue {
     #[must_use]
     pub fn new(config: RateLimiterConfig) -> Self {
-        let bucket = Mutex::new(TokenBucket::new(
-            config.max_concurrent,
-            config.min_interval_ms,
-            5000,
-        ));
+        let bucket =
+            Mutex::new(TokenBucket::new(config.max_concurrent, config.min_interval_ms, 5000));
         Self {
             bucket,
             queue: Mutex::new(PriorityQueue::new()),
@@ -259,7 +245,9 @@ impl RequestQueue {
     /// 添加任务
     pub async fn add_request<F>(&self, f: F, label: &str, priority: i32) -> serde_json::Value
     where
-        F: FnMut() -> futures::future::BoxFuture<'static, crate::error::Result<serde_json::Value>> + Send + 'static,
+        F: FnMut() -> futures::future::BoxFuture<'static, crate::error::Result<serde_json::Value>>
+            + Send
+            + 'static,
     {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let task = TaskEntry::new(f, tx, label.to_string(), priority, self.config.max_retries);
@@ -487,7 +475,13 @@ mod tests {
         let mut q = PriorityQueue::new();
         let (tx, _) = tokio::sync::oneshot::channel();
         q.enqueue(
-            TaskEntry::new(|| Box::pin(async { Ok(serde_json::json!(1)) }), tx, "t".to_string(), 0, 0),
+            TaskEntry::new(
+                || Box::pin(async { Ok(serde_json::json!(1)) }),
+                tx,
+                "t".to_string(),
+                0,
+                0,
+            ),
             0,
         );
         assert_eq!(q.size(), 1);
@@ -526,13 +520,8 @@ mod tests {
             max_retries: 0,
             ..Default::default()
         });
-        let v = q
-            .add_request(
-                || Box::pin(async { Ok(serde_json::json!("hello")) }),
-                "test",
-                0,
-            )
-            .await;
+        let v =
+            q.add_request(|| Box::pin(async { Ok(serde_json::json!("hello")) }), "test", 0).await;
         assert_eq!(v, serde_json::json!("hello"));
     }
 
@@ -549,11 +538,23 @@ mod tests {
         let (tx1, _) = tokio::sync::oneshot::channel();
         let (tx2, _) = tokio::sync::oneshot::channel();
         pq.enqueue(
-            TaskEntry::new(|| Box::pin(async { Ok(serde_json::json!(1)) }), tx1, "low".to_string(), 0, 0),
+            TaskEntry::new(
+                || Box::pin(async { Ok(serde_json::json!(1)) }),
+                tx1,
+                "low".to_string(),
+                0,
+                0,
+            ),
             0,
         );
         pq.enqueue(
-            TaskEntry::new(|| Box::pin(async { Ok(serde_json::json!(2)) }), tx2, "high".to_string(), 5, 0),
+            TaskEntry::new(
+                || Box::pin(async { Ok(serde_json::json!(2)) }),
+                tx2,
+                "high".to_string(),
+                5,
+                0,
+            ),
             5,
         );
         assert_eq!(pq.dequeue().unwrap().label, "high");

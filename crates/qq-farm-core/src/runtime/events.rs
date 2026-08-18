@@ -11,15 +11,9 @@ use serde::Serialize;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WorkerEvent {
     /// Worker 已启动
-    Started {
-        account_id: String,
-        account_name: String,
-    },
+    Started { account_id: String, account_name: String },
     /// Worker 已停止
-    Stopped {
-        account_id: String,
-        reason: String,
-    },
+    Stopped { account_id: String, reason: String },
     /// Worker 状态更新（轮询周期上报）
     Status {
         account_id: String,
@@ -28,22 +22,11 @@ pub enum WorkerEvent {
         status: serde_json::Value,
     },
     /// Worker 出错
-    Error {
-        account_id: String,
-        message: String,
-    },
+    Error { account_id: String, message: String },
     /// Worker 日志
-    Log {
-        account_id: String,
-        account_name: String,
-        level: String,
-        module: String,
-        message: String,
-    },
+    Log { account_id: String, account_name: String, level: String, module: String, message: String },
     /// 调度器快照（用于 UI 展示）
-    Schedulers {
-        schedulers: Vec<SchedulerSnapshot>,
-    },
+    Schedulers { schedulers: Vec<SchedulerSnapshot> },
 }
 
 impl WorkerEvent {

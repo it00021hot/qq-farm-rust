@@ -166,12 +166,7 @@ impl TaskService {
     pub async fn get_task_info(&self) -> Result<TaskInfoReply> {
         let body = self
             .gateway
-            .request(
-                TASK_SERVICE,
-                "TaskInfo",
-                &TaskInfoRequest {}.encode_to_vec(),
-                10_000,
-            )
+            .request(TASK_SERVICE, "TaskInfo", &TaskInfoRequest {}.encode_to_vec(), 10_000)
             .await?;
         Ok(TaskInfoReply::decode(&body[..])?)
     }
@@ -186,10 +181,7 @@ impl TaskService {
         task_id: i64,
         do_shared: bool,
     ) -> Result<ClaimTaskRewardReply> {
-        let req = ClaimTaskRewardRequest {
-            id: task_id,
-            do_shared,
-        };
+        let req = ClaimTaskRewardRequest { id: task_id, do_shared };
         let body = self
             .gateway
             .request(TASK_SERVICE, "ClaimTaskReward", &req.encode_to_vec(), 10_000)
@@ -207,10 +199,7 @@ impl TaskService {
         active_type: i32,
         point_ids: Vec<i64>,
     ) -> Result<ClaimDailyRewardReply> {
-        let req = ClaimDailyRewardRequest {
-            r#type: active_type,
-            point_ids,
-        };
+        let req = ClaimDailyRewardRequest { r#type: active_type, point_ids };
         let body = self
             .gateway
             .request(TASK_SERVICE, "ClaimDailyReward", &req.encode_to_vec(), 10_000)
@@ -224,17 +213,10 @@ impl TaskService {
     /// - 网络 / 网关错误
     /// - protobuf 解码失败
     pub async fn claim_all_illustrated_rewards(&self) -> Result<ClaimAllRewardsV2Reply> {
-        let req = ClaimAllRewardsV2Request {
-            only_claimable: true,
-        };
+        let req = ClaimAllRewardsV2Request { only_claimable: true };
         let body = self
             .gateway
-            .request(
-                ILLUSTRATED_SERVICE,
-                "ClaimAllRewardsV2",
-                &req.encode_to_vec(),
-                10_000,
-            )
+            .request(ILLUSTRATED_SERVICE, "ClaimAllRewardsV2", &req.encode_to_vec(), 10_000)
             .await?;
         Ok(ClaimAllRewardsV2Reply::decode(&body[..])?)
     }
@@ -279,7 +261,8 @@ impl TaskService {
                 &self.account_id.lock(),
                 "任务",
                 format!("发现 {} 个可领取任务", claimable.len()),
-                crate::constants::PanelEvent::TaskScan, Some(serde_json::json!({ "module": "task",  "count": claimable.len() })),
+                crate::constants::PanelEvent::TaskScan,
+                Some(serde_json::json!({ "module": "task",  "count": claimable.len() })),
             );
             if !daily_claimable.is_empty() {
                 let descs: Vec<&str> = daily_claimable.iter().map(|t| t.desc.as_str()).collect();
@@ -288,7 +271,8 @@ impl TaskService {
                     &self.account_id.lock(),
                     "任务",
                     format!("每日任务可领取: {}", descs.join("，")),
-                    crate::constants::PanelEvent::DailyTask, Some(serde_json::json!({ "module": "task"})),
+                    crate::constants::PanelEvent::DailyTask,
+                    Some(serde_json::json!({ "module": "task"})),
                 );
             }
             let mut daily_claim_success: i32 = 0;
@@ -310,11 +294,8 @@ impl TaskService {
     /// 领取单个任务（公开入口，供手动调用）
     pub async fn do_claim(&self, task: &TaskDto) -> bool {
         let use_share = task.share_multiple > 1;
-        let multiple_str = if use_share {
-            format!(" ({}倍)", task.share_multiple)
-        } else {
-            String::new()
-        };
+        let multiple_str =
+            if use_share { format!(" ({}倍)", task.share_multiple) } else { String::new() };
         match self.claim_task_reward(task.id, use_share).await {
             Ok(reply) => {
                 let reward = get_reward_summary(&reply.items);
@@ -341,7 +322,8 @@ impl TaskService {
                     &self.account_id.lock(),
                     "任务",
                     format!("领取({category_name}): {}{multiple_str} → {reward_str}", task.desc),
-                    crate::constants::PanelEvent::TaskClaim, Some(serde_json::json!({ "module": "task"})),
+                    crate::constants::PanelEvent::TaskClaim,
+                    Some(serde_json::json!({ "module": "task"})),
                 );
                 *self.task_claim_done_date_key.lock() = get_date_key();
                 *self.task_claim_last_at.lock() = now_ms();
@@ -358,7 +340,10 @@ impl TaskService {
     }
 
     /// 扫描并领取活跃度奖励
-    pub async fn check_and_claim_actives(&self, actives: &[crate::proto::generated::gamepb::taskpb::Active]) -> ActiveClaimResult {
+    pub async fn check_and_claim_actives(
+        &self,
+        actives: &[crate::proto::generated::gamepb::taskpb::Active],
+    ) -> ActiveClaimResult {
         let mut result = ActiveClaimResult::default();
         for active in actives {
             let active_type = active.r#type;
@@ -371,11 +356,8 @@ impl TaskService {
                 continue;
             }
             result.scanned += claimable.len() as i32;
-            let point_ids: Vec<i64> = claimable
-                .iter()
-                .map(|r| r.point_id)
-                .filter(|id| *id > 0)
-                .collect();
+            let point_ids: Vec<i64> =
+                claimable.iter().map(|r| r.point_id).filter(|id| *id > 0).collect();
             if point_ids.is_empty() {
                 continue;
             }
@@ -384,16 +366,13 @@ impl TaskService {
                 2 => "周活跃",
                 _ => &format!("活跃{}", active_type),
             };
-            tracing::info!(
-                "[活跃] {} 发现 {} 个可领取奖励",
-                type_name,
-                point_ids.len()
-            );
+            tracing::info!("[活跃] {} 发现 {} 个可领取奖励", type_name, point_ids.len());
             crate::services::panel_log::log(
                 &self.account_id.lock(),
                 "活跃",
                 format!("{type_name} 发现 {} 个可领取奖励", point_ids.len()),
-                crate::constants::PanelEvent::ActivityPoints, Some(serde_json::json!({ "module": "task"})),
+                crate::constants::PanelEvent::ActivityPoints,
+                Some(serde_json::json!({ "module": "task"})),
             );
             match self.claim_daily_reward(active_type, point_ids.clone()).await {
                 Ok(reply) => {
@@ -405,7 +384,8 @@ impl TaskService {
                                 &self.account_id.lock(),
                                 "活跃",
                                 format!("{type_name} 领取: {reward}"),
-                                crate::constants::PanelEvent::ActivityPoints, Some(serde_json::json!({ "module": "task"})),
+                                crate::constants::PanelEvent::ActivityPoints,
+                                Some(serde_json::json!({ "module": "task"})),
                             );
                         }
                     }
@@ -419,7 +399,8 @@ impl TaskService {
                         &self.account_id.lock(),
                         "活跃",
                         format!("{type_name} 领取失败: {e}"),
-                        crate::constants::PanelEvent::ActivityPoints, Some(serde_json::json!({ "module": "task"})),
+                        crate::constants::PanelEvent::ActivityPoints,
+                        Some(serde_json::json!({ "module": "task"})),
                     );
                 }
             }
@@ -445,7 +426,8 @@ impl TaskService {
             &self.account_id.lock(),
             "任务",
             format!("领取成功: 点券{gain}"),
-            crate::constants::PanelEvent::IllustratedRewards, Some(serde_json::json!({ "module": "task"})),
+            crate::constants::PanelEvent::IllustratedRewards,
+            Some(serde_json::json!({ "module": "task"})),
         );
         *self.task_claim_done_date_key.lock() = get_date_key();
         *self.task_claim_last_at.lock() = now_ms();
@@ -475,10 +457,7 @@ impl TaskService {
             return;
         }
         if has_claimable {
-            tracing::info!(
-                "[任务] 有 {} 个任务可领取，准备自动领取...",
-                claimable.len()
-            );
+            tracing::info!("[任务] 有 {} 个任务可领取，准备自动领取...", claimable.len());
         }
         if has_claimable {
             for task in &claimable {
@@ -697,25 +676,14 @@ pub fn format_task(t: &Task, category_name: &'static str) -> TaskDto {
     let total = t.total_progress;
     TaskDto {
         id: t.id,
-        desc: if t.desc.is_empty() {
-            format!("任务#{}", t.id)
-        } else {
-            t.desc.clone()
-        },
+        desc: if t.desc.is_empty() { format!("任务#{}", t.id) } else { t.desc.clone() },
         category: category_name,
         progress: t.progress,
         total_progress: total,
         is_claimed: t.is_claimed,
         is_unlocked: t.is_unlocked,
         share_multiple: t.share_multiple,
-        rewards: t
-            .rewards
-            .iter()
-            .map(|r| RewardItemDto {
-                id: r.id,
-                count: r.count,
-            })
-            .collect(),
+        rewards: t.rewards.iter().map(|r| RewardItemDto { id: r.id, count: r.count }).collect(),
         can_claim: t.is_unlocked && !t.is_claimed && t.progress >= total && total > 0,
     }
 }
@@ -783,17 +751,13 @@ fn get_date_key() -> String {
     } else {
         crate::utils::time::now_ms() + 8 * 3600 * 1000
     };
-    let dt = chrono::DateTime::from_timestamp_millis(bj_ms)
-        .unwrap_or_else(|| chrono::Utc::now());
+    let dt = chrono::DateTime::from_timestamp_millis(bj_ms).unwrap_or_else(|| chrono::Utc::now());
     format!("{}-{:02}-{:02}", dt.year(), dt.month(), dt.day())
 }
 
 fn now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
 // =====================================================================

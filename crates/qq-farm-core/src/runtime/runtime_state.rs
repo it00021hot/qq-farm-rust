@@ -85,16 +85,8 @@ pub struct LogFilters {
 pub enum RuntimeEvent {
     Log(LogEntry),
     AccountLog(AccountLogEntry),
-    Status {
-        account_id: String,
-        account_name: String,
-        status: serde_json::Value,
-    },
-    WorkerLog {
-        entry: serde_json::Value,
-        account_id: String,
-        account_name: String,
-    },
+    Status { account_id: String, account_name: String, status: serde_json::Value },
+    WorkerLog { entry: serde_json::Value, account_id: String, account_name: String },
 }
 
 /// 抽象 Account Store（用于解耦 models::store）
@@ -256,13 +248,11 @@ impl RuntimeState {
             account_id: extra_val
                 .as_ref()
                 .and_then(|v| v.get("accountId").or_else(|| v.get("account_id")))
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
+                .and_then(json_to_string),
             account_name: extra_val
                 .as_ref()
                 .and_then(|v| v.get("accountName").or_else(|| v.get("account_name")))
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
+                .and_then(json_to_string),
             is_warn: tag == "错误"
                 || extra_val
                     .as_ref()
@@ -354,8 +344,8 @@ impl RuntimeState {
                 let today_key = get_today_key();
                 if saved.date == today_key {
                     // 从 typed OperationsMap 取值（与 operation_keys 1:1 对应）
-                    let ops_json = serde_json::to_value(&saved.operations)
-                        .unwrap_or(serde_json::Value::Null);
+                    let ops_json =
+                        serde_json::to_value(&saved.operations).unwrap_or(serde_json::Value::Null);
                     if let Some(obj) = ops_json.as_object() {
                         for k in &self.operation_keys {
                             if let Some(v) = obj.get(k).and_then(|x| x.as_i64()) {
@@ -395,15 +385,22 @@ impl RuntimeState {
         }
     }
 
+    /// 最近 `limit` 条，按 `ts` 升序（旧→新），对齐 Go `hub.Logs.Query`。
+    #[must_use]
+    pub fn take_last_n_ascending(mut logs: Vec<LogEntry>, limit: usize) -> Vec<LogEntry> {
+        logs.sort_by(|a, b| a.ts.cmp(&b.ts));
+        let limit = limit.max(1);
+        if logs.len() > limit {
+            let skip = logs.len() - limit;
+            logs.drain(0..skip);
+        }
+        logs
+    }
+
     /// 过滤日志
     #[must_use]
     pub fn filter_logs(&self, list: &[LogEntry], filters: &LogFilters) -> Vec<LogEntry> {
-        let keyword = filters
-            .keyword
-            .as_deref()
-            .unwrap_or("")
-            .trim()
-            .to_lowercase();
+        let keyword = filters.keyword.as_deref().unwrap_or("").trim().to_lowercase();
         let keyword_terms: Vec<String> = if keyword.is_empty() {
             vec![]
         } else {
@@ -413,16 +410,10 @@ impl RuntimeState {
         let module = filters.module.as_deref().unwrap_or("").trim();
         let event_name = filters.event.as_deref().unwrap_or("").trim();
         let is_warn = filters.is_warn;
-        let time_from_ms = filters
-            .time_from
-            .as_deref()
-            .and_then(|s| chrono_parse(s))
-            .unwrap_or(i64::MIN);
-        let time_to_ms = filters
-            .time_to
-            .as_deref()
-            .and_then(|s| chrono_parse(s))
-            .unwrap_or(i64::MAX);
+        let time_from_ms =
+            filters.time_from.as_deref().and_then(|s| chrono_parse(s)).unwrap_or(i64::MIN);
+        let time_to_ms =
+            filters.time_to.as_deref().and_then(|s| chrono_parse(s)).unwrap_or(i64::MAX);
 
         list.iter()
             .filter(|l| {
@@ -482,15 +473,20 @@ impl RuntimeState {
 // 纯函数
 // =====================================================================
 
+fn json_to_string(v: &serde_json::Value) -> Option<String> {
+    v.as_str().map(str::to_string).or_else(|| {
+        v.as_i64()
+            .map(|n| n.to_string())
+            .or_else(|| v.as_u64().map(|n| n.to_string()))
+    })
+}
+
 fn format_local_datetime24(date: Option<i64>) -> String {
     use chrono::{Local, TimeZone};
     let d = date.map_or_else(Local::now, |ms| {
         let secs = ms / 1000;
         let nsecs = ((ms % 1000).max(0) as u32) * 1_000_000;
-        Local
-            .timestamp_opt(secs, nsecs)
-            .single()
-            .unwrap_or_else(Local::now)
+        Local.timestamp_opt(secs, nsecs).single().unwrap_or_else(Local::now)
     });
     format!(
         "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
@@ -505,23 +501,17 @@ fn format_local_datetime24(date: Option<i64>) -> String {
 
 fn chrono_parse(s: &str) -> Option<i64> {
     use chrono::DateTime;
-    DateTime::parse_from_rfc3339(s)
-        .ok()
-        .map(|dt| dt.timestamp_millis())
-        .or_else(|| {
-            // 简化：尝试 yyyy-MM-dd HH:mm:ss
-            chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
-                .ok()
-                .map(|dt| dt.and_utc().timestamp_millis())
-        })
+    DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.timestamp_millis()).or_else(|| {
+        // 简化：尝试 yyyy-MM-dd HH:mm:ss
+        chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
+            .ok()
+            .map(|dt| dt.and_utc().timestamp_millis())
+    })
 }
 
 fn now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
 // =====================================================================
@@ -599,6 +589,19 @@ mod tests {
     }
 
     #[test]
+    fn log_account_id_accepts_number() {
+        let s = make_state();
+        s.log(
+            "系统",
+            "开始启动账号: 大号",
+            Some(serde_json::json!({ "accountId": 1, "accountName": "大号" })),
+        );
+        let logs = s.global_logs.lock();
+        assert_eq!(logs[0].account_id.as_deref(), Some("1"));
+        assert_eq!(logs[0].account_name.as_deref(), Some("大号"));
+    }
+
+    #[test]
     fn add_account_log_cap_300() {
         let s = make_state();
         for i in 0..400 {
@@ -664,10 +667,7 @@ mod tests {
         s.log("系统", "beta", None);
         s.log("错误", "gamma", None);
         let logs = s.global_logs.lock().clone();
-        let filters = LogFilters {
-            keyword: Some("alpha".to_string()),
-            ..Default::default()
-        };
+        let filters = LogFilters { keyword: Some("alpha".to_string()), ..Default::default() };
         let filtered = s.filter_logs(&logs, &filters);
         assert_eq!(filtered.len(), 1);
         assert!(filtered[0].msg.contains("alpha"));
@@ -679,10 +679,7 @@ mod tests {
         s.log("系统", "alpha beta gamma", None);
         s.log("系统", "alpha only", None);
         let logs = s.global_logs.lock().clone();
-        let filters = LogFilters {
-            keyword: Some("alpha beta".to_string()),
-            ..Default::default()
-        };
+        let filters = LogFilters { keyword: Some("alpha beta".to_string()), ..Default::default() };
         let filtered = s.filter_logs(&logs, &filters);
         // AND 语义
         assert_eq!(filtered.len(), 1);
@@ -695,10 +692,7 @@ mod tests {
         s.log("系统", "info", None);
         s.log("错误", "err", None);
         let logs = s.global_logs.lock().clone();
-        let filters = LogFilters {
-            tag: Some("错误".to_string()),
-            ..Default::default()
-        };
+        let filters = LogFilters { tag: Some("错误".to_string()), ..Default::default() };
         let filtered = s.filter_logs(&logs, &filters);
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].tag, "错误");
@@ -711,10 +705,7 @@ mod tests {
         s.log("错误", "err1", None);
         s.log("其他", "other1", None);
         let logs = s.global_logs.lock().clone();
-        let filters = LogFilters {
-            module: Some("system".to_string()),
-            ..Default::default()
-        };
+        let filters = LogFilters { module: Some("system".to_string()), ..Default::default() };
         let filtered = s.filter_logs(&logs, &filters);
         // 系统和错误 tag 都被 system module 接受
         assert_eq!(filtered.len(), 2);
@@ -726,10 +717,7 @@ mod tests {
         s.log("系统", "info", None);
         s.log("错误", "err", None);
         let logs = s.global_logs.lock().clone();
-        let filters = LogFilters {
-            is_warn: Some(true),
-            ..Default::default()
-        };
+        let filters = LogFilters { is_warn: Some(true), ..Default::default() };
         let filtered = s.filter_logs(&logs, &filters);
         assert_eq!(filtered.len(), 1);
         assert!(filtered[0].is_warn);
@@ -742,10 +730,7 @@ mod tests {
         let logs = s.global_logs.lock().clone();
         let now = now_ms();
         // time_from = now + 1000（应过滤掉）
-        let filters = LogFilters {
-            time_from: Some(format_iso(now + 1000)),
-            ..Default::default()
-        };
+        let filters = LogFilters { time_from: Some(format_iso(now + 1000)), ..Default::default() };
         let filtered = s.filter_logs(&logs, &filters);
         assert_eq!(filtered.len(), 0);
     }
@@ -825,10 +810,7 @@ mod tests {
             logs.push(entry);
         }
         let logs = s.global_logs.lock().clone();
-        let filters = LogFilters {
-            event: Some("login".to_string()),
-            ..Default::default()
-        };
+        let filters = LogFilters { event: Some("login".to_string()), ..Default::default() };
         let filtered = s.filter_logs(&logs, &filters);
         assert_eq!(filtered.len(), 1);
     }
@@ -847,10 +829,7 @@ mod tests {
         let mut rx = s.subscribe();
         s.log("系统", "test", None);
         // 异步检查，可能需要 yield
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
             let result =
                 tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv()).await;
@@ -863,6 +842,30 @@ mod tests {
         let s = make_state();
         let _rx = s.subscribe();
         s.log("系统", "test", None);
+    }
+
+    fn log_entry(ts: i64, msg: &str) -> LogEntry {
+        LogEntry {
+            time: format!("{ts}"),
+            tag: "系统".into(),
+            msg: msg.into(),
+            meta: serde_json::Value::Null,
+            ts,
+            search_text: String::new(),
+            account_id: None,
+            account_name: None,
+            is_warn: false,
+        }
+    }
+
+    #[test]
+    fn take_last_n_ascending_keeps_oldest_to_newest() {
+        let logs = vec![log_entry(100, "old"), log_entry(200, "mid"), log_entry(300, "new")];
+        let out = RuntimeState::take_last_n_ascending(logs, 2);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].msg, "mid");
+        assert_eq!(out[1].msg, "new");
+        assert!(out[0].ts < out[1].ts);
     }
 
     fn format_iso(ms: i64) -> String {

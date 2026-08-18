@@ -116,10 +116,7 @@ mod tests {
             assert!(t.ends_with('='));
             let body = &t[..t.len() - 1];
             for c in body.chars() {
-                assert!(
-                    c.is_ascii_alphanumeric(),
-                    "non-alphanumeric char: {c} in {t}"
-                );
+                assert!(c.is_ascii_alphanumeric(), "non-alphanumeric char: {c} in {t}");
             }
         }
     }

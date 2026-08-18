@@ -45,8 +45,9 @@ pub fn delete_account(state: State<'_, DesktopState>, account_id: String) -> Ipc
 /// 启动账号 worker。
 #[tauri::command]
 pub fn start_account(state: State<'_, DesktopState>, account_id: String) -> IpcResult<Value> {
-    let acc = accounts::start_account(&state.app, &state.acl, &account_id).map_err(IpcError::from)?;
-    serde_json::to_value(acc).map_err(|e| IpcError::from(qq_farm_app::AppError::Internal(e.to_string())))
+    let acc =
+        accounts::start_account(&state.app, &state.acl, &account_id).map_err(IpcError::from)?;
+    Ok(accounts::account_to_public_json(&acc))
 }
 
 /// 停止账号 worker。
@@ -63,16 +64,14 @@ pub fn remark_account(
     name: String,
 ) -> IpcResult<Value> {
     let acc = accounts::remark_account(&state.acl, &account_id, name).map_err(IpcError::from)?;
-    serde_json::to_value(acc).map_err(|e| IpcError::from(qq_farm_app::AppError::Internal(e.to_string())))
+    Ok(accounts::account_to_public_json(&acc))
 }
 
 /// 创建微信扫码登录任务。
 #[tauri::command]
 pub async fn wx_login_create(state: State<'_, DesktopState>) -> IpcResult<WxLoginCreateDto> {
     let _ = &state.acl;
-    let r = wx_login::create_task(&state.app.wx_login)
-        .await
-        .map_err(IpcError::from)?;
+    let r = wx_login::create_task(&state.app.wx_login).await.map_err(IpcError::from)?;
     Ok(WxLoginCreateDto {
         task_id: r.task_id,
         app_id: r.app_id,
@@ -89,9 +88,7 @@ pub async fn wx_login_poll(
     task_id: String,
 ) -> IpcResult<WxLoginStatusDto> {
     let _ = &state.acl;
-    let r = wx_login::poll_status(&state.app.wx_login, &task_id)
-        .await
-        .map_err(IpcError::from)?;
+    let r = wx_login::poll_status(&state.app.wx_login, &task_id).await.map_err(IpcError::from)?;
     Ok(WxLoginStatusDto {
         task_id: r.task_id,
         app_id: r.app_id,
@@ -107,9 +104,7 @@ pub async fn wx_login_confirm(
     task_id: String,
 ) -> IpcResult<WxLoginStatusDto> {
     let _ = &state.acl;
-    let r = wx_login::confirm(&state.app.wx_login, &task_id)
-        .await
-        .map_err(IpcError::from)?;
+    let r = wx_login::confirm(&state.app.wx_login, &task_id).await.map_err(IpcError::from)?;
     Ok(WxLoginStatusDto {
         task_id: r.task_id,
         app_id: r.app_id,
@@ -120,14 +115,9 @@ pub async fn wx_login_confirm(
 
 /// 换取微信登录 code。
 #[tauri::command]
-pub async fn wx_login_code(
-    state: State<'_, DesktopState>,
-    task_id: String,
-) -> IpcResult<Value> {
+pub async fn wx_login_code(state: State<'_, DesktopState>, task_id: String) -> IpcResult<Value> {
     let _ = &state.acl;
-    let r = wx_login::issue_code(&state.app.wx_login, &task_id)
-        .await
-        .map_err(IpcError::from)?;
+    let r = wx_login::issue_code(&state.app.wx_login, &task_id).await.map_err(IpcError::from)?;
     Ok(serde_json::json!({ "code": r.code, "openid": r.openid, "appId": r.app_id }))
 }
 
@@ -140,13 +130,8 @@ pub fn wx_login_destroy(state: State<'_, DesktopState>, task_id: String) -> IpcR
 }
 
 pub(crate) fn build_accounts(state: &DesktopState) -> Vec<AccountSummary> {
-    let running: std::collections::HashSet<String> = state
-        .app
-        .engine
-        .list_workers()
-        .into_iter()
-        .map(|w| w.account_id)
-        .collect();
+    let running: std::collections::HashSet<String> =
+        state.app.engine.list_workers().into_iter().map(|w| w.account_id).collect();
     let allowed = accounts::accessible_account_ids(&state.acl);
     account_store::get_accounts()
         .into_iter()
@@ -161,6 +146,7 @@ pub(crate) fn build_accounts(state: &DesktopState) -> Vec<AccountSummary> {
                     .unwrap_or(&a.nick)
                     .to_string()
             };
+            let wx_authorized = a.has_wx_auth();
             AccountSummary {
                 id: a.id.clone(),
                 name: a.name,
@@ -169,6 +155,7 @@ pub(crate) fn build_accounts(state: &DesktopState) -> Vec<AccountSummary> {
                 qq: a.qq,
                 avatar: a.avatar,
                 running: running.contains(&a.id),
+                wx_authorized,
             }
         })
         .collect()

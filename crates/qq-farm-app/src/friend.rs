@@ -14,11 +14,7 @@ pub async fn list_friends(
     force: bool,
 ) -> AppResult<Vec<qq_farm_core::services::friend::visit_strategy::FriendSummary>> {
     let loop_ = require_worker_loop(ctx, account_id)?;
-    let friends = loop_
-        .friend()
-        .get_friends_list(force)
-        .await
-        .map_err(AppError::from_core)?;
+    let friends = loop_.friend().get_friends_list(force).await.map_err(AppError::from_core)?;
     Ok(friend_summaries_from_values(friends))
 }
 
@@ -44,11 +40,7 @@ pub async fn interact_records(ctx: &AppContext, account_id: &str) -> AppResult<V
 /// 好友地块。
 pub async fn friend_lands(ctx: &AppContext, account_id: &str, gid: i64) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
-    let lands = loop_
-        .friend()
-        .get_friend_lands_detail(gid)
-        .await
-        .map_err(AppError::from_core)?;
+    let lands = loop_.friend().get_friend_lands_detail(gid).await.map_err(AppError::from_core)?;
     serde_json::to_value(lands).map_err(|e| AppError::Internal(e.to_string()))
 }
 
@@ -57,11 +49,7 @@ pub async fn friend_op(ctx: &AppContext, account_id: &str, gid: i64, op: &str) -
     let loop_ = require_worker_loop(ctx, account_id)?;
     let op = qq_farm_core::models::types::FriendOperation::from_str_opt(op)
         .ok_or_else(|| AppError::BadRequest(format!("unknown op: {op}")))?;
-    let ret = loop_
-        .friend()
-        .do_friend_operation(op, gid)
-        .await
-        .map_err(AppError::from_core)?;
+    let ret = loop_.friend().do_friend_operation(op, gid).await.map_err(AppError::from_core)?;
     let stolen = ret.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
     if matches!(op, qq_farm_core::models::types::FriendOperation::Steal) && stolen > 0 {
         let _ = loop_.warehouse().sell_all_fruits().await;
@@ -72,15 +60,11 @@ pub async fn friend_op(ctx: &AppContext, account_id: &str, gid: i64, op: &str) -
 /// 好友黑名单。
 #[must_use]
 pub fn friend_blacklist(account_id: &str) -> Value {
-    json!(qq_farm_core::models::store::account_config::get_friend_blacklist(
-        Some(account_id)
-    ))
+    json!(qq_farm_core::models::store::account_config::get_friend_blacklist(Some(account_id)))
 }
 
 pub fn toggle_friend_blacklist(account_id: &str, gid: i64) -> Value {
-    json!(
-        qq_farm_core::models::store::account_config::toggle_friend_blacklist(account_id, gid)
-    )
+    json!(qq_farm_core::models::store::account_config::toggle_friend_blacklist(account_id, gid))
 }
 
 #[must_use]
@@ -113,8 +97,7 @@ pub fn batch_add_known_gids(account_id: &str, gids: &[i64]) -> Value {
 }
 
 pub fn batch_remove_known_gids(account_id: &str, gids: &[i64]) -> Value {
-    let _ =
-        qq_farm_core::models::store::account_config::remove_known_friend_gids(account_id, gids);
+    let _ = qq_farm_core::models::store::account_config::remove_known_friend_gids(account_id, gids);
     known_gid_settings(account_id)
 }
 

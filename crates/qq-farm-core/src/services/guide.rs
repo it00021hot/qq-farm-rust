@@ -53,12 +53,7 @@ impl GuideService {
         let req = SetWeakGuideNodeCompleteRequest { node_id };
         let body = self
             .gateway
-            .request(
-                GUIDE_SERVICE,
-                "SetWeakGuideNodeComplete",
-                &req.encode_to_vec(),
-                10_000,
-            )
+            .request(GUIDE_SERVICE, "SetWeakGuideNodeComplete", &req.encode_to_vec(), 10_000)
             .await?;
         Ok(SetWeakGuideNodeCompleteReply::decode(&body[..])?)
     }
@@ -68,19 +63,11 @@ impl GuideService {
     /// # Errors
     /// - 网络 / 网关错误
     /// - protobuf 解码失败
-    pub async fn claim_weak_guide_reward(
-        &self,
-        node_id: i64,
-    ) -> Result<ClaimWeakGuideRewardReply> {
+    pub async fn claim_weak_guide_reward(&self, node_id: i64) -> Result<ClaimWeakGuideRewardReply> {
         let req = ClaimWeakGuideRewardRequest { node_id };
         let body = self
             .gateway
-            .request(
-                GUIDE_SERVICE,
-                "ClaimWeakGuideReward",
-                &req.encode_to_vec(),
-                10_000,
-            )
+            .request(GUIDE_SERVICE, "ClaimWeakGuideReward", &req.encode_to_vec(), 10_000)
             .await?;
         Ok(ClaimWeakGuideRewardReply::decode(&body[..])?)
     }
@@ -97,10 +84,7 @@ impl GuideService {
                     } else {
                         tracing::info!("[引导] 领取引导奖励 → {}", reward);
                     }
-                    GuideClaimResult {
-                        claimed: 1,
-                        reward_items: items,
-                    }
+                    GuideClaimResult { claimed: 1, reward_items: items }
                 } else {
                     GuideClaimResult::default()
                 }
@@ -159,51 +143,31 @@ mod tests {
 
     #[test]
     fn reward_summary_gold() {
-        let items = vec![Item {
-            id: 1,
-            count: 500,
-            ..Default::default()
-        }];
+        let items = vec![Item { id: 1, count: 500, ..Default::default() }];
         assert_eq!(get_reward_summary(&items), "金币500");
     }
 
     #[test]
     fn reward_summary_experience() {
-        let items = vec![Item {
-            id: 2,
-            count: 1000,
-            ..Default::default()
-        }];
+        let items = vec![Item { id: 2, count: 1000, ..Default::default() }];
         assert_eq!(get_reward_summary(&items), "经验1000");
     }
 
     #[test]
     fn reward_summary_ticket() {
-        let items = vec![Item {
-            id: 1002,
-            count: 5,
-            ..Default::default()
-        }];
+        let items = vec![Item { id: 1002, count: 5, ..Default::default() }];
         assert_eq!(get_reward_summary(&items), "点券5");
     }
 
     #[test]
     fn reward_summary_skips_zero() {
-        let items = vec![Item {
-            id: 1,
-            count: 0,
-            ..Default::default()
-        }];
+        let items = vec![Item { id: 1, count: 0, ..Default::default() }];
         assert_eq!(get_reward_summary(&items), "");
     }
 
     #[test]
     fn reward_summary_unknown_id() {
-        let items = vec![Item {
-            id: 12345,
-            count: 1,
-            ..Default::default()
-        }];
+        let items = vec![Item { id: 12345, count: 1, ..Default::default() }];
         assert_eq!(get_reward_summary(&items), "物品#12345x1");
     }
 

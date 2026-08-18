@@ -358,9 +358,7 @@ impl WorkerLoop {
             self.reset_unified_schedule();
             let intervals =
                 crate::models::store::account_config::get_intervals(Some(&self.account.id));
-            self.farm.set_check_interval(Duration::from_secs(
-                intervals.farm.max(1) as u64,
-            ));
+            self.farm.set_check_interval(Duration::from_secs(intervals.farm.max(1) as u64));
             if self.unified_scheduler_running.load(Ordering::Acquire) {
                 self.schedule_unified_next_tick(scheduler);
             }
@@ -463,16 +461,8 @@ impl WorkerLoop {
         // 对齐 worker.ts onLoginSuccess：先背包点券/金豆 → 统计基线 → 邀请码 → 礼包
         if let Ok(bag) = self.warehouse.get_bag().await {
             let items = crate::services::warehouse::get_bag_items(&bag);
-            let coupon = items
-                .iter()
-                .find(|i| i.id == 1002)
-                .map(|i| i.count)
-                .unwrap_or(0);
-            let gold_bean = items
-                .iter()
-                .find(|i| i.id == 1005)
-                .map(|i| i.count)
-                .unwrap_or(0);
+            let coupon = items.iter().find(|i| i.id == 1002).map(|i| i.count).unwrap_or(0);
+            let gold_bean = items.iter().find(|i| i.id == 1005).map(|i| i.count).unwrap_or(0);
             *self.coupon.lock() = coupon.max(0);
             if gold_bean > 0 {
                 *self.gold_bean.lock() = gold_bean;
@@ -717,7 +707,8 @@ impl WorkerLoop {
                                 "连接可能已断开 ({}s 无响应, pending={pending})",
                                 elapsed / 1000
                             ),
-                            crate::constants::PanelEvent::HeartbeatTimeout, Some(serde_json::json!({
+                            crate::constants::PanelEvent::HeartbeatTimeout,
+                            Some(serde_json::json!({
                                 "module": "heartbeat",
                                 "isWarn": true,
                                 "elapsedMs": elapsed,
@@ -730,7 +721,8 @@ impl WorkerLoop {
                                 &acc_id,
                                 "心跳",
                                 "心跳超时，账号将停止运行...",
-                                crate::constants::PanelEvent::HeartbeatTimeout, Some(serde_json::json!({
+                                crate::constants::PanelEvent::HeartbeatTimeout,
+                                Some(serde_json::json!({
                                     "module": "heartbeat",
                                     "isWarn": true
                                 })),
@@ -746,6 +738,17 @@ impl WorkerLoop {
                     if current_gid == 0 {
                         return;
                     }
+                    // 单条 WS 串行：GetAll 等大包在路上时 Heartbeat 回包会被堵住，20s RPC
+                    // 超时不是 socket 已死。interval 里 spawn 不受 preventOverlap 约束，
+                    // 忙时再叠发只会刷「Heartbeat 失败」。原 bot catch 空吞。
+                    if gateway.has_pending_method("Heartbeat") || pending > 0 {
+                        tracing::debug!(
+                            account_id = %acc_id,
+                            pending,
+                            "skip Heartbeat: socket busy"
+                        );
+                        return;
+                    }
                     // 对齐 network.ts：sendMsgAsync(...).then(...).catch(() => {}) —— 发完即返回，不阻塞 interval
                     let gateway = gateway.clone();
                     let last_resp = last_resp.clone();
@@ -759,20 +762,10 @@ impl WorkerLoop {
                                 *miss.lock() = 0;
                             }
                             Err(e) => {
-                                tracing::warn!(
+                                tracing::debug!(
                                     account_id = %acc_id,
                                     error = %e,
-                                    "Heartbeat 请求失败"
-                                );
-                                crate::services::panel_log::log(
-                                    &acc_id,
-                                    "心跳",
-                                    format!("Heartbeat 失败: {e}"),
-                                    crate::constants::PanelEvent::HeartbeatTimeout, Some(serde_json::json!({
-                                        "module": "heartbeat",
-                                        "isWarn": true,
-                                        "error": e.to_string(),
-                                    })),
+                                    "Heartbeat RPC 超时（忙时常见，不等于掉线）"
                                 );
                             }
                         }
@@ -853,8 +846,9 @@ impl WorkerLoop {
             scheduler.clear("fertilizer_buy_check");
             return;
         }
-        let snap =
-            crate::models::store::account_config::get_account_config_snapshot(Some(&self.account.id));
+        let snap = crate::models::store::account_config::get_account_config_snapshot(Some(
+            &self.account.id,
+        ));
         let minutes = snap.fertilizer_buy_check_interval_minutes.max(1) as u64;
         let this = Arc::clone(self);
         scheduler.set_interval_task(
@@ -871,8 +865,9 @@ impl WorkerLoop {
             &self.account.id,
             "农场",
             format!("化肥自动购买检测定时器已启动，间隔 {minutes} 分钟"),
-            crate::constants::PanelEvent::FertilizerBuyTimer, Some(serde_json::json!({
-                "module": "farm", 
+            crate::constants::PanelEvent::FertilizerBuyTimer,
+            Some(serde_json::json!({
+                "module": "farm",
                 "result": "start",
                 "intervalMinutes": minutes,
             })),
@@ -883,8 +878,9 @@ impl WorkerLoop {
         if !self.auto_on("fertilizer_buy_organic") && !self.auto_on("fertilizer_buy_normal") {
             return;
         }
-        let snap =
-            crate::models::store::account_config::get_account_config_snapshot(Some(&self.account.id));
+        let snap = crate::models::store::account_config::get_account_config_snapshot(Some(
+            &self.account.id,
+        ));
         let commerce = crate::services::commerce::CommerceService::new(
             self.mall.clone(),
             self.mystery_shop.clone(),
@@ -1103,8 +1099,9 @@ impl WorkerLoop {
             &self.account.id,
             "农场",
             format!("收到推送: {changed_count}块土地变化，检查中..."),
-            crate::constants::PanelEvent::LandsNotify, Some(serde_json::json!({
-                "module": "farm", 
+            crate::constants::PanelEvent::LandsNotify,
+            Some(serde_json::json!({
+                "module": "farm",
                 "result": "trigger_check",
                 "count": changed_count,
             })),
@@ -1121,6 +1118,7 @@ impl WorkerLoop {
         let st = status_svc::status_data_for(&self.account.id);
         let user = serde_json::json!({
             "name": st.name,
+            "avatar": st.avatar,
             "level": st.level,
             "gold": st.gold,
             "exp": st.exp,
@@ -1143,9 +1141,10 @@ impl WorkerLoop {
         let help = ((next.help_at - now) / 1000).max(0);
         let steal = ((next.steal_at - now) / 1000).max(0);
         let auto = crate::models::store::account_config::get_automation(Some(&self.account.id));
-        let preferred = crate::models::store::account_config::get_preferred_seed(Some(&self.account.id));
-        let (current, needed) = crate::config::game_config::global()
-            .get_level_exp_progress(st.level, st.exp);
+        let preferred =
+            crate::models::store::account_config::get_preferred_seed(Some(&self.account.id));
+        let (current, needed) =
+            crate::config::game_config::global().get_level_exp_progress(st.level, st.exp);
         if let Some(obj) = full.as_object_mut() {
             obj.insert(
                 "nextChecks".to_string(),
@@ -1170,10 +1169,7 @@ impl WorkerLoop {
                 serde_json::json!(self.applied_config_revision.load(Ordering::Acquire)),
             );
             obj.insert("accountId".to_string(), serde_json::json!(self.account.id));
-            obj.insert(
-                "accountName".to_string(),
-                serde_json::json!(self.account.display_name),
-            );
+            obj.insert("accountName".to_string(), serde_json::json!(self.account.display_name));
             obj.insert(
                 "uptime".to_string(),
                 serde_json::json!(self.started_at.elapsed().as_secs_f64()),
@@ -1273,14 +1269,10 @@ pub fn random_interval_ms(min_ms: u64, max_ms: u64) -> u64 {
         return (min_sec as u64) * 1000;
     }
     use std::time::{SystemTime, UNIX_EPOCH};
-    let seed = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
+    let seed =
+        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0);
     // 简易 LCG（确定性足够）
-    let r = seed
-        .wrapping_mul(6364136223846793005)
-        .wrapping_add(1442695040888963407);
+    let r = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
     let range = (max_sec - min_sec + 1) as u64;
     let sec = min_sec as u64 + (r % range);
     sec * 1000
@@ -1303,10 +1295,7 @@ pub fn get_local_date_key() -> String {
 #[must_use]
 pub fn now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
 // =====================================================================
@@ -1458,10 +1447,7 @@ mod tests {
 
     #[test]
     fn worker_loop_resume_bot() {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let (loop_, _) = make_loop();
         rt.block_on(async {
             loop_.mark_login_ready();
@@ -1543,10 +1529,7 @@ mod tests {
 
     #[test]
     fn start_schedulers_runs() {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let (loop_, _) = make_loop();
         rt.block_on(async {
             let scheduler = Scheduler::new(format!("worker:{}", loop_.account_id()));
@@ -1560,7 +1543,10 @@ mod tests {
             assert!(snap.tasks.iter().any(|t| t.name == "unified_next_tick"));
             let next = loop_.next_runs.lock().clone();
             let now = now_ms();
-            assert!(next.farm_at > now, "first farm tick must be delayed like TS resetUnifiedSchedule");
+            assert!(
+                next.farm_at > now,
+                "first farm tick must be delayed like TS resetUnifiedSchedule"
+            );
             assert!(next.help_at > now);
             assert!(next.steal_at > now);
             scheduler.shutdown();

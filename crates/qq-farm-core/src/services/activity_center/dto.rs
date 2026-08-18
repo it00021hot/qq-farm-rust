@@ -2,8 +2,13 @@ use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
+use crate::constants::{
+    BEIJING_UTC_OFFSET_SECONDS, CONSTELLATION_ACTIVITY_TYPE, QINGMEI_DAILY_GRANT_ID,
+    SECONDS_PER_DAY, SHOP_ACTIVITY_TYPE,
+};
 use crate::error::Result;
 use crate::proto::generated::corepb::Item as CoreItem;
+use crate::proto::generated::gamepb::activitypb::ConstellationData;
 use crate::proto::generated::gamepb::activitypb::{
     ActivityContent, ActivityItem, ActivityOperateReply, StarSandGoods,
 };
@@ -13,13 +18,8 @@ use crate::proto::generated::gamepb::seasonpb::{
 use crate::proto::generated::gamepb::solartermspb::{
     GetSolarTermsReply, SolarTermInfo, SolarTermsConfig,
 };
-use crate::proto::generated::gamepb::activitypb::ConstellationData;
 use crate::services::activity_center_state::{ActivityStateIdentity, ConstellationActivityState};
 use crate::services::warehouse::WarehouseService;
-use crate::constants::{
-    BEIJING_UTC_OFFSET_SECONDS, CONSTELLATION_ACTIVITY_TYPE, QINGMEI_DAILY_GRANT_ID, SECONDS_PER_DAY,
-    SHOP_ACTIVITY_TYPE,
-};
 
 use super::error::{ActivityError, ActivityErrorCode};
 
@@ -299,11 +299,7 @@ pub(crate) fn item_from_id(id: i64, count: i64) -> ItemDto {
     ItemDto {
         id,
         count,
-        name: meta
-            .as_ref()
-            .map(|m| m.name.clone())
-            .filter(|n| !n.is_empty())
-            .unwrap_or_default(),
+        name: meta.as_ref().map(|m| m.name.clone()).filter(|n| !n.is_empty()).unwrap_or_default(),
         image: crate::config::game_config::mapped_item_image(id),
         rarity: meta.and_then(|m| m.rarity).unwrap_or(0),
         balance: None,
@@ -315,7 +311,9 @@ pub(crate) fn season_item_dto(item: &SeasonItem) -> ItemDto {
     item_from_id(item.item_id, item.count)
 }
 
-pub(crate) fn solar_term_reward_dto(r: &crate::proto::generated::gamepb::solartermspb::SolarTermReward) -> ItemDto {
+pub(crate) fn solar_term_reward_dto(
+    r: &crate::proto::generated::gamepb::solartermspb::SolarTermReward,
+) -> ItemDto {
     item_from_id(r.item_id, r.count)
 }
 
@@ -374,7 +372,10 @@ pub(crate) fn text_content(bytes: &[u8]) -> serde_json::Value {
     serde_json::json!({ "title": "", "paragraphs": [trimmed] })
 }
 
-pub(crate) fn constellation_identity(season: &SeasonDto, activity_id: i64) -> ActivityStateIdentity {
+pub(crate) fn constellation_identity(
+    season: &SeasonDto,
+    activity_id: i64,
+) -> ActivityStateIdentity {
     ActivityStateIdentity {
         season_id: season.id.to_string(),
         activity_id: activity_id.to_string(),
@@ -389,21 +390,12 @@ pub(crate) fn constellation_dto(
     confirmed: &ConstellationActivityState,
 ) -> ConstellationDto {
     let catalog = constellation_catalog_json();
-    let catalog_activity_id = catalog
-        .get("activityId")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let catalog_activity_id = catalog.get("activityId").and_then(|v| v.as_str()).unwrap_or("");
     let catalog_supported = catalog_activity_id == activity.id.to_string();
-    let display_name = catalog
-        .get("displayName")
-        .and_then(|v| v.as_str())
-        .unwrap_or("观星礼录")
-        .to_string();
-    let catalog_server_name = catalog
-        .get("serverName")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    let display_name =
+        catalog.get("displayName").and_then(|v| v.as_str()).unwrap_or("观星礼录").to_string();
+    let catalog_server_name =
+        catalog.get("serverName").and_then(|v| v.as_str()).unwrap_or("").to_string();
     if !catalog_supported {
         return ConstellationDto {
             activity_id: activity.id,
@@ -426,23 +418,14 @@ pub(crate) fn constellation_dto(
     let current_day = calculated.map(|d| d.clamp(1, 28));
     let dynamic_nodes: HashMap<String, (bool, bool)> = dynamic
         .map(|data| {
-            data.nodes
-                .iter()
-                .map(|n| (n.node_id.to_string(), (n.field_2, n.field_3)))
-                .collect()
+            data.nodes.iter().map(|n| (n.node_id.to_string(), (n.field_2, n.field_3))).collect()
         })
         .unwrap_or_default();
-    let confirmed_opened: HashSet<String> = confirmed
-        .confirmed_opened_node_ids
-        .iter()
-        .cloned()
-        .collect();
+    let confirmed_opened: HashSet<String> =
+        confirmed.confirmed_opened_node_ids.iter().cloned().collect();
     let confirmed_lit: HashSet<String> = confirmed.confirmed_lit_node_ids.iter().cloned().collect();
-    let catalog_groups = catalog
-        .get("groups")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
+    let catalog_groups =
+        catalog.get("groups").and_then(|v| v.as_array()).cloned().unwrap_or_default();
 
     let groups: Vec<ConstellationGroupDto> = catalog_groups
         .iter()
@@ -461,7 +444,9 @@ pub(crate) fn constellation_dto(
             let node_ids = group
                 .pointer("/links/nodeIds")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().map(|v| json_text(Some(v))).filter(|s| !s.is_empty()).collect())
+                .map(|arr| {
+                    arr.iter().map(|v| json_text(Some(v))).filter(|s| !s.is_empty()).collect()
+                })
                 .unwrap_or_default();
             let rewards = group
                 .get("rewards")
@@ -486,10 +471,8 @@ pub(crate) fn constellation_dto(
 
             let confirmed_opened_node = confirmed_opened.contains(&node_id);
             let confirmed_lit_node = confirmed_lit.contains(&node_id);
-            let (dynamic_opened, dynamic_lit) = dynamic_nodes
-                .get(&node_id)
-                .copied()
-                .unwrap_or((false, false));
+            let (dynamic_opened, dynamic_lit) =
+                dynamic_nodes.get(&node_id).copied().unwrap_or((false, false));
             let dynamic_lightable = dynamic_opened && !dynamic_lit;
             let no_claimable = current_day == Some(order)
                 && confirmed.no_claimable_days.contains_key(&order.to_string());
@@ -501,11 +484,7 @@ pub(crate) fn constellation_dto(
                         Some(true),
                         true,
                         "lit",
-                        if no_claimable {
-                            Some("confirmed-no-claimable")
-                        } else {
-                            None
-                        },
+                        if no_claimable { Some("confirmed-no-claimable") } else { None },
                         if no_claimable {
                             "server-rejection"
                         } else if confirmed_lit_node {
@@ -515,23 +494,12 @@ pub(crate) fn constellation_dto(
                         },
                     )
                 } else if dynamic_lightable {
-                    (
-                        Some(true),
-                        Some(false),
-                        true,
-                        "lightable",
-                        None,
-                        "authoritative",
-                    )
+                    (Some(true), Some(false), true, "lightable", None, "authoritative")
                 } else if current_day.is_some_and(|d| order > d) {
                     (Some(false), Some(false), false, "locked", None, "schedule")
                 } else if current_day == Some(order) {
                     (
-                        if confirmed_opened_node || dynamic_opened {
-                            Some(true)
-                        } else {
-                            None
-                        },
+                        if confirmed_opened_node || dynamic_opened { Some(true) } else { None },
                         None,
                         false,
                         "claimableUnknown",
@@ -546,11 +514,7 @@ pub(crate) fn constellation_dto(
                     )
                 } else {
                     (
-                        if confirmed_opened_node || dynamic_opened {
-                            Some(true)
-                        } else {
-                            None
-                        },
+                        if confirmed_opened_node || dynamic_opened { Some(true) } else { None },
                         None,
                         false,
                         "unknown",
@@ -657,20 +621,11 @@ pub(crate) fn build_actions(
     shop: Option<&StarSandShopDto>,
 ) -> serde_json::Value {
     let pass = season.as_ref().and_then(|s| s.pass.as_ref());
-    let claimable_pass = pass
-        .map(|p| p.nodes.iter().filter(|n| n.claimable).count())
-        .unwrap_or(0);
-    let has_claimable_solar = solar
-        .as_ref()
-        .map(|s| s.terms.iter().any(|t| t.can_claim))
-        .unwrap_or(false);
+    let claimable_pass = pass.map(|p| p.nodes.iter().filter(|n| n.claimable).count()).unwrap_or(0);
+    let has_claimable_solar =
+        solar.as_ref().map(|s| s.terms.iter().any(|t| t.can_claim)).unwrap_or(false);
     let lightable = constellation
-        .map(|c| {
-            c.groups
-                .iter()
-                .filter(|g| g.visual_state == "lightable")
-                .count()
-        })
+        .map(|c| c.groups.iter().filter(|g| g.visual_state == "lightable").count())
         .unwrap_or(0);
     let attemptable = constellation
         .map(|c| {
@@ -683,21 +638,14 @@ pub(crate) fn build_actions(
     let current_day = constellation.and_then(|c| c.current_day);
     let current_groups_known = constellation
         .map(|c| {
-            let current: Vec<_> = c
-                .groups
-                .iter()
-                .filter(|g| current_day.is_some_and(|d| g.order == d))
-                .collect();
+            let current: Vec<_> =
+                c.groups.iter().filter(|g| current_day.is_some_and(|d| g.order == d)).collect();
             !current.is_empty() && current.iter().all(|g| g.state_known)
         })
         .unwrap_or(false);
     let availability_known = lightable > 0 || current_groups_known;
-    let catalog_supported = constellation
-        .map(|c| c.catalog_status == "supported")
-        .unwrap_or(false);
-    let constellation_act = season
-        .as_ref()
-        .and_then(|s| s.constellation_activity.as_ref());
+    let catalog_supported = constellation.map(|c| c.catalog_status == "supported").unwrap_or(false);
+    let constellation_act = season.as_ref().and_then(|s| s.constellation_activity.as_ref());
     let server_time = season.as_ref().map(|s| s.server_time).unwrap_or(0);
     let start_time = constellation_act.map(|a| a.start_time).unwrap_or(0);
     let end_time = constellation_act.map(|a| a.end_time).unwrap_or(0);
@@ -747,11 +695,7 @@ pub fn find_season_activity(
     season_reply: &GetSeasonInfoReply,
     type_code: i64,
 ) -> Option<&SeasonActivity> {
-    let activities = season_reply
-        .season_info
-        .as_ref()?
-        .activities
-        .as_slice();
+    let activities = season_reply.season_info.as_ref()?.activities.as_slice();
     activities.iter().find(|a| a.r#type == type_code)
 }
 
@@ -759,19 +703,10 @@ pub fn find_season_activity(
 #[must_use]
 pub fn normalize_season(reply: &GetSeasonInfoReply) -> Option<SeasonDto> {
     let season: &SeasonInfo = reply.season_info.as_ref()?;
-    let activities: Vec<SeasonActivityDto> = season
-        .activities
-        .iter()
-        .map(activity_dto)
-        .collect();
-    let constellation = activities
-        .iter()
-        .find(|a| a.r#type == CONSTELLATION_ACTIVITY_TYPE)
-        .cloned();
-    let shop = activities
-        .iter()
-        .find(|a| a.r#type == SHOP_ACTIVITY_TYPE)
-        .cloned();
+    let activities: Vec<SeasonActivityDto> = season.activities.iter().map(activity_dto).collect();
+    let constellation =
+        activities.iter().find(|a| a.r#type == CONSTELLATION_ACTIVITY_TYPE).cloned();
+    let shop = activities.iter().find(|a| a.r#type == SHOP_ACTIVITY_TYPE).cloned();
     let pass = season.pass.as_ref().map(pass_dto);
     Some(SeasonDto {
         id: season.season_id,
@@ -806,11 +741,8 @@ pub fn activity_dto(a: &SeasonActivity) -> SeasonActivityDto {
 pub fn pass_dto(p: &SeasonPass) -> SeasonPassDto {
     let current_level = p.current_level;
     let claimed_through = p.claimed_through_level;
-    let nodes: Vec<SeasonPassNodeDto> = p
-        .nodes
-        .iter()
-        .map(|node| pass_node_dto(node, current_level, claimed_through))
-        .collect();
+    let nodes: Vec<SeasonPassNodeDto> =
+        p.nodes.iter().map(|node| pass_node_dto(node, current_level, claimed_through)).collect();
     SeasonPassDto {
         activity_id: p.activity_id,
         title: bytes_to_text(&p.title),
@@ -831,7 +763,11 @@ pub fn pass_dto(p: &SeasonPass) -> SeasonPassDto {
     }
 }
 
-fn pass_node_dto(node: &SeasonRewardNode, current_level: i64, claimed_through: i64) -> SeasonPassNodeDto {
+fn pass_node_dto(
+    node: &SeasonRewardNode,
+    current_level: i64,
+    claimed_through: i64,
+) -> SeasonPassNodeDto {
     let level = node.node_id;
     let claimed = level != 0 && level <= claimed_through;
     let locked = level == 0 || level > current_level;
@@ -868,19 +804,10 @@ pub fn normalize_solar_terms(reply: &GetSolarTermsReply) -> SolarTermsDto {
             t
         })
         .collect();
-    let configs: Vec<SolarTermsConfigDto> = reply
-        .configs
-        .iter()
-        .map(solar_terms_config_dto)
-        .collect();
+    let configs: Vec<SolarTermsConfigDto> =
+        reply.configs.iter().map(solar_terms_config_dto).collect();
     let current_config = reply.current_config.as_ref().map(solar_terms_config_dto);
-    SolarTermsDto {
-        server_time,
-        current_term_id,
-        terms,
-        current_config,
-        configs,
-    }
+    SolarTermsDto { server_time, current_term_id, terms, current_config, configs }
 }
 
 pub(crate) fn solar_term_dto(t: &SolarTermInfo) -> SolarTermDto {
@@ -922,14 +849,9 @@ pub fn star_sand_goods_dto(
     let cost_count = goods.cost.as_ref().map(|c| c.count).unwrap_or(0);
     let cost_valid = cost_id > 0 && cost_count > 0;
     let balance_known = balances.is_some();
-    let balance = balances
-        .and_then(|m| m.get(&cost_id).copied())
-        .unwrap_or(0);
-    let max_count = if cost_valid && balance_known && cost_count > 0 {
-        balance / cost_count
-    } else {
-        0
-    };
+    let balance = balances.and_then(|m| m.get(&cost_id).copied()).unwrap_or(0);
+    let max_count =
+        if cost_valid && balance_known && cost_count > 0 { balance / cost_count } else { 0 };
     StarSandGoodsDto {
         id: goods.goods_id,
         activity_id,
@@ -967,9 +889,7 @@ pub fn normalize_shop_from_reply(
             let cost_id = g.cost.as_ref().map(|c| c.id).unwrap_or(0);
             let cost_count = g.cost.as_ref().map(|c| c.count).unwrap_or(0);
             let cost_valid = cost_id > 0 && cost_count > 0;
-            let balance = balances
-                .and_then(|m| m.get(&cost_id).copied())
-                .unwrap_or(0);
+            let balance = balances.and_then(|m| m.get(&cost_id).copied()).unwrap_or(0);
             let max_count = if cost_valid && balance_known && cost_count > 0 {
                 balance / cost_count
             } else {
@@ -1001,11 +921,8 @@ pub fn normalize_shop_from_reply(
         .filter(|g| g.exchangeable && (!g.max_exchange_count_known || g.max_exchange_count > 0))
         .count() as i32;
 
-    let mut categories: Vec<String> = goods
-        .iter()
-        .map(|g| g.category.clone())
-        .filter(|s| !s.is_empty())
-        .collect();
+    let mut categories: Vec<String> =
+        goods.iter().map(|g| g.category.clone()).filter(|s| !s.is_empty()).collect();
     categories.sort();
     categories.dedup();
 
@@ -1029,11 +946,7 @@ pub fn normalize_shop_from_reply(
         vec![]
     };
 
-    let server_time = season_reply
-        .season_info
-        .as_ref()
-        .map(|s| s.server_time)
-        .unwrap_or(0);
+    let server_time = season_reply.season_info.as_ref().map(|s| s.server_time).unwrap_or(0);
     let name = reply
         .data
         .as_ref()
@@ -1054,13 +967,16 @@ pub fn normalize_shop_from_reply(
     } else if affordable_count == 0 {
         shop_action["reason"] = serde_json::json!("当前余额不足以兑换目录商品");
     }
-    let balance = currencies.first().and_then(|c| {
-        if balance_known {
-            Some(c.count.to_string())
-        } else {
-            None
-        }
-    });
+    let balance =
+        currencies.first().and_then(
+            |c| {
+                if balance_known {
+                    Some(c.count.to_string())
+                } else {
+                    None
+                }
+            },
+        );
 
     StarSandShopDto {
         activity_id,
@@ -1099,11 +1015,7 @@ pub(crate) async fn read_bag_balances(
 }
 
 /// 把"00xxx" / 数字字符串解析为正整数
-pub fn positive_decimal(
-    value: &str,
-    code: ActivityErrorCode,
-    field_name: &str,
-) -> Result<i64> {
+pub fn positive_decimal(value: &str, code: ActivityErrorCode, field_name: &str) -> Result<i64> {
     let text = value.trim();
     // 必须非空、只含 ASCII 数字（不接 '-'，原 TS 用 `^[1-9]\d*$`）
     if text.is_empty() || !text.chars().all(|c| c.is_ascii_digit()) {
@@ -1120,10 +1032,9 @@ pub fn positive_decimal(
         }
         .into());
     }
-    let n: i64 = text.parse().map_err(|_| ActivityError {
-        code,
-        message: format!("{} is too large", field_name),
-    })?;
+    let n: i64 = text
+        .parse()
+        .map_err(|_| ActivityError { code, message: format!("{} is too large", field_name) })?;
     if n < 0 {
         return Err(ActivityError {
             code,
@@ -1193,7 +1104,10 @@ pub(crate) fn load_qingmei_seed_claimed_date(account_id: &str) -> Option<String>
     }
 }
 
-pub(crate) fn persist_qingmei_seed_claimed_date(account_id: &str, today: &str) -> std::io::Result<()> {
+pub(crate) fn persist_qingmei_seed_claimed_date(
+    account_id: &str,
+    today: &str,
+) -> std::io::Result<()> {
     let path = qingmei_seed_claimed_path(account_id);
     crate::services::json_db::write_json_file_atomic(
         &path,
@@ -1232,27 +1146,19 @@ pub(crate) fn force_qingmei_seed_claimed_in_snapshot(snapshot: &mut Option<serde
 }
 
 pub(crate) fn constellation_catalog_json() -> serde_json::Value {
-    static RAW: &str = include_str!("../../../../../assets/activity-data/constellation-2026072701.json");
+    static RAW: &str =
+        include_str!("../../../../../assets/activity-data/constellation-2026072701.json");
     serde_json::from_str(RAW).unwrap_or(serde_json::Value::Null)
 }
 
 pub(crate) fn constellation_catalog_version() -> i64 {
-    constellation_catalog_json()
-        .get("catalogVersion")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0)
+    constellation_catalog_json().get("catalogVersion").and_then(|v| v.as_i64()).unwrap_or(0)
 }
 
 pub(crate) fn constellation_catalog_rules() -> serde_json::Value {
-    constellation_catalog_json()
-        .get("rules")
-        .cloned()
-        .unwrap_or(serde_json::Value::Null)
+    constellation_catalog_json().get("rules").cloned().unwrap_or(serde_json::Value::Null)
 }
 
 pub(crate) fn constellation_catalog_groups() -> serde_json::Value {
-    constellation_catalog_json()
-        .get("groups")
-        .cloned()
-        .unwrap_or_else(|| serde_json::json!([]))
+    constellation_catalog_json().get("groups").cloned().unwrap_or_else(|| serde_json::json!([]))
 }

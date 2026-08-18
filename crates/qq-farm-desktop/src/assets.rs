@@ -7,13 +7,7 @@ use tauri::http::{header::CONTENT_TYPE, Request, Response, StatusCode};
 use qq_farm_core::config::paths::game_config_static_dir;
 
 fn content_type(path: &Path) -> &'static str {
-    match path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase()
-        .as_str()
-    {
+    match path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
@@ -90,10 +84,7 @@ pub fn handle_request(request: Request<Vec<u8>>) -> Response<Vec<u8>> {
             .unwrap_or_default(),
         Err(err) => {
             tracing::debug!(error = %err, file = %file.display(), "farmcfg: read failed");
-            Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .body(Vec::new())
-                .unwrap_or_default()
+            Response::builder().status(StatusCode::NOT_FOUND).body(Vec::new()).unwrap_or_default()
         }
     }
 }
@@ -104,20 +95,13 @@ mod tests {
     use tauri::http::Method;
 
     fn get(uri: &str) -> Request<Vec<u8>> {
-        Request::builder()
-            .method(Method::GET)
-            .uri(uri)
-            .body(Vec::new())
-            .expect("request")
+        Request::builder().method(Method::GET).uri(uri).body(Vec::new()).expect("request")
     }
 
     #[test]
     fn relative_from_farmcfg_localhost_path() {
         let req = get("farmcfg://localhost/seed_images_named/20218.png");
-        assert_eq!(
-            relative_from_request(&req),
-            "seed_images_named/20218.png"
-        );
+        assert_eq!(relative_from_request(&req), "seed_images_named/20218.png");
     }
 
     #[test]
@@ -125,11 +109,7 @@ mod tests {
         let res = handle_request(get("farmcfg://localhost/seed_images_named/20218.png"));
         assert_eq!(res.status(), StatusCode::OK);
         assert!(!res.body().is_empty());
-        let ct = res
-            .headers()
-            .get(CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
+        let ct = res.headers().get(CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("");
         assert_eq!(ct, "image/png");
     }
 }

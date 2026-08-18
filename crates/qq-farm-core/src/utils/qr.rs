@@ -71,14 +71,8 @@ mod tests {
     #[test]
     fn cookie_get_value_basic() {
         let c = "wxuin=o1234567890; pt2_token=abc; pgv_pvid=999";
-        assert_eq!(
-            CookieUtils::get_value(Some(c), "wxuin"),
-            Some("o1234567890".to_string())
-        );
-        assert_eq!(
-            CookieUtils::get_value(Some(c), "pt2_token"),
-            Some("abc".to_string())
-        );
+        assert_eq!(CookieUtils::get_value(Some(c), "wxuin"), Some("o1234567890".to_string()));
+        assert_eq!(CookieUtils::get_value(Some(c), "pt2_token"), Some("abc".to_string()));
         assert_eq!(CookieUtils::get_value(Some(c), "nonexistent"), None);
     }
 

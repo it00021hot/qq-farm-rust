@@ -13,8 +13,5 @@ pub enum WorkerMessage {
     /// 重载配置
     ReloadConfig,
     /// 自定义消息（业务扩展用）
-    Custom {
-        tag: String,
-        payload: serde_json::Value,
-    },
+    Custom { tag: String, payload: serde_json::Value },
 }

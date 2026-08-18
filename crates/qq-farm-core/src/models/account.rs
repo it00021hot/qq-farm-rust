@@ -52,6 +52,15 @@ pub struct AccountSession {
     /// 更新时间（ms）
     #[serde(default)]
     pub updated_at: i64,
+    /// 应用宝 / 微信开放平台 openid
+    #[serde(default)]
+    pub wx_openid: String,
+    /// 应用宝 login_buffer
+    #[serde(default)]
+    pub wx_login_buffer: String,
+    /// 应用宝 accesstoken
+    #[serde(default)]
+    pub wx_access_token: String,
 }
 
 /// 兼容旧名；请改用 [`AccountSession`]。
@@ -61,7 +70,11 @@ pub type Account = AccountSession;
 impl AccountSession {
     /// 创建新账号
     #[must_use]
-    pub fn new(id: impl Into<String>, open_id: impl Into<String>, display_name: impl Into<String>) -> Self {
+    pub fn new(
+        id: impl Into<String>,
+        open_id: impl Into<String>,
+        display_name: impl Into<String>,
+    ) -> Self {
         Self {
             id: id.into(),
             open_id: open_id.into(),
@@ -75,6 +88,9 @@ impl AccountSession {
             username: String::new(),
             created_at: 0,
             updated_at: 0,
+            wx_openid: String::new(),
+            wx_login_buffer: String::new(),
+            wx_access_token: String::new(),
         }
     }
 
@@ -82,11 +98,8 @@ impl AccountSession {
     #[must_use]
     pub fn from_store(acc: &crate::models::store::accounts::AccountRecord) -> Self {
         let code = acc.code.clone();
-        let display_name = if acc.name.trim().is_empty() {
-            acc.nick.clone()
-        } else {
-            acc.name.clone()
-        };
+        let display_name =
+            if acc.name.trim().is_empty() { acc.nick.clone() } else { acc.name.clone() };
         Self {
             id: acc.id.clone(),
             open_id: code.clone(),
@@ -100,7 +113,16 @@ impl AccountSession {
             username: acc.username.clone(),
             created_at: acc.created_at,
             updated_at: acc.updated_at,
+            wx_openid: acc.wx_openid.clone(),
+            wx_login_buffer: acc.wx_login_buffer.clone(),
+            wx_access_token: acc.wx_access_token.clone(),
         }
+    }
+
+    /// 微信账号且已持久化应用宝授权。
+    #[must_use]
+    pub fn has_wx_auth(&self) -> bool {
+        self.platform.trim().eq_ignore_ascii_case("wx") && !self.wx_login_buffer.trim().is_empty()
     }
 }
 
@@ -123,6 +145,9 @@ mod tests {
             username: "user".into(),
             created_at: 1,
             updated_at: 2,
+            wx_openid: "oid".into(),
+            wx_login_buffer: "buf".into(),
+            wx_access_token: "tok".into(),
         };
         let acc = AccountSession::from_store(&store);
         assert_eq!(acc.platform, "wx");
@@ -130,5 +155,8 @@ mod tests {
         assert_eq!(acc.open_id, "wx-one-time");
         assert_eq!(acc.display_name, "账号2");
         assert_eq!(acc.username, "user");
+        assert!(acc.has_wx_auth());
+        assert_eq!(acc.wx_login_buffer, "buf");
+        assert_eq!(acc.wx_access_token, "tok");
     }
 }

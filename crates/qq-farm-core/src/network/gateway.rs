@@ -25,7 +25,9 @@ use crate::network::error::{NetworkError, Result};
 use crate::network::frame::{FrameBuilder, FrameParser};
 use crate::network::notify::NotifyEvent;
 use crate::network::request::RequestManager;
-use crate::proto::generated::gamepb::userpb::{DeviceInfo, HeartbeatReply, HeartbeatRequest, LoginReply, LoginRequest, ReportData};
+use crate::proto::generated::gamepb::userpb::{
+    DeviceInfo, HeartbeatReply, HeartbeatRequest, LoginReply, LoginRequest, ReportData,
+};
 use crate::proto::generated::gatepb::MessageType;
 
 /// 连接阶段
@@ -100,13 +102,8 @@ fn rpc_phase_ok(phase: ConnectionPhase, require_online: bool) -> Result<()> {
                 "request requires Online, current: {phase:?}"
             )));
         }
-    } else if !matches!(
-        phase,
-        ConnectionPhase::Login | ConnectionPhase::Online
-    ) {
-        return Err(NetworkError::Phase(format!(
-            "connection not open: {phase:?}"
-        )));
+    } else if !matches!(phase, ConnectionPhase::Login | ConnectionPhase::Online) {
+        return Err(NetworkError::Phase(format!("connection not open: {phase:?}")));
     }
     Ok(())
 }
@@ -131,18 +128,12 @@ fn origin_from_ws_url(server_url: &str) -> String {
 fn apply_default_ws_headers(headers: &mut HashMap<String, String>, _server_url: &str) {
     if header_missing(headers, "Origin") {
         // 对齐 network.ts：Origin 固定为游戏网关，不随自定义 serverUrl 变
-        headers.insert(
-            "Origin".to_string(),
-            "https://gate-obt.nqf.qq.com".to_string(),
-        );
+        headers.insert("Origin".to_string(), "https://gate-obt.nqf.qq.com".to_string());
     }
     if header_missing(headers, "User-Agent") {
         let ua = crate::config::get_runtime_config().device_info.user_agent;
-        let ua = if ua.is_empty() {
-            crate::config::DeviceInfo::windows_pc().user_agent
-        } else {
-            ua
-        };
+        let ua =
+            if ua.is_empty() { crate::config::DeviceInfo::windows_pc().user_agent } else { ua };
         headers.insert("User-Agent".to_string(), ua);
     }
 }
@@ -294,11 +285,7 @@ impl Gateway {
 
     /// 取出并清空断开原因；无显式原因时视为远端 `ws_close`
     pub fn take_disconnect_reason(&self) -> String {
-        self.inner
-            .disconnect_reason
-            .lock()
-            .take()
-            .unwrap_or_else(|| "ws_close".to_string())
+        self.inner.disconnect_reason.lock().take().unwrap_or_else(|| "ws_close".to_string())
     }
 
     /// 当前会话结束后返回（dispatch 退出或 `force_disconnect`）
@@ -327,7 +314,14 @@ impl Gateway {
     /// 发送一个业务请求
     ///
     /// 返回 `client_seq` + 响应 receiver
-    pub fn begin_request(&self, service: &str, method: &str) -> (i64, oneshot::Receiver<std::result::Result<crate::network::request::Response, NetworkError>>) {
+    pub fn begin_request(
+        &self,
+        service: &str,
+        method: &str,
+    ) -> (
+        i64,
+        oneshot::Receiver<std::result::Result<crate::network::request::Response, NetworkError>>,
+    ) {
         self.inner.requests.call(service, method)
     }
 
@@ -344,10 +338,7 @@ impl Gateway {
         let encrypted_body = if body.is_empty() {
             Vec::new()
         } else {
-            self.inner
-                .encryptor
-                .encrypt(body)
-                .map_err(|e| NetworkError::Encrypt(e.to_string()))?
+            self.inner.encryptor.encrypt(body).map_err(|e| NetworkError::Encrypt(e.to_string()))?
         };
         let frame = FrameBuilder::request(service, method)
             .with_client_seq(client_seq)
@@ -386,10 +377,7 @@ impl Gateway {
             .as_ref()
             .ok_or_else(|| NetworkError::Phase("ws not connected".into()))?
             .clone();
-        ws_tx
-            .send(frame_bytes)
-            .await
-            .map_err(|_| NetworkError::WebSocket("send failed".into()))?;
+        ws_tx.send(frame_bytes).await.map_err(|_| NetworkError::WebSocket("send failed".into()))?;
         Ok(())
     }
 
@@ -453,6 +441,12 @@ impl Gateway {
         self.inner.requests.pending_count()
     }
 
+    /// 是否已有指定方法名的 RPC 在路上（心跳避免叠发）
+    #[must_use]
+    pub fn has_pending_method(&self, method: &str) -> bool {
+        self.inner.requests.has_pending_method(method)
+    }
+
     /// 最近一次入站帧时间（ms）。0 表示本会话尚未收到帧。
     #[must_use]
     pub fn last_rx_ms(&self) -> i64 {
@@ -507,9 +501,8 @@ impl Gateway {
         let body = prost::Message::encode_to_vec(&req);
 
         // 3. 对齐 sendLogin：用 sendMsg（Login 阶段可发），不是 sendMsgAsync
-        let reply_bytes = self
-            .send_rpc("gamepb.userpb.UserService", "Login", &body, 20_000, false)
-            .await?;
+        let reply_bytes =
+            self.send_rpc("gamepb.userpb.UserService", "Login", &body, 20_000, false).await?;
 
         // 4. 解码 LoginReply
         let reply = LoginReply::decode(reply_bytes.as_slice())
@@ -555,12 +548,12 @@ impl Gateway {
     pub async fn fetch_user_settings(&self) -> Result<()> {
         let req = crate::proto::generated::gamepb::userpb::GetUserSettingsRequest {};
         let body = prost::Message::encode_to_vec(&req);
-        let reply_bytes = self
-            .request("gamepb.userpb.UserService", "GetUserSettings", &body, 20_000)
-            .await?;
-        let reply =
-            crate::proto::generated::gamepb::userpb::GetUserSettingsReply::decode(reply_bytes.as_slice())
-                .map_err(|e| NetworkError::Frame(format!("decode GetUserSettingsReply: {e}")))?;
+        let reply_bytes =
+            self.request("gamepb.userpb.UserService", "GetUserSettings", &body, 20_000).await?;
+        let reply = crate::proto::generated::gamepb::userpb::GetUserSettingsReply::decode(
+            reply_bytes.as_slice(),
+        )
+        .map_err(|e| NetworkError::Frame(format!("decode GetUserSettingsReply: {e}")))?;
         if reply.settings.is_some() {
             tracing::info!("用户设置已同步");
         }
@@ -569,15 +562,11 @@ impl Gateway {
 
     /// 发 Heartbeat 请求（同步服务器时间 + 维持连接）
     pub async fn heartbeat(&self, gid: i64, client_version: &str) -> Result<HeartbeatReply> {
-        let req = HeartbeatRequest {
-            gid,
-            client_version: client_version.to_string(),
-        };
+        let req = HeartbeatRequest { gid, client_version: client_version.to_string() };
         let body = prost::Message::encode_to_vec(&req);
         // 对齐 network.ts：Heartbeat 走 sendMsgAsync 默认 20s，不能用 5s（忙时易误超时→掉线）
-        let reply_bytes = self
-            .request("gamepb.userpb.UserService", "Heartbeat", &body, 20_000)
-            .await?;
+        let reply_bytes =
+            self.request("gamepb.userpb.UserService", "Heartbeat", &body, 20_000).await?;
         let reply = HeartbeatReply::decode(reply_bytes.as_slice())
             .map_err(|e| NetworkError::Frame(format!("decode HeartbeatReply: {e}")))?;
         if reply.server_time > 0 {
@@ -593,11 +582,12 @@ impl Gateway {
 }
 
 /// 接收 dispatch loop
-async fn dispatch_loop(mut rx: mpsc::Receiver<crate::network::client::ReceivedFrame>, inner: Arc<Inner>) {
+async fn dispatch_loop(
+    mut rx: mpsc::Receiver<crate::network::client::ReceivedFrame>,
+    inner: Arc<Inner>,
+) {
     while let Some(frame) = rx.recv().await {
-        inner
-            .last_rx_ms
-            .store(crate::utils::time::now_ms(), Ordering::Release);
+        inner.last_rx_ms.store(crate::utils::time::now_ms(), Ordering::Release);
         // 1. 解析外层 GateMessage
         let parsed = match FrameParser::parse(&frame.bytes) {
             Ok(p) => p,
@@ -672,10 +662,7 @@ fn handle_response(inner: &Arc<Inner>, parsed: &FrameParser) {
             client_seq,
         };
         let _ = inner.requests.fail(client_seq, err);
-    } else if !inner
-        .requests
-        .complete(client_seq, parsed.body().to_vec(), parsed.server_seq())
-    {
+    } else if !inner.requests.complete(client_seq, parsed.body().to_vec(), parsed.server_seq()) {
         tracing::debug!(
             client_seq,
             service = parsed.service_name(),

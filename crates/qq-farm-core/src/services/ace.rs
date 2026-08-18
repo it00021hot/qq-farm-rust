@@ -63,8 +63,7 @@ impl AceShared {
         *self.sender.lock() = Some(sender);
         *self.tsdk.lock() = Some(tsdk);
         self.ready_logged.store(false, Ordering::SeqCst);
-        self.last_speed_check_at
-            .store(crate::utils::time::now_ms(), Ordering::SeqCst);
+        self.last_speed_check_at.store(crate::utils::time::now_ms(), Ordering::SeqCst);
 
         // 1. anti_data 5s
         self.scheduler.set_interval_task(
@@ -102,11 +101,7 @@ impl AceShared {
             ace_simple_task(self.clone(), |s| {
                 let now = crate::utils::time::now_ms();
                 let last = s.last_speed_check_at.swap(now, Ordering::SeqCst);
-                let elapsed = if last == 0 {
-                    30_000
-                } else {
-                    (now - last).max(0) as u64
-                };
+                let elapsed = if last == 0 { 30_000 } else { (now - last).max(0) as u64 };
                 if let Some(tsdk) = s.tsdk.lock().as_ref() {
                     let _ = tsdk.detect_speed_hack(elapsed);
                 }
@@ -178,14 +173,10 @@ impl AceShared {
             return Ok(());
         };
 
-        let req = AntiDataRequest {
-            data: prost::bytes::Bytes::from(data.clone()),
-        };
+        let req = AntiDataRequest { data: prost::bytes::Bytes::from(data.clone()) };
         let body = req.encode_to_vec();
 
-        let reply_body = sender
-            .send("gamepb.acepb.AceService", "AntiData", &body, 10_000)
-            .await?;
+        let reply_body = sender.send("gamepb.acepb.AceService", "AntiData", &body, 10_000).await?;
 
         let reply = AntiDataReply::decode(reply_body.as_slice())?;
         if !reply.result.is_empty() {

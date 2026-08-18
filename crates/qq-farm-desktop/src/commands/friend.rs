@@ -28,11 +28,12 @@ pub async fn friend_list(
 
 /// 强制同步好友列表。
 #[tauri::command]
-pub async fn friend_sync(state: State<'_, DesktopState>, account_id: String) -> IpcResult<Vec<qq_farm_app::dto::FriendSummary>> {
+pub async fn friend_sync(
+    state: State<'_, DesktopState>,
+    account_id: String,
+) -> IpcResult<Vec<qq_farm_app::dto::FriendSummary>> {
     ensure(&state, &account_id)?;
-    friend::list_friends(&state.app, &account_id, true)
-        .await
-        .map_err(IpcError::from)
+    friend::list_friends(&state.app, &account_id, true).await.map_err(IpcError::from)
 }
 
 /// 清空好友列表缓存。
@@ -50,9 +51,7 @@ pub async fn friend_lands(
     gid: i64,
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
-    friend::friend_lands(&state.app, &account_id, gid)
-        .await
-        .map_err(IpcError::from)
+    friend::friend_lands(&state.app, &account_id, gid).await.map_err(IpcError::from)
 }
 
 /// 好友操作。
@@ -64,9 +63,7 @@ pub async fn friend_op(
     op: String,
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
-    friend::friend_op(&state.app, &account_id, gid, &op)
-        .await
-        .map_err(IpcError::from)
+    friend::friend_op(&state.app, &account_id, gid, &op).await.map_err(IpcError::from)
 }
 
 /// 互动记录。
@@ -76,9 +73,7 @@ pub async fn friend_interact_records(
     account_id: String,
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
-    friend::interact_records(&state.app, &account_id)
-        .await
-        .map_err(IpcError::from)
+    friend::interact_records(&state.app, &account_id).await.map_err(IpcError::from)
 }
 
 /// 切换好友黑名单。
@@ -94,10 +89,7 @@ pub fn friend_blacklist_toggle(
 
 /// 已知好友 GID 设置。
 #[tauri::command]
-pub fn friend_known_gids(
-    state: State<'_, DesktopState>,
-    account_id: String,
-) -> IpcResult<Value> {
+pub fn friend_known_gids(state: State<'_, DesktopState>, account_id: String) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
     Ok(friend::known_gid_settings(&account_id))
 }

@@ -166,9 +166,8 @@ impl FarmService {
                     }
                     let gid = *host_gid.lock();
                     if gid == 0 {
-                        let _ = event_tx.send(FarmEvent::Error {
-                            message: "host_gid not set".into(),
-                        });
+                        let _ =
+                            event_tx.send(FarmEvent::Error { message: "host_gid not set".into() });
                         return;
                     }
                     let acc = account_id.lock().clone();
@@ -181,11 +180,11 @@ impl FarmService {
                                 &acc,
                                 "巡田",
                                 format!("检查失败: {e}"),
-                                crate::constants::PanelEvent::FarmCycle, Some(serde_json::json!({ "module": "farm"})),
+                                crate::constants::PanelEvent::FarmCycle,
+                                Some(serde_json::json!({ "module": "farm"})),
                             );
-                            let _ = event_tx.send(FarmEvent::Error {
-                                message: format!("cycle failed: {e}"),
-                            });
+                            let _ = event_tx
+                                .send(FarmEvent::Error { message: format!("cycle failed: {e}") });
                         }
                     }
                 })
@@ -234,10 +233,8 @@ impl FarmService {
     /// 获取土地详情（lands + summary）
     pub async fn get_lands_detail(
         &self,
-    ) -> Result<(
-        Vec<serde_json::Value>,
-        crate::services::farm::land_analysis::LandDetailSummary,
-    )> {
+    ) -> Result<(Vec<serde_json::Value>, crate::services::farm::land_analysis::LandDetailSummary)>
+    {
         let host_gid = *self.host_gid.lock();
         let reply = self.api.get_all_lands(host_gid).await?;
         Ok(crate::services::farm::land_analysis::own_lands_detail(&reply.lands))
@@ -247,7 +244,8 @@ impl FarmService {
     pub async fn run_farm_operation(&self) -> Result<()> {
         let gid = *self.host_gid.lock();
         let acc = self.account_id.lock().clone();
-        let result = Self::run_one_cycle(&self.api, &self.planting, gid, &acc, &self.event_tx).await;
+        let result =
+            Self::run_one_cycle(&self.api, &self.planting, gid, &acc, &self.event_tx).await;
         if result.is_ok() {
             let _ = self.event_tx.send(FarmEvent::CycleCompleted);
         }
@@ -276,12 +274,7 @@ impl FarmService {
         let ids: Vec<i64> = reply
             .lands
             .iter()
-            .filter(|l| {
-                l.plant
-                    .as_ref()
-                    .map(|p| p.dry_num > 0)
-                    .unwrap_or(false)
-            })
+            .filter(|l| l.plant.as_ref().map(|p| p.dry_num > 0).unwrap_or(false))
             .map(|l| l.id)
             .collect();
         let n = ids.len();
@@ -322,12 +315,8 @@ impl FarmService {
     pub async fn op_fertilize(&self) -> Result<FertilizeOpResult> {
         let gid = *self.host_gid.lock();
         let reply = self.api.get_all_lands(gid).await?;
-        let planted: Vec<i64> = reply
-            .lands
-            .iter()
-            .filter(|l| l.plant.is_some())
-            .map(|l| l.id)
-            .collect();
+        let planted: Vec<i64> =
+            reply.lands.iter().filter(|l| l.plant.is_some()).map(|l| l.id).collect();
         if planted.is_empty() {
             return Ok(FertilizeOpResult::default());
         }
@@ -338,14 +327,10 @@ impl FarmService {
             .await
             .fertilize_by_config_ex(&planted, gid, &acc, Default::default())
             .await?;
-        let _ = self.event_tx.send(FarmEvent::Fertilized {
-            normal: result.normal,
-            organic: result.organic,
-        });
-        Ok(FertilizeOpResult {
-            normal: result.normal,
-            organic: result.organic,
-        })
+        let _ = self
+            .event_tx
+            .send(FarmEvent::Fertilized { normal: result.normal, organic: result.organic });
+        Ok(FertilizeOpResult { normal: result.normal, organic: result.organic })
     }
 
     /// 种植（`op=plant`）—— 自动选种种空地/枯地
@@ -424,16 +409,14 @@ impl FarmService {
                 account_id,
                 "农场",
                 "没有土地数据",
-                crate::constants::PanelEvent::FarmCycle, Some(serde_json::json!({ "module": "farm"})),
+                crate::constants::PanelEvent::FarmCycle,
+                Some(serde_json::json!({ "module": "farm"})),
             );
             return Ok(());
         }
         let status = analyze_lands(&lands, host_gid);
         let summary = summarize_lands(&lands);
-        let _ = event_tx.send(FarmEvent::Checked {
-            summary,
-            phase_hint: String::new(),
-        });
+        let _ = event_tx.send(FarmEvent::Checked { summary, phase_hint: String::new() });
         let mut actions: Vec<String> = Vec::new();
 
         let skip_own =
@@ -455,7 +438,8 @@ impl FarmService {
                         account_id,
                         "农场",
                         format!("一键务农失败: {e}"),
-                        crate::constants::PanelEvent::FarmCycle, Some(serde_json::json!({ "module": "farm"})),
+                        crate::constants::PanelEvent::FarmCycle,
+                        Some(serde_json::json!({ "module": "farm"})),
                     );
                 }
                 Ok(reply) => {
@@ -476,10 +460,7 @@ impl FarmService {
         let mut harvested_land_ids: Vec<i64> = Vec::new();
         let mut harvest_lands: Vec<crate::proto::generated::gamepb::plantpb::LandInfo> = Vec::new();
         if !status.harvestable.is_empty() {
-            match api
-                .harvest(status.harvestable.clone(), host_gid, true)
-                .await
-            {
+            match api.harvest(status.harvestable.clone(), host_gid, true).await {
                 Ok(hr) => {
                     harvested_land_ids = status.harvestable.clone();
                     harvest_lands = hr.land;
@@ -488,16 +469,15 @@ impl FarmService {
                         "harvest",
                         harvested_land_ids.len() as i64,
                     );
-                    let _ = event_tx.send(FarmEvent::Harvested {
-                        count: harvested_land_ids.len(),
-                    });
+                    let _ = event_tx.send(FarmEvent::Harvested { count: harvested_land_ids.len() });
                     crate::services::status::apply_reward_deltas_for(account_id, &hr.items);
                     crate::services::panel_log::log(
                         account_id,
                         "收获",
                         format!("收获完成 {} 块土地", harvested_land_ids.len()),
-                        crate::constants::PanelEvent::HarvestCrop, Some(serde_json::json!({
-                            "module": "farm", 
+                        crate::constants::PanelEvent::HarvestCrop,
+                        Some(serde_json::json!({
+                            "module": "farm",
                             "result": "ok",
                             "count": harvested_land_ids.len(),
                             "landIds": harvested_land_ids,
@@ -511,8 +491,9 @@ impl FarmService {
                         account_id,
                         "收获",
                         e.to_string(),
-                        crate::constants::PanelEvent::HarvestCrop, Some(serde_json::json!({
-                            "module": "farm", 
+                        crate::constants::PanelEvent::HarvestCrop,
+                        Some(serde_json::json!({
+                            "module": "farm",
                             "result": "error",
                         })),
                     );
@@ -558,18 +539,21 @@ impl FarmService {
                 .await
             {
                 Ok(r) => {
-                    crate::services::stats::record_operation_for(account_id, "plant", plant_count as i64);
-                    let _ = event_tx.send(FarmEvent::Planted {
-                        count: r.planted_lands.len(),
-                    });
+                    crate::services::stats::record_operation_for(
+                        account_id,
+                        "plant",
+                        plant_count as i64,
+                    );
+                    let _ = event_tx.send(FarmEvent::Planted { count: r.planted_lands.len() });
                     if !r.planted_lands.is_empty() {
                         actions.push(format!("种植{}", r.planted_lands.len()));
                         crate::services::panel_log::log(
                             account_id,
                             "种植",
                             format!("种植完成 {} 块土地", r.planted_lands.len()),
-                            crate::constants::PanelEvent::PlantSeed, Some(serde_json::json!({
-                                "module": "farm", 
+                            crate::constants::PanelEvent::PlantSeed,
+                            Some(serde_json::json!({
+                                "module": "farm",
                                 "result": "ok",
                                 "count": r.planted_lands.len(),
                                 "landIds": r.planted_lands,
@@ -583,7 +567,8 @@ impl FarmService {
                         account_id,
                         "种植",
                         e.to_string(),
-                        crate::constants::PanelEvent::PlantSeed, Some(serde_json::json!({ "module": "farm"})),
+                        crate::constants::PanelEvent::PlantSeed,
+                        Some(serde_json::json!({ "module": "farm"})),
                     );
                 }
             }
@@ -611,21 +596,17 @@ impl FarmService {
                 )
                 .await
             {
-                let _ = event_tx.send(FarmEvent::Fertilized {
-                    normal: result.normal,
-                    organic: result.organic,
-                });
+                let _ = event_tx
+                    .send(FarmEvent::Fertilized { normal: result.normal, organic: result.organic });
                 if result.normal + result.organic > 0 {
                     actions.push(format!("施肥{}/{}", result.normal, result.organic));
                     crate::services::panel_log::log(
                         account_id,
                         "施肥",
-                        format!(
-                            "多季补肥完成 普通{} / 有机{}",
-                            result.normal, result.organic
-                        ),
-                        crate::constants::PanelEvent::Fertilize, Some(serde_json::json!({
-                            "module": "farm", 
+                        format!("多季补肥完成 普通{} / 有机{}", result.normal, result.organic),
+                        crate::constants::PanelEvent::Fertilize,
+                        Some(serde_json::json!({
+                            "module": "farm",
                             "result": "ok",
                             "normal": result.normal,
                             "organic": result.organic,
@@ -644,8 +625,9 @@ impl FarmService {
                             account_id,
                             "解锁",
                             format!("土地#{land_id} 解锁成功"),
-                            crate::constants::PanelEvent::UnlockLand, Some(serde_json::json!({
-                                "module": "farm", 
+                            crate::constants::PanelEvent::UnlockLand,
+                            Some(serde_json::json!({
+                                "module": "farm",
                                 "result": "ok",
                                 "landId": land_id,
                             })),
@@ -656,8 +638,9 @@ impl FarmService {
                         account_id,
                         "解锁",
                         format!("土地#{land_id} 解锁失败: {e}"),
-                        crate::constants::PanelEvent::UnlockLand, Some(serde_json::json!({
-                            "module": "farm", 
+                        crate::constants::PanelEvent::UnlockLand,
+                        Some(serde_json::json!({
+                            "module": "farm",
                             "result": "error",
                             "landId": land_id,
                         })),
@@ -673,8 +656,9 @@ impl FarmService {
                             account_id,
                             "升级",
                             format!("土地#{land_id} 升级成功"),
-                            crate::constants::PanelEvent::UpgradeLand, Some(serde_json::json!({
-                                "module": "farm", 
+                            crate::constants::PanelEvent::UpgradeLand,
+                            Some(serde_json::json!({
+                                "module": "farm",
                                 "result": "ok",
                                 "landId": land_id,
                             })),
@@ -687,7 +671,7 @@ impl FarmService {
                         format!("土地#{land_id} 升级失败: {e}"),
                         crate::constants::PanelEvent::UpgradeLand,
                         Some(serde_json::json!({
-                            "module": "farm", 
+                            "module": "farm",
                             "result": "error",
                             "landId": land_id,
                         })),
@@ -697,12 +681,9 @@ impl FarmService {
             }
         }
 
-        let fertilizer_mode = crate::models::store::account_config::get_automation(Some(account_id))
-            .fertilizer;
-        if matches!(
-            fertilizer_mode,
-            crate::models::types::FertilizerMode::Smart
-        ) {
+        let fertilizer_mode =
+            crate::models::store::account_config::get_automation(Some(account_id)).fertilizer;
+        if matches!(fertilizer_mode, crate::models::types::FertilizerMode::Smart) {
             if let Ok(result) = planting
                 .lock()
                 .await
@@ -727,8 +708,9 @@ impl FarmService {
                         account_id,
                         "施肥",
                         format!("巡田施肥完成 有机{}", result.organic),
-                        crate::constants::PanelEvent::Fertilize, Some(serde_json::json!({
-                            "module": "farm", 
+                        crate::constants::PanelEvent::Fertilize,
+                        Some(serde_json::json!({
+                            "module": "farm",
                             "result": "ok",
                             "organic": result.organic,
                         })),
@@ -744,8 +726,9 @@ impl FarmService {
                 account_id,
                 "农场",
                 format!("[{}]{action_str}", status_parts.join(" ")),
-                crate::constants::PanelEvent::FarmCycle, Some(serde_json::json!({
-                    "module": "farm", 
+                crate::constants::PanelEvent::FarmCycle,
+                Some(serde_json::json!({
+                    "module": "farm",
                     "opType": "all",
                     "actions": actions,
                 })),

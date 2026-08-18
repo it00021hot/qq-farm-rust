@@ -32,11 +32,6 @@ impl Land {
     /// 创建新土地（默认空闲）
     #[must_use]
     pub fn new(id: u32) -> Self {
-        Self {
-            id,
-            crop_id: None,
-            status: LandStatus::Empty,
-            remaining_secs: 0,
-        }
+        Self { id, crop_id: None, status: LandStatus::Empty, remaining_secs: 0 }
     }
 }

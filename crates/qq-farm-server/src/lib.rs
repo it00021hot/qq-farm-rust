@@ -7,8 +7,8 @@
 use std::sync::Arc;
 
 use axum::{routing::get, Json, Router};
-use tower_http::services::ServeDir;
 use serde_json::json;
+use tower_http::services::ServeDir;
 
 pub mod config;
 pub mod context;
@@ -31,8 +31,8 @@ pub struct TestApp {
 
 /// 构造测试用 axum Router（包含完整路由 + middleware + health）
 pub async fn build_test_app(cfg: TestApp) -> Router {
-    use std::sync::Once;
     use qq_farm_core::runtime::engine::{EngineConfig, GatewayConfigTemplate, RuntimeEngine};
+    use std::sync::Once;
 
     // persist_global 会写 accounts.json；测试必须隔离，避免污染开发 data/
     static INIT_DATA_DIR: Once = Once::new();
@@ -46,10 +46,7 @@ pub async fn build_test_app(cfg: TestApp) -> Router {
     let engine = Arc::new(RuntimeEngine::assemble(EngineConfig {
         max_workers: 4,
         gateway_template: GatewayConfigTemplate {
-            server_url: cfg
-                .server_url
-                .clone()
-                .unwrap_or_else(|| "ws://localhost:0".to_string()),
+            server_url: cfg.server_url.clone().unwrap_or_else(|| "ws://localhost:0".to_string()),
             platform: cfg.platform.clone().unwrap_or_else(|| "test".to_string()),
             os: "linux".to_string(),
             client_version: "0.1.0-test".to_string(),
@@ -76,10 +73,7 @@ pub async fn build_test_app(cfg: TestApp) -> Router {
         .route("/health", get(health))
         .route("/ws", get(socket::ws_handler))
         .merge(routes::build(ctx.clone()))
-        .nest_service(
-            "/game-config",
-            ServeDir::new(qq_farm_core::config::game_config_static_dir()),
-        )
+        .nest_service("/game-config", ServeDir::new(qq_farm_core::config::game_config_static_dir()))
         .with_state(ctx)
         .layer(axum::middleware::from_fn(middleware::cors_layer))
 }

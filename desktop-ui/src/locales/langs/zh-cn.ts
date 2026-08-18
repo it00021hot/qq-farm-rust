@@ -328,6 +328,10 @@ const local: App.I18n.Schema = {
           running: '运行中',
           error: '异常'
         },
+        authStatus: {
+          authorized: '已授权',
+          unauthorized: '未授权'
+        },
         fertilizerMode: {
           none: '不施肥',
           normal: '仅普通化肥',
@@ -476,6 +480,7 @@ const local: App.I18n.Schema = {
         qq: 'QQ',
         remark: '备注',
         runStatus: '运行状态',
+        authStatus: '授权状态',
         status: '状态',
         lastOnlineAt: '最近在线',
         addAccount: '新增账号',
@@ -786,7 +791,27 @@ const local: App.I18n.Schema = {
         strategyMaxFertExp: '最大普通肥经验/时',
         strategyMaxProfit: '最大净利润/时',
         strategyMaxFertProfit: '最大普通肥净利润/时',
-        strategyBagPriority: '背包种子优先'
+        strategyBagPriority: '背包种子优先',
+        offlineReminder: '下线提醒',
+        saveOffline: '保存下线提醒',
+        saveOfflineSuccess: '下线提醒已保存',
+        testOffline: '测试通知',
+        testOfflineSuccess: '测试消息发送成功',
+        testOfflineFail: '测试失败',
+        channel: '推送渠道',
+        channelDocs: '官网',
+        channelNone: '不推送',
+        reloginUrl: '重登录链接',
+        reloginNone: '不需要',
+        reloginQqLink: 'QQ 直链',
+        reloginQrLink: '二维码链接',
+        endpoint: '接口地址',
+        token: 'Token',
+        reminderTitle: '标题',
+        reminderMsg: '内容',
+        offlineDeleteSec: '离线删除账号 (秒)',
+        offlineDeleteHint: '0 表示不删除',
+        offlineHint: '账号掉线时推送到所选渠道。Webhook 填接口地址，其他渠道填 Token。未填写地址或 Token 时不会推送，也不会在运行日志里报错。'
       },
       gameConfig: {
         title: '游戏配置',

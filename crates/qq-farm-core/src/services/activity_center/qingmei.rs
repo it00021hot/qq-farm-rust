@@ -2,27 +2,27 @@ use std::collections::HashSet;
 
 use prost::Message;
 
+use crate::constants::{
+    ACTIVITY_SERVICE, CLAIM_QINGMEI_SEED_OPERATE_TYPE, CONTINUE_QINGMEI_BREW_OPERATE_TYPE,
+    QINGMEI_BREW_ACTIVITY_ID, QINGMEI_DAILY_ACTIVITY_ID, QINGMEI_DAILY_ALREADY_CLAIMED_CODE,
+    QINGMEI_DAILY_GRANT_ID, QINGMEI_ITEM_ID, QINGMEI_SHARED_SETTLEMENT_MODE, QINGMEI_SHARE_SCENE,
+    QINGMEI_SHARE_SOURCE, QUERY_QINGMEI_OPERATE_TYPE, SELL_QINGMEI_BREW_OPERATE_TYPE,
+    START_QINGMEI_BREW_OPERATE_TYPE,
+};
 use crate::error::Result;
 use crate::proto::generated::gamepb::activitypb::{
     ActivityOperateReply, ClaimQingMeiDailySeedRequest, ContinueQingMeiBrewRequest,
     QueryActivityRequest, SettleQingMeiBrewRequest, StartQingMeiBrewRequest,
 };
-use crate::constants::{
-    ACTIVITY_SERVICE, CLAIM_QINGMEI_SEED_OPERATE_TYPE, CONTINUE_QINGMEI_BREW_OPERATE_TYPE,
-    QINGMEI_BREW_ACTIVITY_ID, QINGMEI_DAILY_ACTIVITY_ID, QINGMEI_DAILY_ALREADY_CLAIMED_CODE,
-    QINGMEI_DAILY_GRANT_ID, QINGMEI_ITEM_ID, QINGMEI_SHARE_SCENE, QINGMEI_SHARE_SOURCE,
-    QINGMEI_SHARED_SETTLEMENT_MODE, QUERY_QINGMEI_OPERATE_TYPE, SELL_QINGMEI_BREW_OPERATE_TYPE,
-    START_QINGMEI_BREW_OPERATE_TYPE,
-};
 
 use super::dto::{
-    activity_item_dto, force_qingmei_seed_claimed_in_snapshot, item_dto, item_from_id, json_i64,
-    json_positive_decimal, json_text, text_content, is_qingmei_already_claimed_message,
+    activity_item_dto, force_qingmei_seed_claimed_in_snapshot, is_qingmei_already_claimed_message,
+    item_dto, item_from_id, json_i64, json_positive_decimal, json_text, text_content,
 };
 use super::error::{ActivityError, ActivityErrorCode};
-use crate::services::warehouse::WarehouseService;
-use super::{ItemDto, QingMeiDto};
 use super::ActivityCenterService;
+use super::{ItemDto, QingMeiDto};
+use crate::services::warehouse::WarehouseService;
 
 impl ActivityCenterService {
     // ----- 青梅 -----
@@ -32,18 +32,11 @@ impl ActivityCenterService {
         body: Vec<u8>,
         expected_error_codes: &[i64],
     ) -> Result<(ActivityOperateReply, bool)> {
-        match self
-            .gateway
-            .request(ACTIVITY_SERVICE, "Operate", &body, 10_000)
-            .await
-        {
+        match self.gateway.request(ACTIVITY_SERVICE, "Operate", &body, 10_000).await {
             Ok(bytes) => Ok((ActivityOperateReply::decode(&bytes[..])?, false)),
-            Err(crate::network::error::NetworkError::Gateway {
-                code,
-                error_message,
-                ..
-            }) if expected_error_codes.contains(&code)
-                || is_qingmei_already_claimed_message(&error_message) =>
+            Err(crate::network::error::NetworkError::Gateway { code, error_message, .. })
+                if expected_error_codes.contains(&code)
+                    || is_qingmei_already_claimed_message(&error_message) =>
             {
                 Ok((ActivityOperateReply::default(), true))
             }
@@ -56,9 +49,7 @@ impl ActivityCenterService {
             activity_id: QINGMEI_BREW_ACTIVITY_ID,
             operate_type: QUERY_QINGMEI_OPERATE_TYPE,
         };
-        self.operate_qingmei(req.encode_to_vec(), &[])
-            .await
-            .map(|(r, _)| r)
+        self.operate_qingmei(req.encode_to_vec(), &[]).await.map(|(r, _)| r)
     }
 
     /// 当前青梅活动
@@ -75,21 +66,13 @@ impl ActivityCenterService {
         } else {
             WarehouseService::get_bag_via(&self.gateway).await?
         };
-        let items = bag
-            .item_bag
-            .as_ref()
-            .map(|b| b.items.as_slice())
-            .unwrap_or(&[]);
+        let items = bag.item_bag.as_ref().map(|b| b.items.as_slice()).unwrap_or(&[]);
         Ok(items
             .iter()
             .filter(|i| i.id == QINGMEI_ITEM_ID && i.count > 0)
             .map(|i| {
-                let mutant_types: Vec<String> = i
-                    .mutant_types
-                    .iter()
-                    .filter(|t| **t != 0)
-                    .map(ToString::to_string)
-                    .collect();
+                let mutant_types: Vec<String> =
+                    i.mutant_types.iter().filter(|t| **t != 0).map(ToString::to_string).collect();
                 let uid = i.uid.to_string();
                 let mut dto = serde_json::to_value(item_from_id(i.id, i.count))
                     .unwrap_or_else(|_| serde_json::json!({}));
@@ -112,12 +95,8 @@ impl ActivityCenterService {
         ingredients: Option<&[serde_json::Value]>,
     ) -> QingMeiDto {
         let activity = reply.data.as_ref().and_then(|d| d.activity.as_ref());
-        let brew = reply
-            .data
-            .as_ref()
-            .and_then(|d| d.qingmei_brew.as_ref())
-            .cloned()
-            .unwrap_or_default();
+        let brew =
+            reply.data.as_ref().and_then(|d| d.qingmei_brew.as_ref()).cloned().unwrap_or_default();
         let quote = reply
             .qingmei_quote
             .clone()
@@ -126,13 +105,10 @@ impl ActivityCenterService {
         let current_round = brew.current_round;
         let started = brew.base_gold > 0;
         let max_rounds = brew.max_rounds.max(1);
-        let claimed_today = self.qingmei_seed_claimed_today()
-            || daily_seed.map(|d| d.claimed).unwrap_or(false);
-        let balance: i64 = ingredients
-            .unwrap_or(&[])
-            .iter()
-            .filter_map(|v| json_i64(v.get("count")))
-            .sum();
+        let claimed_today =
+            self.qingmei_seed_claimed_today() || daily_seed.map(|d| d.claimed).unwrap_or(false);
+        let balance: i64 =
+            ingredients.unwrap_or(&[]).iter().filter_map(|v| json_i64(v.get("count"))).sum();
         let activity_id = activity
             .map(|a| a.activity_id)
             .filter(|id| *id != 0)
@@ -270,9 +246,8 @@ impl ActivityCenterService {
                 ActivityErrorCode::InvalidQingmeiCount,
                 "count",
             )?;
-            let candidate = candidates.iter().find(|c| {
-                json_i64(c.get("count")).unwrap_or(0) >= count
-            });
+            let candidate =
+                candidates.iter().find(|c| json_i64(c.get("count")).unwrap_or(0) >= count);
             vec![serde_json::json!({
                 "uid": candidate.and_then(|c| c.get("uid").cloned()).unwrap_or(serde_json::Value::Null),
                 "count": count,
@@ -399,5 +374,4 @@ impl ActivityCenterService {
             "snapshot": self.snapshot_with_shop(None).await.ok(),
         }))
     }
-
 }

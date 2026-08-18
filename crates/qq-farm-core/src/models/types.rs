@@ -365,6 +365,7 @@ pub struct QuietHoursConfig {
 
 /// 单账号完整配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AccountConfig {
     pub automation: AutomationConfig,
     pub planting_strategy: PlantingStrategy,
@@ -418,10 +419,7 @@ pub struct AccountConfigSnapshot {
 
 impl Default for AccountConfigSnapshot {
     fn default() -> Self {
-        Self {
-            config: AccountConfig::default(),
-            ui: None,
-        }
+        Self { config: AccountConfig::default(), ui: None }
     }
 }
 
@@ -457,13 +455,9 @@ mod tests {
 
     #[test]
     fn land_type_string_roundtrip() {
-        for lt in [
-            LandType::Normal,
-            LandType::Gold,
-            LandType::Black,
-            LandType::Red,
-            LandType::PurpleGold,
-        ] {
+        for lt in
+            [LandType::Normal, LandType::Gold, LandType::Black, LandType::Red, LandType::PurpleGold]
+        {
             assert_eq!(LandType::from_str_opt(lt.as_str()), Some(lt));
         }
         assert_eq!(LandType::from_str_opt("unknown"), None);

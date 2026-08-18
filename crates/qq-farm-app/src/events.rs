@@ -1,6 +1,6 @@
 //! 应用事件总线 — 包装 core RuntimeEvent，并产出与 web Socket 对齐的实时信封。
 
-use qq_farm_core::runtime::runtime_state::{LogEntry, RuntimeEvent};
+use qq_farm_core::runtime::runtime_state::{AccountLogEntry, LogEntry, RuntimeEvent};
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::sync::broadcast;
@@ -56,11 +56,7 @@ impl PanelRealtimeEvent {
     #[must_use]
     pub fn from_runtime(ev: &RuntimeEvent) -> Vec<Self> {
         match ev {
-            RuntimeEvent::Status {
-                account_id,
-                account_name,
-                status,
-            } => {
+            RuntimeEvent::Status { account_id, account_name, status } => {
                 if account_id.is_empty() {
                     return Vec::new();
                 }
@@ -91,18 +87,11 @@ impl PanelRealtimeEvent {
                 }
                 vec![Self {
                     event_type: "account-log:new".into(),
-                    payload: serde_json::to_value(entry).unwrap_or(json!({
-                        "message": entry.msg,
-                        "accountId": entry.account_id,
-                    })),
+                    payload: account_log_payload(entry),
                     account_id: Some(entry.account_id.clone()),
                 }]
             }
-            RuntimeEvent::WorkerLog {
-                entry,
-                account_id,
-                ..
-            } => {
+            RuntimeEvent::WorkerLog { entry, account_id, .. } => {
                 if account_id.is_empty() {
                     return Vec::new();
                 }
@@ -130,11 +119,8 @@ fn flatten_status_body(status: &Value, account_id: &str, account_name: &str) -> 
         .or_else(|| status.get("nick").and_then(Value::as_str))
         .filter(|s| !s.is_empty())
         .unwrap_or(account_name);
-    let mut out = if let Some(obj) = status.as_object() {
-        Value::Object(obj.clone())
-    } else {
-        json!({})
-    };
+    let mut out =
+        if let Some(obj) = status.as_object() { Value::Object(obj.clone()) } else { json!({}) };
     if let Some(obj) = out.as_object_mut() {
         obj.insert("accountId".into(), json!(account_id));
         obj.entry("nick".to_string()).or_insert_with(|| json!(nick));
@@ -154,10 +140,22 @@ fn flatten_status_body(status: &Value, account_id: &str, account_name: &str) -> 
             }
         }
         obj.insert("online".into(), json!(connected));
-        obj.entry("runStatus".to_string())
-            .or_insert_with(|| json!(if connected { 1 } else { 0 }));
+        obj.entry("runStatus".to_string()).or_insert_with(|| json!(if connected { 1 } else { 0 }));
     }
     out
+}
+
+fn account_log_payload(entry: &AccountLogEntry) -> Value {
+    json!({
+        "accountId": entry.account_id,
+        "accountName": entry.account_name,
+        "action": entry.action,
+        "event": entry.action,
+        "msg": entry.msg,
+        "message": entry.msg,
+        "tag": "系统",
+        "time": entry.time,
+    })
 }
 
 fn log_payload(entry: &LogEntry) -> Value {
@@ -174,48 +172,34 @@ fn log_payload(entry: &LogEntry) -> Value {
             obj.entry("event".to_string()).or_insert_with(|| event.clone());
         }
         if let Some(module) = entry.meta.get("module") {
-            obj.entry("module".to_string())
-                .or_insert_with(|| module.clone());
+            obj.entry("module".to_string()).or_insert_with(|| module.clone());
         }
-        if let Some(gid) = entry
-            .meta
-            .get("friendGid")
-            .or_else(|| entry.meta.get("targetGid"))
-        {
+        if let Some(gid) = entry.meta.get("friendGid").or_else(|| entry.meta.get("targetGid")) {
             obj.entry("friendGid".to_string()).or_insert_with(|| gid.clone());
             obj.entry("targetGid".to_string()).or_insert_with(|| gid.clone());
         }
         if let Some(name) = entry.meta.get("friendName") {
-            obj.entry("friendName".to_string())
-                .or_insert_with(|| name.clone());
+            obj.entry("friendName".to_string()).or_insert_with(|| name.clone());
         }
         if let Some(result) = entry.meta.get("result") {
-            obj.entry("result".to_string())
-                .or_insert_with(|| result.clone());
+            obj.entry("result".to_string()).or_insert_with(|| result.clone());
         }
         if let Some(actions) = entry.meta.get("actions") {
-            obj.entry("actions".to_string())
-                .or_insert_with(|| actions.clone());
+            obj.entry("actions".to_string()).or_insert_with(|| actions.clone());
         }
-        obj.entry("isWarn".to_string())
-            .or_insert_with(|| json!(entry.is_warn));
-        obj.entry("tag".to_string())
-            .or_insert_with(|| json!(entry.tag));
+        obj.entry("isWarn".to_string()).or_insert_with(|| json!(entry.is_warn));
+        obj.entry("tag".to_string()).or_insert_with(|| json!(entry.tag));
     }
     payload
 }
 
-fn derived_from_log(entry: &LogEntry, payload: &Value, account_id: Option<&str>) -> Vec<PanelRealtimeEvent> {
-    let module = entry
-        .meta
-        .get("module")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let event = entry
-        .meta
-        .get("event")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+fn derived_from_log(
+    entry: &LogEntry,
+    payload: &Value,
+    account_id: Option<&str>,
+) -> Vec<PanelRealtimeEvent> {
+    let module = entry.meta.get("module").and_then(Value::as_str).unwrap_or("");
+    let event = entry.meta.get("event").and_then(Value::as_str).unwrap_or("");
     let id = account_id.map(str::to_string);
     let mut out = Vec::new();
 
@@ -230,11 +214,7 @@ fn derived_from_log(entry: &LogEntry, payload: &Value, account_id: Option<&str>)
         if let Some(obj) = body.as_object_mut() {
             obj.entry("action".to_string()).or_insert_with(|| json!(action));
             obj.entry("result".to_string()).or_insert_with(|| {
-                entry
-                    .meta
-                    .get("result")
-                    .cloned()
-                    .unwrap_or_else(|| json!("ok"))
+                entry.meta.get("result").cloned().unwrap_or_else(|| json!("ok"))
             });
         }
         out.push(PanelRealtimeEvent {
@@ -261,19 +241,11 @@ fn derived_from_log(entry: &LogEntry, payload: &Value, account_id: Option<&str>)
 }
 
 fn infer_friend_action(payload: &Value, event: &str) -> &'static str {
-    let msg = payload
-        .get("message")
-        .or_else(|| payload.get("msg"))
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let msg =
+        payload.get("message").or_else(|| payload.get("msg")).and_then(Value::as_str).unwrap_or("");
     let actions = payload.get("actions").and_then(Value::as_array);
     let joined = actions
-        .map(|a| {
-            a.iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join("/")
-        })
+        .map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("/"))
         .unwrap_or_default();
     let blob = format!("{msg} {joined} {event}");
     if blob.contains('偷') || blob.contains("steal") {
@@ -345,24 +317,35 @@ mod tests {
     #[test]
     fn visit_friend_log_emits_friend_interact() {
         let ev = RuntimeEvent::Log(log_entry("visit_friend", "friend", "bob: 偷2"));
-        let types: Vec<_> = AppEvent::from(ev)
-            .to_realtime()
-            .into_iter()
-            .map(|e| e.event_type)
-            .collect();
+        let types: Vec<_> =
+            AppEvent::from(ev).to_realtime().into_iter().map(|e| e.event_type).collect();
         assert!(types.contains(&"log:new".to_string()));
         assert!(types.contains(&"friend_interact".to_string()));
-        let interact = AppEvent::from(RuntimeEvent::Log(log_entry(
-            "visit_friend",
-            "friend",
-            "bob: 偷2",
-        )))
-        .to_realtime()
-        .into_iter()
-        .find(|e| e.event_type == "friend_interact")
-        .expect("friend_interact");
+        let interact =
+            AppEvent::from(RuntimeEvent::Log(log_entry("visit_friend", "friend", "bob: 偷2")))
+                .to_realtime()
+                .into_iter()
+                .find(|e| e.event_type == "friend_interact")
+                .expect("friend_interact");
         assert_eq!(interact.payload["action"], "steal");
         assert_eq!(interact.payload["targetGid"], 42);
+    }
+
+    #[test]
+    fn account_log_payload_has_readable_message() {
+        let ev = RuntimeEvent::AccountLog(AccountLogEntry {
+            time: "2026-08-17 19:30:54".into(),
+            action: "disconnect_stop".into(),
+            msg: "账号 大号 连接已断开，已停止运行并等待重新扫码".into(),
+            account_id: "1".into(),
+            account_name: "大号".into(),
+        });
+        let out = AppEvent::from(ev).to_realtime();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].event_type, "account-log:new");
+        assert_eq!(out[0].payload["message"], "账号 大号 连接已断开，已停止运行并等待重新扫码");
+        assert_eq!(out[0].payload["event"], "disconnect_stop");
+        assert_eq!(out[0].payload["tag"], "系统");
     }
 
     #[test]
