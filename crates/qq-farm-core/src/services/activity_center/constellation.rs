@@ -56,35 +56,32 @@ impl ActivityCenterService {
                 crate::proto::generated::gamepb::activitypb::operate_constellation_request::Empty {},
             ),
         };
-        let body = match self
-            .gateway
-            .request(ACTIVITY_SERVICE, "Operate", &req.encode_to_vec(), 10_000)
-            .await
-        {
-            Ok(bytes) => bytes,
-            Err(crate::network::error::NetworkError::Gateway { code, .. })
-                if code == 1_034_038
-                    && activity_active
-                    && current_day.is_some_and(|d| (1..=28).contains(&d)) =>
-            {
-                let day = current_day.unwrap_or(0);
-                let rejection = state_with_no_claimable_day(
-                    &identity,
-                    i64::from(day),
-                    &server_time.to_string(),
-                    None,
-                );
-                self.merge_and_persist_constellation(&identity, &state_key, rejection);
-                let snapshot = self.snapshot_with_shop(None).await.ok();
-                return Ok(serde_json::json!({
-                    "outcome": "nothingToClaim",
-                    "noClaimable": true,
-                    "message": "今日星宿奖励已经领取，无需重复操作",
-                    "snapshot": snapshot,
-                }));
-            }
-            Err(e) => return Err(e.into()),
-        };
+        let body =
+            match self.gateway.request(ACTIVITY_SERVICE, "Operate", &req.encode_to_vec()).await {
+                Ok(bytes) => bytes,
+                Err(crate::network::error::NetworkError::Gateway { code, .. })
+                    if code == 1_034_038
+                        && activity_active
+                        && current_day.is_some_and(|d| (1..=28).contains(&d)) =>
+                {
+                    let day = current_day.unwrap_or(0);
+                    let rejection = state_with_no_claimable_day(
+                        &identity,
+                        i64::from(day),
+                        &server_time.to_string(),
+                        None,
+                    );
+                    self.merge_and_persist_constellation(&identity, &state_key, rejection);
+                    let snapshot = self.snapshot_with_shop(None).await.ok();
+                    return Ok(serde_json::json!({
+                        "outcome": "nothingToClaim",
+                        "noClaimable": true,
+                        "message": "今日星宿奖励已经领取，无需重复操作",
+                        "snapshot": snapshot,
+                    }));
+                }
+                Err(e) => return Err(e.into()),
+            };
         let reply = ActivityOperateReply::decode(&body[..])?;
         if reply.activity_id != activity_id {
             return Err(Error::Protocol("星座操作返回了不匹配的活动 ID".to_string()));

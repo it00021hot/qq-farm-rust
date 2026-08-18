@@ -78,7 +78,6 @@ impl QQVipService {
                 VIP_SERVICE,
                 "GetDailyGiftStatus",
                 &GetDailyGiftStatusRequest {}.encode_to_vec(),
-                10_000,
             )
             .await?;
         Ok(GetDailyGiftStatusReply::decode(&body[..])?)
@@ -92,12 +91,7 @@ impl QQVipService {
     pub async fn claim_daily_gift(&self) -> Result<ClaimDailyGiftReply> {
         let body = self
             .gateway
-            .request(
-                VIP_SERVICE,
-                "ClaimDailyGift",
-                &ClaimDailyGiftRequest {}.encode_to_vec(),
-                10_000,
-            )
+            .request(VIP_SERVICE, "ClaimDailyGift", &ClaimDailyGiftRequest {}.encode_to_vec())
             .await?;
         Ok(ClaimDailyGiftReply::decode(&body[..])?)
     }

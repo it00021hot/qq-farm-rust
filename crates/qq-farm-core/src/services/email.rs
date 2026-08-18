@@ -53,7 +53,6 @@ impl EmailService {
                 "gamepb.emailpb.EmailService",
                 "GetEmailList",
                 &prost::Message::encode_to_vec(&req),
-                10_000,
             )
             .await?;
         Ok(GetEmailListReply::decode(&body)?)
@@ -68,7 +67,6 @@ impl EmailService {
                 "gamepb.emailpb.EmailService",
                 "ClaimEmail",
                 &prost::Message::encode_to_vec(&req),
-                10_000,
             )
             .await?;
         Ok(ClaimEmailReply::decode(&body)?)
@@ -87,7 +85,6 @@ impl EmailService {
                 "gamepb.emailpb.EmailService",
                 "BatchClaimEmail",
                 &prost::Message::encode_to_vec(&req),
-                10_000,
             )
             .await?;
         Ok(BatchClaimEmailReply::decode(&body)?)
@@ -106,7 +103,6 @@ impl EmailService {
                 "gamepb.emailpb.EmailService",
                 "BatchDeleteEmail",
                 &prost::Message::encode_to_vec(&req),
-                10_000,
             )
             .await?;
         Ok(BatchDeleteEmailReply::decode(&body)?)

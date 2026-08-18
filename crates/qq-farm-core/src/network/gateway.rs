@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 
 use parking_lot::RwLock;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch, Mutex as AsyncMutex};
 
 use crate::network::client::{ConnectOptions, WsClient};
 use crate::network::encryptor::Encryptor;
@@ -161,6 +161,8 @@ struct Inner {
     disconnect_reason: parking_lot::Mutex<Option<String>>,
     /// 最近一次收到任意 WS 帧的时间（ms）。大包 GetAll 下载期间心跳 RPC 可能超时，但连接仍活。
     last_rx_ms: AtomicI64,
+    /// 业务 RPC 串行（对齐 Go farmOpMu）。Heartbeat / ACE 不进这把锁。
+    rpc_gate: AsyncMutex<()>,
 }
 
 impl Gateway {
@@ -181,6 +183,7 @@ impl Gateway {
                 session_end,
                 disconnect_reason: parking_lot::Mutex::new(None),
                 last_rx_ms: AtomicI64::new(0),
+                rpc_gate: AsyncMutex::new(()),
             }),
         }
     }
@@ -302,13 +305,7 @@ impl Gateway {
     }
 
     fn mark_session_ended(&self) {
-        *self.inner.phase.write() = ConnectionPhase::Disconnected;
-        *self.inner.ws_sender.lock() = None;
-        let n = self.inner.requests.reject_all();
-        if n > 0 {
-            tracing::warn!(count = n, "rejected pending requests on disconnect");
-        }
-        let _ = self.inner.session_end.send(true);
+        end_session(&self.inner, None);
     }
 
     /// 发送一个业务请求
@@ -348,17 +345,33 @@ impl Gateway {
         frame.encode().map_err(|e| NetworkError::Frame(format!("encode: {e}")))
     }
 
-    /// 高阶 API：发请求 + 等响应（带超时）
+    /// 高阶 API：发请求 + 等响应，直到回包或会话断开。
     ///
-    /// 对齐原 `sendMsgAsync`：必须已经 Online。登录包走 [`login`]，对应 `sendMsg`。
-    pub async fn request(
+    /// 对齐 Go 本田/巡查：不在业务 RPC 上套 10s/20s 硬切。登录走 [`login`]，心跳走 [`request_with_timeout`]。
+    pub async fn request(&self, service: &str, method: &str, body: &[u8]) -> Result<Vec<u8>> {
+        let _gate = self.inner.rpc_gate.lock().await;
+        self.send_rpc(service, method, body, None, true).await
+    }
+
+    /// 不等待业务锁（ACE AntiData）。同样等到回包或断线。
+    pub async fn request_unlocked(
+        &self,
+        service: &str,
+        method: &str,
+        body: &[u8],
+    ) -> Result<Vec<u8>> {
+        self.send_rpc(service, method, body, None, true).await
+    }
+
+    /// 仅 Login / Heartbeat：带超时。不占业务锁，避免大包把心跳堵住。
+    pub async fn request_with_timeout(
         &self,
         service: &str,
         method: &str,
         body: &[u8],
         timeout_ms: u64,
     ) -> Result<Vec<u8>> {
-        self.send_rpc(service, method, body, timeout_ms, true).await
+        self.send_rpc(service, method, body, Some(timeout_ms), true).await
     }
 
     /// 对齐原 `sendMsgNoReply`：必须已经 Online，只发送不等待回包。
@@ -388,7 +401,7 @@ impl Gateway {
         service: &str,
         method: &str,
         body: &[u8],
-        timeout_ms: u64,
+        timeout_ms: Option<u64>,
         require_online: bool,
     ) -> Result<Vec<u8>> {
         {
@@ -419,19 +432,26 @@ impl Gateway {
             .await
             .map_err(|_| NetworkError::WebSocket("ws sender closed".into()))?;
 
-        match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), rx).await {
-            Ok(Ok(Ok(resp))) => Ok(resp.body),
-            Ok(Ok(Err(e))) => Err(e),
-            Ok(Err(_)) => Err(NetworkError::Phase("response channel cancelled".into())),
-            Err(_) => {
-                self.inner.requests.cancel(seq);
-                Err(NetworkError::Timeout {
-                    client_seq: seq,
-                    service_name: service.to_string(),
-                    method_name: method.to_string(),
-                    pending: self.inner.requests.pending_count(),
-                })
+        let waited = if let Some(ms) = timeout_ms {
+            match tokio::time::timeout(std::time::Duration::from_millis(ms), rx).await {
+                Ok(inner) => inner,
+                Err(_) => {
+                    self.inner.requests.cancel(seq);
+                    return Err(NetworkError::Timeout {
+                        client_seq: seq,
+                        service_name: service.to_string(),
+                        method_name: method.to_string(),
+                        pending: self.inner.requests.pending_count(),
+                    });
+                }
             }
+        } else {
+            rx.await
+        };
+        match waited {
+            Ok(Ok(resp)) => Ok(resp.body),
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err(NetworkError::Phase("response channel cancelled".into())),
         }
     }
 
@@ -501,8 +521,15 @@ impl Gateway {
         let body = prost::Message::encode_to_vec(&req);
 
         // 3. 对齐 sendLogin：用 sendMsg（Login 阶段可发），不是 sendMsgAsync
-        let reply_bytes =
-            self.send_rpc("gamepb.userpb.UserService", "Login", &body, 20_000, false).await?;
+        let reply_bytes = self
+            .send_rpc(
+                "gamepb.userpb.UserService",
+                "Login",
+                &body,
+                Some(crate::constants::LOGIN_TIMEOUT_MS),
+                false,
+            )
+            .await?;
 
         // 4. 解码 LoginReply
         let reply = LoginReply::decode(reply_bytes.as_slice())
@@ -549,7 +576,7 @@ impl Gateway {
         let req = crate::proto::generated::gamepb::userpb::GetUserSettingsRequest {};
         let body = prost::Message::encode_to_vec(&req);
         let reply_bytes =
-            self.request("gamepb.userpb.UserService", "GetUserSettings", &body, 20_000).await?;
+            self.request("gamepb.userpb.UserService", "GetUserSettings", &body).await?;
         let reply = crate::proto::generated::gamepb::userpb::GetUserSettingsReply::decode(
             reply_bytes.as_slice(),
         )
@@ -565,8 +592,14 @@ impl Gateway {
         let req = HeartbeatRequest { gid, client_version: client_version.to_string() };
         let body = prost::Message::encode_to_vec(&req);
         // 对齐 network.ts：Heartbeat 走 sendMsgAsync 默认 20s，不能用 5s（忙时易误超时→掉线）
-        let reply_bytes =
-            self.request("gamepb.userpb.UserService", "Heartbeat", &body, 20_000).await?;
+        let reply_bytes = self
+            .request_with_timeout(
+                "gamepb.userpb.UserService",
+                "Heartbeat",
+                &body,
+                crate::constants::HEARTBEAT_RPC_TIMEOUT_MS,
+            )
+            .await?;
         let reply = HeartbeatReply::decode(reply_bytes.as_slice())
             .map_err(|e| NetworkError::Frame(format!("decode HeartbeatReply: {e}")))?;
         if reply.server_time > 0 {
@@ -579,6 +612,22 @@ impl Gateway {
     pub fn now_ms(&self) -> i64 {
         crate::utils::time::now_ms()
     }
+}
+
+fn end_session(inner: &Inner, reason: Option<&str>) {
+    if let Some(reason) = reason {
+        let mut guard = inner.disconnect_reason.lock();
+        if guard.is_none() {
+            *guard = Some(reason.to_string());
+        }
+    }
+    *inner.phase.write() = ConnectionPhase::Disconnected;
+    *inner.ws_sender.lock() = None;
+    let n = inner.requests.reject_all();
+    if n > 0 {
+        tracing::warn!(count = n, "rejected pending requests on disconnect");
+    }
+    let _ = inner.session_end.send(true);
 }
 
 /// 接收 dispatch loop
@@ -636,15 +685,7 @@ async fn dispatch_loop(
             }
         }
     }
-    {
-        let mut guard = inner.disconnect_reason.lock();
-        if guard.is_none() {
-            *guard = Some("ws_close".to_string());
-        }
-    }
-    *inner.phase.write() = ConnectionPhase::Disconnected;
-    *inner.ws_sender.lock() = None;
-    let _ = inner.session_end.send(true);
+    end_session(&inner, Some("ws_close"));
     tracing::debug!("dispatch loop exited");
 }
 

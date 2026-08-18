@@ -185,8 +185,7 @@ impl ActivityCenterService {
                 },
             ),
         };
-        let body =
-            self.gateway.request(ACTIVITY_SERVICE, "Operate", &req.encode_to_vec(), 10_000).await?;
+        let body = self.gateway.request(ACTIVITY_SERVICE, "Operate", &req.encode_to_vec()).await?;
         let reply = ActivityOperateReply::decode(&body[..])?;
         if reply.activity_id != shop_activity.activity_id {
             return Err(ActivityError {

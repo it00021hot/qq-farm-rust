@@ -16,8 +16,7 @@ impl ActivityCenterService {
         operate_type: i64,
     ) -> Result<ActivityOperateReply> {
         let req = QueryActivityRequest { activity_id, operate_type };
-        let body =
-            self.gateway.request(ACTIVITY_SERVICE, "Operate", &req.encode_to_vec(), 10_000).await?;
+        let body = self.gateway.request(ACTIVITY_SERVICE, "Operate", &req.encode_to_vec()).await?;
         Ok(ActivityOperateReply::decode(&body[..])?)
     }
 

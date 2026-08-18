@@ -79,7 +79,6 @@ impl MonthCardService {
                 MALL_SERVICE,
                 "GetMonthCardInfos",
                 &GetMonthCardInfosRequest {}.encode_to_vec(),
-                10_000,
             )
             .await?;
         Ok(GetMonthCardInfosReply::decode(&body[..])?)
@@ -97,7 +96,7 @@ impl MonthCardService {
         let req = ClaimMonthCardRewardRequest { goods_id };
         let body = self
             .gateway
-            .request(MALL_SERVICE, "ClaimMonthCardReward", &req.encode_to_vec(), 10_000)
+            .request(MALL_SERVICE, "ClaimMonthCardReward", &req.encode_to_vec())
             .await?;
         Ok(ClaimMonthCardRewardReply::decode(&body[..])?)
     }

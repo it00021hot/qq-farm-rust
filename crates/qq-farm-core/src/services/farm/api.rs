@@ -30,9 +30,6 @@ use crate::proto::generated::gamepb::shoppb::{
 /// 操作限制更新回调（对齐 TS `onOperationLimitsUpdate(reply.operation_limits)`）
 pub type OperationLimitsCallback = Arc<dyn Fn(Vec<OperationLimit>) + Send + Sync + 'static>;
 
-/// 默认请求超时（20 秒，与原 TS 一致）
-const DEFAULT_TIMEOUT_MS: u64 = 20_000;
-
 /// 普通肥料 ID
 pub const NORMAL_FERTILIZER_ID: i64 = 1011;
 /// 有机肥料 ID
@@ -75,7 +72,7 @@ impl Api {
         // 简化版：用 WaterLandRequest 作为通用 land_ids + host_gid 的载体
         let body = WaterLandRequest { land_ids, host_gid }.encode_to_vec();
         self.gateway
-            .request("gamepb.plantpb.PlantService", method, &body, DEFAULT_TIMEOUT_MS)
+            .request("gamepb.plantpb.PlantService", method, &body)
             .await
             .map_err(Error::from)
     }
@@ -85,10 +82,7 @@ impl Api {
     /// `items` 按种子分组：每组一个 `PlantItem { seed_id, land_ids }`。
     pub async fn plant(&self, items: Vec<PlantItem>) -> Result<PlantReply> {
         let body = PlantRequest { land_and_seed: Default::default(), items }.encode_to_vec();
-        let resp = self
-            .gateway
-            .request("gamepb.plantpb.PlantService", "Plant", &body, DEFAULT_TIMEOUT_MS)
-            .await?;
+        let resp = self.gateway.request("gamepb.plantpb.PlantService", "Plant", &body).await?;
         PlantReply::decode(&*resp).map_err(Error::from)
     }
 
@@ -97,10 +91,7 @@ impl Api {
     /// 对齐 TS `getAllLands()`：`AllLandsRequest.create({})`，不传 host_gid。
     pub async fn get_all_lands(&self, _host_gid: i64) -> Result<AllLandsReply> {
         let body = AllLandsRequest { host_gid: 0 }.encode_to_vec();
-        let resp = self
-            .gateway
-            .request("gamepb.plantpb.PlantService", "AllLands", &body, DEFAULT_TIMEOUT_MS)
-            .await?;
+        let resp = self.gateway.request("gamepb.plantpb.PlantService", "AllLands", &body).await?;
         let reply = AllLandsReply::decode(&*resp).map_err(Error::from)?;
         if !reply.operation_limits.is_empty() {
             if let Some(cb) = self.on_operation_limits_update.lock().as_ref() {
@@ -118,20 +109,14 @@ impl Api {
         all: bool,
     ) -> Result<HarvestReply> {
         let body = HarvestRequest { land_ids, host_gid, is_all: all }.encode_to_vec();
-        let resp = self
-            .gateway
-            .request("gamepb.plantpb.PlantService", "Harvest", &body, DEFAULT_TIMEOUT_MS)
-            .await?;
+        let resp = self.gateway.request("gamepb.plantpb.PlantService", "Harvest", &body).await?;
         HarvestReply::decode(&*resp).map_err(Error::from)
     }
 
     /// 浇水
     pub async fn water_land(&self, land_ids: Vec<i64>, host_gid: i64) -> Result<WaterLandReply> {
         let body = WaterLandRequest { land_ids, host_gid }.encode_to_vec();
-        let resp = self
-            .gateway
-            .request("gamepb.plantpb.PlantService", "WaterLand", &body, DEFAULT_TIMEOUT_MS)
-            .await?;
+        let resp = self.gateway.request("gamepb.plantpb.PlantService", "WaterLand", &body).await?;
         WaterLandReply::decode(&*resp).map_err(Error::from)
     }
 
@@ -140,19 +125,14 @@ impl Api {
     /// 对齐 TS `farming()`：只带 `land_ids` + `host_gid`，不传 field_3/field_4。
     pub async fn farming(&self, land_ids: Vec<i64>, host_gid: i64) -> Result<FarmingReply> {
         let body = FarmingRequest { land_ids, host_gid, ..Default::default() }.encode_to_vec();
-        let resp = self
-            .gateway
-            .request("gamepb.plantpb.PlantService", "Farming", &body, DEFAULT_TIMEOUT_MS)
-            .await?;
+        let resp = self.gateway.request("gamepb.plantpb.PlantService", "Farming", &body).await?;
         FarmingReply::decode(&*resp).map_err(Error::from)
     }
 
     /// 施肥（单块）
     pub async fn fertilize(&self, land_id: i64, fertilizer_id: i64) -> Result<()> {
         let body = FertilizeRequest { land_ids: vec![land_id], fertilizer_id }.encode_to_vec();
-        self.gateway
-            .request("gamepb.plantpb.PlantService", "Fertilize", &body, DEFAULT_TIMEOUT_MS)
-            .await?;
+        self.gateway.request("gamepb.plantpb.PlantService", "Fertilize", &body).await?;
         Ok(())
     }
 
@@ -179,50 +159,37 @@ impl Api {
     /// 铲除植物
     pub async fn remove_plant(&self, land_ids: Vec<i64>) -> Result<RemovePlantReply> {
         let body = RemovePlantRequest { land_ids }.encode_to_vec();
-        let resp = self
-            .gateway
-            .request("gamepb.plantpb.PlantService", "RemovePlant", &body, DEFAULT_TIMEOUT_MS)
-            .await?;
+        let resp =
+            self.gateway.request("gamepb.plantpb.PlantService", "RemovePlant", &body).await?;
         RemovePlantReply::decode(&*resp).map_err(Error::from)
     }
 
     /// 升级土地
     pub async fn upgrade_land(&self, land_id: i64) -> Result<UpgradeLandReply> {
         let body = UpgradeLandRequest { land_id }.encode_to_vec();
-        let resp = self
-            .gateway
-            .request("gamepb.plantpb.PlantService", "UpgradeLand", &body, DEFAULT_TIMEOUT_MS)
-            .await?;
+        let resp =
+            self.gateway.request("gamepb.plantpb.PlantService", "UpgradeLand", &body).await?;
         UpgradeLandReply::decode(&*resp).map_err(Error::from)
     }
 
     /// 解锁土地
     pub async fn unlock_land(&self, land_id: i64, do_shared: bool) -> Result<UnlockLandReply> {
         let body = UnlockLandRequest { land_id, do_shared }.encode_to_vec();
-        let resp = self
-            .gateway
-            .request("gamepb.plantpb.PlantService", "UnlockLand", &body, DEFAULT_TIMEOUT_MS)
-            .await?;
+        let resp = self.gateway.request("gamepb.plantpb.PlantService", "UnlockLand", &body).await?;
         UnlockLandReply::decode(&*resp).map_err(Error::from)
     }
 
     /// 获取商店信息
     pub async fn get_shop_info(&self, shop_id: i64) -> Result<ShopInfoReply> {
         let body = ShopInfoRequest { shop_id }.encode_to_vec();
-        let resp = self
-            .gateway
-            .request("gamepb.shoppb.ShopService", "ShopInfo", &body, DEFAULT_TIMEOUT_MS)
-            .await?;
+        let resp = self.gateway.request("gamepb.shoppb.ShopService", "ShopInfo", &body).await?;
         ShopInfoReply::decode(&*resp).map_err(Error::from)
     }
 
     /// 购买商品
     pub async fn buy_goods(&self, goods_id: i64, num: i64, price: i64) -> Result<BuyGoodsReply> {
         let body = BuyGoodsRequest { goods_id, num, price }.encode_to_vec();
-        let resp = self
-            .gateway
-            .request("gamepb.shoppb.ShopService", "BuyGoods", &body, DEFAULT_TIMEOUT_MS)
-            .await?;
+        let resp = self.gateway.request("gamepb.shoppb.ShopService", "BuyGoods", &body).await?;
         BuyGoodsReply::decode(&*resp).map_err(Error::from)
     }
 }

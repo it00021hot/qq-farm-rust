@@ -16,14 +16,9 @@ use crate::runtime::scheduler::{Scheduler, TaskFn};
 /// ACE sender 抽象（gateway 提供）
 #[async_trait::async_trait]
 pub trait AceSender: Send + Sync + 'static {
-    /// 发请求给服务器；返回 body 字节
-    async fn send(
-        &self,
-        service: &str,
-        method: &str,
-        body: &[u8],
-        timeout_ms: u64,
-    ) -> crate::error::Result<Vec<u8>>;
+    /// 发请求给服务器；返回 body 字节（等到回包或断线，不走业务锁）
+    async fn send(&self, service: &str, method: &str, body: &[u8])
+        -> crate::error::Result<Vec<u8>>;
 }
 
 /// ACE runtime 共享状态
@@ -176,7 +171,7 @@ impl AceShared {
         let req = AntiDataRequest { data: prost::bytes::Bytes::from(data.clone()) };
         let body = req.encode_to_vec();
 
-        let reply_body = sender.send("gamepb.acepb.AceService", "AntiData", &body, 10_000).await?;
+        let reply_body = sender.send("gamepb.acepb.AceService", "AntiData", &body).await?;
 
         let reply = AntiDataReply::decode(reply_body.as_slice())?;
         if !reply.result.is_empty() {
@@ -238,10 +233,9 @@ impl AceSender for GatewayAceSender {
         service: &str,
         method: &str,
         body: &[u8],
-        timeout_ms: u64,
     ) -> crate::error::Result<Vec<u8>> {
         self.gateway
-            .request(service, method, body, timeout_ms)
+            .request_unlocked(service, method, body)
             .await
             .map_err(crate::error::Error::Network)
     }

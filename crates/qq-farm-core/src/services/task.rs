@@ -166,7 +166,7 @@ impl TaskService {
     pub async fn get_task_info(&self) -> Result<TaskInfoReply> {
         let body = self
             .gateway
-            .request(TASK_SERVICE, "TaskInfo", &TaskInfoRequest {}.encode_to_vec(), 10_000)
+            .request(TASK_SERVICE, "TaskInfo", &TaskInfoRequest {}.encode_to_vec())
             .await?;
         Ok(TaskInfoReply::decode(&body[..])?)
     }
@@ -182,10 +182,8 @@ impl TaskService {
         do_shared: bool,
     ) -> Result<ClaimTaskRewardReply> {
         let req = ClaimTaskRewardRequest { id: task_id, do_shared };
-        let body = self
-            .gateway
-            .request(TASK_SERVICE, "ClaimTaskReward", &req.encode_to_vec(), 10_000)
-            .await?;
+        let body =
+            self.gateway.request(TASK_SERVICE, "ClaimTaskReward", &req.encode_to_vec()).await?;
         Ok(ClaimTaskRewardReply::decode(&body[..])?)
     }
 
@@ -200,10 +198,8 @@ impl TaskService {
         point_ids: Vec<i64>,
     ) -> Result<ClaimDailyRewardReply> {
         let req = ClaimDailyRewardRequest { r#type: active_type, point_ids };
-        let body = self
-            .gateway
-            .request(TASK_SERVICE, "ClaimDailyReward", &req.encode_to_vec(), 10_000)
-            .await?;
+        let body =
+            self.gateway.request(TASK_SERVICE, "ClaimDailyReward", &req.encode_to_vec()).await?;
         Ok(ClaimDailyRewardReply::decode(&body[..])?)
     }
 
@@ -216,7 +212,7 @@ impl TaskService {
         let req = ClaimAllRewardsV2Request { only_claimable: true };
         let body = self
             .gateway
-            .request(ILLUSTRATED_SERVICE, "ClaimAllRewardsV2", &req.encode_to_vec(), 10_000)
+            .request(ILLUSTRATED_SERVICE, "ClaimAllRewardsV2", &req.encode_to_vec())
             .await?;
         Ok(ClaimAllRewardsV2Reply::decode(&body[..])?)
     }

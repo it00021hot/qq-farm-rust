@@ -107,10 +107,8 @@ impl WarehouseService {
     /// 拉取背包
     pub async fn get_bag(&self) -> Result<BagReply> {
         let req = BagRequest {};
-        let body = self
-            .gateway
-            .request("gamepb.itempb.ItemService", "Bag", &req.encode_to_vec(), 10_000)
-            .await?;
+        let body =
+            self.gateway.request("gamepb.itempb.ItemService", "Bag", &req.encode_to_vec()).await?;
         Ok(BagReply::decode(&body)?)
     }
 
@@ -119,9 +117,8 @@ impl WarehouseService {
     /// 仅供其他 service 在不持 warehouse 引用时调用。
     pub async fn get_bag_via(gateway: &Arc<Gateway>) -> Result<BagReply> {
         let req = BagRequest {};
-        let body = gateway
-            .request("gamepb.itempb.ItemService", "Bag", &req.encode_to_vec(), 10_000)
-            .await?;
+        let body =
+            gateway.request("gamepb.itempb.ItemService", "Bag", &req.encode_to_vec()).await?;
         Ok(BagReply::decode(&body[..])?)
     }
 
@@ -148,10 +145,8 @@ impl WarehouseService {
         let payload: Vec<CoreItem> =
             items.iter().map(|(id, count, uid)| core_item(*id, *count, *uid)).collect();
         let req = SellRequest { items: payload };
-        let body = self
-            .gateway
-            .request("gamepb.itempb.ItemService", "Sell", &req.encode_to_vec(), 10_000)
-            .await?;
+        let body =
+            self.gateway.request("gamepb.itempb.ItemService", "Sell", &req.encode_to_vec()).await?;
         Ok(SellReply::decode(&body)?)
     }
 
@@ -193,10 +188,8 @@ impl WarehouseService {
             return Err(crate::error::Error::Business(format!("背包中未找到物品 {item_id}")));
         };
         let req = UseRequest { item: Some(core_item(item_id, count, item.uid)) };
-        let body = self
-            .gateway
-            .request("gamepb.itempb.ItemService", "Use", &req.encode_to_vec(), 10_000)
-            .await?;
+        let body =
+            self.gateway.request("gamepb.itempb.ItemService", "Use", &req.encode_to_vec()).await?;
         Ok(UseReply::decode(&body)?)
     }
 
@@ -207,7 +200,7 @@ impl WarehouseService {
         let req = BatchUseRequest { items: payload };
         let body = self
             .gateway
-            .request("gamepb.itempb.ItemService", "BatchUse", &req.encode_to_vec(), 10_000)
+            .request("gamepb.itempb.ItemService", "BatchUse", &req.encode_to_vec())
             .await?;
         Ok(BatchUseReply::decode(&body)?)
     }

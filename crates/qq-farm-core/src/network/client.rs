@@ -53,6 +53,8 @@ pub struct ConnectOptions {
 enum WsCommand {
     /// 发送二进制
     Send(Vec<u8>),
+    /// 回复 Ping
+    Pong(Vec<u8>),
     /// 主动关闭
     Close(Option<CloseFrame<'static>>),
 }
@@ -87,8 +89,11 @@ impl WsClient {
         let (frame_tx, frame_rx) = mpsc::channel::<ReceivedFrame>(rx_capacity);
         let (cmd_tx, cmd_rx) = mpsc::channel::<WsCommand>(32);
 
-        // Spawn IO task
-        tokio::spawn(run_io_task(stream, frame_tx, cmd_rx));
+        // 读/写分 task：对齐 gorilla readLoop vs WriteMessage。大包组装或
+        // 向上投递时不能堵住出站心跳。
+        let (sink, read) = stream.split();
+        tokio::spawn(run_write_task(sink, cmd_rx));
+        tokio::spawn(run_read_task(read, frame_tx, cmd_tx.clone()));
 
         Ok((Self { tx: cmd_tx }, frame_rx))
     }
@@ -113,72 +118,59 @@ impl WsClient {
     }
 }
 
-/// IO task：在独立 task 中跑读循环 + 写循环
-async fn run_io_task(
-    mut stream: WsStream,
+type WsSink = futures::stream::SplitSink<WsStream, WsMessage>;
+type WsRead = futures::stream::SplitStream<WsStream>;
+
+async fn run_write_task(mut sink: WsSink, mut cmd_rx: mpsc::Receiver<WsCommand>) {
+    while let Some(cmd) = cmd_rx.recv().await {
+        let ok = match cmd {
+            WsCommand::Send(bytes) => sink.send(WsMessage::Binary(bytes)).await.is_ok(),
+            WsCommand::Pong(data) => sink.send(WsMessage::Pong(data.into())).await.is_ok(),
+            WsCommand::Close(frame) => {
+                let _ = sink.send(WsMessage::Close(frame)).await;
+                let _ = sink.close().await;
+                break;
+            }
+        };
+        if !ok {
+            break;
+        }
+    }
+    tracing::debug!("ws write task exited");
+}
+
+async fn run_read_task(
+    mut read: WsRead,
     frame_tx: mpsc::Sender<ReceivedFrame>,
-    mut cmd_rx: mpsc::Receiver<WsCommand>,
+    cmd_tx: mpsc::Sender<WsCommand>,
 ) {
-    loop {
-        tokio::select! {
-            frame = stream.next() => {
-                match frame {
-                    Some(Ok(WsMessage::Binary(data))) => {
-                        if frame_tx.send(ReceivedFrame { bytes: data.to_vec() }).await.is_err() {
-                            // 上层已 drop
-                            break;
-                        }
-                    }
-                    Some(Ok(WsMessage::Close(frame))) => {
-                        tracing::info!(?frame, "ws closed by server");
-                        break;
-                    }
-                    Some(Ok(WsMessage::Ping(data))) => {
-                        if stream.send(WsMessage::Pong(data)).await.is_err() {
-                            break;
-                        }
-                    }
-                    Some(Ok(WsMessage::Pong(_))) => {
-                        // ignore
-                    }
-                    Some(Ok(WsMessage::Text(_))) => {
-                        tracing::warn!("ws received text frame, expected binary");
-                    }
-                    Some(Ok(WsMessage::Frame(_))) => {
-                        // 裸 frame，tungstenite 内部一般不暴露给上层
-                    }
-                    Some(Err(e)) => {
-                        tracing::warn!(error = %e, "ws stream error");
-                        break;
-                    }
-                    None => {
-                        // stream closed
-                        break;
-                    }
+    while let Some(frame) = read.next().await {
+        match frame {
+            Ok(WsMessage::Binary(data)) => {
+                if frame_tx.send(ReceivedFrame { bytes: data.to_vec() }).await.is_err() {
+                    break;
                 }
             }
-            cmd = cmd_rx.recv() => {
-                match cmd {
-                    Some(WsCommand::Send(bytes)) => {
-                        if stream.send(WsMessage::Binary(bytes)).await.is_err() {
-                            break;
-                        }
-                    }
-                    Some(WsCommand::Close(frame)) => {
-                        let _ = stream.send(WsMessage::Close(frame)).await;
-                        let _ = stream.close(None).await;
-                        break;
-                    }
-                    None => {
-                        // 所有 handle 都 drop 了
-                        let _ = stream.close(None).await;
-                        break;
-                    }
+            Ok(WsMessage::Close(frame)) => {
+                tracing::info!(?frame, "ws closed by server");
+                break;
+            }
+            Ok(WsMessage::Ping(data)) => {
+                if cmd_tx.send(WsCommand::Pong(data.to_vec())).await.is_err() {
+                    break;
                 }
+            }
+            Ok(WsMessage::Pong(_)) | Ok(WsMessage::Frame(_)) => {}
+            Ok(WsMessage::Text(_)) => {
+                tracing::warn!("ws received text frame, expected binary");
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "ws stream error");
+                break;
             }
         }
     }
-    tracing::debug!("ws IO task exited");
+    tracing::debug!("ws read task exited");
 }
 
 const WS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -414,6 +406,32 @@ mod tests {
             .expect("recv");
         assert_eq!(frame.bytes, b"ECHO:hello");
 
+        client.close().await.expect("close");
+    }
+
+    #[tokio::test]
+    async fn write_proceeds_when_inbound_channel_is_full() {
+        let (port, _h) = start_mock_ws().await;
+        let url = format!("ws://127.0.0.1:{port}/");
+        let mut opts = ConnectOptions::default();
+        opts.rx_capacity = 1;
+        let (client, mut rx) = WsClient::connect(&url, opts).await.expect("connect");
+
+        client.send(b"one").await.expect("send one");
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        client.send(b"two").await.expect("send two");
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), client.send(b"three"))
+            .await
+            .expect("write blocked by unread inbound")
+            .expect("send three");
+
+        let first = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("recv");
+        assert!(first.bytes.starts_with(b"ECHO:"));
         client.close().await.expect("close");
     }
 

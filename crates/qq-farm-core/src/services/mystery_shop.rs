@@ -43,12 +43,7 @@ impl MysteryShopService {
     pub async fn get_active_npc(&self) -> Result<GetActiveNpcReply> {
         let body = self
             .gateway
-            .request(
-                MYSTERY_SHOP_SERVICE,
-                "GetActiveNPC",
-                &GetActiveNpcRequest {}.encode_to_vec(),
-                10_000,
-            )
+            .request(MYSTERY_SHOP_SERVICE, "GetActiveNPC", &GetActiveNpcRequest {}.encode_to_vec())
             .await?;
         Ok(GetActiveNpcReply::decode(&body[..])?)
     }

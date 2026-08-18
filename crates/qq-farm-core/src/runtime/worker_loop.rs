@@ -159,6 +159,43 @@ struct NextRuns {
     steal_at: i64,
 }
 
+fn heartbeat_silence_exceeded(now: i64, last_hb: i64, last_rx: i64, silence_ms: i64) -> bool {
+    let last = last_hb.max(last_rx);
+    last > 0 && now.saturating_sub(last) > silence_ms
+}
+
+struct FlagGuard<'a>(&'a AtomicBool);
+
+impl Drop for FlagGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+struct NextSlotGuard<'a> {
+    flag: &'a AtomicBool,
+    next: &'a Mutex<NextRuns>,
+    kind: &'static str,
+    min_ms: u64,
+    max_ms: u64,
+}
+
+impl Drop for NextSlotGuard<'_> {
+    fn drop(&mut self) {
+        let at = now_ms() + random_interval_ms(self.min_ms, self.max_ms) as i64;
+        {
+            let mut g = self.next.lock();
+            match self.kind {
+                "farm" => g.farm_at = at,
+                "help" => g.help_at = at,
+                "steal" => g.steal_at = at,
+                _ => {}
+            }
+        }
+        self.flag.store(false, Ordering::Release);
+    }
+}
+
 /// IP 化：worker 上报给 master 的状态数据结构
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize)]
@@ -685,9 +722,13 @@ impl WorkerLoop {
                     let last_rx = gateway.last_rx_ms();
                     let last = last_hb.max(last_rx);
                     let elapsed = now - last;
-                    let pending = gateway.pending_count();
-                    // Go：Bare RPC timeout 不是 socket 已死。GetAll 大包在路上时心跳回包会被堵住。
-                    if elapsed > hb_timeout.as_millis() as i64 && pending == 0 {
+                    // 杀号看入站帧 / 心跳成功，不看 pending（超时 cancel 会把 pending 打成 0）。
+                    if heartbeat_silence_exceeded(
+                        now,
+                        last_hb,
+                        last_rx,
+                        hb_timeout.as_millis() as i64,
+                    ) {
                         let miss_n = {
                             let mut g = miss.lock();
                             *g += 1;
@@ -696,23 +737,19 @@ impl WorkerLoop {
                         tracing::warn!(
                             account_id = %acc_id,
                             elapsed_ms = elapsed,
-                            pending,
+                            pending = gateway.pending_count(),
                             "心跳超时 ({}s 无响应)",
                             elapsed / 1000
                         );
                         crate::services::panel_log::log(
                             &acc_id,
                             "心跳",
-                            format!(
-                                "连接可能已断开 ({}s 无响应, pending={pending})",
-                                elapsed / 1000
-                            ),
+                            format!("连接可能已断开 ({}s 无响应)", elapsed / 1000),
                             crate::constants::PanelEvent::HeartbeatTimeout,
                             Some(serde_json::json!({
                                 "module": "heartbeat",
                                 "isWarn": true,
                                 "elapsedMs": elapsed,
-                                "pending": pending,
                             })),
                         );
                         if miss_n >= MAX_HEARTBEAT_MISS {
@@ -738,14 +775,10 @@ impl WorkerLoop {
                     if current_gid == 0 {
                         return;
                     }
-                    // 单条 WS 串行：GetAll 等大包在路上时 Heartbeat 回包会被堵住，20s RPC
-                    // 超时不是 socket 已死。interval 里 spawn 不受 preventOverlap 约束，
-                    // 忙时再叠发只会刷「Heartbeat 失败」。原 bot catch 空吞。
-                    if gateway.has_pending_method("Heartbeat") || pending > 0 {
+                    if gateway.has_pending_method("Heartbeat") {
                         tracing::debug!(
                             account_id = %acc_id,
-                            pending,
-                            "skip Heartbeat: socket busy"
+                            "skip Heartbeat: already in flight"
                         );
                         return;
                     }
@@ -905,6 +938,7 @@ impl WorkerLoop {
         if self.unified_tick_running.swap(true, Ordering::AcqRel) {
             return;
         }
+        let _guard = FlagGuard(&self.unified_tick_running);
         let now = now_ms();
         let (due_farm, due_help, due_steal) = {
             let guard = self.next_runs.lock();
@@ -923,7 +957,6 @@ impl WorkerLoop {
         if due_steal {
             self.run_steal_tick().await;
         }
-        self.unified_tick_running.store(false, Ordering::Release);
     }
 
     /// 触发 farm tick（对外暴露给 on_login_success 启动独立 task）
@@ -932,6 +965,13 @@ impl WorkerLoop {
             return;
         }
         let (min_ms, max_ms) = self.interval_range_ms("farm");
+        let _guard = NextSlotGuard {
+            flag: &self.farm_tick_running,
+            next: &self.next_runs,
+            kind: "farm",
+            min_ms,
+            max_ms,
+        };
         if self.login_ready() {
             // 静默时段仅作用于好友帮助/偷菜；本田 tick 仍跑（对齐 bot worker.ts）
             if self.auto_on("farm") {
@@ -946,8 +986,6 @@ impl WorkerLoop {
             }
             self.sync_status();
         }
-        self.next_runs.lock().farm_at = now_ms() + random_interval_ms(min_ms, max_ms) as i64;
-        self.farm_tick_running.store(false, Ordering::Release);
     }
 
     /// 触发 help tick
@@ -964,23 +1002,24 @@ impl WorkerLoop {
             return;
         }
         let (min_ms, max_ms) = self.interval_range_ms("help");
+        let _guard = NextSlotGuard {
+            flag: &self.help_tick_running,
+            next: &self.next_runs,
+            kind: "help",
+            min_ms,
+            max_ms,
+        };
         if crate::services::friend::visit_strategy::in_friend_quiet_hours_for(
             Some(&self.account.id),
             None,
         ) {
-            self.next_runs.lock().help_at = now_ms() + random_interval_ms(min_ms, max_ms) as i64;
-            self.help_tick_running.store(false, Ordering::Release);
             return;
         }
         if self.auto_on("friend_help_exp_limit") && self.friend.is_help_exp_limit_reached() {
-            self.next_runs.lock().help_at = now_ms() + random_interval_ms(min_ms, max_ms) as i64;
-            self.help_tick_running.store(false, Ordering::Release);
             return;
         }
         let _ = self.friend.check_friends_help(&self.account.id).await;
         self.sync_status();
-        self.next_runs.lock().help_at = now_ms() + random_interval_ms(min_ms, max_ms) as i64;
-        self.help_tick_running.store(false, Ordering::Release);
     }
 
     /// 触发 steal tick
@@ -997,12 +1036,17 @@ impl WorkerLoop {
             return;
         }
         let (min_ms, max_ms) = self.interval_range_ms("steal");
+        let _guard = NextSlotGuard {
+            flag: &self.steal_tick_running,
+            next: &self.next_runs,
+            kind: "steal",
+            min_ms,
+            max_ms,
+        };
         if crate::services::friend::visit_strategy::in_friend_quiet_hours_for(
             Some(&self.account.id),
             None,
         ) {
-            self.next_runs.lock().steal_at = now_ms() + random_interval_ms(min_ms, max_ms) as i64;
-            self.steal_tick_running.store(false, Ordering::Release);
             return;
         }
         let stolen = self.friend.check_friends_steal(&self.account.id).await.unwrap_or(0);
@@ -1011,8 +1055,6 @@ impl WorkerLoop {
             let _ = self.warehouse.sell_all_fruits().await;
         }
         self.sync_status();
-        self.next_runs.lock().steal_at = now_ms() + random_interval_ms(min_ms, max_ms) as i64;
-        self.steal_tick_running.store(false, Ordering::Release);
     }
 
     /// 跑每日任务
@@ -1411,6 +1453,16 @@ mod tests {
         assert_eq!(s.len(), 10);
         assert_eq!(s.chars().nth(4), Some('-'));
         assert_eq!(s.chars().nth(7), Some('-'));
+    }
+
+    #[test]
+    fn heartbeat_silence_ignores_pending_and_uses_inbound_frames() {
+        assert!(!heartbeat_silence_exceeded(1_000, 980, 0, 50));
+        assert!(heartbeat_silence_exceeded(1_000, 900, 0, 50));
+        // 有入站帧则不算静默，即使心跳很久没成功
+        assert!(!heartbeat_silence_exceeded(1_000, 100, 980, 50));
+        // pending 不是参数：从未收到过任何帧时不杀
+        assert!(!heartbeat_silence_exceeded(1_000, 0, 0, 30));
     }
 
     #[test]

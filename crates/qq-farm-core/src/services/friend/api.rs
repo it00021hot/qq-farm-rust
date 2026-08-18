@@ -8,10 +8,7 @@ use std::time::{Duration, Instant};
 use prost::Message as _;
 use tokio::sync::Mutex as AsyncMutex;
 
-use crate::constants::{
-    DEFAULT_TIMEOUT_MS, FRIEND_GET_ALL_TIMEOUT_MS, FRIEND_LIST_COALESCE_MS,
-    QQ_FRIEND_LIST_BATCH_SIZE,
-};
+use crate::constants::{FRIEND_LIST_COALESCE_MS, QQ_FRIEND_LIST_BATCH_SIZE};
 use crate::error::{Error, Result};
 use crate::network::gateway::Gateway;
 use crate::proto::generated::gamepb::friendpb::{
@@ -164,37 +161,9 @@ impl FriendApi {
 
     async fn fetch_wx_friends(&self) -> Result<Vec<GameFriend>> {
         let body = GetAllRequest {}.encode_to_vec();
-        match self
-            .gateway
-            .request("gamepb.friendpb.FriendService", "GetAll", &body, FRIEND_GET_ALL_TIMEOUT_MS)
-            .await
-        {
-            Ok(resp) => Ok(decode_get_all_friends(&resp)),
-            Err(e) => {
-                // 对齐 Go loadFriends(wx)：GetAll 失败后用已知 GID 走 GetGameFriends，不要 SyncAll。
-                // GetAll 超时后回包往往还在路上，再打 SyncAll 会把心跳和后续 RPC 全部堵死。
-                let account_id = self.account_id.lock().clone();
-                let known: Vec<i64> =
-                    crate::models::store::account_config::get_known_friend_gids(Some(&account_id))
-                        .into_iter()
-                        .filter(|gid| {
-                            *gid > 0
-                        && !crate::services::friend::visit_strategy::is_known_friend_gid_invalid(
-                            *gid,
-                        )
-                        })
-                        .collect();
-                if known.is_empty() {
-                    return Err(e.into());
-                }
-                let fallback = self.fetch_game_friends_by_gids(&known).await;
-                if fallback.is_empty() {
-                    Err(e.into())
-                } else {
-                    Ok(fallback)
-                }
-            }
-        }
+        // GetAll 失败不要立刻再打 GetGameFriends：回包可能还在路上。
+        let resp = self.gateway.request("gamepb.friendpb.FriendService", "GetAll", &body).await?;
+        Ok(decode_get_all_friends(&resp))
     }
 
     async fn fetch_game_friends_by_gids(&self, known: &[i64]) -> Vec<GameFriend> {
@@ -204,12 +173,7 @@ impl FriendApi {
             let body = GetGameFriendsRequest { gids: chunk.to_vec() }.encode_to_vec();
             match self
                 .gateway
-                .request(
-                    "gamepb.friendpb.FriendService",
-                    "GetGameFriends",
-                    &body,
-                    DEFAULT_TIMEOUT_MS,
-                )
+                .request("gamepb.friendpb.FriendService", "GetGameFriends", &body)
                 .await
             {
                 Ok(resp) => {
@@ -257,11 +221,7 @@ impl FriendApi {
         }
 
         let body = SyncAllRequest { open_ids: Vec::new() }.encode_to_vec();
-        match self
-            .gateway
-            .request("gamepb.friendpb.FriendService", "SyncAll", &body, DEFAULT_TIMEOUT_MS)
-            .await
-        {
+        match self.gateway.request("gamepb.friendpb.FriendService", "SyncAll", &body).await {
             Ok(resp) => {
                 if let Ok(reply) = SyncAllReply::decode(&*resp) {
                     all = dedupe_friends_by_gid(reply.game_friends);
@@ -370,10 +330,8 @@ impl FriendApi {
         };
         let _gate = self.rpc_gate.lock().await;
         let body = GetApplicationsRequest {}.encode_to_vec();
-        let resp = self
-            .gateway
-            .request("gamepb.friendpb.FriendService", "GetApplications", &body, DEFAULT_TIMEOUT_MS)
-            .await?;
+        let resp =
+            self.gateway.request("gamepb.friendpb.FriendService", "GetApplications", &body).await?;
         let reply = GetApplicationsReply::decode(&*resp)?;
         Ok(reply.applications.into_iter().filter(|a| a.gid > 0).map(|a| (a.gid, a.name)).collect())
     }
@@ -383,9 +341,7 @@ impl FriendApi {
         use crate::proto::generated::gamepb::friendpb::AcceptFriendsRequest;
         let _gate = self.rpc_gate.lock().await;
         let body = AcceptFriendsRequest { friend_gids: gids }.encode_to_vec();
-        self.gateway
-            .request("gamepb.friendpb.FriendService", "AcceptFriends", &body, DEFAULT_TIMEOUT_MS)
-            .await?;
+        self.gateway.request("gamepb.friendpb.FriendService", "AcceptFriends", &body).await?;
         Ok(())
     }
 
@@ -408,10 +364,7 @@ impl FriendApi {
             reason: 2, // ENTER_REASON_FRIEND
         }
         .encode_to_vec();
-        let resp = self
-            .gateway
-            .request("gamepb.visitpb.VisitService", "Enter", &body, DEFAULT_TIMEOUT_MS)
-            .await?;
+        let resp = self.gateway.request("gamepb.visitpb.VisitService", "Enter", &body).await?;
         EnterReply::decode(&*resp).map_err(Error::from)
     }
 
@@ -422,9 +375,7 @@ impl FriendApi {
         let body = LeaveRequest { host_gid }.encode_to_vec();
         // 原 TS：try { ... } catch { /* 离开失败不影响主流程 */ }
         // Rust 端：调用方自己判断
-        self.gateway
-            .request("gamepb.visitpb.VisitService", "Leave", &body, DEFAULT_TIMEOUT_MS)
-            .await?;
+        self.gateway.request("gamepb.visitpb.VisitService", "Leave", &body).await?;
         Ok(())
     }
 
@@ -443,10 +394,7 @@ impl FriendApi {
         }
         let body =
             FarmingRequest { land_ids: target, host_gid, field_3: 0, field_4: 2 }.encode_to_vec();
-        let resp = match self
-            .gateway
-            .request("gamepb.plantpb.PlantService", "Farming", &body, DEFAULT_TIMEOUT_MS)
-            .await
+        let resp = match self.gateway.request("gamepb.plantpb.PlantService", "Farming", &body).await
         {
             Ok(r) => r,
             Err(crate::network::error::NetworkError::Gateway { code: 1_001_057, .. }) => {
@@ -486,10 +434,7 @@ impl FriendApi {
     pub async fn water_farm(&self, host_gid: i64, land_ids: Vec<i64>) -> Result<()> {
         use crate::proto::generated::gamepb::plantpb::{WaterLandReply, WaterLandRequest};
         let body = WaterLandRequest { land_ids, host_gid }.encode_to_vec();
-        let resp = self
-            .gateway
-            .request("gamepb.plantpb.PlantService", "WaterLand", &body, DEFAULT_TIMEOUT_MS)
-            .await?;
+        let resp = self.gateway.request("gamepb.plantpb.PlantService", "WaterLand", &body).await?;
         let reply = WaterLandReply::decode(&*resp)?;
         self.fire_operation_limits(reply.operation_limits);
         Ok(())
@@ -499,10 +444,7 @@ impl FriendApi {
     pub async fn steal_farm(&self, host_gid: i64, land_ids: Vec<i64>) -> Result<()> {
         use crate::proto::generated::gamepb::plantpb::{HarvestReply, HarvestRequest};
         let body = HarvestRequest { land_ids, host_gid, is_all: true }.encode_to_vec();
-        let resp = self
-            .gateway
-            .request("gamepb.plantpb.PlantService", "Harvest", &body, DEFAULT_TIMEOUT_MS)
-            .await?;
+        let resp = self.gateway.request("gamepb.plantpb.PlantService", "Harvest", &body).await?;
         let reply = HarvestReply::decode(&*resp)?;
         self.fire_operation_limits(reply.operation_limits);
         Ok(())
@@ -580,11 +522,7 @@ impl FriendApi {
                 }
             };
 
-            match self
-                .gateway
-                .request("gamepb.plantpb.PlantService", method, &body, DEFAULT_TIMEOUT_MS)
-                .await
-            {
+            match self.gateway.request("gamepb.plantpb.PlantService", method, &body).await {
                 Ok(resp) => {
                     let confirmed = match kind {
                         BadPutKind::Weeds => PutWeedsReply::decode(&*resp)
@@ -641,10 +579,8 @@ impl FriendApi {
             CheckCanOperateReply, CheckCanOperateRequest,
         };
         let body = CheckCanOperateRequest { host_gid, operation_id }.encode_to_vec();
-        let resp = self
-            .gateway
-            .request("gamepb.plantpb.PlantService", "CheckCanOperate", &body, DEFAULT_TIMEOUT_MS)
-            .await?;
+        let resp =
+            self.gateway.request("gamepb.plantpb.PlantService", "CheckCanOperate", &body).await?;
         let reply = CheckCanOperateReply::decode(&*resp).map_err(Error::from)?;
         Ok((reply.can_operate, reply.can_steal_num))
     }

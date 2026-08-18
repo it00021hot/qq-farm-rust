@@ -64,7 +64,6 @@ impl RandomDropService {
                 RANDOM_DROP_SERVICE,
                 "GetActivityInfo",
                 &GetActivityInfoRequest {}.encode_to_vec(),
-                10_000,
             )
             .await?;
         let reply = GetActivityInfoReply::decode(&body[..])?;

@@ -11,13 +11,13 @@ pub const DEFAULT_FRIENDS_LIST_CACHE_TTL_MS: u64 = 60_000;
 pub const MIN_FRIENDS_LIST_CACHE_TTL_MS: u64 = 10_000;
 pub const INVALID_KNOWN_FRIEND_GID_COOLDOWN_MS: u64 = 24 * 60 * 60 * 1000;
 
-pub const DEFAULT_TIMEOUT_MS: u64 = 20_000;
-/// 微信 GetAll 回包带头像/图鉴，20s 经常读不完；对齐「大包等完整帧」而不是空等超时。
-pub const FRIEND_GET_ALL_TIMEOUT_MS: u64 = 60_000;
 pub const FRIEND_LIST_COALESCE_MS: u64 = 800;
 pub const QQ_FRIEND_LIST_BATCH_SIZE: usize = 35;
 /// 普通 RPC 排队上限；Heartbeat 不受此限（Go 无 QueueFull）。
 pub const MAX_PENDING_RPC: usize = 32;
+/// 仅 Login / Heartbeat 使用的短超时；其它游戏 RPC 等到回包或断线。
+pub const LOGIN_TIMEOUT_MS: u64 = 20_000;
+pub const HEARTBEAT_RPC_TIMEOUT_MS: u64 = 20_000;
 
 /// 微信扫码任务默认存活
 pub const WX_LOGIN_TASK_TTL_MS: u64 = 110_000;

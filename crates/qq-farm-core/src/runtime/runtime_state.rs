@@ -474,11 +474,9 @@ impl RuntimeState {
 // =====================================================================
 
 fn json_to_string(v: &serde_json::Value) -> Option<String> {
-    v.as_str().map(str::to_string).or_else(|| {
-        v.as_i64()
-            .map(|n| n.to_string())
-            .or_else(|| v.as_u64().map(|n| n.to_string()))
-    })
+    v.as_str()
+        .map(str::to_string)
+        .or_else(|| v.as_i64().map(|n| n.to_string()).or_else(|| v.as_u64().map(|n| n.to_string())))
 }
 
 fn format_local_datetime24(date: Option<i64>) -> String {

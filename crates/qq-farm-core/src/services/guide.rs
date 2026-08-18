@@ -53,7 +53,7 @@ impl GuideService {
         let req = SetWeakGuideNodeCompleteRequest { node_id };
         let body = self
             .gateway
-            .request(GUIDE_SERVICE, "SetWeakGuideNodeComplete", &req.encode_to_vec(), 10_000)
+            .request(GUIDE_SERVICE, "SetWeakGuideNodeComplete", &req.encode_to_vec())
             .await?;
         Ok(SetWeakGuideNodeCompleteReply::decode(&body[..])?)
     }
@@ -67,7 +67,7 @@ impl GuideService {
         let req = ClaimWeakGuideRewardRequest { node_id };
         let body = self
             .gateway
-            .request(GUIDE_SERVICE, "ClaimWeakGuideReward", &req.encode_to_vec(), 10_000)
+            .request(GUIDE_SERVICE, "ClaimWeakGuideReward", &req.encode_to_vec())
             .await?;
         Ok(ClaimWeakGuideRewardReply::decode(&body[..])?)
     }

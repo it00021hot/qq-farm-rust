@@ -521,9 +521,14 @@ impl FriendService {
         if self.is_checking.swap(true, Ordering::AcqRel) {
             return Ok(0);
         }
-        let result = self.visit_batch_inner(account_id, kind).await;
-        self.is_checking.store(false, Ordering::Release);
-        result
+        struct Guard<'a>(&'a AtomicBool);
+        impl Drop for Guard<'_> {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::Release);
+            }
+        }
+        let _guard = Guard(&self.is_checking);
+        self.visit_batch_inner(account_id, kind).await
     }
 
     async fn visit_batch_inner(&self, account_id: &str, kind: VisitKind) -> Result<usize> {

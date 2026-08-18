@@ -41,10 +41,8 @@ impl PayService {
     /// - protobuf 解码失败
     pub async fn get_recharge_info(&self, source: &str) -> Result<GetRechargeInfoReply> {
         let req = GetRechargeInfoRequest { source: source.to_string() };
-        let body = self
-            .gateway
-            .request(PAY_SERVICE, "GetRechargeInfo", &req.encode_to_vec(), 10_000)
-            .await?;
+        let body =
+            self.gateway.request(PAY_SERVICE, "GetRechargeInfo", &req.encode_to_vec()).await?;
         Ok(GetRechargeInfoReply::decode(&body[..])?)
     }
 

@@ -540,15 +540,13 @@ const { connected, connect } = useFarmWs({
     if (type === 'log' || type === 'log:new' || type === 'account_log' || type === 'worker_log') {
       if (current && accountId && accountId !== current) return;
       const formatted = formatEventMessage(type, payload);
-      pushLog(formatted.tag, formatted.message, formatted.event, formatted.isWarn);
+      const rawTs = Number((payload as { ts?: number; time?: number }).ts || (payload as { time?: number }).time || 0);
+      pushLog(formatted.tag, formatted.message, formatted.event, formatted.isWarn, rawTs > 0 ? rawTs : undefined);
       return;
     }
 
     if (['farm_operation', 'farm_tick', 'friend_interact'].includes(type)) {
       if (current && accountId && accountId !== current) return;
-      const formatted = formatEventMessage(type, payload);
-      pushLog(formatted.tag, formatted.message, formatted.event, formatted.isWarn);
-      // Prefer event stream; only soft-refresh status (no bag) to avoid panel flash.
       if (type === 'farm_tick' || type === 'farm_operation') {
         void loadStatus({ silent: true, withExtras: false });
       }

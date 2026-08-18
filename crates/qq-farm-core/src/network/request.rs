@@ -8,7 +8,7 @@
 //! 1. 调用方通过 [`RequestManager::call`] 发起请求，拿到 `client_seq` + `oneshot::Receiver`
 //! 2. 发送时把 `client_seq` 写入 frame
 //! 3. 收到响应时按 `client_seq` 找到对应 receiver，send 响应数据
-//! 4. 超时由调用方用 `tokio::time::timeout` 控制
+//! 4. 超时仅 Login / Heartbeat 由调用方用 `request_with_timeout` 控制；业务 RPC 等到回包或断线
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -131,11 +131,7 @@ impl RequestManager {
     /// 是否已有指定方法名的 RPC 在等待回包（心跳避免叠发）
     #[must_use]
     pub fn has_pending_method(&self, method: &str) -> bool {
-        self.inner
-            .pending
-            .lock()
-            .values()
-            .any(|p| p.method_name.eq_ignore_ascii_case(method))
+        self.inner.pending.lock().values().any(|p| p.method_name.eq_ignore_ascii_case(method))
     }
 
     /// 偷看 pending 的 service/method（不移除）
@@ -144,11 +140,15 @@ impl RequestManager {
         self.inner.pending.lock().get(&seq).map(|p| (p.service_name.clone(), p.method_name.clone()))
     }
 
-    /// 拒绝所有待处理请求（连接断开时调用）
+    /// 拒绝所有待处理请求（连接断开时调用），并唤醒等待方
     pub fn reject_all(&self) -> usize {
         let mut pending_map = self.inner.pending.lock();
         let count = pending_map.len();
-        pending_map.clear();
+        for (_, mut pending) in pending_map.drain() {
+            if let Some(tx) = pending.sender.take() {
+                let _ = tx.send(Err(NetworkError::WebSocket("connection closed".into())));
+            }
+        }
         count
     }
 }
@@ -204,11 +204,13 @@ mod tests {
     #[tokio::test]
     async fn reject_all() {
         let mgr = RequestManager::new();
-        let _ = mgr.call("a", "b");
-        let _ = mgr.call("c", "d");
+        let (_s1, rx1) = mgr.call("a", "b");
+        let (_s2, rx2) = mgr.call("c", "d");
         let n = mgr.reject_all();
         assert_eq!(n, 2);
         assert_eq!(mgr.pending_count(), 0);
+        assert!(rx1.await.expect("ch").is_err());
+        assert!(rx2.await.expect("ch").is_err());
     }
 
     #[tokio::test]

@@ -222,8 +222,14 @@ impl FarmService {
         if self.is_checking.swap(true, Ordering::AcqRel) {
             return Ok(LandSummary::default());
         }
+        struct Guard<'a>(&'a AtomicBool);
+        impl Drop for Guard<'_> {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::Release);
+            }
+        }
+        let _guard = Guard(&self.is_checking);
         let result = self.run_farm_operation().await;
-        self.is_checking.store(false, Ordering::Release);
         match result {
             Ok(()) => Ok(LandSummary::default()),
             Err(e) => Err(e),

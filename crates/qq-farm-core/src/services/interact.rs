@@ -120,7 +120,6 @@ impl InteractService {
                 "gamepb.interactpb.InteractService",
                 "GetInteractInfo",
                 &prost::Message::encode_to_vec(&req),
-                10_000,
             )
             .await?;
         Ok(GetInteractInfoReply::decode(&body)?)
@@ -135,7 +134,6 @@ impl InteractService {
                 "gamepb.interactpb.InteractService",
                 "GetInteractSummary",
                 &prost::Message::encode_to_vec(&req),
-                10_000,
             )
             .await?;
         Ok(GetInteractSummaryReply::decode(&body)?)
@@ -147,9 +145,19 @@ impl InteractService {
 
         let mut errors = Vec::new();
         for &(service, method) in RPC_CANDIDATES {
-            match self.gateway.request(service, method, &req_body, 2500).await {
+            match self.gateway.request(service, method, &req_body).await {
                 Ok(body) => return Ok(InteractRecordsReply::decode(&body)?),
-                Err(e) => errors.push(format!("{service}.{method}: {e}")),
+                Err(e) => {
+                    let retry = matches!(
+                        e,
+                        crate::network::error::NetworkError::Gateway { .. }
+                            | crate::network::error::NetworkError::Frame(_)
+                    );
+                    errors.push(format!("{service}.{method}: {e}"));
+                    if !retry {
+                        break;
+                    }
+                }
             }
         }
         tracing::warn!("[好友] 访客记录接口调用失败: {}", errors.join(" | "));

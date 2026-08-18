@@ -32,7 +32,7 @@ impl ActivityCenterService {
         body: Vec<u8>,
         expected_error_codes: &[i64],
     ) -> Result<(ActivityOperateReply, bool)> {
-        match self.gateway.request(ACTIVITY_SERVICE, "Operate", &body, 10_000).await {
+        match self.gateway.request(ACTIVITY_SERVICE, "Operate", &body).await {
             Ok(bytes) => Ok((ActivityOperateReply::decode(&bytes[..])?, false)),
             Err(crate::network::error::NetworkError::Gateway { code, error_message, .. })
                 if expected_error_codes.contains(&code)

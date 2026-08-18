@@ -107,10 +107,8 @@ impl InviteService {
             share_cfg_id: share_cfg_id_num,
             scene_id: WECHAT_SHARE_SCENE_ID.to_string(),
         };
-        let body = self
-            .gateway
-            .request(USER_SERVICE, "ReportArkClick", &req.encode_to_vec(), 10_000)
-            .await?;
+        let body =
+            self.gateway.request(USER_SERVICE, "ReportArkClick", &req.encode_to_vec()).await?;
         Ok(ReportArkClickReply::decode(&body[..])?)
     }
 

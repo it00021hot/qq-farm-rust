@@ -105,11 +105,7 @@ impl Worker {
                     eng.runtime_state(),
                 );
             } else {
-                crate::services::panel_log::register(
-                    &account_id,
-                    &account_name,
-                    event_tx.clone(),
-                );
+                crate::services::panel_log::register(&account_id, &account_name, event_tx.clone());
             }
 
             let tsdk_data_dir = config.data_dir.join(account_id.as_str());
@@ -170,7 +166,11 @@ impl Worker {
                     }
                     Err(e) => {
                         tracing::warn!(account_id = %account_id, "应用宝换码失败: {e}");
-                        emit_login_log(&account_id, &format!("应用宝换码失败，请重新扫码: {e}"), true);
+                        emit_login_log(
+                            &account_id,
+                            &format!("应用宝换码失败，请重新扫码: {e}"),
+                            true,
+                        );
                         emit_terminal_stop(
                             &event_tx,
                             &account_id,

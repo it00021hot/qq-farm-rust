@@ -87,7 +87,6 @@ impl ShareService {
                 "gamepb.sharepb.ShareService",
                 "CheckCanShare",
                 &prost::Message::encode_to_vec(&req),
-                10_000,
             )
             .await?;
         Ok(CheckCanShareReply::decode(&body)?)
@@ -102,7 +101,6 @@ impl ShareService {
                 "gamepb.sharepb.ShareService",
                 "GetInviteInfo",
                 &prost::Message::encode_to_vec(&req),
-                10_000,
             )
             .await?;
         Ok(GetInviteInfoReply::decode(&body)?)
@@ -117,7 +115,6 @@ impl ShareService {
                 "gamepb.sharepb.ShareService",
                 "ReportShare",
                 &prost::Message::encode_to_vec(&req),
-                10_000,
             )
             .await?;
         Ok(ReportShareReply::decode(&body)?)
@@ -145,7 +142,6 @@ impl ShareService {
                 "gamepb.sharepb.ShareService",
                 "ClaimShareReward",
                 &prost::Message::encode_to_vec(&req),
-                10_000,
             )
             .await?;
         Ok(ClaimShareRewardReply::decode(&body)?)

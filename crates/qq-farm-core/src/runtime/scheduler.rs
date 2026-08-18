@@ -177,7 +177,10 @@ impl Scheduler {
             tokio::select! {
                 _ = cancel.cancelled() => return,
                 _ = tokio::time::sleep(delay) => {
-                    task().await;
+                    // 到期后另起 task 跑回调，clear() 只取消尚未开火的 timer。
+                    tokio::spawn(async move {
+                        task().await;
+                    });
                 }
             }
             tracing::trace!(name = %task_name, "timeout task fired");
@@ -360,6 +363,34 @@ mod tests {
         );
         tokio::time::sleep(Duration::from_millis(80)).await;
         assert_eq!(counter.load(Ordering::SeqCst), 1);
+        scheduler.shutdown();
+    }
+
+    #[tokio::test]
+    async fn clear_timeout_does_not_abort_running_callback() {
+        let scheduler = Scheduler::new("test-clear-running");
+        let started = Arc::new(AtomicUsize::new(0));
+        let finished = Arc::new(AtomicUsize::new(0));
+        let s2 = started.clone();
+        let f2 = finished.clone();
+        scheduler.set_timeout_task(
+            "slow",
+            Duration::from_millis(20),
+            Arc::new(move || {
+                let s = s2.clone();
+                let f = f2.clone();
+                Box::pin(async move {
+                    s.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_millis(80)).await;
+                    f.fetch_add(1, Ordering::SeqCst);
+                })
+            }),
+        );
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        assert_eq!(started.load(Ordering::SeqCst), 1);
+        scheduler.clear("slow");
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        assert_eq!(finished.load(Ordering::SeqCst), 1);
         scheduler.shutdown();
     }
 

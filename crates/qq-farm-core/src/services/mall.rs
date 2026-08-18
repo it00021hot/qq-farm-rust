@@ -157,7 +157,7 @@ impl MallService {
         let req = GetMallListBySlotTypeRequest { slot_type, sub_slot_type };
         let body = self
             .gateway
-            .request(MALL_SERVICE, "GetMallListBySlotType", &req.encode_to_vec(), 10_000)
+            .request(MALL_SERVICE, "GetMallListBySlotType", &req.encode_to_vec())
             .await?;
         Ok(GetMallListBySlotTypeResponse::decode(&body[..])?)
     }
@@ -179,8 +179,7 @@ impl MallService {
     /// - 余额不足等业务错误（`code=1000019`）— 由调用方识别
     pub async fn purchase_mall_goods(&self, goods_id: i32, count: i32) -> Result<PurchaseResponse> {
         let req = PurchaseRequest { goods_id, count };
-        let body =
-            self.gateway.request(MALL_SERVICE, "Purchase", &req.encode_to_vec(), 10_000).await?;
+        let body = self.gateway.request(MALL_SERVICE, "Purchase", &req.encode_to_vec()).await?;
         Ok(PurchaseResponse::decode(&body[..])?)
     }
 

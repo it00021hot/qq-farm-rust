@@ -28,12 +28,7 @@ impl ActivityCenterService {
     pub async fn query_season(&self) -> Result<GetSeasonInfoReply> {
         let body = self
             .gateway
-            .request(
-                SEASON_SERVICE,
-                "GetSeasonInfo",
-                &GetSeasonInfoRequest {}.encode_to_vec(),
-                10_000,
-            )
+            .request(SEASON_SERVICE, "GetSeasonInfo", &GetSeasonInfoRequest {}.encode_to_vec())
             .await?;
         let reply = GetSeasonInfoReply::decode(&body[..])?;
         *self.cached_season.lock() = Some(reply.clone());
@@ -67,7 +62,6 @@ impl ActivityCenterService {
                 SEASON_SERVICE,
                 "ClaimBattlePassRewards",
                 &ClaimBattlePassRewardsRequest {}.encode_to_vec(),
-                10_000,
             )
             .await?;
         let reply = ClaimBattlePassRewardsReply::decode(&body[..])?;
@@ -90,12 +84,7 @@ impl ActivityCenterService {
     pub async fn query_solar_terms(&self) -> Result<GetSolarTermsReply> {
         let body = self
             .gateway
-            .request(
-                SOLAR_TERMS_SERVICE,
-                "GetSolarTerms",
-                &GetSolarTermsRequest {}.encode_to_vec(),
-                10_000,
-            )
+            .request(SOLAR_TERMS_SERVICE, "GetSolarTerms", &GetSolarTermsRequest {}.encode_to_vec())
             .await?;
         Ok(GetSolarTermsReply::decode(&body[..])?)
     }
@@ -128,7 +117,7 @@ impl ActivityCenterService {
         let req = ClaimSolarTermsRequest { term_id: parsed };
         let body = self
             .gateway
-            .request(SOLAR_TERMS_SERVICE, "ClaimSolarTerms", &req.encode_to_vec(), 10_000)
+            .request(SOLAR_TERMS_SERVICE, "ClaimSolarTerms", &req.encode_to_vec())
             .await?;
         let reply = ClaimSolarTermsReply::decode(&body[..])?;
         Ok(serde_json::json!({
