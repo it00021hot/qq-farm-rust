@@ -438,6 +438,7 @@
 - IPC：`wx_quick_login_detect` / `wx_quick_login_authorize`；失败原因回传前端
 - Go Web 同样走后端 `POST .../detect`、`.../authorize`：Chrome 直连 `localhost.weixin.qq.com` 会被 CORS / Local Network Access 拦住；本机面板由 Go 绑 `127.0.0.1` 代探
 - 能力状态：Windows 已登录未锁定桌面微信时，添加账号「本机微信」应检出昵称并可确认授权
+- 2026-08-18 补：新版 Weixin.exe 除 14013-14015 外还会监听 14016/14019/14022/14023；探测端口扩到 14013-14025 + 13013-13015
 
 ### 2026-08-18 — 桌面品牌与 Go 版拆开
 

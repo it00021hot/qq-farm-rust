@@ -50,7 +50,10 @@ pub const WX_OAUTH_REDIRECT_URI: &str =
     "https://yybadaccess.3g.qq.com/pc_yyb/pcyyb_oauth?login_type=WX";
 
 /// 桌面微信本地 HTTP API 端口（Windows fast_login）
-pub const DESKTOP_WECHAT_PORTS: &[u16] = &[14013, 14014, 14015, 13013, 13014, 13015];
+pub const DESKTOP_WECHAT_PORTS: &[u16] = &[
+    14013, 14014, 14015, 14016, 14017, 14018, 14019, 14020, 14021, 14022, 14023, 14024, 14025, 13013,
+    13014, 13015,
+];
 /// 桌面微信本地 HTTPS 主机名（解析到 127.0.0.1）
 pub const LOCAL_WECHAT_HOST: &str = "localhost.weixin.qq.com";
 pub const LOCAL_WECHAT_CHECK_PATH: &str = "/api/check-login";
