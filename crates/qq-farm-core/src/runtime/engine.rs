@@ -970,9 +970,7 @@ impl RuntimeEngine {
                     accounts_store::persist_global();
                     tracing::info!(account_id = %account_id, "应用宝 token 保活成功");
                 }
-                Err(e)
-                    if e.kind == crate::services::wx_login::WxAuthErrorKind::CredentialsDead =>
-                {
+                Err(e) if e.kind == crate::services::wx_login::WxAuthErrorKind::CredentialsDead => {
                     tracing::warn!(account_id = %account_id, "应用宝保活失败，清授权: {e}");
                     accounts_store::clear_wx_auth(&account_id);
                     accounts_store::persist_global();

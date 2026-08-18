@@ -21,9 +21,13 @@ use std::time::Duration;
 use reqwest::redirect::Policy;
 
 use crate::constants::game_ids::{
-    WX_OAUTH_APP_ID, WX_OAUTH_REDIRECT_URI, WX_OAUTH_SCOPE, WX_OAUTH_STATE,
+    DESKTOP_WECHAT_PORTS, WX_OAUTH_APP_ID, WX_OAUTH_REDIRECT_URI, WX_OAUTH_SCOPE, WX_OAUTH_STATE,
 };
 
+use super::local_wechat::{
+    LocalWechatAuthorizeResult, LocalWechatClient, LocalWechatOAuth, LocalWechatPosition,
+    LocalWechatProfile,
+};
 use super::native_protocol;
 use super::wx_auth::{classify_yyb_message, now_unix, WxAuthError, YybCredentials};
 
@@ -206,7 +210,10 @@ impl WxLoginService {
     }
 
     /// OAuth code → 应用宝凭据（扫码 confirm / 本机快速授权共用）。
-    pub async fn exchange_oauth_code(&self, oauth_code: &str) -> Result<YybCredentials, WxAuthError> {
+    pub async fn exchange_oauth_code(
+        &self,
+        oauth_code: &str,
+    ) -> Result<YybCredentials, WxAuthError> {
         let code = oauth_code.trim();
         if code.is_empty() {
             return Err(WxAuthError::dead("quick authorization code is missing"));
@@ -214,8 +221,10 @@ impl WxLoginService {
         let mut cookies = HashMap::new();
         let params = [("login_type", "WX"), ("code", code), ("state", WX_OAUTH_STATE)];
         let query = encode_query(&params);
-        let callback =
-            self.request(&format!("{CALLBACK_URL}?{query}"), &mut cookies, None).await.map_err(map_http_err)?;
+        let callback = self
+            .request(&format!("{CALLBACK_URL}?{query}"), &mut cookies, None)
+            .await
+            .map_err(map_http_err)?;
         if callback.status < 200 || callback.status >= 400 {
             return Err(WxAuthError::transient(format!(
                 "WeChat authorization callback failed (HTTP {})",
@@ -282,6 +291,29 @@ impl WxLoginService {
             return Err(WxAuthError::dead("quick authorization code is missing"));
         }
         Ok(code)
+    }
+
+    /// 探测本机微信（桌面进程代理 `localhost.weixin.qq.com`）。
+    #[allow(clippy::unused_self, clippy::missing_const_for_fn)]
+    pub async fn detect_desktop_wechat(
+        &self,
+        ports: Option<&[u16]>,
+    ) -> Result<LocalWechatProfile, WxAuthError> {
+        let ports = ports.unwrap_or(DESKTOP_WECHAT_PORTS);
+        LocalWechatClient::production().detect(&LocalWechatOAuth::yyb(), ports).await
+    }
+
+    /// 本机微信 `/api/authorize`，返回一次性 `redirect_url`。
+    #[allow(clippy::unused_self, clippy::missing_const_for_fn)]
+    pub async fn authorize_desktop_wechat(
+        &self,
+        port: u16,
+        authorize_uuid: &str,
+        position: LocalWechatPosition,
+    ) -> Result<LocalWechatAuthorizeResult, WxAuthError> {
+        LocalWechatClient::production()
+            .authorize(port, &LocalWechatOAuth::yyb(), authorize_uuid, position)
+            .await
     }
 
     /// 用已保存的应用宝 accesstoken 重新换 login_buffer（旧账号无 refresh 时回退）。
@@ -377,9 +409,8 @@ impl WxLoginService {
                 } else if !current.openid.trim().is_empty()
                     && !current.access_token.trim().is_empty()
                 {
-                    let buf = self
-                        .refresh_login_buffer(&current.openid, &current.access_token)
-                        .await?;
+                    let buf =
+                        self.refresh_login_buffer(&current.openid, &current.access_token).await?;
                     current.login_buffer = buf;
                 } else {
                     return Err(map_native_mint_err(first));
@@ -588,9 +619,12 @@ fn refresh_token_payload(creds: &YybCredentials) -> String {
     .to_string()
 }
 
-fn parse_refresh_token_json(body: &str, base: &YybCredentials) -> Result<YybCredentials, WxAuthError> {
-    let data: serde_json::Value =
-        serde_json::from_str(body).map_err(|e| WxAuthError::transient(format!("JSON parse: {e}")))?;
+fn parse_refresh_token_json(
+    body: &str,
+    base: &YybCredentials,
+) -> Result<YybCredentials, WxAuthError> {
+    let data: serde_json::Value = serde_json::from_str(body)
+        .map_err(|e| WxAuthError::transient(format!("JSON parse: {e}")))?;
     let code = data.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
     if code != 0 {
         let msg = data.get("msg").and_then(|v| v.as_str()).unwrap_or("refresh failed");
@@ -632,8 +666,8 @@ fn map_native_mint_err(err: String) -> WxAuthError {
 }
 
 fn parse_login_buffer_json(body: &str) -> Result<String, WxAuthError> {
-    let data: serde_json::Value =
-        serde_json::from_str(body).map_err(|e| WxAuthError::transient(format!("JSON parse: {e}")))?;
+    let data: serde_json::Value = serde_json::from_str(body)
+        .map_err(|e| WxAuthError::transient(format!("JSON parse: {e}")))?;
     let code = data.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
     let login_buffer = if code == 0 {
         data.get("ext_info")
@@ -1167,7 +1201,8 @@ mod tests {
 
     #[test]
     fn parse_quick_redirect_url_accepts_valid() {
-        let url = "https://yybadaccess.3g.qq.com/pc_yyb/pcyyb_oauth?login_type=WX&state=web&code=abc123";
+        let url =
+            "https://yybadaccess.3g.qq.com/pc_yyb/pcyyb_oauth?login_type=WX&state=web&code=abc123";
         assert_eq!(WxLoginService::parse_quick_redirect_url(url).unwrap(), "abc123");
     }
 
@@ -1323,11 +1358,9 @@ mod tests {
             expires_in: 7200,
             ..Default::default()
         };
-        let updated = parse_refresh_token_json(
-            r#"{"code":0,"user_info":{"access_token":"new"}}"#,
-            &base,
-        )
-        .expect("parse");
+        let updated =
+            parse_refresh_token_json(r#"{"code":0,"user_info":{"access_token":"new"}}"#, &base)
+                .expect("parse");
         assert_eq!(updated.refresh_token, "rt");
         assert_eq!(updated.refresh_token_observed_at, 222);
     }

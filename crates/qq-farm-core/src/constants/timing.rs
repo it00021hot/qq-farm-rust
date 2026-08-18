@@ -19,6 +19,11 @@ pub const MAX_PENDING_RPC: usize = 32;
 pub const LOGIN_TIMEOUT_MS: u64 = 20_000;
 pub const HEARTBEAT_RPC_TIMEOUT_MS: u64 = 20_000;
 
+/// 探测本机微信 `/api/check-login` 超时（对齐 YYB scan.html）
+pub const LOCAL_WECHAT_DETECT_TIMEOUT_MS: u64 = 3_000;
+/// 本机微信 `/api/authorize` 等待用户确认超时
+pub const LOCAL_WECHAT_AUTHORIZE_TIMEOUT_MS: u64 = 120_000;
+
 /// 微信扫码任务默认存活
 pub const WX_LOGIN_TASK_TTL_MS: u64 = 110_000;
 /// 扫码换出的 code 尚未绑定账号时，应用宝授权暂存时长

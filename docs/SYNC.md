@@ -430,3 +430,20 @@
 - 对照 YYB-Go-Enhanced：45 分钟提前量只做保活外层门闸；`refresh_credentials_and_buffer` 有 refresh_token 就一定先 `pcyyb_refresh_token_auth` 再换 `login_buffer`
 - 落盘 `wx_refresh_token_observed_at`；微信未轮换 refresh_token 时不改时钟；约 25 天后列表 `wxRescanRecommended` 显示「建议重扫」
 - 能力状态：保活后过期时间应往后推；同一 refresh 连续约 25 天账号授权列变为「建议重扫」
+
+### 2026-08-18 — 桌面本机微信快速授权改原生代理
+
+- 现象：Tauri/Wails WebView 直连 `https://localhost.weixin.qq.com` 失败（自定义协议 CORS / Local Network Access / 微信自签证书），检测后静默回退扫码
+- 对照 YYB-Go-Enhanced：OAuth 参数已齐；YYB 用浏览器碰本机微信是因为服务端可能在远程 Docker。桌面进程在本机，改为 Rust 绑 `127.0.0.1` 代理 `/api/check-login`、`/api/authorize`
+- IPC：`wx_quick_login_detect` / `wx_quick_login_authorize`；失败原因回传前端
+- Go Web 同样走后端 `POST .../detect`、`.../authorize`：Chrome 直连 `localhost.weixin.qq.com` 会被 CORS / Local Network Access 拦住；本机面板由 Go 绑 `127.0.0.1` 代探
+- 能力状态：Windows 已登录未锁定桌面微信时，添加账号「本机微信」应检出昵称并可确认授权
+
+### 2026-08-18 — 桌面品牌与 Go 版拆开
+
+- 显示名 / 窗口 / 托盘 / 菜单改为 **QQ Farm**（Go 仍为「QQ农场智能助手」）
+- `identifier` 改为 `com.qqfarm.rust`；release 数据目录改为 OS `QQFarmRust`
+- 图标改为锈橙底绿苗 + 六边形 R 角标（侧栏 logo / favicon 同步）
+- 能力状态：与 Go 桌面可并装；Dock / 托盘 tooltip / 数据目录互不覆盖
+
+

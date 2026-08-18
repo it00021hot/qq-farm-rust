@@ -17,6 +17,8 @@ commands.allow = [
   "wx_login_code",
   "wx_login_destroy",
   "wx_quick_login_create",
+  "wx_quick_login_detect",
+  "wx_quick_login_authorize",
   "wx_quick_login_confirm",
   "farm_status_detail",
   "farm_diamond",

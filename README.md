@@ -76,7 +76,7 @@ cd crates/qq-farm-desktop && cargo tauri dev
 
 - macOS 有原生菜单（应用：打开数据目录 / 检查更新）；Windows 动作在托盘
 - 关闭窗口隐藏到托盘；退出只走托盘「退出」或 macOS Cmd+Q
-- 安装包内嵌 `tsdk.wasm` 与 `game_config`；数据目录默认 `~/Library/Application Support/QQFarm` 或 `%LOCALAPPDATA%\QQFarm`
+- 安装包内嵌 `tsdk.wasm` 与 `game_config`；数据目录默认 `~/Library/Application Support/QQFarmRust` 或 `%LOCALAPPDATA%\QQFarmRust`
 
 ### 发版与自动更新
 
@@ -103,7 +103,7 @@ git push origin v0.2.0
 | `FARM_CLIENT_VERSION` | `1.13.1.6_20260723` | 客户端版本 |
 | `ADMIN_PORT` | `3007` | HTTP / Socket.IO 端口 |
 | `RUST_LOG` | `info` | 日志级别 |
-| `FARM_DATA_DIR` | server：`<app_root>/data`；桌面安装包：OS 应用数据目录 `QQFarm` | 账号、用户、配置 |
+| `FARM_DATA_DIR` | server：`<app_root>/data`；桌面安装包：OS 应用数据目录 `QQFarmRust` | 账号、用户、配置 |
 
 ## 运行时行为
 

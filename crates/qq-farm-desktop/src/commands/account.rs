@@ -11,7 +11,10 @@ use qq_farm_core::models::store::accounts as account_store;
 use crate::error::{IpcError, IpcResult};
 use crate::state::DesktopState;
 
-use super::dto::{AccountSummary, WxLoginCreateDto, WxLoginStatusDto, WxQuickCreateDto};
+use super::dto::{
+    AccountSummary, WxLoginCreateDto, WxLoginStatusDto, WxQuickAuthorizeDto, WxQuickCreateDto,
+    WxQuickDetectDto,
+};
 
 /// 账号列表（LocalOwner：全部本地账号）。
 #[tauri::command]
@@ -143,6 +146,47 @@ pub async fn wx_quick_login_create(state: State<'_, DesktopState>) -> IpcResult<
         ports: r.ports,
         expires_at: r.expires_at,
     })
+}
+
+/// 探测本机微信（原生代理，不走 WebView）。
+#[tauri::command]
+pub async fn wx_quick_login_detect(
+    state: State<'_, DesktopState>,
+    session_id: String,
+) -> IpcResult<WxQuickDetectDto> {
+    let _ = &state.acl;
+    let r = wx_login::detect_quick_session(&state.app.wx_login, &session_id)
+        .await
+        .map_err(IpcError::from)?;
+    Ok(WxQuickDetectDto {
+        port: r.port,
+        authorize_uuid: r.authorize_uuid,
+        nickname: r.nickname,
+        headimgurl: r.headimgurl,
+    })
+}
+
+/// 本机微信确认授权，返回 redirect_url。
+#[tauri::command]
+pub async fn wx_quick_login_authorize(
+    state: State<'_, DesktopState>,
+    session_id: String,
+    port: u16,
+    authorize_uuid: String,
+    x: i32,
+    y: i32,
+) -> IpcResult<WxQuickAuthorizeDto> {
+    let _ = &state.acl;
+    let redirect_url = wx_login::authorize_quick_session(
+        &state.app.wx_login,
+        &session_id,
+        port,
+        &authorize_uuid,
+        qq_farm_core::services::wx_login::LocalWechatPosition { x, y },
+    )
+    .await
+    .map_err(IpcError::from)?;
+    Ok(WxQuickAuthorizeDto { redirect_url })
 }
 
 /// 确认本机微信 fast_login 回调。

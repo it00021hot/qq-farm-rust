@@ -3,10 +3,12 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { farmPlatformOptions, translateStringOptions } from '@/constants/business';
 import {
   fetchAddFarmAccount,
+  fetchAuthorizeFarmWxQuickLogin,
   fetchConfirmFarmWxLogin,
   fetchConfirmFarmWxQuickLogin,
   fetchCreateFarmWxLoginTask,
   fetchCreateFarmWxQuickLoginSession,
+  fetchDetectFarmWxQuickLogin,
   fetchFarmWxLoginCode,
   fetchFarmWxLoginStatus,
   fetchModifyFarmAccount,
@@ -55,13 +57,6 @@ const activeLoginTab = ref<LoginTab>('code');
 const wxMode = ref<WxMode>('local');
 const wxTaskId = ref('');
 const wxSessionId = ref('');
-const wxQuickConfig = ref<{
-  appId: string;
-  scope: string;
-  redirectUri: string;
-  state: string;
-  ports: number[];
-} | null>(null);
 const wxQuickPort = ref<number | null>(null);
 const wxQuickProfile = ref<{ authorizeUuid?: string; nickname?: string; headimgurl?: string } | null>(null);
 const wxStatus = ref('');
@@ -186,7 +181,6 @@ function resetWxLogin() {
   stopWxPolling();
   wxTaskId.value = '';
   wxSessionId.value = '';
-  wxQuickConfig.value = null;
   wxQuickPort.value = null;
   wxQuickProfile.value = null;
   wxStatus.value = '';
@@ -194,47 +188,6 @@ function resetWxLogin() {
   wxQrUrl.value = '';
   wxLoading.value = false;
   wxSubmitting.value = false;
-}
-
-function parseLocalWechatResponse(text: string): any {
-  let value = JSON.parse(text);
-  if (typeof value === 'string') value = JSON.parse(value);
-  return value;
-}
-
-async function localWechatRequest(
-  port: number,
-  path: string,
-  body: Record<string, unknown>,
-  timeoutMs = 3000
-): Promise<any> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(`https://localhost.weixin.qq.com:${port}${path}`, {
-      method: 'POST',
-      cache: 'no-store',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: controller.signal
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return parseLocalWechatResponse(await response.text());
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function checkLoginBody(config: NonNullable<typeof wxQuickConfig.value>) {
-  return {
-    apiname: 'qrconnectchecklogin',
-    jsdata: {
-      appid: config.appId,
-      scope: config.scope,
-      redirect_uri: config.redirectUri,
-      state: config.state
-    }
-  };
 }
 
 function authorizePosition() {
@@ -317,7 +270,6 @@ async function getWxCodeAndSave() {
 async function detectLocalWechat() {
   wxLoading.value = true;
   wxError.value = '';
-  wxQuickConfig.value = null;
   wxQuickPort.value = null;
   wxQuickProfile.value = null;
   wxStatus.value = '正在检测本机微信...';
@@ -327,34 +279,15 @@ async function detectLocalWechat() {
       throw new Error((error as any)?.message || '创建快速授权会话失败');
     }
     wxSessionId.value = String(data.sessionId);
-    const config = {
-      appId: String(data.appId),
-      scope: String(data.scope),
-      redirectUri: String(data.redirectUri),
-      state: String(data.state),
-      ports: (data.ports || []).map(Number)
-    };
-    wxQuickConfig.value = config;
-    const results = await Promise.all(
-      config.ports.map(async port => {
-        try {
-          return { port, data: await localWechatRequest(port, '/api/check-login', checkLoginBody(config)) };
-        } catch {
-          return null;
-        }
-      })
-    );
-    const match = results.find(
-      item => item && Number(item.data?.errcode) === 0 && item.data?.jsdata?.authorize_uuid
-    );
-    if (!match) {
-      throw new Error('未检测到可用的桌面微信');
+    const detected = await fetchDetectFarmWxQuickLogin(wxSessionId.value);
+    if (detected.error || !detected.data?.authorizeUuid) {
+      throw new Error((detected.error as any)?.message || '未检测到可用的桌面微信');
     }
-    wxQuickPort.value = match.port;
+    wxQuickPort.value = Number(detected.data.port);
     wxQuickProfile.value = {
-      authorizeUuid: match.data.jsdata.authorize_uuid,
-      nickname: match.data.jsdata.nickname,
-      headimgurl: match.data.jsdata.headimgurl
+      authorizeUuid: String(detected.data.authorizeUuid),
+      nickname: detected.data.nickname,
+      headimgurl: detected.data.headimgurl
     };
     wxStatus.value = wxQuickProfile.value.nickname
       ? `${wxQuickProfile.value.nickname} · 请在电脑微信中确认`
@@ -370,10 +303,9 @@ async function detectLocalWechat() {
 }
 
 async function authorizeLocalWechat() {
-  const config = wxQuickConfig.value;
   const port = wxQuickPort.value;
   const profile = wxQuickProfile.value;
-  if (!config || !port || !profile?.authorizeUuid || !wxSessionId.value) {
+  if (!port || !profile?.authorizeUuid || !wxSessionId.value) {
     wxError.value = '请先检测本机微信';
     return;
   }
@@ -381,36 +313,24 @@ async function authorizeLocalWechat() {
   wxError.value = '';
   wxStatus.value = '等待电脑微信确认...';
   try {
-    const result = await localWechatRequest(
+    const pos = authorizePosition();
+    const authorized = await fetchAuthorizeFarmWxQuickLogin(wxSessionId.value, {
       port,
-      '/api/authorize',
-      {
-        apiname: 'qrconnectfastauthorize',
-        jsdata: {
-          data: JSON.stringify(authorizePosition()),
-          appid: config.appId,
-          scope: config.scope,
-          redirect_uri: config.redirectUri,
-          state: config.state,
-          authorize_uuid: profile.authorizeUuid
-        }
-      },
-      120000
-    );
-    const errcode = Number(result?.errcode);
-    if (errcode === 10050) throw new Error('已在微信中拒绝授权');
-    if (errcode === 10046) throw new Error('授权已超时，请重新检测');
-    if (errcode === 10057) {
-      wxMode.value = 'qr';
-      void startWxLogin();
-      throw new Error('当前应用仅支持扫码授权');
-    }
-    if (errcode !== 0 || !result?.jsdata?.redirect_url) {
-      throw new Error('桌面微信未返回有效授权结果');
+      authorizeUuid: profile.authorizeUuid,
+      x: pos.x,
+      y: pos.y
+    });
+    if (authorized.error || !authorized.data?.redirectUrl) {
+      const message = (authorized.error as any)?.message || '桌面微信未返回有效授权结果';
+      if (String(message).includes('仅支持扫码授权')) {
+        wxMode.value = 'qr';
+        void startWxLogin();
+      }
+      throw new Error(message);
     }
     const { data, error } = await fetchConfirmFarmWxQuickLogin(
       wxSessionId.value,
-      String(result.jsdata.redirect_url)
+      String(authorized.data.redirectUrl)
     );
     if (error || !data?.code) {
       throw new Error((error as any)?.message || '快速授权确认失败');
@@ -654,7 +574,13 @@ onBeforeUnmount(() => {
             </NSpin>
             <p v-if="wxError" class="text-13px text-error">{{ wxError }}</p>
             <NSpace>
-              <NButton type="primary" :loading="wxSubmitting" :disabled="!wxQuickPort" @click="authorizeLocalWechat">
+              <NButton
+                size="small"
+                type="primary"
+                :loading="wxSubmitting"
+                :disabled="!wxQuickPort"
+                @click="authorizeLocalWechat"
+              >
                 使用本机微信授权
               </NButton>
               <NButton size="small" :loading="wxLoading" @click="detectLocalWechat">重新检测</NButton>

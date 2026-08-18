@@ -688,11 +688,7 @@ async fn prepare_wx_gateway_code(
     account: &AccountSession,
 ) -> Result<(String, YybCredentials), crate::services::wx_login::WxAuthError> {
     let svc = crate::services::wx_login::service::WxLoginService::new();
-    svc.mint_gateway_code(
-        &account.yyb_credentials(),
-        crate::constants::WX_MINI_APP_ID,
-    )
-    .await
+    svc.mint_gateway_code(&account.yyb_credentials(), crate::constants::WX_MINI_APP_ID).await
 }
 
 fn persist_wx_gateway_credentials(account_id: &str, code: &str, creds: &YybCredentials) {

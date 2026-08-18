@@ -286,6 +286,28 @@ export function fetchCreateFarmWxQuickLoginSession() {
   }>('wx_quick_login_create');
 }
 
+export function fetchDetectFarmWxQuickLogin(sessionId: string) {
+  return invokeFlat<{
+    port: number;
+    authorizeUuid: string;
+    nickname?: string;
+    headimgurl?: string;
+  }>('wx_quick_login_detect', { sessionId });
+}
+
+export function fetchAuthorizeFarmWxQuickLogin(
+  sessionId: string,
+  payload: { port: number; authorizeUuid: string; x: number; y: number }
+) {
+  return invokeFlat<{ redirectUrl: string }>('wx_quick_login_authorize', {
+    sessionId,
+    port: payload.port,
+    authorizeUuid: payload.authorizeUuid,
+    x: payload.x,
+    y: payload.y
+  });
+}
+
 export function fetchConfirmFarmWxQuickLogin(sessionId: string, redirectUrl: string) {
   return invokeFlat<{ code: string; openid?: string }>('wx_quick_login_confirm', {
     sessionId,

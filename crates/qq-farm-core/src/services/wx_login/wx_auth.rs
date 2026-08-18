@@ -144,10 +144,7 @@ mod tests {
             expires_in: 7200,
             refresh_token_observed_at: 0,
         };
-        assert!(
-            !c.token_due_for_refresh(0),
-            "token with 30m left should not refresh when ahead=0"
-        );
+        assert!(!c.token_due_for_refresh(0), "token with 30m left should not refresh when ahead=0");
         assert!(
             c.token_due_for_refresh(crate::constants::WX_KEEPALIVE_AHEAD_SECS),
             "token with 30m left should refresh under 45m keepalive window"

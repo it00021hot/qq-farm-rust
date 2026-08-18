@@ -89,6 +89,8 @@ pub fn run() {
             commands::account::wx_login_code,
             commands::account::wx_login_destroy,
             commands::account::wx_quick_login_create,
+            commands::account::wx_quick_login_detect,
+            commands::account::wx_quick_login_authorize,
             commands::account::wx_quick_login_confirm,
             // farm
             commands::farm::farm_status_detail,

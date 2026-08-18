@@ -12,11 +12,11 @@ fn env_unset(key: &str) -> bool {
 fn default_os_data_dir() -> Option<PathBuf> {
     #[cfg(windows)]
     {
-        dirs::data_local_dir().map(|d| d.join("QQFarm"))
+        dirs::data_local_dir().map(|d| d.join("QQFarmRust"))
     }
     #[cfg(not(windows))]
     {
-        dirs::data_dir().map(|d| d.join("QQFarm"))
+        dirs::data_dir().map(|d| d.join("QQFarmRust"))
     }
 }
 

@@ -1,5 +1,9 @@
 <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
   <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#f0c9a0"/>
+      <stop offset="100%" stop-color="#b45309"/>
+    </linearGradient>
     <linearGradient id="leafA" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#7ddea2"/>
       <stop offset="100%" stop-color="#2f9e5f"/>
@@ -17,6 +21,7 @@
       <stop offset="100%" stop-color="#9a3412"/>
     </linearGradient>
   </defs>
+  <rect width="64" height="64" rx="14" fill="url(#bg)"/>
   <ellipse cx="32" cy="52" rx="22" ry="7" fill="url(#soil)" opacity="0.95"/>
   <path d="M12 50c4-4 10-6 20-6s16 2 20 6c-3 3-10 5-20 5s-17-2-20-5z" fill="url(#soil)"/>
   <path d="M32 48V24" stroke="#1f7a4a" stroke-width="3" stroke-linecap="round" fill="none"/>

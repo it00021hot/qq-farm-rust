@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "QQ农场智能助手",
+  "productName": "QQ Farm",
   "version": "0.1.4",
-  "identifier": "com.qqfarm.desktop",
+  "identifier": "com.qqfarm.rust",
   "build": {
     "beforeDevCommand": {
       "cwd": "../../desktop-ui",
@@ -18,7 +18,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "QQ农场智能助手",
+        "title": "QQ Farm",
         "width": 1280,
         "height": 800,
         "resizable": true,

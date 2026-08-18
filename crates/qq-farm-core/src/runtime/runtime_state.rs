@@ -85,7 +85,11 @@ pub struct LogFilters {
 pub enum RuntimeEvent {
     Log(LogEntry),
     AccountLog(AccountLogEntry),
-    Status { account_id: String, account_name: String, status: serde_json::Value },
+    Status {
+        account_id: String,
+        account_name: String,
+        status: serde_json::Value,
+    },
     AccountStatus {
         account_id: String,
         account_name: String,
@@ -93,7 +97,11 @@ pub enum RuntimeEvent {
         detail: String,
         wx_authorized: bool,
     },
-    WorkerLog { entry: serde_json::Value, account_id: String, account_name: String },
+    WorkerLog {
+        entry: serde_json::Value,
+        account_id: String,
+        account_name: String,
+    },
 }
 
 /// 抽象 Account Store（用于解耦 models::store）

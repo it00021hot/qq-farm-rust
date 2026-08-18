@@ -79,6 +79,23 @@ pub struct WxQuickCreateDto {
     pub expires_at: i64,
 }
 
+/// 本机微信检测结果。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WxQuickDetectDto {
+    pub port: u16,
+    pub authorize_uuid: String,
+    pub nickname: String,
+    pub headimgurl: String,
+}
+
+/// 本机微信 authorize 返回的一次性回调。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WxQuickAuthorizeDto {
+    pub redirect_url: String,
+}
+
 /// 背包出售单项。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]

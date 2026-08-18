@@ -19,7 +19,7 @@ cd crates/qq-farm-desktop && cargo tauri dev
 环境变量与 server 共用（如 `TSDK_WASM_PATH`、`FARM_SERVER_URL`、`MAX_WORKERS`）。
 
 - 开发：数据目录同 `qq-farm-core::get_data_dir()`（默认仓库 `data/`，可用 `FARM_DATA_DIR` 覆盖）
-- 安装包：未设 `FARM_DATA_DIR` 时为 macOS `~/Library/Application Support/QQFarm`、Windows `%LOCALAPPDATA%\QQFarm`；`tsdk.wasm` / `game_config` 从 bundle resources 加载
+- 安装包：未设 `FARM_DATA_DIR` 时为 macOS `~/Library/Application Support/QQFarmRust`、Windows `%LOCALAPPDATA%\QQFarmRust`；`tsdk.wasm` / `game_config` 从 bundle resources 加载
 
 ## 壳层
 

@@ -10,7 +10,7 @@ use qq_farm_core::constants::game_ids::{
 };
 use qq_farm_core::constants::{WX_LOGIN_PENDING_AUTH_TTL_MS, WX_LOGIN_TASK_TTL_MS, WX_MINI_APP_ID};
 use qq_farm_core::services::wx_login::service::{ScanStatus, WxLoginService, WxLoginSession};
-use qq_farm_core::services::wx_login::YybCredentials;
+use qq_farm_core::services::wx_login::{LocalWechatPosition, LocalWechatProfile, YybCredentials};
 
 use crate::error::{AppError, AppResult};
 
@@ -197,7 +197,7 @@ pub async fn create_task_for(hub: &WxLoginHub, owner: &str) -> AppResult<WxCreat
     })
 }
 
-/// 创建本机微信快速授权会话（前端 WebView 调 localhost.weixin.qq.com）。
+/// 创建本机微信快速授权会话（桌面端由原生进程探测本机微信）。
 pub async fn create_quick_session(hub: &WxLoginHub) -> AppResult<WxQuickCreateResult> {
     create_quick_session_for(hub, "").await
 }
@@ -224,6 +224,63 @@ pub async fn create_quick_session_for(
     })
 }
 
+fn require_quick_session(hub: &WxLoginHub, session_id: &str, owner: Option<&str>) -> AppResult<()> {
+    prune_quick_sessions(hub, now_ms());
+    let sessions = hub.quick_sessions.lock();
+    let session = sessions
+        .get(session_id)
+        .ok_or_else(|| AppError::NotFound("Quick login session expired or not found".into()))?;
+    if owner.filter(|o| !o.is_empty()).is_some_and(|o| session.owner != o) {
+        return Err(AppError::Forbidden("Quick login session owner mismatch".into()));
+    }
+    Ok(())
+}
+
+/// 桌面进程探测本机微信（不消耗一次性会话）。
+pub async fn detect_quick_session(
+    hub: &WxLoginHub,
+    session_id: &str,
+) -> AppResult<LocalWechatProfile> {
+    detect_quick_session_for(hub, session_id, None).await
+}
+
+pub async fn detect_quick_session_for(
+    hub: &WxLoginHub,
+    session_id: &str,
+    owner: Option<&str>,
+) -> AppResult<LocalWechatProfile> {
+    require_quick_session(hub, session_id, owner)?;
+    hub.service.detect_desktop_wechat(None).await.map_err(map_wx_auth_user_err)
+}
+
+/// 桌面进程调用本机微信 authorize，返回 redirect_url（仍须 confirm）。
+pub async fn authorize_quick_session(
+    hub: &WxLoginHub,
+    session_id: &str,
+    port: u16,
+    authorize_uuid: &str,
+    position: LocalWechatPosition,
+) -> AppResult<String> {
+    authorize_quick_session_for(hub, session_id, port, authorize_uuid, position, None).await
+}
+
+pub async fn authorize_quick_session_for(
+    hub: &WxLoginHub,
+    session_id: &str,
+    port: u16,
+    authorize_uuid: &str,
+    position: LocalWechatPosition,
+    owner: Option<&str>,
+) -> AppResult<String> {
+    require_quick_session(hub, session_id, owner)?;
+    let result = hub
+        .service
+        .authorize_desktop_wechat(port, authorize_uuid, position)
+        .await
+        .map_err(map_wx_auth_user_err)?;
+    Ok(result.redirect_url)
+}
+
 /// 确认本机微信 fast_login 回调并完成换票。
 pub async fn confirm_quick_session(
     hub: &WxLoginHub,
@@ -244,17 +301,18 @@ pub async fn confirm_quick_session_for(
         .map_err(|e| AppError::BadRequest(e.to_string()))?;
     let creds = hub.service.exchange_oauth_code(&oauth_code).await.map_err(map_wx_auth_err)?;
     let openid = creds.openid.clone();
-    let (gateway_code, updated) = hub
-        .service
-        .mint_gateway_code(&creds, WX_MINI_APP_ID)
-        .await
-        .map_err(map_wx_auth_err)?;
+    let (gateway_code, updated) =
+        hub.service.mint_gateway_code(&creds, WX_MINI_APP_ID).await.map_err(map_wx_auth_err)?;
     store_pending_auth(hub, &gateway_code, WxAuth::from(updated));
     Ok(WxCodeResult { openid, app_id: WX_MINI_APP_ID.to_string(), code: gateway_code })
 }
 
 fn map_wx_auth_err(e: qq_farm_core::services::wx_login::WxAuthError) -> AppError {
     AppError::Internal(e.to_string())
+}
+
+fn map_wx_auth_user_err(e: qq_farm_core::services::wx_login::WxAuthError) -> AppError {
+    AppError::BadRequest(e.to_string())
 }
 
 /// 读取任务二维码 JPEG。
@@ -340,11 +398,8 @@ pub async fn issue_code_for(
         expires_in: 7200,
         ..Default::default()
     };
-    let (code, updated) = hub
-        .service
-        .mint_gateway_code(&creds, &app_id)
-        .await
-        .map_err(map_wx_auth_err)?;
+    let (code, updated) =
+        hub.service.mint_gateway_code(&creds, &app_id).await.map_err(map_wx_auth_err)?;
     if !updated.login_buffer.is_empty() {
         store_pending_auth(&hub, &code, WxAuth::from(updated));
     }
@@ -455,5 +510,16 @@ mod tests {
         let created = create_quick_session(&hub).await.unwrap();
         take_quick_session(&hub, &created.session_id, None).unwrap();
         assert!(take_quick_session(&hub, &created.session_id, None).is_err());
+    }
+
+    #[tokio::test]
+    async fn detect_requires_live_session() {
+        let hub = WxLoginHub::new();
+        let err = detect_quick_session(&hub, "missing").await.unwrap_err();
+        assert!(err.to_string().contains("not found") || err.to_string().contains("expired"));
+        let created = create_quick_session(&hub).await.unwrap();
+        require_quick_session(&hub, &created.session_id, None).unwrap();
+        take_quick_session(&hub, &created.session_id, None).unwrap();
+        assert!(require_quick_session(&hub, &created.session_id, None).is_err());
     }
 }

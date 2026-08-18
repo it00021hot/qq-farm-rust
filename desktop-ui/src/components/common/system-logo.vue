@@ -14,38 +14,25 @@
           <stop offset="0%" stop-color="#c4a574" />
           <stop offset="100%" stop-color="#8b6914" />
         </linearGradient>
-        <linearGradient id="farmSun" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stop-color="#ffe08a" />
-          <stop offset="100%" stop-color="#f5a623" />
+        <linearGradient id="farmBadge" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#dea584" />
+          <stop offset="100%" stop-color="#9a3412" />
         </linearGradient>
       </defs>
 
-      <!-- soil mound -->
       <ellipse cx="32" cy="52" rx="22" ry="7" fill="url(#farmSoil)" opacity="0.95" />
       <path d="M12 50c4-4 10-6 20-6s16 2 20 6c-3 3-10 5-20 5s-17-2-20-5z" fill="url(#farmSoil)" />
 
-      <!-- stem -->
       <path d="M32 48V24" stroke="var(--logo-color-700)" stroke-width="3" stroke-linecap="round" fill="none" />
-
-      <!-- left leaf -->
       <path d="M31 34c-8-1-14-7-15-14 8 1 15 6 16 13-0.2 0.5-0.6 0.9-1 1z" fill="url(#farmLeafA)" />
-      <!-- right leaf -->
       <path d="M33 30c8-2 13-8 14-15-8 2-14 8-15 14 0.2 0.5 0.6 0.9 1 1z" fill="url(#farmLeafB)" />
-      <!-- top sprout -->
       <path d="M32 24c-4-6-3-12 0-16 3 4 4 10 0 16z" fill="url(#farmLeafA)" />
 
-      <!-- sun -->
-      <circle cx="50" cy="14" r="6" fill="url(#farmSun)" />
-      <g stroke="#f5a623" stroke-width="1.6" stroke-linecap="round" opacity="0.85">
-        <path d="M50 5v2.2" />
-        <path d="M50 20.8V23" />
-        <path d="M41 14h2.2" />
-        <path d="M56.8 14H59" />
-        <path d="M43.6 7.6l1.6 1.6" />
-        <path d="M54.8 18.8l1.6 1.6" />
-        <path d="M54.8 9.2l1.6-1.6" />
-        <path d="M43.6 20.4l1.6-1.6" />
-      </g>
+      <path d="M50 4.2l7.8 4.5v9l-7.8 4.5-7.8-4.5v-9z" fill="url(#farmBadge)" />
+      <path
+        fill="#fff"
+        d="M46.9 9.3h4.2c1.95 0 3.25 1.15 3.25 2.75 0 1.2-.7 2.15-1.85 2.5l2.2 3.65h-2.45l-1.95-3.35h-1.2v3.35h-2.2V9.3zm2.2 4.4h1.85c.85 0 1.35-.5 1.35-1.2s-.5-1.2-1.35-1.2H49.1v2.4z"
+      />
     </svg>
   </div>
 </template>

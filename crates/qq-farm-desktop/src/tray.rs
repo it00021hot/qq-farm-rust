@@ -12,8 +12,10 @@ const TRAY_TEMPLATE: &[u8] = include_bytes!("../icons/trayicon-template.png");
 
 pub fn install(app: &AppHandle) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, shell::ID_SHOW_MAIN, "显示主窗口", true, None::<&str>)?;
-    let open_data = MenuItem::with_id(app, shell::ID_OPEN_DATA_DIR, "打开数据目录", true, None::<&str>)?;
-    let check_update = MenuItem::with_id(app, shell::ID_CHECK_UPDATE, "检查更新", true, None::<&str>)?;
+    let open_data =
+        MenuItem::with_id(app, shell::ID_OPEN_DATA_DIR, "打开数据目录", true, None::<&str>)?;
+    let check_update =
+        MenuItem::with_id(app, shell::ID_CHECK_UPDATE, "检查更新", true, None::<&str>)?;
     let about = MenuItem::with_id(app, shell::ID_ABOUT, "关于", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, shell::ID_QUIT, "退出", true, None::<&str>)?;
     let sep1 = PredefinedMenuItem::separator(app)?;
@@ -35,7 +37,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
     TrayIconBuilder::with_id("main")
         .icon(icon)
         .icon_as_template(cfg!(target_os = "macos"))
-        .tooltip("QQ农场智能助手")
+        .tooltip("QQ Farm")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| shell::handle_menu_event(app, event.id()))

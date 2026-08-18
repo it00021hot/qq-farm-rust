@@ -77,10 +77,7 @@ async fn prompt_and_install(app: AppHandle, version: String) {
         .message(format!("发现新版本 {version}，是否立即更新？"))
         .title("软件更新")
         .kind(MessageDialogKind::Info)
-        .buttons(MessageDialogButtons::OkCancelCustom(
-            "立即更新".to_string(),
-            "稍后".to_string(),
-        ))
+        .buttons(MessageDialogButtons::OkCancelCustom("立即更新".to_string(), "稍后".to_string()))
         .blocking_show();
     if !go {
         return;

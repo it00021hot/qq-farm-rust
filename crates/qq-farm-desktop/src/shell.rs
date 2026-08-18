@@ -86,8 +86,8 @@ fn open_path(path: &Path) -> std::io::Result<()> {
 pub fn show_about(app: &AppHandle) {
     let version = app.package_info().version.to_string();
     app.dialog()
-        .message(format!("QQ农场智能助手桌面端\n版本 {version}"))
-        .title("QQ农场智能助手")
+        .message(format!("QQ Farm desktop\nVersion {version}"))
+        .title("QQ Farm")
         .kind(MessageDialogKind::Info)
         .blocking_show();
 }

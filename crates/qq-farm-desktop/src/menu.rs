@@ -7,14 +7,14 @@ use crate::shell;
 
 pub fn install(app: &AppHandle) -> tauri::Result<()> {
     let about = AboutMetadata {
-        name: Some("QQ农场智能助手".into()),
+        name: Some("QQ Farm".into()),
         version: Some(app.package_info().version.to_string()),
-        comments: Some("QQ农场智能助手桌面端".into()),
+        comments: Some("QQ Farm desktop".into()),
         copyright: Some("© 2026 QQFarm".into()),
         ..Default::default()
     };
 
-    let app_menu = SubmenuBuilder::new(app, "QQ农场智能助手")
+    let app_menu = SubmenuBuilder::new(app, "QQ Farm")
         .about(Some(about))
         .separator()
         .hide()
@@ -36,12 +36,12 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
 
     let window_menu = SubmenuBuilder::new(app, "Window").minimize().maximize().build()?;
 
-    let open_data = MenuItem::with_id(app, shell::ID_OPEN_DATA_DIR, "打开数据目录", true, None::<&str>)?;
-    let check_update = MenuItem::with_id(app, shell::ID_CHECK_UPDATE, "检查更新", true, None::<&str>)?;
-    let app_actions = SubmenuBuilder::new(app, "应用")
-        .item(&open_data)
-        .item(&check_update)
-        .build()?;
+    let open_data =
+        MenuItem::with_id(app, shell::ID_OPEN_DATA_DIR, "打开数据目录", true, None::<&str>)?;
+    let check_update =
+        MenuItem::with_id(app, shell::ID_CHECK_UPDATE, "检查更新", true, None::<&str>)?;
+    let app_actions =
+        SubmenuBuilder::new(app, "应用").item(&open_data).item(&check_update).build()?;
 
     let menu = MenuBuilder::new(app)
         .item(&app_menu)

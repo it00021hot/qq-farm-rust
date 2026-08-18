@@ -424,10 +424,7 @@ pub(crate) fn constellation_dto(
     let confirmed_opened: HashSet<String> =
         confirmed.confirmed_opened_node_ids.iter().cloned().collect();
     let confirmed_lit: HashSet<String> = confirmed.confirmed_lit_node_ids.iter().cloned().collect();
-    let catalog_groups = constellation_catalog_groups()
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
+    let catalog_groups = constellation_catalog_groups().as_array().cloned().unwrap_or_default();
 
     let groups: Vec<ConstellationGroupDto> = catalog_groups
         .iter()
