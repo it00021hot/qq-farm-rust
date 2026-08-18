@@ -78,6 +78,7 @@ jobs:
           echo "Building $VER"
 
       - name: Normalize updater signing env
+        id: signing
         shell: bash
         env:
           RAW_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -85,20 +86,47 @@ jobs:
         run: |
           KEY=$(printf '%s' "$RAW_KEY" | tr -d '\r')
           {
-            echo "TAURI_SIGNING_PRIVATE_KEY<<EOF"
+            echo "key<<EOF"
             printf '%s\n' "$KEY"
             echo "EOF"
-          } >> "$GITHUB_ENV"
+          } >> "$GITHUB_OUTPUT"
           PASS=$(printf '%s' "$RAW_PASSWORD" | tr -d '\r')
           if [ -n "$PASS" ]; then
-            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$PASS" >> "$GITHUB_ENV"
+            echo "has_password=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "password<<EOF"
+              printf '%s\n' "$PASS"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "has_password=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build and upload
+      - name: Build and upload (passwordless key)
+        if: steps.signing.outputs.has_password != 'true'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUSTFLAGS: "-D warnings"
+          TAURI_SIGNING_PRIVATE_KEY: ${{ steps.signing.outputs.key }}
+        with:
+          projectPath: crates/qq-farm-desktop
+          args: ${{ matrix.args }}
+          tagName: ${{ steps.ver.outputs.tag }}
+          releaseName: QQ Farm Desktop ${{ steps.ver.outputs.tag }}
+          releaseBody: See the assets to download and install this version.
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
+
+      - name: Build and upload (password-protected key)
+        if: steps.signing.outputs.has_password == 'true'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUSTFLAGS: "-D warnings"
+          TAURI_SIGNING_PRIVATE_KEY: ${{ steps.signing.outputs.key }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ steps.signing.outputs.password }}
         with:
           projectPath: crates/qq-farm-desktop
           args: ${{ matrix.args }}
