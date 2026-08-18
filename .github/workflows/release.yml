@@ -80,6 +80,9 @@ jobs:
       - name: Sync app version from tag
         shell: bash
         run: |
+          # Windows checkout can leave CRLF; bash then treats `pipefail\r` as an invalid option.
+          tr -d '\r' < scripts/sync-app-version.sh > scripts/sync-app-version.sh.lf
+          mv scripts/sync-app-version.sh.lf scripts/sync-app-version.sh
           bash scripts/sync-app-version.sh "${{ steps.ver.outputs.version }}"
 
       - name: Normalize updater signing env
