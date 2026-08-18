@@ -1,7 +1,7 @@
 <script setup lang="tsx">
 import { onMounted, ref } from 'vue';
 import dayjs from 'dayjs';
-import { NButton, NPopconfirm, NTag } from 'naive-ui';
+import { NButton, NPopconfirm, NTag, NTooltip } from 'naive-ui';
 import { farmAuthStatusRecord, farmPlatformRecord, farmRunStatusRecord } from '@/constants/business';
 import {
   fetchDeleteFarmAccount,
@@ -101,13 +101,17 @@ const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagi
           unauthorized: 'warning',
           rescanRecommended: 'warning'
         };
+        const tag = <NTag type={tagMap[status]}>{$t(farmAuthStatusRecord[status])}</NTag>;
+        if (status !== 'rescanRecommended') {
+          return tag;
+        }
         return (
-          <NTag
-            type={tagMap[status]}
-            title={status === 'rescanRecommended' ? $t('page.farm.common.authStatus.rescanHint') : undefined}
-          >
-            {$t(farmAuthStatusRecord[status])}
-          </NTag>
+          <NTooltip>
+            {{
+              default: () => $t('page.farm.common.authStatus.rescanHint'),
+              trigger: () => tag
+            }}
+          </NTooltip>
         );
       }
     },

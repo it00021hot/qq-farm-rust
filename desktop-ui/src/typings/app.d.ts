@@ -573,6 +573,8 @@ declare namespace App {
             authStatus: {
               authorized: string;
               unauthorized: string;
+              rescanRecommended: string;
+              rescanHint: string;
             };
             fertilizerMode: {
               none: string;
