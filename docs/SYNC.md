@@ -411,3 +411,9 @@
 - Windows CI 把空的 updater 密钥密码当成错误密码；仅在 Secret 非空时写入环境变量，并去掉私钥 CR
 - 清掉 core/desktop 未使用字段、重名 glob、弃用 `Account` 导出；CI `RUSTFLAGS=-D warnings`
 - 能力状态：Windows job 能签 updater 产物；`cargo check --workspace` 无 rustc warning
+
+### 2026-08-18 — Windows 无边框与发版版本号对齐 tag
+
+- Windows 使用 `tauri.windows.conf.json` 关闭原生边框，保留前端自定义最小化/最大化/关闭按钮；对齐 Wails frameless
+- Release workflow 在构建前用 tag 同步 `Cargo.toml` / `tauri.conf.json` / `desktop-ui/package.json` 版本
+- 能力状态：Windows 不再出现系统标题栏与虚拟按钮重复；安装包文件名与 Release tag 一致

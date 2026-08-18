@@ -1,6 +1,6 @@
 {
   "name": "qq-farm-desktop-ui",
-  "version": "0.1.0",
+  "version": "0.1.4",
   "description": "QQ Farm desktop UI based on SoybeanAdmin (Vue3 + NaiveUI + UnoCSS) and Tauri v2 IPC",
   "keywords": [
     "TypeScript",

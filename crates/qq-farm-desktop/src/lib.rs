@@ -61,6 +61,12 @@ pub fn run() {
             shell::install_close_to_tray(app.handle());
             updater::setup(app.handle());
 
+            #[cfg(target_os = "windows")]
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_decorations(false);
+                let _ = window.set_shadow(true);
+            }
+
             let cfg_dir = qq_farm_core::config::paths::game_config_static_dir();
             tracing::info!(dir = %cfg_dir.display(), "game-config static dir");
             Ok(())

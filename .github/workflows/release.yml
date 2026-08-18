@@ -77,6 +77,11 @@ jobs:
           echo "version=$VER" >> "$GITHUB_OUTPUT"
           echo "Building $VER"
 
+      - name: Sync app version from tag
+        shell: bash
+        run: |
+          bash scripts/sync-app-version.sh "${{ steps.ver.outputs.version }}"
+
       - name: Normalize updater signing env
         id: signing
         shell: bash
