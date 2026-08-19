@@ -1,6 +1,8 @@
 //! 数据目录、关于框、关窗进托盘、显示主窗口。
 
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use tauri::menu::MenuId;
 use tauri::{AppHandle, Manager};
@@ -12,6 +14,7 @@ pub const ID_SHOW_MAIN: &str = "show-main";
 pub const ID_OPEN_DATA_DIR: &str = "open-data-dir";
 pub const ID_CHECK_UPDATE: &str = "check-update";
 pub const ID_ABOUT: &str = "about";
+pub const ID_ABOUT_TRAY: &str = "about-tray";
 pub const ID_QUIT: &str = "quit";
 
 pub fn handle_menu_event(app: &AppHandle, id: &MenuId) {
@@ -19,7 +22,11 @@ pub fn handle_menu_event(app: &AppHandle, id: &MenuId) {
         ID_SHOW_MAIN => show_main_window(app),
         ID_OPEN_DATA_DIR => open_data_dir(),
         ID_CHECK_UPDATE => updater::check_for_updates(app, true),
-        ID_ABOUT => show_about(app),
+        // 托盘里的“关于”：用独立 id 避免与 macOS 原生 AboutMetadata 冲突（导致 double 弹窗或无响应）
+        ID_ABOUT_TRAY => show_about(app),
+        ID_ABOUT => {
+            show_about(app);
+        }
         ID_QUIT => app.exit(0),
         _ => {}
     }
@@ -84,10 +91,35 @@ fn open_path(path: &Path) -> std::io::Result<()> {
 }
 
 pub fn show_about(app: &AppHandle) {
+    // 避免某些 macOS 菜单事件触发同一动作两次（导致 About 连弹）
+    static LAST_ABOUT_MS: AtomicU64 = AtomicU64::new(0);
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let last = LAST_ABOUT_MS.load(Ordering::Relaxed);
+    if now_ms.saturating_sub(last) < 1500 {
+        return;
+    }
+    LAST_ABOUT_MS.store(now_ms, Ordering::Relaxed);
+
     let version = app.package_info().version.to_string();
+    let github = "https://github.com/it00021hot/qq-farm-rust";
     app.dialog()
-        .message(format!("QQ Farm desktop\nVersion {version}"))
-        .title("QQ Farm")
+        .message(format!(
+            "QQ Farm Rust（桌面版）\n\
+\n\
+这是一个“微信农场/偷菜”的多账号自动运行工具。\n\
+你可以在管理页面查看运行状态，并配置自动任务。\n\
+\n\
+它会自动完成：\n\
+- 农场：除草除虫、浇水收获、种植施肥等\n\
+- 偷菜：按好友规则进行偷取\n\
+\n\
+GitHub: {github}\n\
+Version {version}"
+        ))
+        .title("QQ Farm Rust")
         .kind(MessageDialogKind::Info)
         .blocking_show();
 }

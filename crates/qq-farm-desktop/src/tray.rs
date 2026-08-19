@@ -16,7 +16,9 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
         MenuItem::with_id(app, shell::ID_OPEN_DATA_DIR, "打开数据目录", true, None::<&str>)?;
     let check_update =
         MenuItem::with_id(app, shell::ID_CHECK_UPDATE, "检查更新", true, None::<&str>)?;
-    let about = MenuItem::with_id(app, shell::ID_ABOUT, "关于", true, None::<&str>)?;
+    // macOS 上原生 AboutMetadata 的 id 固定为 "about"；这里用独立 id，避免与原生 about 冲突
+    //（也避免你之前看到的 “about 两次”/“点了没反应”）。
+    let about = MenuItem::with_id(app, shell::ID_ABOUT_TRAY, "关于", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, shell::ID_QUIT, "退出", true, None::<&str>)?;
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
