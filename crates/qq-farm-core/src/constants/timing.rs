@@ -12,6 +12,8 @@ pub const MIN_FRIENDS_LIST_CACHE_TTL_MS: u64 = 10_000;
 pub const INVALID_KNOWN_FRIEND_GID_COOLDOWN_MS: u64 = 24 * 60 * 60 * 1000;
 
 pub const FRIEND_LIST_COALESCE_MS: u64 = 800;
+/// 好友 LandsNotify 按 gid 去抖，避免连发气泡打满 GetGameFriends。
+pub const FRIEND_LANDS_NOTIFY_DEBOUNCE_MS: u64 = 500;
 pub const QQ_FRIEND_LIST_BATCH_SIZE: usize = 35;
 /// 普通 RPC 排队上限；Heartbeat 不受此限（Go 无 QueueFull）。
 pub const MAX_PENDING_RPC: usize = 32;

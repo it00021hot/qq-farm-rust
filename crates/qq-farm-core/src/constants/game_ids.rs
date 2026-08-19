@@ -39,6 +39,28 @@ pub const GOLD_BEAN_ITEM_ID: i64 = 1005;
 /// 商城商品：有机肥（数字碰巧与点券 1002 相同，但是不同域）
 pub const MALL_ORGANIC_FERTILIZER_GOODS_ID: i32 = 1002;
 
+/// 植物操作 ID（`OperationLimit.id` / `CheckCanOperate`）
+pub const OP_HARVEST: i64 = 10001;
+pub const OP_REMOVE: i64 = 10002;
+pub const OP_PUT_WEED: i64 = 10003;
+pub const OP_PUT_BUG: i64 = 10004;
+pub const OP_HELP_WEED: i64 = 10005;
+pub const OP_HELP_BUG: i64 = 10006;
+pub const OP_HELP_WATER: i64 = 10007;
+/// 偷菜日配额。QQ 有 `day_times`；微信不受限，不要调 `CheckCanOperate(10008)`。
+pub const OP_STEAL: i64 = 10008;
+
+/// 微信无 10008 日偷次数；仅 QQ 走 `OperationLimit` / `CheckCanOperate`。
+#[must_use]
+pub fn steal_daily_quota_applies(platform: &str) -> bool {
+    !platform.trim().eq_ignore_ascii_case("wx")
+}
+
+/// 好友农场 Harvest：这块地当前不可偷
+pub const GATEWAY_UNSTEALABLE: i64 = 1_001_040;
+/// 好友 Farming 无事可做
+pub const GATEWAY_FARMING_NOOP: i64 = 1_001_057;
+
 /// 微信开放平台 / 桌面与扫码共用的小程序 AppId（面板 wx 登录另有 TARGET）
 pub const WX_MINI_APP_ID: &str = "wx5306c5978fdb76e4";
 
@@ -51,8 +73,8 @@ pub const WX_OAUTH_REDIRECT_URI: &str =
 
 /// 桌面微信本地 HTTP API 端口（Windows fast_login）
 pub const DESKTOP_WECHAT_PORTS: &[u16] = &[
-    14013, 14014, 14015, 14016, 14017, 14018, 14019, 14020, 14021, 14022, 14023, 14024, 14025, 13013,
-    13014, 13015,
+    14013, 14014, 14015, 14016, 14017, 14018, 14019, 14020, 14021, 14022, 14023, 14024, 14025,
+    13013, 13014, 13015,
 ];
 /// 桌面微信本地 HTTPS 主机名（解析到 127.0.0.1）
 pub const LOCAL_WECHAT_HOST: &str = "localhost.weixin.qq.com";
@@ -61,3 +83,16 @@ pub const LOCAL_WECHAT_AUTHORIZE_PATH: &str = "/api/authorize";
 
 /// 网关 Origin（WS 握手）
 pub const DEFAULT_GATEWAY_ORIGIN: &str = "https://gate-obt.nqf.qq.com";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wechat_has_no_steal_daily_quota() {
+        assert!(!steal_daily_quota_applies("wx"));
+        assert!(!steal_daily_quota_applies("WX"));
+        assert!(steal_daily_quota_applies("qq"));
+        assert!(steal_daily_quota_applies(""));
+    }
+}

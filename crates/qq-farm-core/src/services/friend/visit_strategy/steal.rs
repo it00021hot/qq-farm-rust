@@ -215,7 +215,8 @@ pub fn analyze_friend_lands(
         let id = land.id;
 
         if phase == PlantPhase::Ripe {
-            if can_i_still_steal_plant(plant, my_gid) {
+            // 微信没有「每人偷满」；只信服务器 stealable + 成熟主地。
+            if plant.stealable {
                 let plant_id = plant.id;
                 let seed_id = crate::config::game_config::global()
                     .get_plant_by_id(plant_id)
@@ -267,7 +268,62 @@ pub fn analyze_friend_lands(
     result
 }
 
-/// 偷好友菜（带积分收集 + 推送缩减 + 重试）
+/// 从推送/进场土地统计可偷与帮忙数（推送可能只含变化地，调用方应与旧值取 max）。
+#[must_use]
+pub fn plant_summary_from_lands(
+    lands: &[LandInfo],
+    my_gid: i64,
+) -> super::panel_dto::FriendPlantSummary {
+    let status = analyze_friend_lands(lands, my_gid, &[], false, "");
+    super::panel_dto::FriendPlantSummary {
+        steal_num: status.stealable.len() as i64,
+        dry_num: status.need_water.len() as i64,
+        weed_num: status.need_weed.len() as i64,
+        insect_num: status.need_bug.len() as i64,
+    }
+}
+
+/// 推送只含变化地时，可偷/帮忙只升不降，避免把未出现在包里的地清掉。
+#[must_use]
+pub fn merge_partial_plant_summary(
+    existing: Option<&super::panel_dto::FriendPlantSummary>,
+    incoming: super::panel_dto::FriendPlantSummary,
+) -> super::panel_dto::FriendPlantSummary {
+    let old = existing.cloned().unwrap_or_default();
+    super::panel_dto::FriendPlantSummary {
+        steal_num: old.steal_num.max(incoming.steal_num),
+        dry_num: old.dry_num.max(incoming.dry_num),
+        weed_num: old.weed_num.max(incoming.weed_num),
+        insect_num: old.insect_num.max(incoming.insect_num),
+    }
+}
+
+fn steal_error_code(err: &crate::error::Error) -> Option<i64> {
+    match err {
+        crate::error::Error::Network(crate::network::error::NetworkError::Gateway {
+            code, ..
+        }) => Some(*code),
+        _ => None,
+    }
+}
+
+fn is_unstealable_error(err: &crate::error::Error) -> bool {
+    steal_error_code(err) == Some(crate::constants::GATEWAY_UNSTEALABLE)
+        || err.to_string().contains("1001040")
+}
+
+fn is_steal_transient(err: &crate::error::Error) -> bool {
+    super::blacklist::is_transient_network_error(&err.to_string())
+}
+
+fn record_stolen_land(result: &mut StealResult, land_id: i64, stealable_info: &[StealableInfo]) {
+    result.ok += 1;
+    if let Some(info) = stealable_info.iter().find(|i| i.land_id == land_id) {
+        result.stolen_infos.push(info.clone());
+    }
+}
+
+/// 先一键 `is_all=true`，失败后再对主地 `is_all=false` 按地回退。
 pub async fn steal_lands_with_reward_log(
     api: &FriendApi,
     _recent_help: &RecentHelpCache,
@@ -280,36 +336,89 @@ pub async fn steal_lands_with_reward_log(
     if land_ids.is_empty() {
         return result;
     }
-    let pending: Vec<i64> = land_ids.to_vec();
-    let info_list: Vec<StealableInfo> = stealable_info.to_vec();
-    let mut pending_ref: Vec<i64> = pending.clone();
-    let info_list_ref: Vec<StealableInfo> = info_list.clone();
-
-    match api.steal_farm(friend_gid, pending_ref.clone()).await {
+    match api.steal_farm(friend_gid, land_ids.to_vec(), true).await {
         Ok(()) => {
-            result.ok = pending_ref.len();
-            result.stolen_infos = info_list_ref.clone();
+            result.ok = land_ids.len();
+            result.stolen_infos = stealable_info.to_vec();
             return result;
         }
-        Err(_) => {
-            let to_retry = pending_ref.clone();
-            for land_id in to_retry {
-                match api.steal_farm(friend_gid, vec![land_id]).await {
-                    Ok(()) => {
-                        result.ok += 1;
-                        if let Some(info) = info_list_ref.iter().find(|i| i.land_id == land_id) {
-                            result.stolen_infos.push(info.clone());
-                        }
-                    }
-                    Err(_) => {
-                        pending_ref.retain(|&x| x != land_id);
-                    }
-                }
-                sleep(Duration::from_millis(100)).await;
-            }
+        Err(e) if is_steal_transient(&e) => {
+            tracing::warn!(friend_gid, error = %e, "一键偷菜网络中断");
+            return result;
         }
+        Err(_) => {}
+    }
+    for land_id in land_ids {
+        match api.steal_farm(friend_gid, vec![*land_id], false).await {
+            Ok(()) => record_stolen_land(&mut result, *land_id, stealable_info),
+            Err(e) if is_unstealable_error(&e) => {}
+            Err(e) if is_steal_transient(&e) => {
+                tracing::warn!(friend_gid, land_id, error = %e, "按地偷菜网络中断");
+                break;
+            }
+            Err(_) => {}
+        }
+        sleep(Duration::from_millis(100)).await;
     }
     result
+}
+
+fn unique_help_land_ids(status: &AnalyzeResult) -> Vec<i64> {
+    let mut seen = HashSet::new();
+    status
+        .need_weed
+        .iter()
+        .chain(status.need_bug.iter())
+        .chain(status.need_water.iter())
+        .copied()
+        .filter(|id| *id > 0 && seen.insert(*id))
+        .collect()
+}
+
+/// 有可偷才帮忙：不受帮忙开关 / 经验上限约束；失败不挡偷菜结果。
+pub async fn steal_side_help(
+    api: &FriendApi,
+    friend_gid: i64,
+    status: &AnalyzeResult,
+    total_actions: &mut super::help::TotalActions,
+    actions: &mut Vec<String>,
+) {
+    let all_help = unique_help_land_ids(status);
+    if all_help.is_empty() {
+        return;
+    }
+    match api.help_farm(friend_gid, all_help).await {
+        Ok(outcome) if outcome.land_ids.is_empty() && outcome.operation_count <= 0 => {}
+        Ok(outcome) => {
+            let count = if outcome.land_ids.is_empty() {
+                outcome.operation_count.max(0) as usize
+            } else {
+                outcome.land_ids.len()
+            };
+            if count == 0 {
+                return;
+            }
+            let mut parts = Vec::new();
+            if !status.need_weed.is_empty() {
+                parts.push(format!("草{}", status.need_weed.len()));
+            }
+            if !status.need_bug.is_empty() {
+                parts.push(format!("虫{}", status.need_bug.len()));
+            }
+            if !status.need_water.is_empty() {
+                parts.push(format!("水{}", status.need_water.len()));
+            }
+            actions.push(if parts.is_empty() {
+                format!("一键务农{count}块")
+            } else {
+                format!("一键务农{count}块({})", parts.join("/"))
+            });
+            total_actions.farming += count;
+        }
+        Err(e) => {
+            tracing::warn!(friend_gid, error = %e, "偷菜顺手帮忙失败");
+        }
+    }
 }
 
 /// 拜访好友 - 仅偷菜
@@ -333,7 +442,7 @@ pub async fn visit_friend_for_steal(
             let msg = format!("{e}");
             let kind = handle_friend_enter_error(account_id, friend_gid, &friend_name, &msg);
             if kind != FriendEnterErrorKind::Error {
-                return Some(VisitResult { acted: false, entered: false });
+                return Some(VisitResult { acted: false, entered: false, stolen: 0 });
             }
             crate::services::panel_log::log_warn(
                 account_id,
@@ -347,14 +456,14 @@ pub async fn visit_friend_for_steal(
                     "friendGid": friend_gid,
                 })),
             );
-            return Some(VisitResult { acted: false, entered: false });
+            return Some(VisitResult { acted: false, entered: false, stolen: 0 });
         }
     };
 
     let lands = enter_reply.lands.clone();
     if lands.is_empty() {
         let _ = api.leave_farm(friend_gid).await;
-        return Some(VisitResult { acted: false, entered: true });
+        return Some(VisitResult { acted: false, entered: true, stolen: 0 });
     }
 
     let plant_blacklist =
@@ -368,10 +477,9 @@ pub async fn visit_friend_for_steal(
             Some(p) if !p.phases.is_empty() => p,
             _ => return false,
         };
-        matches!(get_current_phase(land), Some(PlantPhase::Ripe))
-            && can_i_still_steal_plant(plant, my_gid)
+        matches!(get_current_phase(land), Some(PlantPhase::Ripe)) && plant.stealable
     });
-    let status = analyze_friend_lands(&lands, my_gid, &plant_blacklist, false, account_id);
+    let mut status = analyze_friend_lands(&lands, my_gid, &plant_blacklist, false, account_id);
 
     if has_stealable_before_filter && status.stealable.is_empty() {
         let _ = api.leave_farm(friend_gid).await;
@@ -379,38 +487,59 @@ pub async fn visit_friend_for_steal(
     }
 
     let mut actions: Vec<String> = Vec::new();
-    if !status.stealable.is_empty() {
-        let steal_result = steal_lands_with_reward_log(
-            api,
-            _recent_help,
-            friend_gid,
-            &status.stealable,
-            &status.stealable_info,
-            None,
-        )
-        .await;
-        if steal_result.ok > 0 {
-            let plant_names: Vec<String> = steal_result
-                .stolen_infos
-                .iter()
-                .map(|i| i.name.clone())
-                .collect::<HashSet<_>>()
-                .into_iter()
-                .collect();
-            let names = plant_names.join("/");
-            actions.push(if names.is_empty() {
-                format!("偷{}", steal_result.ok)
-            } else {
-                format!("偷{}({names})", steal_result.ok)
-            });
-            total_actions.steal += steal_result.ok;
-            crate::services::stats::record_operation_for(
-                account_id,
-                "steal",
-                steal_result.ok as i64,
-            );
-            crate::utils::random::random_delay(500, 800).await;
+    let mut stolen = 0usize;
+    let had_stealable = !status.stealable.is_empty();
+    if had_stealable {
+        let mut skip_steal = false;
+        // 微信 10008 无限：不调 CheckCanOperate，也不用 can_steal_num 截断。
+        if crate::constants::steal_daily_quota_applies(&api.platform()) {
+            match api.check_can_operate(friend_gid, crate::constants::OP_STEAL).await {
+                Ok((false, _)) => skip_steal = true,
+                Ok((true, can_steal)) if can_steal > 0 => {
+                    let cap = can_steal as usize;
+                    if status.stealable.len() > cap {
+                        status.stealable.truncate(cap);
+                        status.stealable_info.truncate(cap);
+                    }
+                }
+                _ => {}
+            }
         }
+        if !skip_steal {
+            let steal_result = steal_lands_with_reward_log(
+                api,
+                _recent_help,
+                friend_gid,
+                &status.stealable,
+                &status.stealable_info,
+                None,
+            )
+            .await;
+            stolen = steal_result.ok;
+            if steal_result.ok > 0 {
+                let plant_names: Vec<String> = steal_result
+                    .stolen_infos
+                    .iter()
+                    .map(|i| i.name.clone())
+                    .collect::<HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                let names = plant_names.join("/");
+                actions.push(if names.is_empty() {
+                    format!("偷{}", steal_result.ok)
+                } else {
+                    format!("偷{}({names})", steal_result.ok)
+                });
+                total_actions.steal += steal_result.ok;
+                crate::services::stats::record_operation_for(
+                    account_id,
+                    "steal",
+                    steal_result.ok as i64,
+                );
+                crate::utils::random::random_delay(500, 800).await;
+            }
+        }
+        steal_side_help(api, friend_gid, &status, total_actions, &mut actions).await;
     }
 
     if !actions.is_empty() {
@@ -430,7 +559,7 @@ pub async fn visit_friend_for_steal(
     }
 
     let _ = api.leave_farm(friend_gid).await;
-    Some(VisitResult { acted: !actions.is_empty(), entered: true })
+    Some(VisitResult { acted: !actions.is_empty(), entered: true, stolen })
 }
 
 pub(crate) async fn do_steal_op(
@@ -459,9 +588,9 @@ pub(crate) async fn do_steal_op(
         } else {
             String::new()
         };
-        format!("偷取完成 {} 块{}", result.ok, score_hint)
+        format!("一键偷取完成 {} 块{}", result.ok, score_hint)
     } else {
-        "偷取失败或无可偷".to_string()
+        "一键偷取失败或无可偷".to_string()
     };
     serde_json::json!({"ok": true, "opType": "steal", "count": result.ok, "message": msg})
 }

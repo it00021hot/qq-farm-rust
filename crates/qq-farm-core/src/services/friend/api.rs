@@ -86,6 +86,12 @@ impl FriendApi {
         *self.account_id.lock() = account_id.to_string();
     }
 
+    /// 当前连接平台（`qq` / `wx`）。
+    #[must_use]
+    pub fn platform(&self) -> String {
+        self.gateway.platform()
+    }
+
     /// 清空 GetAll 短缓存（面板「清除好友缓存」）
     pub fn invalidate_list_cache(&self) {
         *self.last_list.lock() = None;
@@ -157,6 +163,61 @@ impl FriendApi {
         };
         *self.last_list.lock() = Some((Instant::now(), friends.clone()));
         Ok(friends)
+    }
+
+    /// 只拉一个好友的 GetAll 气泡字段（微信/QQ 都走 GetGameFriends）。
+    pub async fn refresh_game_friend(&self, gid: i64) -> Result<Option<GameFriend>> {
+        if gid <= 0 {
+            return Ok(None);
+        }
+        let _gate = self.rpc_gate.lock().await;
+        let found = self.fetch_game_friends_by_gids(&[gid]).await;
+        Ok(found.into_iter().find(|f| f.gid == gid))
+    }
+
+    /// 把单个好友写回 GetAll 短缓存，供下一次 steal tick / 列表使用。
+    pub fn upsert_last_list_friend(&self, friend: GameFriend) {
+        if friend.gid <= 0 {
+            return;
+        }
+        let mut guard = self.last_list.lock();
+        match guard.as_mut() {
+            Some((_, list)) => {
+                if let Some(existing) = list.iter_mut().find(|f| f.gid == friend.gid) {
+                    *existing = friend;
+                } else {
+                    list.push(friend);
+                }
+            }
+            None => *guard = Some((Instant::now(), vec![friend])),
+        }
+    }
+
+    /// 只改缓存里该好友的 plant 气泡。
+    pub fn patch_last_list_plant(
+        &self,
+        gid: i64,
+        steal_num: i64,
+        dry_num: i64,
+        weed_num: i64,
+        insect_num: i64,
+    ) {
+        if gid <= 0 {
+            return;
+        }
+        let mut guard = self.last_list.lock();
+        let Some((_, list)) = guard.as_mut() else {
+            return;
+        };
+        let Some(friend) = list.iter_mut().find(|f| f.gid == gid) else {
+            return;
+        };
+        let mut plant = friend.plant.clone().unwrap_or_default();
+        plant.steal_plant_num = steal_num;
+        plant.dry_num = dry_num;
+        plant.weed_num = weed_num;
+        plant.insect_num = insect_num;
+        friend.plant = Some(plant);
     }
 
     async fn fetch_wx_friends(&self) -> Result<Vec<GameFriend>> {
@@ -397,12 +458,15 @@ impl FriendApi {
         let resp = match self.gateway.request("gamepb.plantpb.PlantService", "Farming", &body).await
         {
             Ok(r) => r,
-            Err(crate::network::error::NetworkError::Gateway { code: 1_001_057, .. }) => {
+            Err(crate::network::error::NetworkError::Gateway {
+                code: crate::constants::GATEWAY_FARMING_NOOP,
+                ..
+            }) => {
                 return Ok(HelpFarmOutcome {
                     effect: HelpFarmEffect::Noop,
                     land_ids: vec![],
                     operation_count: 0,
-                    code: 1_001_057,
+                    code: crate::constants::GATEWAY_FARMING_NOOP,
                 });
             }
             Err(e) => return Err(e.into()),
@@ -440,10 +504,10 @@ impl FriendApi {
         Ok(())
     }
 
-    /// 偷好友菜（对应原 `stealHarvest`，`is_all: true`）
-    pub async fn steal_farm(&self, host_gid: i64, land_ids: Vec<i64>) -> Result<()> {
+    /// 偷好友菜。`is_all=true` 为一键；多格占地失败后应对 **主地** 再调 `is_all=false`。
+    pub async fn steal_farm(&self, host_gid: i64, land_ids: Vec<i64>, is_all: bool) -> Result<()> {
         use crate::proto::generated::gamepb::plantpb::{HarvestReply, HarvestRequest};
-        let body = HarvestRequest { land_ids, host_gid, is_all: true }.encode_to_vec();
+        let body = HarvestRequest { land_ids, host_gid, is_all }.encode_to_vec();
         let resp = self.gateway.request("gamepb.plantpb.PlantService", "Harvest", &body).await?;
         let reply = HarvestReply::decode(&*resp)?;
         self.fire_operation_limits(reply.operation_limits);
@@ -572,7 +636,8 @@ impl FriendApi {
 
     /// 检查某操作是否可执行（对应原 `checkCanOperate`）
     ///
-    /// operation_id: 10001 (water) / 10002 (weed) / 10003 (bug) / 10005 (steal) ...
+    /// `operation_id` 见 `constants::OP_*`。偷菜 [`crate::constants::OP_STEAL`] 仅 QQ 调用；
+    /// 微信无日配额，巡逻侧应跳过。
     /// 返回 (can_operate, can_steal_num)
     pub async fn check_can_operate(&self, host_gid: i64, operation_id: i64) -> Result<(bool, i64)> {
         use crate::proto::generated::gamepb::plantpb::{

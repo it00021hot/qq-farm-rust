@@ -2,12 +2,13 @@
 //!
 //! 核心：避免重复帮同一块地（recent help 去重）+ 错误分类 + 帮助/偷菜/捣乱。
 //!
-//! 含：RecentHelp 状态机、安静时段、好友/植物黑名单、空访跳过、stealers 过滤。
+//! 含：RecentHelp 状态机、安静时段、好友/植物黑名单、空访跳过、气泡+自巡。
 
 mod blacklist;
 mod cache;
 mod help;
 mod panel_dto;
+mod patrol;
 mod quiet_hours;
 mod steal;
 
@@ -15,6 +16,7 @@ pub use blacklist::*;
 pub use cache::*;
 pub use help::*;
 pub use panel_dto::*;
+pub use patrol::*;
 pub use quiet_hours::*;
 pub use steal::*;
 
@@ -66,6 +68,16 @@ mod tests {
         assert_eq!(v["avatarUrl"], "http://avatar");
         assert_eq!(v["plant"]["stealNum"], 2);
         assert_eq!(v["plant"]["dryNum"], 1);
+    }
+
+    #[test]
+    fn merge_partial_plant_summary_only_raises() {
+        let old = FriendPlantSummary { steal_num: 2, dry_num: 1, weed_num: 0, insect_num: 0 };
+        let incoming = FriendPlantSummary { steal_num: 1, dry_num: 0, weed_num: 3, insect_num: 0 };
+        let merged = merge_partial_plant_summary(Some(&old), incoming);
+        assert_eq!(merged.steal_num, 2);
+        assert_eq!(merged.dry_num, 1);
+        assert_eq!(merged.weed_num, 3);
     }
 
     #[test]
@@ -468,5 +480,29 @@ mod tests {
         plant.stealers = encoded.into();
         assert!(!can_i_still_steal_plant(&plant, 100));
         assert!(can_i_still_steal_plant(&plant, 200));
+    }
+
+    #[test]
+    fn analyze_friend_lands_wechat_ignores_stealers_cap() {
+        use crate::proto::generated::gamepb::plantpb::{
+            LandInfo, PlantInfo, PlantPhaseInfo, StealPlayer,
+        };
+        use prost::Message;
+        let stealers = StealPlayer { gid: 100, num: 2 }.encode_to_vec();
+        let land = LandInfo {
+            id: 7,
+            unlocked: true,
+            plant: Some(PlantInfo {
+                id: 1,
+                stealable: true,
+                steal_num: vec![2].into(),
+                stealers: stealers.into(),
+                phases: vec![PlantPhaseInfo { phase: 6, begin_time: 1, ..Default::default() }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = analyze_friend_lands(&[land], 100, &[], false, "wx");
+        assert_eq!(result.stealable, vec![7]);
     }
 }

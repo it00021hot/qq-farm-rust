@@ -1126,6 +1126,24 @@ impl WorkerLoop {
         self.reset_unified_schedule();
     }
 
+    /// 土地推送：自己的田走巡田；好友田只刷新该 gid 气泡。
+    pub fn on_lands_notify(
+        self: &Arc<Self>,
+        host_gid: i64,
+        changed_count: usize,
+        lands: Vec<crate::proto::generated::gamepb::plantpb::LandInfo>,
+    ) {
+        let my = *self.gid.lock();
+        if host_gid > 0 && my > 0 && host_gid != my {
+            let friend = Arc::clone(&self.friend);
+            tokio::spawn(async move {
+                friend.on_friend_lands_notify(host_gid, lands).await;
+            });
+            return;
+        }
+        self.on_lands_changed(changed_count);
+    }
+
     /// 对齐 TS `onLandsChangedPush`：farm_push 开启时由土地推送触发巡田
     pub fn on_lands_changed(self: &Arc<Self>, changed_count: usize) {
         if !self.login_ready() || !self.auto_on("farm_push") {

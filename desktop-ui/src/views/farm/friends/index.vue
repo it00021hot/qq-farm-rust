@@ -111,8 +111,19 @@ function formatFriendGold(value: unknown) {
   return gold.toLocaleString('zh-CN');
 }
 
+function friendActionRank(friend: Api.Farm.Friend) {
+  const steal = Number(friend.plant?.stealNum || 0);
+  const help =
+    Number(friend.plant?.dryNum || 0) + Number(friend.plant?.weedNum || 0) + Number(friend.plant?.insectNum || 0);
+  return { steal, help };
+}
+
 const sortedFriends = computed(() =>
   [...friends.value].sort((a, b) => {
+    const ar = friendActionRank(a);
+    const br = friendActionRank(b);
+    if (br.steal !== ar.steal) return br.steal - ar.steal;
+    if (br.help !== ar.help) return br.help - ar.help;
     const levelDiff = Number(b.level || 0) - Number(a.level || 0);
     if (levelDiff !== 0) return levelDiff;
     return Number(a.gid || 0) - Number(b.gid || 0);
@@ -535,6 +546,22 @@ watch(
   }
 );
 
+function patchFriendPlant(gid: number, plant: Partial<NonNullable<Api.Farm.Friend['plant']>>) {
+  if (!gid) return;
+  const idx = friends.value.findIndex(f => f.gid === gid);
+  if (idx < 0) return;
+  const prev = friends.value[idx]!.plant || {};
+  friends.value[idx] = {
+    ...friends.value[idx]!,
+    plant: {
+      stealNum: Number(plant.stealNum ?? prev.stealNum ?? 0),
+      dryNum: Number(plant.dryNum ?? prev.dryNum ?? 0),
+      weedNum: Number(plant.weedNum ?? prev.weedNum ?? 0),
+      insectNum: Number(plant.insectNum ?? prev.insectNum ?? 0)
+    }
+  };
+}
+
 let listRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 function scheduleFriendListRefresh(gid?: number) {
   if (gid && gid > 0) {
@@ -554,6 +581,18 @@ useFarmWs({
     const accountId = Number(body.accountId || raw?.accountId || 0);
     const current = farmAccountStore.currentAccountId;
     if (current && accountId && accountId !== current) return;
+
+    if (type === 'friend_plant') {
+      const gid = Number(body.friendGid || body.gid || 0);
+      const plant = (body.plant && typeof body.plant === 'object' ? body.plant : body) as Record<string, unknown>;
+      patchFriendPlant(gid, {
+        stealNum: Number(plant.stealNum ?? body.stealNum ?? 0),
+        dryNum: Number(plant.dryNum ?? body.dryNum ?? 0),
+        weedNum: Number(plant.weedNum ?? body.weedNum ?? 0),
+        insectNum: Number(plant.insectNum ?? body.insectNum ?? 0)
+      });
+      return;
+    }
 
     if (type === 'friend_interact') {
       const action = String(body.action || body.event || '');

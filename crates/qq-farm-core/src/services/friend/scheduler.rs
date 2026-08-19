@@ -155,6 +155,11 @@ pub struct FriendService {
     steal_noop_markers: Mutex<HashMap<i64, i64>>,
     /// 偷菜成功后暂清零可偷气泡，直到游戏 GetAll 追上。
     steal_cleared_gids: Mutex<HashSet<i64>>,
+    /// 零气泡自巡已访问 GID（bubble+probe 轮转）。
+    steal_patrol_visited: Mutex<HashSet<i64>>,
+    /// LandsNotify 补上的可偷数：GetAll 漏气泡时仍进偷菜队列，进场或 GetAll 追上后清除。
+    push_steal_hints: Mutex<HashMap<i64, i64>>,
+    last_friend_push_ms: Mutex<HashMap<i64, u64>>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -166,16 +171,16 @@ struct OpLimitEntry {
 }
 
 const OP_NAMES: [(i64, &str); 8] = [
-    (10001, "浇水"),
-    (10002, "除虫"),
-    (10003, "捣乱共享额度"),
-    (10004, "放虫"),
-    (10005, "帮助操作 #10005"),
-    (10006, "帮助操作 #10006"),
-    (10007, "帮助操作 #10007"),
-    (10008, "铲除"),
+    (crate::constants::OP_HARVEST, "收获"),
+    (crate::constants::OP_REMOVE, "铲除"),
+    (crate::constants::OP_PUT_WEED, "捣乱共享额度"),
+    (crate::constants::OP_PUT_BUG, "放虫"),
+    (crate::constants::OP_HELP_WEED, "除草(帮好友)"),
+    (crate::constants::OP_HELP_BUG, "除虫(帮好友)"),
+    (crate::constants::OP_HELP_WATER, "浇水(帮好友)"),
+    (crate::constants::OP_STEAL, "偷菜"),
 ];
-const BAD_SHARED_LIMIT_ID: i64 = 10003;
+const BAD_SHARED_LIMIT_ID: i64 = crate::constants::OP_PUT_WEED;
 
 /// 好友服务事件
 #[derive(Debug, Clone)]
@@ -215,6 +220,9 @@ impl FriendService {
             friends_list_cache: Mutex::new(None),
             steal_noop_markers: Mutex::new(HashMap::new()),
             steal_cleared_gids: Mutex::new(HashSet::new()),
+            steal_patrol_visited: Mutex::new(HashSet::new()),
+            push_steal_hints: Mutex::new(HashMap::new()),
+            last_friend_push_ms: Mutex::new(HashMap::new()),
         }
     }
 
@@ -380,7 +388,7 @@ impl FriendService {
     }
 
     fn remaining_times_locked(&self, op_id: i64, limit: &OpLimitEntry) -> i64 {
-        if (op_id == BAD_SHARED_LIMIT_ID || op_id == 10004)
+        if (op_id == BAD_SHARED_LIMIT_ID || op_id == crate::constants::OP_PUT_BUG)
             && self.bad_operation_limit_reached.load(Ordering::Acquire)
         {
             return 0;
@@ -389,6 +397,23 @@ impl FriendService {
             return 999;
         }
         (limit.day_times_limit - limit.day_times).max(0)
+    }
+
+    /// 日配额 10008：微信不受限；QQ 无数据或上限≤0 则放行。
+    #[must_use]
+    pub fn can_operate_steal(&self) -> bool {
+        if !crate::constants::steal_daily_quota_applies(&self.api.platform()) {
+            return true;
+        }
+        self.check_daily_reset();
+        let map = self.operation_limits.lock();
+        let Some(limit) = map.get(&crate::constants::OP_STEAL) else {
+            return true;
+        };
+        if limit.day_times_limit <= 0 {
+            return true;
+        }
+        limit.day_times < limit.day_times_limit
     }
 
     /// 底层 API
@@ -580,9 +605,11 @@ impl FriendService {
             crate::models::store::account_config::get_friend_blacklist(Some(account_id))
                 .into_iter()
                 .collect();
-        let mut steal_friends: Vec<FriendSummary> = Vec::new();
+        let mut steal_by_gid: HashMap<i64, FriendSummary> = HashMap::new();
+        let mut steal_eligible: Vec<(i64, i64, i64)> = Vec::new();
         let mut help_friends: Vec<(FriendSummary, i64)> = Vec::new();
         let mut seen = HashSet::new();
+        let cleared: HashSet<i64> = self.steal_cleared_gids.lock().clone();
         for f in friends {
             if f.gid == my_gid || f.gid <= 0 || !seen.insert(f.gid) {
                 continue;
@@ -595,54 +622,86 @@ impl FriendService {
                 continue;
             }
             let summary = crate::services::friend::visit_strategy::game_friend_to_summary(f);
-            let steal_num = summary.plant.as_ref().map(|p| p.steal_num).unwrap_or(0);
+            let live_steal = summary.plant.as_ref().map(|p| p.steal_num).unwrap_or(0);
+            let mut steal_num = live_steal;
+            if cleared.contains(&summary.gid) {
+                if steal_num == 0 {
+                    self.steal_cleared_gids.lock().remove(&summary.gid);
+                } else {
+                    steal_num = 0;
+                }
+            }
+            if steal_num == 0 {
+                if let Some(hint) = self.push_steal_hints.lock().get(&summary.gid).copied() {
+                    if hint > 0 {
+                        steal_num = hint;
+                    }
+                }
+            } else {
+                self.push_steal_hints.lock().remove(&summary.gid);
+            }
             let help_need =
                 summary.plant.as_ref().map(|p| p.dry_num + p.weed_num + p.insect_num).unwrap_or(0);
-            if kind == VisitKind::Steal && steal_num > 0 {
-                // 上次进场无可偷且 steal_plant_num 未变 → 跳过，避免空转刷日志
-                let skip_noop = self
-                    .steal_noop_markers
-                    .lock()
-                    .get(&summary.gid)
-                    .copied()
-                    .is_some_and(|prev| prev == steal_num);
-                if !skip_noop {
-                    steal_friends.push(summary);
-                }
+            if kind == VisitKind::Steal {
+                steal_eligible.push((summary.gid, steal_num, live_steal));
+                steal_by_gid.insert(summary.gid, summary);
             } else if kind == VisitKind::Help && help_need > 0 {
                 help_friends.push((summary, help_need));
             }
         }
 
-        steal_friends.sort_by(|a, b| {
-            let sa = a.plant.as_ref().map(|p| p.steal_num).unwrap_or(0);
-            let sb = b.plant.as_ref().map(|p| p.steal_num).unwrap_or(0);
-            sb.cmp(&sa)
-        });
         help_friends.sort_by(|a, b| b.1.cmp(&a.1));
 
         let mut total = crate::services::friend::visit_strategy::TotalActions::default();
         let recent = self.strategy.recent_help();
 
-        if kind == VisitKind::Steal && !steal_friends.is_empty() {
-            // bot 侧该日志已注释；保留 debug 级噪音会让人以为卡死在「开始批量偷菜」
-            for friend in &steal_friends {
-                let list_steal_num = friend.plant.as_ref().map(|p| p.steal_num).unwrap_or(0);
+        if kind == VisitKind::Steal && !steal_eligible.is_empty() {
+            let mut visited = self.steal_patrol_visited.lock().clone();
+            let patrol = crate::services::friend::visit_strategy::build_steal_patrol_targets(
+                &steal_eligible.iter().map(|(gid, steal, _)| (*gid, *steal)).collect::<Vec<_>>(),
+                &mut visited,
+            );
+            *self.steal_patrol_visited.lock() = visited;
+            for gid in patrol {
+                if !self.can_operate_steal() {
+                    break;
+                }
+                let Some(friend) = steal_by_gid.get(&gid) else {
+                    continue;
+                };
+                let live_steal = steal_eligible
+                    .iter()
+                    .find(|(id, _, _)| *id == gid)
+                    .map(|(_, _, live)| *live)
+                    .unwrap_or(0);
+                // 空访 noop 只用于 GetAll 有气泡误报；推送 hint 空访则丢掉 hint，不打 noop。
+                if live_steal > 0
+                    && self
+                        .steal_noop_markers
+                        .lock()
+                        .get(&gid)
+                        .copied()
+                        .is_some_and(|prev| prev == live_steal)
+                {
+                    self.steal_patrol_visited.lock().insert(gid);
+                    continue;
+                }
                 let visit = crate::services::friend::visit_strategy::visit_friend_for_steal(
                     &self.api, recent, friend, &mut total, my_gid, account_id,
                 )
                 .await;
+                self.steal_patrol_visited.lock().insert(gid);
+                self.push_steal_hints.lock().remove(&gid);
                 match visit {
-                    Some(r) if r.acted => {
-                        self.steal_noop_markers.lock().remove(&friend.gid);
-                        self.mark_friend_steal_cleared(friend.gid);
+                    Some(r) if r.stolen > 0 => {
+                        self.steal_noop_markers.lock().remove(&gid);
+                        self.mark_friend_steal_cleared(gid);
                     }
-                    // 已进场但无可偷 / 偷失败，或黑名单滤光（None）：记下当前列表指标，避免每 tick 重入
-                    Some(r) if r.entered && !r.acted => {
-                        self.steal_noop_markers.lock().insert(friend.gid, list_steal_num);
+                    Some(r) if r.entered && r.stolen == 0 && live_steal > 0 => {
+                        self.steal_noop_markers.lock().insert(gid, live_steal);
                     }
-                    None => {
-                        self.steal_noop_markers.lock().insert(friend.gid, list_steal_num);
+                    None if live_steal > 0 => {
+                        self.steal_noop_markers.lock().insert(gid, live_steal);
                     }
                     _ => {}
                 }
@@ -691,7 +750,11 @@ impl FriendService {
                         "friendName": friend.name,
                     })),
                 );
-                let can_exp = self.can_get_exp_by_candidates(&[10005, 10006, 10007]);
+                let can_exp = self.can_get_exp_by_candidates(&[
+                    crate::constants::OP_HELP_WEED,
+                    crate::constants::OP_HELP_BUG,
+                    crate::constants::OP_HELP_WATER,
+                ]);
                 let _ = crate::services::friend::visit_strategy::visit_friend_for_help(
                     &self.api,
                     recent,
@@ -730,7 +793,7 @@ impl FriendService {
                 Some(serde_json::json!({
                     "module": "friend",
                     "result": "ok",
-                    "visited": steal_friends.len() + help_friends.len(),
+                    "visited": steal_eligible.len() + help_friends.len(),
                     "summary": summary,
                 })),
             );
@@ -1049,11 +1112,14 @@ impl FriendService {
         .max(10) as u64
             * 1000;
         let now = now_ms();
+        if force {
+            self.api.invalidate_list_cache();
+        }
         if !force {
             if let Some((cached_at, cached)) = self.friends_list_cache.lock().as_ref() {
                 if now.saturating_sub(*cached_at) < ttl_ms {
                     let mut list = cached.clone();
-                    self.apply_steal_cleared_overrides(&mut list);
+                    self.apply_list_overlays(&mut list);
                     return Ok(list);
                 }
             }
@@ -1080,7 +1146,7 @@ impl FriendService {
                 // 对齐 Go List：直播失败仍返回已有列表，不把面板点开变成空表/掉线。
                 if let Some((_, cached)) = self.friends_list_cache.lock().as_ref() {
                     let mut list = cached.clone();
-                    self.apply_steal_cleared_overrides(&mut list);
+                    self.apply_list_overlays(&mut list);
                     return Ok(list);
                 }
                 return Ok(Vec::new());
@@ -1132,7 +1198,7 @@ impl FriendService {
                 })),
             );
         }
-        self.apply_steal_cleared_overrides(&mut json);
+        self.apply_list_overlays(&mut json);
         *self.friends_list_cache.lock() = Some((now, json.clone()));
         Ok(json)
     }
@@ -1143,6 +1209,7 @@ impl FriendService {
         self.api.invalidate_list_cache();
         *self.friends_list_cache.lock() = None;
         self.steal_noop_markers.lock().clear();
+        self.push_steal_hints.lock().clear();
         let account_id = self.account_id.lock().clone();
         crate::services::friend::visit_strategy::clear_friends_list_cache(&account_id);
     }
@@ -1153,8 +1220,239 @@ impl FriendService {
             return;
         }
         self.steal_noop_markers.lock().remove(&gid);
+        self.push_steal_hints.lock().remove(&gid);
         self.steal_cleared_gids.lock().insert(gid);
         self.apply_steal_cleared_to_list();
+    }
+
+    fn apply_list_overlays(&self, list: &mut [serde_json::Value]) {
+        self.apply_steal_cleared_overrides(list);
+        self.apply_push_plant_overrides(list);
+    }
+
+    fn json_plant_steal_num(item: &serde_json::Value) -> i64 {
+        item.get("plant")
+            .and_then(|p| p.get("stealNum").or_else(|| p.get("steal_num")))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0)
+    }
+
+    fn set_json_plant_counts(
+        item: &mut serde_json::Value,
+        steal_num: i64,
+        dry_num: Option<i64>,
+        weed_num: Option<i64>,
+        insect_num: Option<i64>,
+    ) {
+        let Some(obj) = item.as_object_mut() else {
+            return;
+        };
+        if let Some(plant) = obj.get_mut("plant").and_then(|p| p.as_object_mut()) {
+            plant.insert("stealNum".into(), serde_json::json!(steal_num));
+            plant.insert("steal_num".into(), serde_json::json!(steal_num));
+            if let Some(n) = dry_num {
+                plant.insert("dryNum".into(), serde_json::json!(n));
+                plant.insert("dry_num".into(), serde_json::json!(n));
+            }
+            if let Some(n) = weed_num {
+                plant.insert("weedNum".into(), serde_json::json!(n));
+                plant.insert("weed_num".into(), serde_json::json!(n));
+            }
+            if let Some(n) = insect_num {
+                plant.insert("insectNum".into(), serde_json::json!(n));
+                plant.insert("insect_num".into(), serde_json::json!(n));
+            }
+        } else {
+            obj.insert(
+                "plant".into(),
+                serde_json::json!({
+                    "stealNum": steal_num,
+                    "steal_num": steal_num,
+                    "dryNum": dry_num.unwrap_or(0),
+                    "weedNum": weed_num.unwrap_or(0),
+                    "insectNum": insect_num.unwrap_or(0),
+                }),
+            );
+        }
+    }
+
+    fn apply_push_plant_overrides(&self, list: &mut [serde_json::Value]) {
+        let mut hints = self.push_steal_hints.lock();
+        if hints.is_empty() {
+            return;
+        }
+        let mut caught_up = Vec::new();
+        for item in list.iter_mut() {
+            let gid = item.get("gid").and_then(|v| v.as_i64()).unwrap_or(0);
+            if gid <= 0 {
+                continue;
+            }
+            let live = Self::json_plant_steal_num(item);
+            if live > 0 {
+                if hints.contains_key(&gid) {
+                    caught_up.push(gid);
+                }
+                continue;
+            }
+            if let Some(hint) = hints.get(&gid).copied() {
+                if hint > 0 {
+                    Self::set_json_plant_counts(item, hint, None, None, None);
+                }
+            }
+        }
+        for gid in caught_up {
+            hints.remove(&gid);
+        }
+    }
+
+    fn patch_friends_cache_plant(
+        &self,
+        gid: i64,
+        steal_num: i64,
+        dry_num: i64,
+        weed_num: i64,
+        insect_num: i64,
+    ) {
+        let mut guard = self.friends_list_cache.lock();
+        let Some((_, list)) = guard.as_mut() else {
+            return;
+        };
+        for item in list.iter_mut() {
+            if item.get("gid").and_then(|v| v.as_i64()) == Some(gid) {
+                Self::set_json_plant_counts(
+                    item,
+                    steal_num,
+                    Some(dry_num),
+                    Some(weed_num),
+                    Some(insect_num),
+                );
+                break;
+            }
+        }
+    }
+
+    fn emit_friend_plant_patch(
+        &self,
+        gid: i64,
+        steal_num: i64,
+        dry_num: i64,
+        weed_num: i64,
+        insect_num: i64,
+    ) {
+        let account_id = self.account_id.lock().clone();
+        crate::services::panel_log::log(
+            &account_id,
+            "好友",
+            format!("气泡更新 GID:{gid} 可偷{steal_num}"),
+            crate::constants::PanelEvent::FriendPlantPatch,
+            Some(serde_json::json!({
+                "module": "friend",
+                "event": "friend_plant_patch",
+                "friendGid": gid,
+                "gid": gid,
+                "stealNum": steal_num,
+                "dryNum": dry_num,
+                "weedNum": weed_num,
+                "insectNum": insect_num,
+                "plant": {
+                    "stealNum": steal_num,
+                    "dryNum": dry_num,
+                    "weedNum": weed_num,
+                    "insectNum": insect_num,
+                },
+            })),
+        );
+    }
+
+    /// 好友田 LandsNotify：只刷新该 gid（GetGameFriends），不全量 GetAll。
+    pub async fn on_friend_lands_notify(
+        &self,
+        host_gid: i64,
+        lands: Vec<crate::proto::generated::gamepb::plantpb::LandInfo>,
+    ) {
+        if host_gid <= 0 {
+            return;
+        }
+        let now = now_ms();
+        {
+            let mut last = self.last_friend_push_ms.lock();
+            if let Some(prev) = last.get(&host_gid).copied() {
+                if now.saturating_sub(prev) < crate::constants::FRIEND_LANDS_NOTIFY_DEBOUNCE_MS {
+                    return;
+                }
+            }
+            last.insert(host_gid, now);
+        }
+        let my_gid = *self.host_gid.lock();
+        let from_lands =
+            crate::services::friend::visit_strategy::plant_summary_from_lands(&lands, my_gid);
+        let mut plant = from_lands.clone();
+        if let Ok(Some(friend)) = self.api.refresh_game_friend(host_gid).await {
+            plant = crate::services::friend::visit_strategy::game_friend_to_summary(friend.clone())
+                .plant
+                .unwrap_or(plant);
+            self.api.upsert_last_list_friend(friend);
+        } else {
+            let existing = self
+                .friends_list_cache
+                .lock()
+                .as_ref()
+                .and_then(|(_, list)| {
+                    list.iter()
+                        .find(|item| item.get("gid").and_then(|v| v.as_i64()) == Some(host_gid))
+                })
+                .and_then(|item| {
+                    Some(crate::services::friend::visit_strategy::FriendPlantSummary {
+                        steal_num: Self::json_plant_steal_num(item),
+                        dry_num: item
+                            .get("plant")
+                            .and_then(|p| p.get("dryNum").or_else(|| p.get("dry_num")))
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0),
+                        weed_num: item
+                            .get("plant")
+                            .and_then(|p| p.get("weedNum").or_else(|| p.get("weed_num")))
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0),
+                        insect_num: item
+                            .get("plant")
+                            .and_then(|p| p.get("insectNum").or_else(|| p.get("insect_num")))
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0),
+                    })
+                });
+            plant = crate::services::friend::visit_strategy::merge_partial_plant_summary(
+                existing.as_ref(),
+                from_lands,
+            );
+            self.api.patch_last_list_plant(
+                host_gid,
+                plant.steal_num,
+                plant.dry_num,
+                plant.weed_num,
+                plant.insect_num,
+            );
+        }
+        if plant.steal_num > 0 {
+            self.push_steal_hints.lock().insert(host_gid, plant.steal_num);
+            self.steal_cleared_gids.lock().remove(&host_gid);
+            self.steal_patrol_visited.lock().remove(&host_gid);
+            self.steal_noop_markers.lock().remove(&host_gid);
+        }
+        self.patch_friends_cache_plant(
+            host_gid,
+            plant.steal_num,
+            plant.dry_num,
+            plant.weed_num,
+            plant.insect_num,
+        );
+        self.emit_friend_plant_patch(
+            host_gid,
+            plant.steal_num,
+            plant.dry_num,
+            plant.weed_num,
+            plant.insect_num,
+        );
     }
 
     fn apply_steal_cleared_to_list(&self) {

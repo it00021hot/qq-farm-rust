@@ -16,7 +16,7 @@ use super::blacklist::{
 };
 use super::now_ms;
 use super::panel_dto::FriendSummary;
-use super::steal::{analyze_friend_lands, steal_lands_with_reward_log};
+use super::steal::{analyze_friend_lands, steal_lands_with_reward_log, steal_side_help};
 
 /// 帮助状态
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -290,6 +290,8 @@ pub fn merge_farming_outcomes(outcomes: &[FarmingOutcome]) -> FarmingOutcome {
 pub struct VisitResult {
     pub acted: bool,
     pub entered: bool,
+    #[serde(default)]
+    pub stolen: usize,
 }
 
 pub async fn run_farming_with_fallback(
@@ -417,24 +419,24 @@ pub async fn visit_friend(
             let msg = format!("{e}");
             let kind = handle_friend_enter_error(account_id, friend_gid, &friend_name, &msg);
             if kind != FriendEnterErrorKind::Error {
-                return VisitResult { acted: false, entered: false };
+                return VisitResult { acted: false, entered: false, stolen: 0 };
             }
             tracing::warn!(friend_gid, error = %msg, "进入好友农场失败");
-            return VisitResult { acted: false, entered: false };
+            return VisitResult { acted: false, entered: false, stolen: 0 };
         }
     };
 
     let lands = enter_reply.lands.clone();
     if lands.is_empty() {
         let _ = api.leave_farm(friend_gid).await;
-        return VisitResult { acted: false, entered: true };
+        return VisitResult { acted: false, entered: true, stolen: 0 };
     }
 
     let plant_blacklist = get_plant_blacklist(account_id);
     let friend_blacklist = get_account_friend_blacklist(account_id);
     if friend_blacklist.contains(&friend_gid) {
         let _ = api.leave_farm(friend_gid).await;
-        return VisitResult { acted: false, entered: true };
+        return VisitResult { acted: false, entered: true, stolen: 0 };
     }
     let status = analyze_friend_lands(&lands, my_gid, &plant_blacklist, false, account_id);
     let snapshot_key = RecentHelpCache::make_snapshot_key(
@@ -442,11 +444,51 @@ pub async fn visit_friend(
     );
 
     let mut actions: Vec<String> = Vec::new();
+    let mut stolen = 0usize;
 
     let help_enabled = is_automation_on_for(account_id, "friend_help");
     let stop_when_exp_limit = is_automation_on_for(account_id, "friend_help_exp_limit");
     let allow_by_exp = !stop_when_exp_limit || can_get_exp_by_candidates;
-    if help_enabled && allow_by_exp {
+    let steal_enabled =
+        is_automation_on_for(account_id, "friend_steal") && !status.stealable.is_empty();
+    if steal_enabled {
+        let steal_result = steal_lands_with_reward_log(
+            api,
+            recent_help,
+            friend_gid,
+            &status.stealable,
+            &status.stealable_info,
+            None,
+        )
+        .await;
+        stolen = steal_result.ok;
+        if steal_result.ok > 0 {
+            let plant_names: Vec<String> = steal_result
+                .stolen_infos
+                .iter()
+                .filter_map(|i| if i.name.is_empty() { None } else { Some(i.name.clone()) })
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect();
+            let score_hint = if steal_result.score_gained > 0 {
+                format!("+积分x{}", steal_result.score_gained)
+            } else {
+                String::new()
+            };
+            actions.push(format!(
+                "偷{}{}{}",
+                steal_result.ok,
+                if plant_names.is_empty() {
+                    String::new()
+                } else {
+                    format!("({})", plant_names.join("/"))
+                },
+                score_hint
+            ));
+            total_actions.steal += steal_result.ok;
+        }
+        steal_side_help(api, friend_gid, &status, total_actions, &mut actions).await;
+    } else if help_enabled && allow_by_exp {
         let all_help_ids: Vec<i64> = status
             .need_weed
             .iter()
@@ -485,43 +527,6 @@ pub async fn visit_friend(
                 ));
                 total_actions.farming += outcome.land_count;
             }
-        }
-    }
-
-    if is_automation_on_for(account_id, "friend_steal") && !status.stealable.is_empty() {
-        let steal_result = steal_lands_with_reward_log(
-            api,
-            recent_help,
-            friend_gid,
-            &status.stealable,
-            &status.stealable_info,
-            None,
-        )
-        .await;
-        if steal_result.ok > 0 {
-            let plant_names: Vec<String> = steal_result
-                .stolen_infos
-                .iter()
-                .filter_map(|i| if i.name.is_empty() { None } else { Some(i.name.clone()) })
-                .collect::<HashSet<_>>()
-                .into_iter()
-                .collect();
-            let score_hint = if steal_result.score_gained > 0 {
-                format!("+积分x{}", steal_result.score_gained)
-            } else {
-                String::new()
-            };
-            actions.push(format!(
-                "偷{}{}{}",
-                steal_result.ok,
-                if plant_names.is_empty() {
-                    String::new()
-                } else {
-                    format!("({})", plant_names.join("/"))
-                },
-                score_hint
-            ));
-            total_actions.steal += steal_result.ok;
         }
     }
 
@@ -575,7 +580,7 @@ pub async fn visit_friend(
     }
 
     let _ = api.leave_farm(friend_gid).await;
-    VisitResult { acted: !actions.is_empty(), entered: true }
+    VisitResult { acted: !actions.is_empty(), entered: true, stolen }
 }
 
 /// 拜访好友 - 仅帮助
@@ -598,7 +603,7 @@ pub async fn visit_friend_for_help(
     if !stop_when_exp_limit {
         help_auto_disabled.store(false, std::sync::atomic::Ordering::Release);
     } else if help_auto_disabled.load(std::sync::atomic::Ordering::Acquire) {
-        return Some(VisitResult { acted: false, entered: false });
+        return Some(VisitResult { acted: false, entered: false, stolen: 0 });
     }
 
     let enter_reply = match api.enter_farm(friend_gid).await {
@@ -607,16 +612,16 @@ pub async fn visit_friend_for_help(
             let msg = format!("{e}");
             let kind = handle_friend_enter_error(account_id, friend_gid, &friend_name, &msg);
             if kind != FriendEnterErrorKind::Error {
-                return Some(VisitResult { acted: false, entered: false });
+                return Some(VisitResult { acted: false, entered: false, stolen: 0 });
             }
-            return Some(VisitResult { acted: false, entered: false });
+            return Some(VisitResult { acted: false, entered: false, stolen: 0 });
         }
     };
 
     let lands = enter_reply.lands.clone();
     if lands.is_empty() {
         let _ = api.leave_farm(friend_gid).await;
-        return Some(VisitResult { acted: false, entered: true });
+        return Some(VisitResult { acted: false, entered: true, stolen: 0 });
     }
 
     let status = analyze_friend_lands(&lands, my_gid, &[], false, account_id);
@@ -691,7 +696,7 @@ pub async fn visit_friend_for_help(
     }
 
     let _ = api.leave_farm(friend_gid).await;
-    Some(VisitResult { acted: !actions.is_empty(), entered: true })
+    Some(VisitResult { acted: !actions.is_empty(), entered: true, stolen: 0 })
 }
 
 /// 总操作计数器（与原 TS `totalActions` 一致）

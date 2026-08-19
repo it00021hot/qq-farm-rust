@@ -10,7 +10,9 @@ import {
   landIdLabel,
   soilLabel,
   soilLevelClass,
-  visibleLands
+  tickMatureLands,
+  visibleLands,
+  visibleOwnFarmOps
 } from '@/views/farm/shared/land-display';
 import { $t } from '@/locales';
 
@@ -55,6 +57,11 @@ const summaryTags = computed(() => {
 });
 
 const displayLands = computed(() => visibleLands(lands.value));
+
+const visibleOperateOptions = computed(() => {
+  const available = visibleOwnFarmOps(lands.value);
+  return operateOptions.filter(item => available.has(item.op));
+});
 
 function landStatusTag(status: string, occupiedByMaster?: boolean): { type: NaiveUI.ThemeColor; label: string } {
   if (occupiedByMaster) {
@@ -131,9 +138,15 @@ let refreshTimer: ReturnType<typeof setInterval> | null = null;
 function startTimers() {
   stopTimers();
   tickTimer = setInterval(() => {
-    lands.value = lands.value.map(land =>
-      land.matureInSec && land.matureInSec > 0 ? { ...land, matureInSec: land.matureInSec - 1 } : land
-    );
+    const ticked = tickMatureLands(lands.value);
+    lands.value = ticked.lands;
+    if (ticked.newlyRipe > 0 && summary.value) {
+      summary.value = {
+        ...summary.value,
+        harvestable: (summary.value.harvestable || 0) + ticked.newlyRipe,
+        growing: Math.max(0, (summary.value.growing || 0) - ticked.newlyRipe)
+      };
+    }
   }, 1000);
   refreshTimer = setInterval(() => {
     void loadLands();
@@ -174,7 +187,7 @@ defineExpose({ refresh: loadLands });
   <NCard :title="$t('page.farm.personal.landsTitle')" :bordered="false" size="small" class="card-wrapper">
     <template #header-extra>
       <NSpace size="small">
-        <NPopconfirm v-for="item in operateOptions" :key="item.op" @positive-click="handleOperate(item.op)">
+        <NPopconfirm v-for="item in visibleOperateOptions" :key="item.op" @positive-click="handleOperate(item.op)">
           <template #trigger>
             <NButton size="small" :type="item.type" ghost :loading="operating" :disabled="!connected">
               {{ $t(`page.farm.personal.op.${item.op}`) }}

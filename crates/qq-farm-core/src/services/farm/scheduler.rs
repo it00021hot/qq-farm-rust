@@ -213,10 +213,6 @@ impl FarmService {
         if gid == 0 || !crate::services::automation::is_automation_on_for(&acc, "farm") {
             return Ok(LandSummary::default());
         }
-        // 对齐 bot checkFarm：静默时段跳过本田务农（读账号配置）
-        if crate::services::friend::visit_strategy::in_friend_quiet_hours_for(Some(&acc), None) {
-            return Ok(LandSummary::default());
-        }
         if self.is_checking.swap(true, Ordering::AcqRel) {
             return Ok(LandSummary::default());
         }
@@ -313,6 +309,27 @@ impl FarmService {
     /// 除虫（`op=insecticide`）—— 同 weed，复用 farming
     pub async fn op_insecticide(&self) -> Result<usize> {
         self.op_weed().await
+    }
+
+    /// 一键务农（`op=clear`）—— 除草/除虫/浇水，对齐 Go `RunFarmOperation("clear")`
+    pub async fn op_farming(&self) -> Result<usize> {
+        let gid = *self.host_gid.lock();
+        let reply = self.api.get_all_lands(gid).await?;
+        let status = analyze_lands(&reply.lands, gid);
+        let mut ids: Vec<i64> = status
+            .need_weed
+            .iter()
+            .chain(status.need_bug.iter())
+            .chain(status.need_water.iter())
+            .copied()
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        let n = ids.len();
+        if !ids.is_empty() {
+            self.api.farming(ids, gid).await?;
+        }
+        Ok(n)
     }
 
     /// 施肥（`op=fertilize`）—— 按配置对当前所有 plant 施肥

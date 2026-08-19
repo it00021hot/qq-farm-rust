@@ -119,3 +119,59 @@ export function landIdLabel(land: Api.Farm.LandRow) {
   if (ids.length <= 1) return `#${land.id}`;
   return `#${ids[0]}-${ids[ids.length - 1]}`;
 }
+
+export type OwnFarmOperateOp = 'harvest' | 'clear' | 'plant' | 'upgrade' | 'all';
+
+function isActionableLand(land: Api.Farm.LandRow) {
+  return Boolean(land.unlocked) && !land.occupiedByMaster && land.status !== 'locked';
+}
+
+function landCanHarvest(land: Api.Farm.LandRow) {
+  if (!isActionableLand(land)) return false;
+  if (land.status === 'harvestable' || land.status === 'harvested') return true;
+  return land.status === 'growing' && Number(land.matureInSec || 0) <= 0 && Boolean(land.plantName);
+}
+
+function landCanFarm(land: Api.Farm.LandRow) {
+  return isActionableLand(land) && Boolean(land.needWater || land.needWeed || land.needBug);
+}
+
+function landCanPlant(land: Api.Farm.LandRow) {
+  return isActionableLand(land) && (land.status === 'empty' || land.status === 'dead');
+}
+
+function landCanUpgrade(land: Api.Farm.LandRow) {
+  return !land.occupiedByMaster && Boolean(land.couldUpgrade || land.couldUnlock);
+}
+
+/** Own-farm header buttons: only ops that currently have work. */
+export function visibleOwnFarmOps(lands: Api.Farm.LandRow[]): Set<OwnFarmOperateOp> {
+  const list = visibleLands(lands);
+  const harvest = list.some(landCanHarvest);
+  const clear = list.some(landCanFarm);
+  const plant = list.some(landCanPlant);
+  const upgrade = list.some(landCanUpgrade);
+  const ops = new Set<OwnFarmOperateOp>();
+  if (harvest) ops.add('harvest');
+  if (clear) ops.add('clear');
+  if (plant) ops.add('plant');
+  if (upgrade) ops.add('upgrade');
+  if (harvest || clear || plant) ops.add('all');
+  return ops;
+}
+
+/** Countdown tick: remaining 0 on a growing crop becomes harvestable. */
+export function tickMatureLands(lands: Api.Farm.LandRow[]): { lands: Api.Farm.LandRow[]; newlyRipe: number } {
+  let newlyRipe = 0;
+  const next = lands.map(land => {
+    const remaining = Number(land.matureInSec || 0);
+    if (remaining <= 0) return land;
+    const sec = remaining - 1;
+    if (sec <= 0 && land.status === 'growing') {
+      newlyRipe += 1;
+      return { ...land, matureInSec: 0, status: 'harvestable' };
+    }
+    return { ...land, matureInSec: sec };
+  });
+  return { lands: next, newlyRipe };
+}

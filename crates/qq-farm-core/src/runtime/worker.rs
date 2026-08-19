@@ -353,10 +353,12 @@ impl Worker {
                                     wl.apply_basic_notify(level, gold, exp);
                                 }
                                 crate::network::notify::NotifyEvent::LandsChanged {
+                                    host_gid,
                                     changed_count,
+                                    lands,
                                     ..
                                 } => {
-                                    wl.on_lands_changed(changed_count);
+                                    wl.on_lands_notify(host_gid, changed_count, lands);
                                 }
                                 crate::network::notify::NotifyEvent::FriendApplications {
                                     applications,

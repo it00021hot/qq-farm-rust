@@ -3,6 +3,7 @@
 //! 原 network.ts 里 handleNotify 把所有 EventMessage 拆出来判断。
 //! 这里只做"类型 + 路由分发"的最小集合，业务级 handler 留到阶段 1E+。
 
+use crate::proto::generated::gamepb::plantpb::LandInfo;
 use crate::proto::generated::gatepb::EventMessage;
 
 /// 服务器推送的统一事件枚举
@@ -15,14 +16,16 @@ pub enum NotifyEvent {
         /// 原因描述
         reason: String,
     },
-    /// 土地状态变化
+    /// 土地状态变化（自己的田或好友气泡）
     LandsChanged {
         /// 事件类型
         event_type: String,
         /// 农场主人 GID
         host_gid: i64,
-        /// 变更的土地数（具体解码留到阶段 1E+）
+        /// 变更的土地数
         changed_count: usize,
+        /// 推送里带的土地（好友气泡只刷新这些，不全量 GetAll）
+        lands: Vec<LandInfo>,
     },
     /// 物品变化
     ItemChanged { event_type: String, items: Vec<ItemChgLite> },
@@ -58,8 +61,14 @@ pub fn parse_event(event: &EventMessage) -> NotifyEvent {
                 event_type,
                 host_gid: notify.host_gid,
                 changed_count: notify.lands.len(),
+                lands: notify.lands,
             },
-            Err(_) => NotifyEvent::LandsChanged { event_type, host_gid: 0, changed_count: 0 },
+            Err(_) => NotifyEvent::LandsChanged {
+                event_type,
+                host_gid: 0,
+                changed_count: 0,
+                lands: Vec::new(),
+            },
         }
     } else if event_type.contains("ItemNotify") {
         match crate::proto::generated::gamepb::itempb::ItemNotify::decode(body) {

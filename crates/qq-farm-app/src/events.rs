@@ -225,6 +225,15 @@ fn derived_from_log(
     let id = account_id.map(str::to_string);
     let mut out = Vec::new();
 
+    if event == "friend_plant_patch" {
+        out.push(PanelRealtimeEvent {
+            event_type: "friend_plant".into(),
+            payload: payload.clone(),
+            account_id: id,
+        });
+        return out;
+    }
+
     if module == "friend"
         || event == "visit_friend"
         || event == "friend_cycle"
@@ -351,6 +360,31 @@ mod tests {
                 .expect("friend_interact");
         assert_eq!(interact.payload["action"], "steal");
         assert_eq!(interact.payload["targetGid"], 42);
+    }
+
+    #[test]
+    fn friend_plant_patch_emits_friend_plant_only() {
+        let ev = RuntimeEvent::Log(LogEntry {
+            time: "12:00:00".into(),
+            tag: "好友".into(),
+            msg: "气泡更新 GID:9 可偷2".into(),
+            meta: json!({
+                "module": "friend",
+                "event": "friend_plant_patch",
+                "friendGid": 9,
+                "stealNum": 2,
+            }),
+            ts: 1,
+            search_text: String::new(),
+            account_id: Some("7".into()),
+            account_name: Some("acc".into()),
+            is_warn: false,
+        });
+        let types: Vec<_> =
+            AppEvent::from(ev).to_realtime().into_iter().map(|e| e.event_type).collect();
+        assert!(types.contains(&"log:new".to_string()));
+        assert!(types.contains(&"friend_plant".to_string()));
+        assert!(!types.contains(&"friend_interact".to_string()));
     }
 
     #[test]

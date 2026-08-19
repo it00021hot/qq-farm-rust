@@ -64,7 +64,7 @@
 | QQ 小程序扫码拿码 | 齐 | 面板可走 QQ 码登录流程 | `services/qrlogin.rs` |
 | 微信扫码拿码并启动 | 齐 | 扫码 → 应用宝 login_buffer 落盘 → 换一次性网关 code 启动；掉线/重启可用授权再换码重连 | `services/wx_login/*`, `routes/wx_login.rs` |
 | 本田务农循环 | 齐 | 除草除虫浇水 → 收获 → 铲除 → 种植（含多格）→ 施肥/解锁升级；默认策略/skip_own_weed_bug/smart 秒数对齐 bot | `services/farm/*`, `runtime/worker_loop.rs` |
-| 好友帮助 / 偷菜 / 捣乱 | 齐 | 列表、访问、帮助（经验门控）、偷菜（stealers/空访跳过）、静默、黑名单落盘；捣乱按日限/启动筛选/`1001046` 停 | `services/friend/*` |
+| 好友帮助 / 偷菜 / 捣乱 | 齐 | 列表、访问、帮助（经验门控）、偷菜（气泡+自巡/空访/一键 Harvest 主地回退/先偷后帮）、静默仅挡好友、黑名单落盘；捣乱按日限/启动筛选/`1001046` 停 | `services/friend/*` |
 | 背包展示与操作 | 齐 | 按 UID 堆分行；含 `key`/`uid`/`mutantTypes`/`groupKey`；系统物品分离 | `services/warehouse.rs` |
 | 自动/手动出售果实 | 齐 | 自动受 `sell` 开关；跳过不可售；手动 `sell_items` 预检拒绝不可售 | `warehouse` + `game_config` + `worker_loop` |
 | 商城 / 神秘商店 / 月卡 / 钻石 | 齐 | 列表、购买（神秘 Buy 无回包）、月卡、充值信息 | `mall`, `mystery_shop`, `monthcard`, `pay`, `commerce` |
@@ -440,11 +440,39 @@
 - 能力状态：Windows 已登录未锁定桌面微信时，添加账号「本机微信」应检出昵称并可确认授权
 - 2026-08-18 补：新版 Weixin.exe 除 14013-14015 外还会监听 14016/14019/14022/14023；探测端口扩到 14013-14025 + 13013-13015
 
+### 2026-08-19 — 微信版偷菜对齐 Go（本田不挡静默）
+
+- 策略：只玩微信农场——无保护罩、无每人偷满；狗咬只扣金币不挡偷。bot 不改。
+- 巡逻：GetAll `steal_plant_num` 好友多会漏推 → 气泡优先 + `ceil(n/4)` 零气泡自巡（对齐 Go）。有气泡空访仍用 `(gid, steal_num)` noop，零气泡不走 noop。
+- 偷菜：`Harvest is_all=true` 一键；失败后对 **主地** `is_all=false` 按地回退，不传从地。识别 `1001040`。微信确认无 10008 日限：不读 `OperationLimit`、不调 `CheckCanOperate`、不截断 `can_steal_num`。QQ 仍走配额，无数据 fail-open。
+- 偷菜必帮忙：有可偷则 **先偷后帮** 一键 Farming，不受帮忙开关/经验上限；帮忙失败不挡。
+- 静默：`check_farm` 不再看 `friendQuietHours`；help/steal tick 仍静默。
+- 选地：微信路径只信成熟 + `stealable` + 主地，不用 stealers。`OP_NAMES` 10008 改为「偷菜」。
+- 能力状态：代码侧与 Go 微信偷菜策略对齐；实机仍看 L3
+
 ### 2026-08-18 — 桌面品牌与 Go 版拆开
 
 - 显示名 / 窗口 / 托盘 / 菜单改为 **QQ Farm**（Go 仍为「QQ农场智能助手」）
 - `identifier` 改为 `com.qqfarm.rust`；release 数据目录改为 OS `QQFarmRust`
 - 图标改为锈橙底绿苗 + 六边形 R 角标（侧栏 logo / favicon 同步）
 - 能力状态：与 Go 桌面可并装；Dock / 托盘 tooltip / 数据目录互不覆盖
+
+### 2026-08-19 — 微信 10008 确认无限
+
+- 微信农场没有偷菜日配额（operation `10008`）。巡逻不再读 `OperationLimit`，进场不再调 `CheckCanOperate`，也不用 `can_steal_num` 截断可偷地。QQ 仍走配额。
+- 能力状态：微信偷菜只看成熟 + `stealable` + 主地；次数门控已去掉
+
+### 2026-08-19 — 好友气泡推送单点刷新 + 列表排序/一键偷取
+
+- `LandsNotify` 好友田不再丢弃：对该 gid 调 `GetGameFriends`（失败则用推送土地只升不降合并），写回列表缓存与 GetAll 短缓存；不全量 GetAll。
+- 推送可偷写入 `push_steal_hints`：GetAll 漏气泡时仍进偷菜队列；进场或 GetAll 追上后清除。新气泡会去掉 `steal_cleared` / 空访 noop / 自巡 visited。
+- 好友页「刷新列表」`force` 会作废 GetAll 800ms 短缓存。排序：可偷 → 可帮 → 等级。单行按钮「一键偷取」（`is_all` + 主地回退）；顶栏「全部偷取」仍扫所有可偷好友。
+- 能力状态：气泡推送应只改该好友行；手动刷新走强制 GetAll
+
+### 2026-08-19 — 个人农场操作按钮按状态显示
+
+- 桌面 / Go web 个人农场顶栏：无活不显示。收获看成熟（倒计时到 0 也算）；一键务农看草/虫/旱；种植看空地或枯株；升级看可升/可解锁；一键全收仅在收获/务农/种植有活时出现。
+- Rust `op=clear` 改为真正的一键务农（除草/除虫/浇水），对齐 Go 与按钮文案；铲除仍走 `op=remove`。
+- 能力状态：没活不显示对应按钮；成熟倒计时归零后「收获」应出现。
 
 

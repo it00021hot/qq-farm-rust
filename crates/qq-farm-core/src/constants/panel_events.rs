@@ -40,6 +40,7 @@ pub enum PanelEvent {
     PendingFriendRequest,
     GetFriendList,
     FriendListApi,
+    FriendPlantPatch,
     EnterFarm,
     CareFriend,
     PatrolDone,
@@ -87,6 +88,7 @@ impl PanelEvent {
             Self::PendingFriendRequest => "pending_friend_request",
             Self::GetFriendList => "get_friend_list",
             Self::FriendListApi => "friend_list_api",
+            Self::FriendPlantPatch => "friend_plant_patch",
             Self::EnterFarm => "enter_farm",
             Self::CareFriend => "care_friend",
             Self::PatrolDone => "patrol_done",
@@ -133,6 +135,7 @@ impl PanelEvent {
             | Self::PendingFriendRequest
             | Self::GetFriendList
             | Self::FriendListApi
+            | Self::FriendPlantPatch
             | Self::EnterFarm
             | Self::CareFriend
             | Self::PatrolDone
@@ -180,6 +183,7 @@ impl PanelEvent {
             "pending_friend_request" | "待处理申请" => Some(Self::PendingFriendRequest),
             "get_friend_list" | "获取好友列表" => Some(Self::GetFriendList),
             "friend_list_api" | "好友列表接口" => Some(Self::FriendListApi),
+            "friend_plant_patch" => Some(Self::FriendPlantPatch),
             "enter_farm" | "进入农场" => Some(Self::EnterFarm),
             "care_friend" | "照顾好友" => Some(Self::CareFriend),
             "patrol_done" | "巡查完成" => Some(Self::PatrolDone),

@@ -185,7 +185,10 @@ pub async fn operate(ctx: &AppContext, account_id: &str, op: &str) -> AppResult<
             |r| json!({ "ok": true, "op": "fertilize", "normal": r.normal, "organic": r.organic }),
         ),
         "plant" => farm.op_plant().await.map(|n| json!({ "ok": true, "op": "plant", "count": n })),
-        "remove" | "clear" => {
+        "clear" => {
+            farm.op_farming().await.map(|n| json!({ "ok": true, "op": "clear", "count": n }))
+        }
+        "remove" => {
             farm.op_remove().await.map(|n| json!({ "ok": true, "op": "remove", "count": n }))
         }
         "upgrade" => {

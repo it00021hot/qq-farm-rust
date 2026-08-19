@@ -18,7 +18,7 @@ pub struct FriendSummary {
     pub plant: Option<FriendPlantSummary>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FriendPlantSummary {
     #[serde(alias = "steal_num")]

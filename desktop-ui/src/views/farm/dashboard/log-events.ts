@@ -33,6 +33,7 @@ const EVENT_LABELS: Record<string, string> = {
   pending_friend_request: '待处理申请',
   get_friend_list: '获取好友列表',
   friend_list_api: '好友列表接口',
+  friend_plant_patch: '好友气泡',
   enter_farm: '进入农场',
   care_friend: '照顾好友',
   patrol_done: '巡查完成',
