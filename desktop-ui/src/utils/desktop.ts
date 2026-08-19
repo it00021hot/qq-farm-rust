@@ -33,6 +33,11 @@ export function isDesktopMac(): boolean {
   return /mac/i.test(navigator.userAgent);
 }
 
+export async function desktopStartDragging(): Promise<void> {
+  if (!isTauriRuntime()) return;
+  await getCurrentWindow().startDragging();
+}
+
 export async function desktopMinimise(): Promise<void> {
   if (!isTauriRuntime()) return;
   await getCurrentWindow().minimize();

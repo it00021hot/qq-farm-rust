@@ -8,6 +8,7 @@ import { useThemeStore } from '@/store/modules/theme';
 import { isTauriRuntime } from '@/service/tauri/client';
 import {
   desktopIsFullscreen,
+  desktopStartDragging,
   desktopToggleFullscreen,
   isDesktopWindows
 } from '@/utils/desktop';
@@ -67,10 +68,27 @@ onUnmounted(() => {
 });
 
 const windowsDesktop = computed(() => isDesktopWindows());
+
+function startWindowDrag(event: MouseEvent) {
+  if (!isTauriRuntime() || event.button !== 0) return;
+  const target = event.target;
+  if (
+    !(target instanceof Element) ||
+    target.closest(
+      'a, button, input, textarea, select, [contenteditable="true"], [role="button"], .desktop-no-drag'
+    )
+  ) {
+    return;
+  }
+  void desktopStartDragging();
+}
 </script>
 
 <template>
-  <DarkModeContainer class="h-full flex-y-center px-12px shadow-header desktop-drag-region">
+  <DarkModeContainer
+    class="h-full flex-y-center px-12px shadow-header desktop-drag-region"
+    @mousedown="startWindowDrag"
+  >
     <GlobalLogo v-if="showLogo" class="h-full" :style="{ width: themeStore.sider.width + 'px' }" />
     <MenuToggler
       v-if="showMenuToggler"

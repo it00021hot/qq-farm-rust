@@ -565,4 +565,19 @@
 - 改为优先 ItemInfo.level，没有再回退 land_level_need（对齐 bot `getAllSeeds` / 种植策略）
 - 能力状态：种子列表等级与 ItemInfo 一致
 
+### 2026-08-19 — 快速授权全静默回退 / bot 资源镜像工具
+
+- 桌面本机微信快速登录的 create / detect / authorize / confirm 任一步失败均不弹错误，直接切换微信扫码；仅二维码流程自身失败才显示错误
+- Rust 仓新增 `tools/sync-from-bot.mjs`：只读 qq-farm-bot，按哈希预览并以 `--apply` 镜像四份游戏配置、作物图片和 proto；bot 工具及代码不改
+- 新增 `docs/OFFICIAL_RESOURCE_SYNC.md`：说明微信 4.1.x Windows/macOS 缓存路径、`--source` 反编译目录、CDN 资源下载、Rust 同步和 `capture-dir/*.bin` 协议抓包的区别
+- 验证：同步工具 Node 测试 5/5；实际 dry-run 检出配置 3 处差异、图片 908/908 与 proto 36/36 一致；`cargo check -p qq-farm-core`、`pnpm build` 通过
+- 已知存量：`pnpm typecheck` 仍被账号页 number/string 与活动页缺 `rules` 两处既有错误阻断，本次修改文件无新增诊断
+
+### 2026-08-19 — 桌面窗口拖动 / Windows 作物图片
+
+- 拖动：标题栏只使用 Electron/Wails 风格的 `-webkit-app-region: drag`，Tauri v2 没有触发原生拖动；现 macOS / Windows 顶栏非交互区域统一调用 `startDragging`，控件仍可点击
+- 图片：前端硬编码 `farmcfg://localhost/...`，macOS 可用但 Windows WebView2 需要 `http://farmcfg.localhost/...`；改用 Tauri `convertFileSrc(path, "farmcfg")` 按平台生成 URL
+- 验证：资源协议同时覆盖 `farmcfg://localhost/...` 与 Windows `http://farmcfg.localhost/...`
+- 能力状态：macOS 可拖动窗口；Windows 作物、背包、商城和活动图片恢复
+
 

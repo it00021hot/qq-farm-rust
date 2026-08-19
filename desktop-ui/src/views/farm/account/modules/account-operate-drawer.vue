@@ -65,6 +65,7 @@ const wxLoading = ref(false);
 const wxQrUrl = ref('');
 const wxSubmitting = ref(false);
 let wxPollTimer: ReturnType<typeof setTimeout> | undefined;
+let wxQrStartPromise: Promise<void> | undefined;
 function createDefaultModel(): Model {
   return {
     code: '',
@@ -190,6 +191,19 @@ function resetWxLogin() {
   wxSubmitting.value = false;
 }
 
+async function fallbackToQrLogin() {
+  const qrAlreadyReady = wxMode.value === 'qr' && Boolean(wxTaskId.value && wxQrUrl.value);
+  wxMode.value = 'qr';
+  wxSessionId.value = '';
+  wxQuickPort.value = null;
+  wxQuickProfile.value = null;
+  wxError.value = '';
+  if (!qrAlreadyReady) {
+    wxStatus.value = '';
+    await startWxLogin();
+  }
+}
+
 function authorizePosition() {
   const width = 360;
   const height = 263;
@@ -292,11 +306,8 @@ async function detectLocalWechat() {
     wxStatus.value = wxQuickProfile.value.nickname
       ? `${wxQuickProfile.value.nickname} · 请在电脑微信中确认`
       : '本机微信已就绪，请点击授权';
-  } catch (err: any) {
-    wxError.value = err?.message || '本机微信不可用';
-    wxStatus.value = '本机快速授权不可用，已切换到扫码';
-    wxMode.value = 'qr';
-    void startWxLogin();
+  } catch {
+    await fallbackToQrLogin();
   } finally {
     wxLoading.value = false;
   }
@@ -306,12 +317,13 @@ async function authorizeLocalWechat() {
   const port = wxQuickPort.value;
   const profile = wxQuickProfile.value;
   if (!port || !profile?.authorizeUuid || !wxSessionId.value) {
-    wxError.value = '请先检测本机微信';
+    await fallbackToQrLogin();
     return;
   }
   wxSubmitting.value = true;
   wxError.value = '';
   wxStatus.value = '等待电脑微信确认...';
+  let quickCode = '';
   try {
     const pos = authorizePosition();
     const authorized = await fetchAuthorizeFarmWxQuickLogin(wxSessionId.value, {
@@ -321,12 +333,7 @@ async function authorizeLocalWechat() {
       y: pos.y
     });
     if (authorized.error || !authorized.data?.redirectUrl) {
-      const message = (authorized.error as any)?.message || '桌面微信未返回有效授权结果';
-      if (String(message).includes('仅支持扫码授权')) {
-        wxMode.value = 'qr';
-        void startWxLogin();
-      }
-      throw new Error(message);
+      throw new Error((authorized.error as any)?.message || '桌面微信未返回有效授权结果');
     }
     const { data, error } = await fetchConfirmFarmWxQuickLogin(
       wxSessionId.value,
@@ -335,12 +342,18 @@ async function authorizeLocalWechat() {
     if (error || !data?.code) {
       throw new Error((error as any)?.message || '快速授权确认失败');
     }
-    await saveWxCode(String(data.code));
-  } catch (err: any) {
-    wxError.value = err?.message || '快速授权失败';
-    wxStatus.value = '快速授权失败';
+    quickCode = String(data.code);
+  } catch {
+    await fallbackToQrLogin();
+    return;
   } finally {
     wxSubmitting.value = false;
+  }
+  try {
+    await saveWxCode(quickCode);
+  } catch (err: any) {
+    wxError.value = err?.message || '保存账号失败';
+    wxStatus.value = '保存账号失败';
   }
 }
 
@@ -378,7 +391,7 @@ async function pollWxLogin() {
   }
 }
 
-async function startWxLogin() {
+async function runWxLoginStart() {
   resetWxLogin();
   wxLoading.value = true;
   model.value.platform = 'wx';
@@ -400,6 +413,20 @@ async function startWxLogin() {
     wxError.value = err?.message || '二维码获取失败';
   } finally {
     wxLoading.value = false;
+  }
+}
+
+async function startWxLogin() {
+  if (!wxQrStartPromise) {
+    wxQrStartPromise = runWxLoginStart();
+  }
+  const pending = wxQrStartPromise;
+  try {
+    await pending;
+  } finally {
+    if (wxQrStartPromise === pending) {
+      wxQrStartPromise = undefined;
+    }
   }
 }
 

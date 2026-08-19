@@ -4,7 +4,8 @@ import { formatInvokeError } from '@/utils/error';
 
 async function invokeFlat<T = any>(
   cmd: string,
-  args?: Record<string, unknown>
+  args?: Record<string, unknown>,
+  options?: { silent?: boolean }
 ): Promise<FlatResponseData<any, T>> {
   try {
     const data = (await invokeDesktop<T>(cmd, args)) as T;
@@ -12,7 +13,9 @@ async function invokeFlat<T = any>(
   } catch (e) {
     const message = formatInvokeError(e);
     const error = new Error(message);
-    window.$message?.error(message);
+    if (!options?.silent) {
+      window.$message?.error(message);
+    }
     return { data: null as any, error: error as any, response: {} as any };
   }
 }
@@ -281,7 +284,7 @@ export function fetchCreateFarmWxQuickLoginSession() {
     state: string;
     ports: number[];
     expiresAt: number;
-  }>('wx_quick_login_create');
+  }>('wx_quick_login_create', undefined, { silent: true });
 }
 
 export function fetchDetectFarmWxQuickLogin(sessionId: string) {
@@ -290,27 +293,35 @@ export function fetchDetectFarmWxQuickLogin(sessionId: string) {
     authorizeUuid: string;
     nickname?: string;
     headimgurl?: string;
-  }>('wx_quick_login_detect', { sessionId });
+  }>('wx_quick_login_detect', { sessionId }, { silent: true });
 }
 
 export function fetchAuthorizeFarmWxQuickLogin(
   sessionId: string,
   payload: { port: number; authorizeUuid: string; x: number; y: number }
 ) {
-  return invokeFlat<{ redirectUrl: string }>('wx_quick_login_authorize', {
-    sessionId,
-    port: payload.port,
-    authorizeUuid: payload.authorizeUuid,
-    x: payload.x,
-    y: payload.y
-  });
+  return invokeFlat<{ redirectUrl: string }>(
+    'wx_quick_login_authorize',
+    {
+      sessionId,
+      port: payload.port,
+      authorizeUuid: payload.authorizeUuid,
+      x: payload.x,
+      y: payload.y
+    },
+    { silent: true }
+  );
 }
 
 export function fetchConfirmFarmWxQuickLogin(sessionId: string, redirectUrl: string) {
-  return invokeFlat<{ code: string; openid?: string }>('wx_quick_login_confirm', {
-    sessionId,
-    redirectUrl
-  });
+  return invokeFlat<{ code: string; openid?: string }>(
+    'wx_quick_login_confirm',
+    {
+      sessionId,
+      redirectUrl
+    },
+    { silent: true }
+  );
 }
 
 export async function fetchGetFarmStatusDetail(accountId: number) {

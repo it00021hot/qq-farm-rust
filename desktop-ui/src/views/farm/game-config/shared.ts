@@ -1,7 +1,15 @@
+import { convertFileSrc } from '@tauri-apps/api/core';
 import { GOLD_BEAN_ITEM_ID } from '@/constants/items';
 import { isTauriRuntime } from '@/service/tauri/client';
 
 function catalogRelativePath(path: string): string {
+  if (path.startsWith('farmcfg:')) {
+    try {
+      return new URL(path).pathname.replace(/^\//, '');
+    } catch {
+      return '';
+    }
+  }
   const normalized = path.startsWith('/') ? path : `/${path}`;
   return normalized.replace(/^\/game-config\/?/, '').replace(/^\//, '');
 }
@@ -10,21 +18,21 @@ function catalogRelativePath(path: string): string {
  * Resolve catalog icon path for game config assets.
  *
  * - Vite dev/preview: same-origin `/game-config/*` (middleware + dist copy).
- * - Tauri webview: `farmcfg://` custom protocol (reliable in dev + packaged).
+ * - Tauri webview: platform-specific `farmcfg` URL from `convertFileSrc`.
  */
 export function resolveCatalogImage(path?: string | null): string {
   if (!path) return '';
   if (/^https?:\/\//i.test(path) || path.startsWith('data:')) {
     return path.startsWith('//') ? `https:${path}` : path;
   }
-  if (path.startsWith('farmcfg:') || path.startsWith('asset:')) {
+  if (path.startsWith('asset:')) {
     return path;
   }
 
   const rel = catalogRelativePath(path);
   if (!rel) return '';
   if (isTauriRuntime()) {
-    return `farmcfg://localhost/${rel}`;
+    return convertFileSrc(`/${rel}`, 'farmcfg');
   }
   return `/game-config/${rel}`;
 }
