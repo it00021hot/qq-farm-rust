@@ -14,7 +14,7 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 /// 默认客户端版本（与原 TS DEFAULT_CLIENT_VERSION 一致）
-pub const DEFAULT_CLIENT_VERSION: &str = "1.13.1.6_20260723";
+pub const DEFAULT_CLIENT_VERSION: &str = "1.13.2.8_20260723";
 
 /// 默认游戏网关（与原 TS `CONFIG.serverUrl` 一致）
 pub const DEFAULT_GATEWAY_URL: &str = "wss://gate-obt.nqf.qq.com/prod/ws";

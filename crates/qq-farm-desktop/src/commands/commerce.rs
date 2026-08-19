@@ -13,13 +13,6 @@ fn ensure(state: &DesktopState, account_id: &str) -> IpcResult<()> {
     accounts::ensure_account_access(&state.acl, account_id).map_err(IpcError::from)
 }
 
-/// 商城概览 stub（提示使用 catalog / mystery）。
-#[tauri::command]
-pub fn commerce_overview(state: State<'_, DesktopState>, account_id: String) -> IpcResult<Value> {
-    ensure(&state, &account_id)?;
-    commerce::commerce_overview(&state.app, &account_id).map_err(IpcError::from)
-}
-
 /// 游戏商城目录。
 #[tauri::command]
 pub async fn commerce_mall_catalog(

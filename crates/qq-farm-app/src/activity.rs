@@ -1,6 +1,6 @@
 //! 活动中心门面。
 
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::error::{AppError, AppResult};
 use crate::farm::require_worker_loop;
@@ -116,7 +116,26 @@ pub async fn settle_qingmei_brew(ctx: &AppContext, account_id: &str) -> AppResul
     loop_.activity_center().settle_qingmei_brew().await.map_err(AppError::from_core)
 }
 
-/// 兼容旧 stub 名称。
-pub fn activity_state(_ctx: &AppContext, _account_id: &str) -> AppResult<Value> {
-    Ok(json!({ "hint": "use async snapshot()" }))
+pub async fn qixi(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    loop_.activity_center().get_current_qixi_activity().await.map_err(AppError::from_core)
+}
+
+pub async fn claim_qixi_bridge(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    loop_.activity_center().claim_qixi_bridge_rewards().await.map_err(AppError::from_core)
+}
+
+pub async fn gift_qixi_sachet(
+    ctx: &AppContext,
+    account_id: &str,
+    friend_gid: i64,
+    count: i64,
+) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    loop_
+        .activity_center()
+        .gift_qixi_sachet(friend_gid, count)
+        .await
+        .map_err(AppError::from_core)
 }

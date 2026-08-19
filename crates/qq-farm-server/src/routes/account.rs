@@ -39,16 +39,12 @@ pub fn router() -> Router<Arc<AdminContext>> {
         .route("/api/accounts/{id}/stop", post(post_account_stop))
         .route("/api/account/remark", post(remark_account))
         .route("/api/accounts/{id}", delete(delete_account))
-        .route("/api/account-logs", get(get_account_logs))
         .route("/api/logs", get(get_logs).delete(delete_logs))
         .route("/api/settings", get(get_settings).post(save_settings))
         .route("/api/settings/save", post(save_settings))
         .route("/api/settings/default", get(get_default_settings))
-        .route("/api/settings/theme", post(set_theme))
         .route("/api/settings/offline-reminder", post(set_offline_reminder))
         .route("/api/settings/offline-reminder/test", post(test_offline_reminder))
-        .route("/api/announcement", get(get_announcement))
-        .route("/api/announcement/read", post(mark_announcement_read))
 }
 
 #[derive(Debug, Deserialize)]
@@ -75,14 +71,6 @@ struct CreateAccountBody {
     avatar: Option<String>,
     #[serde(default)]
     username: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AccountLogsQuery {
-    #[serde(default)]
-    limit: Option<usize>,
-    #[serde(default, alias = "accountId")]
-    account_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -113,13 +101,6 @@ struct SettingsBody {
     account_id: Option<String>,
     #[serde(flatten)]
     rest: serde_json::Value,
-}
-
-#[derive(Debug, Deserialize)]
-struct ThemeBody {
-    theme: String,
-    #[serde(default)]
-    account_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -254,36 +235,6 @@ async fn post_account_stop(
     ok(json!({ "ok": true, "accountId": id, "stopped": true }))
 }
 
-async fn get_account_logs(
-    State(ctx): State<Arc<AdminContext>>,
-    headers: axum::http::HeaderMap,
-    Query(q): Query<AccountLogsQuery>,
-) -> ApiResult<serde_json::Value> {
-    let sess = current_session(&ctx, &headers);
-    let is_admin = sess.as_ref().is_some_and(|s| s.role == "admin");
-    let owned: std::collections::HashSet<String> = if is_admin {
-        Default::default()
-    } else {
-        accessible_account_ids(&ctx, &headers).into_iter().collect()
-    };
-    let state = ctx.engine.runtime_state();
-    let logs = state.account_logs.lock().clone();
-    let filtered: Vec<_> = logs
-        .into_iter()
-        .filter(|l| {
-            if let Some(target) = q.account_id.as_deref() {
-                if l.account_id != target {
-                    return false;
-                }
-            }
-            is_admin || owned.contains(&l.account_id)
-        })
-        .collect();
-    let limit = q.limit.unwrap_or(100);
-    let limited: Vec<_> = filtered.into_iter().rev().take(limit).collect();
-    Ok(Json(serde_json::to_value(&limited).unwrap_or(json!([]))))
-}
-
 async fn get_logs(
     State(ctx): State<Arc<AdminContext>>,
     headers: axum::http::HeaderMap,
@@ -406,15 +357,6 @@ async fn get_default_settings(
     ok_data(cfg)
 }
 
-async fn set_theme(
-    State(_ctx): State<Arc<AdminContext>>,
-    Json(body): Json<ThemeBody>,
-) -> ApiResult<serde_json::Value> {
-    let _ = body.account_id;
-    qq_farm_core::models::store::global_config::set_ui_theme(&body.theme);
-    ok_empty()
-}
-
 async fn set_offline_reminder(
     State(ctx): State<Arc<AdminContext>>,
     headers: axum::http::HeaderMap,
@@ -470,31 +412,6 @@ async fn test_offline_reminder(
     } else {
         Ok(Json(json!({ "ok": false, "error": result.msg })))
     }
-}
-
-async fn get_announcement(
-    State(ctx): State<Arc<AdminContext>>,
-    headers: axum::http::HeaderMap,
-) -> ApiResult<serde_json::Value> {
-    let username = current_session(&ctx, &headers).map(|s| s.username).unwrap_or_default();
-    let ann = qq_farm_core::models::store::global_config::get_announcement();
-    let should_show =
-        qq_farm_core::models::store::global_config::should_show_announcement(&username);
-    let mut data = serde_json::to_value(&ann).unwrap_or(json!({}));
-    if let Some(obj) = data.as_object_mut() {
-        obj.insert("shouldShow".to_string(), json!(should_show));
-    }
-    ok_data(data)
-}
-
-async fn mark_announcement_read(
-    State(ctx): State<Arc<AdminContext>>,
-    headers: axum::http::HeaderMap,
-) -> ApiResult<serde_json::Value> {
-    if let Some(sess) = current_session(&ctx, &headers) {
-        qq_farm_core::models::store::global_config::mark_announcement_read(&sess.username);
-    }
-    ok_empty()
 }
 
 #[derive(Debug, Deserialize)]

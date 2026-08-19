@@ -634,20 +634,10 @@ impl FriendApi {
         BadPutResult { ok, failed, limit_reached: self.bad_limit_reached() }
     }
 
-    /// 检查某操作是否可执行（对应原 `checkCanOperate`）
-    ///
-    /// `operation_id` 见 `constants::OP_*`。偷菜 [`crate::constants::OP_STEAL`] 仅 QQ 调用；
-    /// 微信无日配额，巡逻侧应跳过。
-    /// 返回 (can_operate, can_steal_num)
-    pub async fn check_can_operate(&self, host_gid: i64, operation_id: i64) -> Result<(bool, i64)> {
-        use crate::proto::generated::gamepb::plantpb::{
-            CheckCanOperateReply, CheckCanOperateRequest,
-        };
-        let body = CheckCanOperateRequest { host_gid, operation_id }.encode_to_vec();
-        let resp =
-            self.gateway.request("gamepb.plantpb.PlantService", "CheckCanOperate", &body).await?;
-        let reply = CheckCanOperateReply::decode(&*resp).map_err(Error::from)?;
-        Ok((reply.can_operate, reply.can_steal_num))
+    /// 检查某操作是否可执行。协议已去掉 `CheckCanOperate`，配额改走 `OperationLimit`。
+    /// 无 RPC 时 fail-open，避免挡住帮助/偷菜。
+    pub async fn check_can_operate(&self, _host_gid: i64, _operation_id: i64) -> Result<(bool, i64)> {
+        Ok((true, 0))
     }
 }
 

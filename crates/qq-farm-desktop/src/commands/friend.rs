@@ -1,4 +1,4 @@
-//! 好友列表、操作、黑名单、已知 GID。
+//! 好友列表、操作、黑名单。
 
 use serde_json::Value;
 use tauri::State;
@@ -24,23 +24,6 @@ pub async fn friend_list(
     friend::list_friends(&state.app, &account_id, force.unwrap_or(false))
         .await
         .map_err(IpcError::from)
-}
-
-/// 强制同步好友列表。
-#[tauri::command]
-pub async fn friend_sync(
-    state: State<'_, DesktopState>,
-    account_id: String,
-) -> IpcResult<Vec<qq_farm_app::dto::FriendSummary>> {
-    ensure(&state, &account_id)?;
-    friend::list_friends(&state.app, &account_id, true).await.map_err(IpcError::from)
-}
-
-/// 清空好友列表缓存。
-#[tauri::command]
-pub fn friend_clear_cache(state: State<'_, DesktopState>, account_id: String) -> IpcResult<()> {
-    ensure(&state, &account_id)?;
-    friend::clear_friends_cache(&state.app, &account_id).map_err(IpcError::from)
 }
 
 /// 好友地块。
@@ -85,22 +68,4 @@ pub fn friend_blacklist_toggle(
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
     Ok(friend::toggle_friend_blacklist(&account_id, gid))
-}
-
-/// 已知好友 GID 设置。
-#[tauri::command]
-pub fn friend_known_gids(state: State<'_, DesktopState>, account_id: String) -> IpcResult<Value> {
-    ensure(&state, &account_id)?;
-    Ok(friend::known_gid_settings(&account_id))
-}
-
-/// 覆盖设置已知好友 GID。
-#[tauri::command]
-pub fn friend_set_known_gids(
-    state: State<'_, DesktopState>,
-    account_id: String,
-    gids: Vec<i64>,
-) -> IpcResult<Value> {
-    ensure(&state, &account_id)?;
-    Ok(friend::set_known_gids(&account_id, gids))
 }

@@ -374,19 +374,6 @@ pub fn engine_global_logs(
     qq_farm_core::runtime::runtime_state::RuntimeState::take_last_n_ascending(filtered, limit)
 }
 
-/// 账号日志。
-#[must_use]
-pub fn account_logs(ctx: &AppContext, account_id: Option<&str>, limit: usize) -> Value {
-    let logs = ctx.engine.runtime_state().account_logs.lock().clone();
-    let mut filtered: Vec<_> = if let Some(id) = account_id.filter(|s| !s.is_empty()) {
-        logs.into_iter().filter(|l| l.account_id == id).collect()
-    } else {
-        logs
-    };
-    filtered = filtered.into_iter().rev().take(limit.max(1)).collect();
-    json!(filtered)
-}
-
 /// 清空全局日志（可选按账号）。
 pub fn clear_global_logs(ctx: &AppContext, account_id: Option<&str>) {
     let state = ctx.engine.runtime_state();

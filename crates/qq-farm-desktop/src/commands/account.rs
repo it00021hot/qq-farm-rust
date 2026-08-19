@@ -16,13 +16,6 @@ use super::dto::{
     WxQuickDetectDto,
 };
 
-/// 账号列表（LocalOwner：全部本地账号）。
-#[tauri::command]
-pub fn list_accounts(state: State<'_, DesktopState>) -> IpcResult<Vec<AccountSummary>> {
-    let _ = &state.acl;
-    Ok(build_accounts(&state))
-}
-
 /// 面板风格账号列表（含 `nextId` / running / nick）。
 #[tauri::command]
 pub fn list_accounts_page(state: State<'_, DesktopState>) -> IpcResult<Value> {
@@ -57,17 +50,6 @@ pub fn start_account(state: State<'_, DesktopState>, account_id: String) -> IpcR
 #[tauri::command]
 pub fn stop_account(state: State<'_, DesktopState>, account_id: String) -> IpcResult<()> {
     accounts::stop_account(&state.app, &state.acl, &account_id).map_err(IpcError::from)
-}
-
-/// 更新账号备注。
-#[tauri::command]
-pub fn remark_account(
-    state: State<'_, DesktopState>,
-    account_id: String,
-    name: String,
-) -> IpcResult<Value> {
-    let acc = accounts::remark_account(&state.acl, &account_id, name).map_err(IpcError::from)?;
-    Ok(accounts::account_to_public_json(&acc))
 }
 
 /// 创建微信扫码登录任务。
@@ -122,14 +104,6 @@ pub async fn wx_login_code(state: State<'_, DesktopState>, task_id: String) -> I
     let _ = &state.acl;
     let r = wx_login::issue_code(&state.app.wx_login, &task_id).await.map_err(IpcError::from)?;
     Ok(serde_json::json!({ "code": r.code, "openid": r.openid, "appId": r.app_id }))
-}
-
-/// 销毁微信扫码任务。
-#[tauri::command]
-pub fn wx_login_destroy(state: State<'_, DesktopState>, task_id: String) -> IpcResult<()> {
-    let _ = &state.acl;
-    wx_login::destroy_task(&state.app.wx_login, &task_id);
-    Ok(())
 }
 
 /// 创建本机微信快速授权会话。

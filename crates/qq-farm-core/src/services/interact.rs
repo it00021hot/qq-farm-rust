@@ -62,8 +62,9 @@ impl ActionType {
     }
 }
 
-/// 归一化后的互动记录
+/// 归一化后的互动记录（面板 JSON 与 bot `/api/interact-records` 同为 camelCase）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NormalizedRecord {
     pub key: String,
     pub server_time_sec: i64,
@@ -350,5 +351,38 @@ mod tests {
             headers: Default::default(),
         };
         let _ = InteractService::new(Arc::new(Gateway::new(cfg, Arc::new(NoopEncryptor))));
+    }
+
+    #[test]
+    fn normalized_record_serializes_camel_case() {
+        let record = NormalizedRecord {
+            key: "1-2-1-0".into(),
+            server_time_sec: 1,
+            server_time_ms: 1000,
+            action_type: 1,
+            action_label: "偷取作物".into(),
+            visitor_gid: 2,
+            nick: "alice".into(),
+            avatar_url: "https://example.com/a.png".into(),
+            crop_id: 10,
+            crop_name: "白萝卜".into(),
+            crop_count: 3,
+            times: 1,
+            from_type: 0,
+            level: 12,
+            land_id: 401003,
+            flag1: 0,
+            flag2: 0,
+            action_detail: "偷取 白萝卜 × 3 · 地块 401003".into(),
+        };
+        let value = serde_json::to_value(&record).expect("serialize");
+        assert_eq!(value["actionType"], 1);
+        assert_eq!(value["actionLabel"], "偷取作物");
+        assert_eq!(value["visitorGid"], 2);
+        assert_eq!(value["avatarUrl"], "https://example.com/a.png");
+        assert_eq!(value["serverTimeMs"], 1000);
+        assert_eq!(value["actionDetail"], "偷取 白萝卜 × 3 · 地块 401003");
+        assert!(value.get("action_type").is_none());
+        assert!(value.get("avatar_url").is_none());
     }
 }

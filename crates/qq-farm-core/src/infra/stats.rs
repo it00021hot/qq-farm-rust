@@ -728,10 +728,11 @@ mod tests {
     }
 
     #[test]
-    #[serial(stats)]
+    #[serial(farm_data_dir)]
     fn save_and_load_persisted_roundtrip() {
         // 用临时目录避免污染 data/stats
         let temp_dir = std::env::temp_dir().join("qq-farm-stats-test");
+        let prev = std::env::var("FARM_DATA_DIR").ok();
         let _ = std::env::set_var("FARM_DATA_DIR", &temp_dir);
         let acc = "test-acc-save";
         let data = PersistedStats {
@@ -747,5 +748,9 @@ mod tests {
         assert_eq!(loaded.operations.fertilize, 5);
         // 清理
         let _ = std::fs::remove_file(stats_file(acc));
+        match prev {
+            Some(v) => std::env::set_var("FARM_DATA_DIR", v),
+            None => std::env::remove_var("FARM_DATA_DIR"),
+        }
     }
 }

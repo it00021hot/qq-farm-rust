@@ -27,6 +27,12 @@ fn activity_type_codes() {
     assert_eq!(EXCHANGE_SHOP_OPERATE_TYPE, 1);
     assert_eq!(QUERY_SHOP_OPERATE_TYPE, 7);
     assert_eq!(LIGHT_CONSTELLATION_OPERATE_TYPE, 21);
+    assert_eq!(QIXI_GROUP_ID, 2_026_081_800);
+    assert_eq!(QIXI_BRIDGE_OPERATE_TYPE, 25);
+    assert_eq!(QIXI_GIFT_OPERATE_TYPE, 26);
+    assert_eq!(QIXI_FEATHER_ITEM_ID, 1024);
+    assert_eq!(QIXI_SACHET_ITEM_ID, 1025);
+    assert_eq!(QIXI_RECEIVED_SACHET_ITEM_ID, 1026);
 }
 
 #[test]
@@ -91,11 +97,22 @@ fn qingmei_rules_from_extra_json_object() {
 }
 
 #[test]
+fn qixi_rules_from_tips_txt() {
+    let extra = r#"{"tips":{"title":"活动说明","txt":["【活动时间】8月18日","种田得鹊羽"]}}"#;
+    let rules = text_content(extra.as_bytes());
+    assert_eq!(rules["title"], "活动说明");
+    assert_eq!(rules["paragraphs"][0], "【活动时间】8月18日");
+    assert_eq!(rules["paragraphs"][1], "种田得鹊羽");
+}
+
+#[test]
 fn error_codes_have_str() {
     assert_eq!(ActivityErrorCode::ShopUnavailable.as_str(), "SHOP_UNAVAILABLE");
     assert_eq!(ActivityErrorCode::InsufficientStarSand.as_str(), "INSUFFICIENT_STAR_SAND");
     assert_eq!(ActivityErrorCode::InvalidShopGoodsId.as_str(), "INVALID_SHOP_GOODS_ID");
     assert_eq!(ActivityErrorCode::InvalidExchangeCount.as_str(), "INVALID_EXCHANGE_COUNT");
+    assert_eq!(ActivityErrorCode::QixiUnavailable.as_str(), "QIXI_UNAVAILABLE");
+    assert_eq!(ActivityErrorCode::InsufficientQixiSachet.as_str(), "INSUFFICIENT_QIXI_SACHET");
 }
 
 #[test]
@@ -521,15 +538,9 @@ fn activity_data_with_empty_catalog() {
     let data = ActivityData {
         activity: Some(ActivityContent {
             activity_id: 1,
-            group_id: 0,
-            r#type: 0,
             name: "test".to_string(),
             extra: bytes::Bytes::new(),
-            begin_time: 0,
-            end_time: 0,
-            sort_order: 0,
-            field_20: 0,
-            field_23: 0,
+            ..Default::default()
         }),
         catalog: Some(StarSandGoodsList { goods: vec![] }),
         ..Default::default()

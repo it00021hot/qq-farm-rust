@@ -633,9 +633,28 @@ impl GameConfig {
         vec![]
     }
 
-    /// 对齐 TS `getEffectiveSellInfo`：只认直接可卖价格，不猜动态条件。
+    /// 对齐 TS `getEffectiveSellInfo`：条件满足时用 `cond_sells`。
     #[must_use]
     pub fn get_effective_sell_info(&self, item: &Item) -> EffectiveSellInfo {
+        self.get_effective_sell_info_at(
+            item,
+            &crate::config::sell_conditions::SellConditionContext::now(
+                crate::utils::time::get_server_time_secs(),
+            ),
+            0,
+        )
+    }
+
+    /// 带过期时间与窗口上下文的出售判定。
+    #[must_use]
+    pub fn get_effective_sell_info_at(
+        &self,
+        item: &Item,
+        ctx: &crate::config::sell_conditions::SellConditionContext,
+        expire_time: i64,
+    ) -> EffectiveSellInfo {
+        let mut ctx = ctx.clone();
+        ctx.expire_time = expire_time;
         let normal: Vec<(i64, i64)> = self
             .parse_sells_value(item.sells.as_ref())
             .into_iter()
@@ -647,6 +666,20 @@ impl GameConfig {
             .into_iter()
             .filter(|(cid, price)| *cid > 0 && *price > 0)
             .collect();
+        if condition.as_ref().is_some_and(|s| !s.is_empty())
+            && !conditional.is_empty()
+            && crate::config::sell_conditions::is_sell_condition_satisfied(
+                condition.as_deref().unwrap_or(""),
+                &ctx,
+            )
+        {
+            return EffectiveSellInfo {
+                sellable: true,
+                status: "available",
+                condition,
+                sells: conditional,
+            };
+        }
         if !normal.is_empty() {
             return EffectiveSellInfo {
                 sellable: true,
@@ -669,8 +702,20 @@ impl GameConfig {
     /// 按物品 id 解析可售信息
     #[must_use]
     pub fn get_effective_sell_info_by_id(&self, item_id: i64) -> EffectiveSellInfo {
+        self.get_effective_sell_info_by_id_at(item_id, 0)
+    }
+
+    /// 按物品 id + 堆叠过期时间解析可售信息。
+    #[must_use]
+    pub fn get_effective_sell_info_by_id_at(&self, item_id: i64, expire_time: i64) -> EffectiveSellInfo {
         match self.get_item_by_id(item_id) {
-            Some(item) => self.get_effective_sell_info(&item),
+            Some(item) => self.get_effective_sell_info_at(
+                &item,
+                &crate::config::sell_conditions::SellConditionContext::now(
+                    crate::utils::time::get_server_time_secs(),
+                ),
+                expire_time,
+            ),
             None => EffectiveSellInfo {
                 sellable: false,
                 status: "unavailable",
@@ -903,5 +948,39 @@ mod tests {
         assert!(info.sellable, "{} should be sellable", item.name);
         assert_eq!(info.status, "available");
         assert!(!info.sells.is_empty());
+    }
+
+    #[test]
+    fn conditional_sells_unlock_after_activity_ends() {
+        use crate::config::activity_windows::{clear_activity_windows_for_test, set_activity_windows, ActivityWindow};
+        use crate::config::sell_conditions::SellConditionContext;
+
+        clear_activity_windows_for_test();
+        set_activity_windows(vec![ActivityWindow {
+            id: "2026081800".into(),
+            name: "鹊桥寄情".into(),
+            begin_time: 1,
+            end_time: 50,
+        }]);
+        let mut item = Item::default();
+        item.sells = None;
+        item.sell_cond = Some(serde_json::Value::String("活动结束后:2026081800".into()));
+        item.cond_sells = Some(serde_json::Value::String("1:100".into()));
+        let gc = GameConfig::default();
+        let before = gc.get_effective_sell_info_at(
+            &item,
+            &SellConditionContext { now_sec: 40, expire_time: 0, activity_windows_loaded: true },
+            0,
+        );
+        assert!(!before.sellable);
+        assert_eq!(before.status, "conditional");
+        let after = gc.get_effective_sell_info_at(
+            &item,
+            &SellConditionContext { now_sec: 60, expire_time: 0, activity_windows_loaded: true },
+            0,
+        );
+        assert!(after.sellable);
+        assert_eq!(after.sells, vec![(1, 100)]);
+        clear_activity_windows_for_test();
     }
 }

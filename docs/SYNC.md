@@ -18,7 +18,7 @@
 | 仓库 | Commit | 日期 | 说明 |
 |------|--------|------|------|
 | **qq-farm-rust** | `main`（本提交：parity 总检修复） | 2026-08-15 | 默认值/门控/SEED 生命周期/封禁落盘/帮助经验/捣乱启动 + 既有心跳/统一 tick/青梅/偷菜空转 |
-| **qq-farm-bot** | `04f9d90` | 2026-08-12 | 修复果实是否可售；`core` 包版本 `20260812` |
+| **qq-farm-bot** | `6f696bf` | 2026-08-18 | 鹊桥寄情 + 网关 5 并发/100 排队 + 出售条件 |
 
 文档范围：**业务行为 + 面板 HTTP/Socket 契约**（不含改 Vue 面板本身）。
 
@@ -26,7 +26,7 @@
 
 | 概念 | 当前值 | 用途 |
 |------|--------|------|
-| 客户端版本 `FARM_CLIENT_VERSION` | 默认 `1.13.1.6_20260723`（与 bot `config.ts` 默认一致） | 进游戏网关声明 |
+| 客户端版本 `FARM_CLIENT_VERSION` | 默认 `1.13.2.8_20260723`（与 bot `config.ts` 默认一致） | 进游戏网关声明 |
 | bot `core` 包版本号 | `20260812` | 原项目发布标签，≠ 客户端版本字符串 |
 | 青梅活动 ID | 每日 `2026081201` / 酿造 `2026081202` | 活动协议 |
 
@@ -66,10 +66,10 @@
 | 本田务农循环 | 齐 | 除草除虫浇水 → 收获 → 铲除 → 种植（含多格）→ 施肥/解锁升级；默认策略/skip_own_weed_bug/smart 秒数对齐 bot | `services/farm/*`, `runtime/worker_loop.rs` |
 | 好友帮助 / 偷菜 / 捣乱 | 齐 | 列表、访问、帮助（经验门控）、偷菜（气泡+自巡/空访/一键 Harvest 主地回退/先偷后帮）、静默仅挡好友、黑名单落盘；捣乱按日限/启动筛选/`1001046` 停 | `services/friend/*` |
 | 背包展示与操作 | 齐 | 按 UID 堆分行；含 `key`/`uid`/`mutantTypes`/`groupKey`；系统物品分离 | `services/warehouse.rs` |
-| 自动/手动出售果实 | 齐 | 自动受 `sell` 开关；跳过不可售；手动 `sell_items` 预检拒绝不可售 | `warehouse` + `game_config` + `worker_loop` |
+| 自动/手动出售果实 | 齐 | 自动受 `sell` 开关；`sell_cond` 满足后用 `cond_sells`（活动结束后 / 道具过期后等）；手动预检拒绝不可售 | `warehouse` + `game_config` + `activity_windows` |
 | 商城 / 神秘商店 / 月卡 / 钻石 | 齐 | 列表、购买（神秘 Buy 无回包）、月卡、充值信息 | `mall`, `mystery_shop`, `monthcard`, `pay`, `commerce` |
 | 日常领取 | 齐 | 任务（成长 claim 后刷新 TaskInfo + `currentTask`）、邮件、分享等 | `task`, `email`, `share`, … |
-| 活动中心 | 齐 | 千星游记、观星、星砂、节令、青梅（含已领幂等） | `activity_center*` |
+| 活动中心 | 齐 | 千星游记、观星、星砂、节令、青梅（含已领幂等）、鹊桥寄情（筑桥领取 + 赠香囊） | `activity_center*` |
 | 面板鉴权与账号 | 齐 | 登录注册（无卡密）、账号 CRUD、设置 | `routes/auth`, `account`, `admin` |
 | 面板农场/好友/活动/商业 API | 齐 | 与 Vue 面板契约兼容，可挂 3007 | `qq-farm-server/src/routes/*` |
 | Socket 状态/日志推送 | 齐 | `status:update` / `log:new` 等 | `socket.rs` |
@@ -318,7 +318,7 @@
 - 与 Go 的差：
   1. 微信 GetAll 失败后 Rust 再打空 `SyncAll`（回包还在路上时把连接堵死）；Go 只对已知 GID 走 `GetGameFriends`
   2. 心跳 30s 无 Heartbeat 回包就杀号；Go 明确「Bare RPC timeout 不是 socket 已死」
-  3. 普通 RPC `pending>=5` 直接 QueueFull（Go 无此硬限），Heartbeat 也被挡住
+  3. 普通 RPC 最多 5 in-flight、最多 100 排队；Heartbeat 插队不占槽
   4. 桌面进好友页 `force: true` 每次都打网关；Go web 用缓存/DB，失败仍展示旧列表
 - 修复：GetAll 等 60s；失败走 GetGameFriends；有入站帧或 in-flight RPC 时不因心跳静默杀号；Heartbeat 不受排队上限；列表失败回缓存；进页不再 force
 - 能力状态：点好友列表不应掉线；需重启桌面后再试
@@ -474,5 +474,69 @@
 - 桌面 / Go web 个人农场顶栏：无活不显示。收获看成熟（倒计时到 0 也算）；一键务农看草/虫/旱；种植看空地或枯株；升级看可升/可解锁；一键全收仅在收获/务农/种植有活时出现。
 - Rust `op=clear` 改为真正的一键务农（除草/除虫/浇水），对齐 Go 与按钮文案；铲除仍走 `op=remove`。
 - 能力状态：没活不显示对应按钮；成熟倒计时归零后「收获」应出现。
+
+### 2026-08-19 — 同步 bot 鹊桥寄情与活动体系（`6f696bf`）
+
+- 协议整份覆盖拷贝 bot `proto/` 后生成；客户端默认 `1.13.2.8_20260723`
+- 鹊桥寄情：`GetGroup` / Operate 筑桥领取 25 / 赠香囊 26；快照串行拉 List + qixi；HTTP `/api/activity-center/qixi*` 与桌面 IPC；desktop-ui 活动页鹊桥 tab
+- 出售：`sell_cond` 满足后用 `cond_sells`（活动结束后 / 道具过期后 / 活动结束前 / 活动区间外），窗口来自 `ActivityService.List`（TTL 5 分钟）
+- 网关：最多 5 in-flight、最多 100 排队；Heartbeat 插队；背包 GetBag 单飞
+- 能力状态：代码齐 + 单测；实机 L5 待验
+
+### 2026-08-19 — 活动中心对齐 bot 目录入口与鹊桥互动
+
+- 桌面活动页改为先看活动列表，再进入千星游记 / 鹊桥寄情 / 青梅；鹊桥页展示阶段消耗与奖励、香囊步进器
+- 赠香囊数量按整数解析（含 JSON 浮点），IPC 同时收 `count` / `sachetCount`，避免只送 1 个
+- 赠送好友列表显示头像、等级、名称，不再用 GID 当主文案
+- 能力状态：面板交互对齐 bot 信息架构；未搬玻璃拟态样式
+
+### 2026-08-19 — 同步鹊桥道具图与 ItemInfo
+
+- 从 bot `gameConfig` 补齐 20 条 ItemInfo（鹊羽/香囊/礼包等）及对应 `seed_images_named` PNG
+- 活动详情返回按钮改为带返回图标的 secondary 按钮
+- 能力状态：静态资源齐；桌面需重启以嵌入新 ItemInfo 并重拷 dist/game-config
+
+### 2026-08-19 — 鹊桥活动说明与赠送提示
+
+- `text_content` 对齐 bot：从活动 extra 的 `tips.txt` 抽出活动说明段落
+- 鹊桥页增加可展开的活动说明；赠送成功提示用好友名称，不再带 GID
+- 能力状态：规则文案与赠送提示对齐 bot 语义
+
+### 2026-08-19 — 好友页顶栏操作按钮可见
+
+- Naive `NCard` 无 title 时不渲染 `#header-extra`，好友页「一键偷取 / 同步 / 刷新列表」因此消失
+- 改为放在搜索行右侧；最近访客刷新同样迁出 header-extra
+- 能力状态：桌面与 Go web 好友页工具栏应可见
+
+### 2026-08-19 — 最近访客字段对齐 bot（camelCase）
+
+- `NormalizedRecord` 序列化改为 camelCase（`actionType` / `actionLabel` / `avatarUrl` 等），对齐 bot `/api/interact-records`
+- 修复桌面「全部显示互动」、筛选失效、头像读不到的问题
+- 能力状态：访客类型标签、筛选与头像字段契约齐
+
+### 2026-08-19 — 好友页去掉重复「同步」按钮
+
+- bot 好友列表只有「刷新列表」；桌面 / Go web 去掉与 refresh 同路径的「同步」
+- 顶栏保留全部偷取 + 刷新列表
+- 能力状态：好友页工具栏对齐 bot
+
+### 2026-08-19 — 无消费者暴露层清理（Phase 1）
+
+- 删除 desktop 无 UI 调用的 IPC（friend_sync、known_gids、get_settings、list_accounts 等）及对应 server HTTP / app 包装
+- 删除 desktop-ui `service/tauri` 脚手架与 `farm.ts` 死 export；server 保留核心路由并新增 `/api/settings/system-config*` 别名
+- 能力状态：暴露面与 bot 实际消费对齐；core 运行时逻辑（访客 GID 补充、化肥定时器等）保留
+
+### 2026-08-19 — 运行环境设置（Phase 2）
+
+- 设置页新增「运行环境」Tab：设备预设、serverUrl、platform、OS、clientVersion、deviceId、UA、保存/重置
+- 新增 desktop IPC：`get_device_presets` / `get_system_config` / `set_system_config` / `reset_system_config`
+- 能力状态：对齐 bot Settings → 系统 → 运行环境
+
+### 2026-08-19 — 化肥保存即检测 / 活动说明 / 面板 parity 补项
+
+- 保存自动控制后调用 `farm_fertilizer_check_and_buy` IPC（开启化肥购买时）
+- 千星游记 / 观星礼录活动说明 dialog；青梅活动说明 collapse
+- 好友列表 25 条/页分页；概览日志 eventType 筛选；账号页清理已停止 + 批量删已停止
+- 能力状态：plan v2 剩余 UI 缺口已补齐
 
 

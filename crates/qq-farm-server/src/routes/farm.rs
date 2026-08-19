@@ -8,8 +8,6 @@
 //! GET    /api/status                            完整状态
 //! GET    /api/diamond                           钻石余额
 //! POST   /api/automation                        切换单个自动化开关
-//! POST   /api/fertilizer/buy                    立即买化肥
-//! POST   /api/fertilizer/check-and-buy          检查并买化肥
 //! GET    /api/lands                             土地详情
 //! GET    /api/plant-blacklist                   获取植物黑名单
 //! POST   /api/plant-blacklist                   添加植物黑名单
@@ -44,8 +42,6 @@ pub fn router() -> Router<Arc<AdminContext>> {
         .route("/api/status", get(get_status))
         .route("/api/diamond", get(get_diamond))
         .route("/api/automation", post(post_automation))
-        .route("/api/fertilizer/buy", post(post_fertilizer_buy))
-        .route("/api/fertilizer/check-and-buy", post(post_fertilizer_check_and_buy))
         .route("/api/lands", get(get_lands))
         .route(
             "/api/plant-blacklist",
@@ -78,23 +74,6 @@ struct AutomationBody {
     account_id: Option<String>,
     #[serde(flatten)]
     rest: serde_json::Map<String, serde_json::Value>,
-}
-
-#[derive(Debug, Deserialize)]
-struct FertilizerBuyBody {
-    #[serde(default, alias = "fertilizerType")]
-    fertilizer_type: Option<String>,
-    count: i64,
-    #[serde(default, alias = "accountId")]
-    account_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct FertilizerCheckBuyBody {
-    #[serde(default, alias = "accountId")]
-    account_id: Option<String>,
-    #[serde(default)]
-    force: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -191,40 +170,6 @@ async fn post_automation(
     let data =
         qq_farm_app::farm::set_automation(&ctx.app_context(), &id, &body.key, body.value, extra)?;
     ok_data(data)
-}
-
-async fn post_fertilizer_buy(
-    State(ctx): State<Arc<AdminContext>>,
-    headers: axum::http::HeaderMap,
-    Json(body): Json<FertilizerBuyBody>,
-) -> ApiResult<serde_json::Value> {
-    let id = resolve_id(&ctx, &headers, body.account_id.as_deref())?;
-    let bought = qq_farm_app::farm::fertilizer_buy(
-        &ctx.app_context(),
-        &id,
-        body.fertilizer_type.as_deref().unwrap_or("organic"),
-        body.count as i32,
-    )
-    .await?;
-    ok(json!({ "ok": true, "bought": bought }))
-}
-
-async fn post_fertilizer_check_and_buy(
-    State(ctx): State<Arc<AdminContext>>,
-    headers: axum::http::HeaderMap,
-    Json(body): Json<FertilizerCheckBuyBody>,
-) -> ApiResult<serde_json::Value> {
-    let id = resolve_id(&ctx, &headers, body.account_id.as_deref())?;
-    let _ = body.force;
-    let summary = qq_farm_app::farm::fertilizer_check_and_buy(&ctx.app_context(), &id).await?;
-    Ok(Json(json!({
-        "ok": true,
-        "organicBought": summary["organicBought"],
-        "normalBought": summary["normalBought"],
-        "organicCurrentHours": summary["organicCurrentHours"],
-        "normalCurrentHours": summary["normalCurrentHours"],
-        "error": summary["error"],
-    })))
 }
 
 async fn get_lands(

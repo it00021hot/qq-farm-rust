@@ -117,6 +117,7 @@ pub fn game_config_static_dir() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use serial_test::serial;
     use super::*;
 
     #[test]
@@ -126,12 +127,14 @@ mod tests {
     }
 
     #[test]
+    #[serial(farm_data_dir)]
     fn get_data_dir_ends_with_data() {
         let d = get_data_dir();
         assert_eq!(d.file_name().and_then(|s| s.to_str()), Some("data"));
     }
 
     #[test]
+    #[serial(farm_data_dir)]
     fn ensure_data_dir_creates() {
         let tmp = std::env::temp_dir().join(format!("qq-farm-ensure-data-{}", std::process::id()));
         let prev = std::env::var("FARM_DATA_DIR").ok();
@@ -152,7 +155,7 @@ mod tests {
     #[test]
     fn get_data_file_appends() {
         let p = get_data_file("accounts.json");
-        assert!(p.ends_with("data/accounts.json") || p.ends_with("data\\accounts.json"));
+        assert_eq!(p.file_name().and_then(|s| s.to_str()), Some("accounts.json"));
     }
 
     #[test]

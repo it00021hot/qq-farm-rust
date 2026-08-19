@@ -5,9 +5,11 @@
 //! - [`system_config`] — 系统配置 + 设备预设 + PlantPhase 枚举
 //! - [`paths`] — 运行时路径（资源根 / 数据目录 / 分享文件）
 
+pub mod activity_windows;
 pub mod app;
 pub mod game_config;
 pub mod paths;
+pub mod sell_conditions;
 pub mod system_config;
 
 pub use app::AppConfig;

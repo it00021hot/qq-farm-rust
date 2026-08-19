@@ -23,10 +23,6 @@ pub fn router() -> Router<Arc<AdminContext>> {
         .route("/api/friend/{gid}/op", post(do_friend_op))
         .route("/api/friend-blacklist", get(get_friend_blacklist).post(toggle_friend_blacklist))
         .route("/api/friend-blacklist/toggle", post(toggle_friend_blacklist))
-        .route("/api/friend-known-gids", get(get_friend_known_gids).post(post_friend_known_gids))
-        .route("/api/friend-known-gids/remove", post(remove_friend_known_gid))
-        .route("/api/friend-known-gids/batch-add", post(batch_add_friend_known_gids))
-        .route("/api/friend-known-gids/batch-remove", post(batch_remove_friend_known_gids))
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,27 +44,6 @@ struct OpBody {
 #[derive(Debug, Deserialize)]
 struct ToggleBody {
     gid: i64,
-    #[serde(default, alias = "accountId")]
-    account_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct KnownGidBody {
-    #[serde(default)]
-    gid: Option<i64>,
-    #[serde(default, alias = "knownFriendGids")]
-    known_friend_gids: Option<Vec<i64>>,
-    #[serde(default, alias = "knownFriendGidSyncCooldownSec")]
-    known_friend_gid_sync_cooldown_sec: Option<i64>,
-    #[serde(default, alias = "friendsListCacheTtlSec")]
-    friends_list_cache_ttl_sec: Option<i64>,
-    #[serde(default, alias = "accountId")]
-    account_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct BatchKnownGidsBody {
-    gids: Vec<i64>,
     #[serde(default, alias = "accountId")]
     account_id: Option<String>,
 }
@@ -154,58 +129,4 @@ async fn toggle_friend_blacklist(
 ) -> ApiResult<serde_json::Value> {
     let id = resolve_account_id(&ctx, &headers, body.account_id.as_deref())?;
     ok_data(qq_farm_app::friend::toggle_friend_blacklist(&id, body.gid))
-}
-
-async fn get_friend_known_gids(
-    State(ctx): State<Arc<AdminContext>>,
-    headers: axum::http::HeaderMap,
-    Query(q): Query<AccountQuery>,
-) -> ApiResult<serde_json::Value> {
-    let id = resolve_account_id(&ctx, &headers, q.account_id.as_deref())?;
-    ok_data(qq_farm_app::friend::known_gid_settings(&id))
-}
-
-async fn post_friend_known_gids(
-    State(ctx): State<Arc<AdminContext>>,
-    headers: axum::http::HeaderMap,
-    Json(body): Json<KnownGidBody>,
-) -> ApiResult<serde_json::Value> {
-    let id = resolve_account_id(&ctx, &headers, body.account_id.as_deref())?;
-    if let Some(gids) = body.known_friend_gids {
-        qq_farm_app::friend::set_known_gids(&id, gids);
-    } else if let Some(gid) = body.gid {
-        qq_farm_app::friend::add_known_gid(&id, gid);
-    }
-    ok_data(qq_farm_app::friend::set_known_gid_cooldowns(
-        &id,
-        body.known_friend_gid_sync_cooldown_sec,
-        body.friends_list_cache_ttl_sec,
-    ))
-}
-
-async fn remove_friend_known_gid(
-    State(ctx): State<Arc<AdminContext>>,
-    headers: axum::http::HeaderMap,
-    Json(body): Json<KnownGidBody>,
-) -> ApiResult<serde_json::Value> {
-    let id = resolve_account_id(&ctx, &headers, body.account_id.as_deref())?;
-    ok_data(qq_farm_app::friend::remove_known_gid(&id, body.gid.unwrap_or(0)))
-}
-
-async fn batch_add_friend_known_gids(
-    State(ctx): State<Arc<AdminContext>>,
-    headers: axum::http::HeaderMap,
-    Json(body): Json<BatchKnownGidsBody>,
-) -> ApiResult<serde_json::Value> {
-    let id = resolve_account_id(&ctx, &headers, body.account_id.as_deref())?;
-    ok_data(qq_farm_app::friend::batch_add_known_gids(&id, &body.gids))
-}
-
-async fn batch_remove_friend_known_gids(
-    State(ctx): State<Arc<AdminContext>>,
-    headers: axum::http::HeaderMap,
-    Json(body): Json<BatchKnownGidsBody>,
-) -> ApiResult<serde_json::Value> {
-    let id = resolve_account_id(&ctx, &headers, body.account_id.as_deref())?;
-    ok_data(qq_farm_app::friend::batch_remove_known_gids(&id, &body.gids))
 }

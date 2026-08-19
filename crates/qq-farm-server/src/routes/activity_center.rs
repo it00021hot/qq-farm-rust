@@ -18,10 +18,6 @@ pub fn router() -> Router<Arc<AdminContext>> {
     Router::new()
         .route("/api/activity-center", get(get_snapshot))
         .route("/api/activity-center/snapshot", get(get_snapshot))
-        .route("/api/activity-center/season", get(get_season))
-        .route("/api/activity-center/shop", get(get_shop))
-        .route("/api/activity-center/solar-terms", get(get_solar_terms))
-        .route("/api/activity-center/qingmei", get(get_qingmei))
         .route("/api/activity-center/pass/claim", post(claim_battle_pass))
         .route("/api/activity-center/constellation/light", post(light_constellation))
         .route("/api/activity-center/shop/exchange", post(exchange_star_sand))
@@ -30,6 +26,8 @@ pub fn router() -> Router<Arc<AdminContext>> {
         .route("/api/activity-center/qingmei/brew/start", post(start_qingmei_brew))
         .route("/api/activity-center/qingmei/brew/continue", post(continue_qingmei_brew))
         .route("/api/activity-center/qingmei/brew/settle", post(settle_qingmei_brew))
+        .route("/api/activity-center/qixi/bridge/claim", post(claim_qixi_bridge))
+        .route("/api/activity-center/qixi/gift", post(gift_qixi_sachet))
 }
 
 #[derive(Debug, Deserialize)]
@@ -57,6 +55,19 @@ struct QingMeiStartBody {
     count: Option<Value>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QixiGiftBody {
+    #[serde(default)]
+    friend_gid: Value,
+    #[serde(default)]
+    count: Value,
+    #[serde(default)]
+    sachet_count: Value,
+    #[serde(default)]
+    account_id: Option<String>,
+}
+
 fn activity_app_result(result: qq_farm_app::AppResult<Value>) -> ApiResult<Value> {
     match result {
         Ok(s) => ok_data(s),
@@ -76,15 +87,6 @@ async fn get_snapshot(
 ) -> ApiResult<Value> {
     let id = resolve_account_id(&ctx, &headers, q.account_id.as_deref())?;
     activity_app_result(qq_farm_app::activity::snapshot(&ctx.app_context(), &id).await)
-}
-
-async fn get_season(
-    State(ctx): State<Arc<AdminContext>>,
-    headers: axum::http::HeaderMap,
-    Query(q): Query<AccountQuery>,
-) -> ApiResult<Value> {
-    let id = resolve_account_id(&ctx, &headers, q.account_id.as_deref())?;
-    activity_app_result(qq_farm_app::activity::season(&ctx.app_context(), &id).await)
 }
 
 async fn claim_battle_pass(
@@ -229,7 +231,10 @@ fn activity_error_json(err: &qq_farm_core::error::Error) -> Value {
         {
             ("GAME_OFFLINE", "游戏连接尚未就绪，请稍后重试")
         }
-        _ if raw.contains("请求队列已满") || raw.contains("request queue full") => {
+        _ if raw.contains("请求等待队列已满")
+            || raw.contains("请求队列已满")
+            || raw.contains("request queue full") =>
+        {
             ("ACTIVITY_BUSY", "活动操作过于频繁，请稍后再试")
         }
         _ if raw.contains("发送失败")
@@ -268,33 +273,6 @@ fn activity_error_json(err: &qq_farm_core::error::Error) -> Value {
     json!({ "ok": false, "error": message, "errorCode": code })
 }
 
-async fn get_shop(
-    State(ctx): State<Arc<AdminContext>>,
-    headers: axum::http::HeaderMap,
-    Query(q): Query<AccountQuery>,
-) -> ApiResult<Value> {
-    let id = resolve_account_id(&ctx, &headers, q.account_id.as_deref())?;
-    activity_app_result(qq_farm_app::activity::shop(&ctx.app_context(), &id).await)
-}
-
-async fn get_solar_terms(
-    State(ctx): State<Arc<AdminContext>>,
-    headers: axum::http::HeaderMap,
-    Query(q): Query<AccountQuery>,
-) -> ApiResult<Value> {
-    let id = resolve_account_id(&ctx, &headers, q.account_id.as_deref())?;
-    activity_app_result(qq_farm_app::activity::solar_terms(&ctx.app_context(), &id).await)
-}
-
-async fn get_qingmei(
-    State(ctx): State<Arc<AdminContext>>,
-    headers: axum::http::HeaderMap,
-    Query(q): Query<AccountQuery>,
-) -> ApiResult<Value> {
-    let id = resolve_account_id(&ctx, &headers, q.account_id.as_deref())?;
-    activity_app_result(qq_farm_app::activity::qingmei(&ctx.app_context(), &id).await)
-}
-
 async fn claim_qingmei_seed(
     State(ctx): State<Arc<AdminContext>>,
     headers: axum::http::HeaderMap,
@@ -329,4 +307,38 @@ async fn settle_qingmei_brew(
 ) -> ApiResult<Value> {
     let id = resolve_account_id(&ctx, &headers, None)?;
     activity_app_result(qq_farm_app::activity::settle_qingmei_brew(&ctx.app_context(), &id).await)
+}
+
+fn json_i64(value: &Value) -> Option<i64> {
+    match value {
+        Value::Number(n) => n
+            .as_i64()
+            .or_else(|| n.as_u64().map(|v| v as i64))
+            .or_else(|| n.as_f64().map(|v| v.trunc() as i64)),
+        Value::String(s) => s.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+async fn claim_qixi_bridge(
+    State(ctx): State<Arc<AdminContext>>,
+    headers: axum::http::HeaderMap,
+) -> ApiResult<Value> {
+    let id = resolve_account_id(&ctx, &headers, None)?;
+    activity_app_result(qq_farm_app::activity::claim_qixi_bridge(&ctx.app_context(), &id).await)
+}
+
+async fn gift_qixi_sachet(
+    State(ctx): State<Arc<AdminContext>>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<QixiGiftBody>,
+) -> ApiResult<Value> {
+    let id = resolve_account_id(&ctx, &headers, body.account_id.as_deref())?;
+    let friend_gid = json_i64(&body.friend_gid).unwrap_or(0);
+    let count = json_i64(&body.sachet_count)
+        .or_else(|| json_i64(&body.count))
+        .unwrap_or(0);
+    activity_app_result(
+        qq_farm_app::activity::gift_qixi_sachet(&ctx.app_context(), &id, friend_gid, count).await,
+    )
 }

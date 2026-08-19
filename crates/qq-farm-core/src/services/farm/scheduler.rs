@@ -491,7 +491,6 @@ impl FarmService {
                         harvested_land_ids.len() as i64,
                     );
                     let _ = event_tx.send(FarmEvent::Harvested { count: harvested_land_ids.len() });
-                    crate::services::status::apply_reward_deltas_for(account_id, &hr.items);
                     crate::services::panel_log::log(
                         account_id,
                         "收获",

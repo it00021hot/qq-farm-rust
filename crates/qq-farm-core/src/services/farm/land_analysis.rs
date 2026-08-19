@@ -279,8 +279,8 @@ pub fn get_organic_fertilizer_targets_from_lands(lands: &[LandInfo]) -> Vec<i64>
         if matches!(current_phase(land), PlantPhase::Dead) {
             continue;
         }
-        // 服务端有该字段时，<=0 说明不能再施有机肥；未下发（None）则视为可施（对齐 bot hasOwnProperty）
-        if plant.left_inorc_fert_times.is_some_and(|n| n <= 0) {
+        // proto3：未下发即为 0，视为不能再施有机肥
+        if plant.left_inorc_fert_times <= 0 {
             continue;
         }
         targets.push(land.id);
@@ -340,7 +340,7 @@ pub fn get_fast_mature_lands(lands: &[LandInfo], threshold_secs: i64) -> Vec<i64
         if time_to_mature > threshold || time_to_mature < 0 {
             continue;
         }
-        if plant.left_inorc_fert_times.is_some_and(|n| n <= 0) {
+        if plant.left_inorc_fert_times <= 0 {
             continue;
         }
         out.push(land.id);
@@ -1291,15 +1291,15 @@ mod tests {
     fn organic_targets_skip_only_when_left_inorc_present_and_zero() {
         let mut allow = make_land(1, true, Some(PlantPhase::Growing));
         if let Some(p) = allow.plant.as_mut() {
-            p.left_inorc_fert_times = None;
+            p.left_inorc_fert_times = 2;
         }
         let mut deny = make_land(2, true, Some(PlantPhase::Growing));
         if let Some(p) = deny.plant.as_mut() {
-            p.left_inorc_fert_times = Some(0);
+            p.left_inorc_fert_times = 0;
         }
         let mut ok = make_land(3, true, Some(PlantPhase::Growing));
         if let Some(p) = ok.plant.as_mut() {
-            p.left_inorc_fert_times = Some(2);
+            p.left_inorc_fert_times = 2;
         }
         let targets = get_organic_fertilizer_targets_from_lands(&[allow, deny, ok]);
         assert_eq!(targets, vec![1, 3]);

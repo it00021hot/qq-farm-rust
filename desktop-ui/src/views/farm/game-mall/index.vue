@@ -93,7 +93,7 @@ watch(
 </script>
 
 <template>
-  <div class="min-h-500px flex-col-stretch gap-16px overflow-hidden lt-sm:overflow-auto">
+  <div class="h-full min-h-500px flex-col-stretch gap-16px overflow-auto">
     <NCard :bordered="false" class="card-wrapper" title="游戏商城">
       <template #header-extra>
         <NSpace align="center">

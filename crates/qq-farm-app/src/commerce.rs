@@ -69,9 +69,3 @@ pub async fn purchase_mystery(
     let dto = commerce.purchase_mystery_offer(offer_id).await.map_err(AppError::from_core)?;
     serde_json::to_value(dto).map_err(|e| AppError::Internal(e.to_string()))
 }
-
-/// 兼容旧 stub。
-pub fn commerce_overview(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
-    let _ = (ctx, account_id);
-    Ok(serde_json::json!({ "hint": "use async mall_catalog / mystery_shop" }))
-}

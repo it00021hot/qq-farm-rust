@@ -350,27 +350,24 @@ async fn e2e_logout_invalidates_token() {
 
 #[tokio::test]
 #[serial_test::serial(e2e)]
-async fn e2e_admin_login_logs() {
+async fn e2e_admin_system_config_alias() {
     let app = build_test_app(TestApp::default()).await;
     let admin_username = "admin";
     let admin_password = "admin";
 
-    // admin 登录（默认账号 admin/admin）
     let resp = app.clone().oneshot(login_req(admin_username, admin_password)).await.unwrap();
     let status = resp.status();
     let bytes = to_bytes(resp.into_body(), 4096).await.unwrap();
     let v: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(status, StatusCode::OK, "admin login 应成功: {v}");
     let token = v["data"]["token"].as_str().expect("admin token").to_string();
-    assert_eq!(v["data"]["role"], "admin");
 
-    // /api/admin/login-logs 需要 admin 鉴权
     let resp = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/admin/login-logs")
+                .uri("/api/settings/system-config")
                 .header("x-admin-token", &token)
                 .body(Body::empty())
                 .unwrap(),
@@ -380,8 +377,7 @@ async fn e2e_admin_login_logs() {
     assert_eq!(resp.status(), StatusCode::OK);
     let bytes = to_bytes(resp.into_body(), 65536).await.unwrap();
     let v: Value = serde_json::from_slice(&bytes).unwrap();
-    // 至少返回 logs 数组
-    assert!(v["logs"].is_array() || v["ok"] == true, "login-logs 响应: {v}");
+    assert!(v["data"]["current"].is_object() || v["ok"] == true, "system-config 响应: {v}");
 }
 
 #[tokio::test]

@@ -78,7 +78,7 @@ impl EmailService {
         box_type: i32,
         email_id: &str,
     ) -> Result<BatchClaimEmailReply> {
-        let req = BatchClaimEmailRequest { box_type, email_id: email_id.to_string() };
+        let req = BatchClaimEmailRequest { box_type, email_ids: vec![email_id.to_string()] };
         let body = self
             .gateway
             .request(
@@ -256,13 +256,8 @@ fn normalize_box_type(v: i32) -> i32 {
     }
 }
 
-fn claim_reply_items(reply: &BatchClaimEmailReply) -> Vec<RewardItem> {
-    reply
-        .items
-        .iter()
-        .map(|i| RewardItem { id: i.id, count: i.count })
-        .filter(|r| r.count > 0)
-        .collect()
+fn claim_reply_items(_reply: &BatchClaimEmailReply) -> Vec<RewardItem> {
+    Vec::new()
 }
 
 fn claim_reply_items_from_single(reply: &ClaimEmailReply) -> Vec<RewardItem> {

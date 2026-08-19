@@ -3,6 +3,8 @@ import { computed, onMounted, reactive, ref, watch } from 'vue';
 import {
   NButton,
   NCard,
+  NCollapse,
+  NCollapseItem,
   NDivider,
   NEmpty,
   NForm,
@@ -11,6 +13,7 @@ import {
   NInputNumber,
   NSelect,
   NSpace,
+  NSpin,
   NSwitch,
   NTabPane,
   NTabs,
@@ -24,14 +27,20 @@ import {
   translateStringOptions
 } from '@/constants/business';
 import {
+  fetchFertilizerCheckAndBuy,
+  fetchGetDevicePresets,
   fetchGetFarmAnalyticsDetail,
   fetchGetFarmAutomationDetail,
   fetchGetFarmBagSeeds,
   fetchGetFarmSeeds,
   fetchGetOfflineReminder,
+  fetchGetSystemConfig,
   fetchModifyFarmAutomation,
+  fetchResetSystemConfig,
   fetchSaveOfflineReminder,
-  fetchTestOfflineReminder
+  fetchSetSystemConfig,
+  fetchTestOfflineReminder,
+  type SystemConfigPayload
 } from '@/service/api';
 import { useFarmAccountStore } from '@/store/modules/farm-account';
 import { $t } from '@/locales';
@@ -65,7 +74,44 @@ const strategySaving = ref(false);
 const automationSaving = ref(false);
 const offlineSaving = ref(false);
 const offlineTesting = ref(false);
-const activeTab = ref<'strategy' | 'automation' | 'offline'>('strategy');
+const activeTab = ref<'strategy' | 'automation' | 'offline' | 'system'>('strategy');
+
+const systemConfigLoading = ref(false);
+const systemConfigSaving = ref(false);
+const devicePresets = ref<Array<{ id: string; name: string; description?: string; deviceInfo?: Record<string, unknown> }>>(
+  []
+);
+const selectedPresetId = ref('');
+const defaultSystemConfig = ref<SystemConfigPayload>(createDefaultSystemConfig());
+const localSystemConfig = ref<SystemConfigPayload>(createDefaultSystemConfig());
+
+const platformOptions = [
+  { label: 'QQ', value: 'qq' },
+  { label: '微信', value: 'wx' }
+];
+const osOptions = [
+  { label: 'Windows', value: 'Windows' },
+  { label: 'iOS', value: 'iOS' },
+  { label: 'Android', value: 'Android' }
+];
+
+function createDefaultSystemConfig(): SystemConfigPayload {
+  return {
+    serverUrl: '',
+    clientVersion: '',
+    platform: 'qq',
+    os: 'Windows',
+    deviceInfo: {
+      os: 'Windows',
+      clientVersion: '',
+      sysSoftware: 'Windows',
+      network: 'wifi',
+      memory: '16384',
+      deviceId: 'DESKTOP-PC<WPC>',
+      userAgent: ''
+    }
+  };
+}
 
 const plantingStrategy = ref('preferred');
 const preferredSeedId = ref<number | null>(0);
@@ -658,9 +704,80 @@ async function handleSaveAutomation() {
     });
     if (!error) {
       window.$message?.success($t('page.farm.settings.saveAutomationSuccess'));
+      if (automation.fertilizer_buy_organic || automation.fertilizer_buy_normal) {
+        const check = await fetchFertilizerCheckAndBuy(farmAccountStore.currentAccountId);
+        if (check.error) {
+          window.$message?.warning($t('page.farm.settings.fertilizerCheckFailed'));
+        }
+      }
     }
   } finally {
     automationSaving.value = false;
+  }
+}
+
+async function loadDevicePresets() {
+  const { error, data } = await fetchGetDevicePresets();
+  if (!error && Array.isArray(data)) {
+    devicePresets.value = data as typeof devicePresets.value;
+  }
+}
+
+async function loadSystemConfig() {
+  systemConfigLoading.value = true;
+  try {
+    const { error, data } = await fetchGetSystemConfig();
+    if (!error && data) {
+      defaultSystemConfig.value = { ...data.default };
+      localSystemConfig.value = { ...(data.saved || data.default) };
+    }
+  } finally {
+    systemConfigLoading.value = false;
+  }
+}
+
+function applyDevicePreset(presetId: string) {
+  const preset = devicePresets.value.find(item => item.id === presetId);
+  if (!preset) return;
+  const deviceInfo = {
+    ...createDefaultSystemConfig().deviceInfo,
+    ...(preset.deviceInfo || {})
+  } as SystemConfigPayload['deviceInfo'];
+  localSystemConfig.value = {
+    ...localSystemConfig.value,
+    os: deviceInfo.os || 'Windows',
+    clientVersion: deviceInfo.clientVersion || '',
+    deviceInfo
+  };
+  selectedPresetId.value = presetId;
+}
+
+async function handleSaveSystemConfig() {
+  systemConfigSaving.value = true;
+  try {
+    localSystemConfig.value.clientVersion = localSystemConfig.value.deviceInfo.clientVersion;
+    localSystemConfig.value.os = localSystemConfig.value.deviceInfo.os;
+    const { error } = await fetchSetSystemConfig(localSystemConfig.value);
+    if (!error) {
+      window.$message?.success($t('page.farm.settings.saveSystemConfigSuccess'));
+    }
+  } finally {
+    systemConfigSaving.value = false;
+  }
+}
+
+async function handleResetSystemConfig() {
+  systemConfigSaving.value = true;
+  try {
+    const { error, data } = await fetchResetSystemConfig();
+    if (!error && data) {
+      defaultSystemConfig.value = { ...data.default };
+      localSystemConfig.value = { ...(data.saved || data.default) };
+      selectedPresetId.value = '';
+      window.$message?.success($t('page.farm.settings.resetSystemConfigSuccess'));
+    }
+  } finally {
+    systemConfigSaving.value = false;
   }
 }
 
@@ -813,7 +930,7 @@ onMounted(async () => {
   if (!farmAccountStore.accounts.length) {
     await farmAccountStore.loadAccounts();
   }
-  await Promise.all([loadConfig(), loadOffline()]);
+  await Promise.all([loadConfig(), loadOffline(), loadDevicePresets(), loadSystemConfig()]);
 });
 </script>
 
@@ -1235,6 +1352,104 @@ onMounted(async () => {
               {{ $t('page.farm.settings.saveOffline') }}
             </NButton>
           </div>
+        </NCard>
+      </NTabPane>
+
+      <NTabPane name="system" :tab="$t('page.farm.settings.system')">
+        <NCard :bordered="false" size="small" class="card-wrapper">
+          <template #header>
+            <div class="text-16px font-medium">{{ $t('page.farm.settings.runtimeEnv') }}</div>
+          </template>
+
+          <NSpin :show="systemConfigLoading">
+            <div class="flex-col gap-16px">
+              <div v-if="devicePresets.length">
+                <div class="mb-8px text-13px">{{ $t('page.farm.settings.devicePresets') }}</div>
+                <NSpace wrap>
+                  <NButton
+                    v-for="preset in devicePresets"
+                    :key="preset.id"
+                    size="small"
+                    :type="selectedPresetId === preset.id ? 'primary' : 'default'"
+                    :title="preset.description"
+                    @click="applyDevicePreset(preset.id)"
+                  >
+                    {{ preset.name }}
+                  </NButton>
+                </NSpace>
+              </div>
+
+              <NForm label-placement="top" label-width="auto">
+                <NFormItem :label="$t('page.farm.settings.serverUrl')">
+                  <NInput v-model:value="localSystemConfig.serverUrl" placeholder="wss://..." />
+                </NFormItem>
+
+                <div class="grid gap-16px md:grid-cols-2">
+                  <NFormItem :label="$t('page.farm.settings.platform')">
+                    <NSpace wrap>
+                      <NButton
+                        v-for="option in platformOptions"
+                        :key="option.value"
+                        size="small"
+                        :type="localSystemConfig.platform === option.value ? 'primary' : 'default'"
+                        @click="localSystemConfig.platform = option.value"
+                      >
+                        {{ option.label }}
+                      </NButton>
+                    </NSpace>
+                  </NFormItem>
+
+                  <NFormItem :label="$t('page.farm.settings.deviceOs')">
+                    <NSpace wrap>
+                      <NButton
+                        v-for="option in osOptions"
+                        :key="option.value"
+                        size="small"
+                        :type="localSystemConfig.deviceInfo.os === option.value ? 'primary' : 'default'"
+                        @click="
+                          localSystemConfig.deviceInfo.os = option.value;
+                          localSystemConfig.os = option.value;
+                        "
+                      >
+                        {{ option.label }}
+                      </NButton>
+                    </NSpace>
+                  </NFormItem>
+                </div>
+
+                <div class="grid gap-16px md:grid-cols-2">
+                  <NFormItem :label="$t('page.farm.settings.clientVersion')">
+                    <NInput v-model:value="localSystemConfig.deviceInfo.clientVersion" />
+                  </NFormItem>
+                  <NFormItem :label="$t('page.farm.settings.sysSoftware')">
+                    <NInput v-model:value="localSystemConfig.deviceInfo.sysSoftware" />
+                  </NFormItem>
+                  <NFormItem :label="$t('page.farm.settings.deviceId')">
+                    <NInput v-model:value="localSystemConfig.deviceInfo.deviceId" />
+                  </NFormItem>
+                  <NFormItem :label="$t('page.farm.settings.memory')">
+                    <NInput v-model:value="localSystemConfig.deviceInfo.memory" />
+                  </NFormItem>
+                  <NFormItem :label="$t('page.farm.settings.network')">
+                    <NInput v-model:value="localSystemConfig.deviceInfo.network" />
+                  </NFormItem>
+                </div>
+
+                <NFormItem :label="$t('page.farm.settings.userAgent')">
+                  <NInput v-model:value="localSystemConfig.deviceInfo.userAgent" type="textarea" :rows="3" />
+                </NFormItem>
+              </NForm>
+
+              <NSpace>
+                <NButton type="primary" :loading="systemConfigSaving" @click="handleSaveSystemConfig">
+                  {{ $t('page.farm.settings.saveRuntimeEnv') }}
+                </NButton>
+                <NButton :loading="systemConfigSaving" @click="handleResetSystemConfig">
+                  {{ $t('page.farm.settings.resetRuntimeEnv') }}
+                </NButton>
+              </NSpace>
+            </div>
+          </NSpin>
         </NCard>
       </NTabPane>
     </NTabs>

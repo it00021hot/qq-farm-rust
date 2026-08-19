@@ -13,11 +13,11 @@
 //! 登录流程（ACE runtime / WASM 握手）留到阶段 1B 业务模块。
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use parking_lot::RwLock;
-use tokio::sync::{mpsc, oneshot, watch, Mutex as AsyncMutex};
+use tokio::sync::{mpsc, oneshot, watch, OwnedSemaphorePermit, Semaphore};
 
 use crate::network::client::{ConnectOptions, WsClient};
 use crate::network::encryptor::Encryptor;
@@ -160,8 +160,9 @@ struct Inner {
     disconnect_reason: parking_lot::Mutex<Option<String>>,
     /// 最近一次收到任意 WS 帧的时间（ms）。大包 GetAll 下载期间心跳 RPC 可能超时，但连接仍活。
     last_rx_ms: AtomicI64,
-    /// 业务 RPC 串行（对齐 Go farmOpMu）。Heartbeat / ACE 不进这把锁。
-    rpc_gate: AsyncMutex<()>,
+    /// 业务 RPC 并发槽（对齐 bot 5 in-flight / 100 排队）。Heartbeat 不占槽。
+    rpc_slots: Arc<Semaphore>,
+    rpc_queued: AtomicUsize,
 }
 
 impl Gateway {
@@ -181,7 +182,8 @@ impl Gateway {
                 session_end,
                 disconnect_reason: parking_lot::Mutex::new(None),
                 last_rx_ms: AtomicI64::new(0),
-                rpc_gate: AsyncMutex::new(()),
+                rpc_slots: Arc::new(Semaphore::new(crate::constants::MAX_IN_FLIGHT_REQUESTS)),
+                rpc_queued: AtomicUsize::new(0),
             }),
         }
     }
@@ -347,7 +349,6 @@ impl Gateway {
     ///
     /// 对齐 Go 本田/巡查：不在业务 RPC 上套 10s/20s 硬切。登录走 [`login`]，心跳走 [`request_with_timeout`]。
     pub async fn request(&self, service: &str, method: &str, body: &[u8]) -> Result<Vec<u8>> {
-        let _gate = self.inner.rpc_gate.lock().await;
         self.send_rpc(service, method, body, None, true).await
     }
 
@@ -392,6 +393,26 @@ impl Gateway {
         Ok(())
     }
 
+    async fn acquire_rpc_slot(&self) -> Result<OwnedSemaphorePermit> {
+        if let Ok(permit) = Arc::clone(&self.inner.rpc_slots).try_acquire_owned() {
+            return Ok(permit);
+        }
+        let queued = self.inner.rpc_queued.fetch_add(1, Ordering::SeqCst);
+        if queued >= crate::constants::MAX_QUEUED_REQUESTS {
+            self.inner.rpc_queued.fetch_sub(1, Ordering::SeqCst);
+            return Err(NetworkError::QueueFull {
+                pending: self.inner.requests.pending_count(),
+                queued,
+            });
+        }
+        let permit = Arc::clone(&self.inner.rpc_slots)
+            .acquire_owned()
+            .await
+            .map_err(|_| NetworkError::Phase("rpc limiter closed".into()))?;
+        self.inner.rpc_queued.fetch_sub(1, Ordering::SeqCst);
+        Ok(permit)
+    }
+
     /// `sendMsg` / `sendMsgAsync` 共用发送路径。
     /// `require_online=true` 对齐 `sendMsgAsync`；`false` 对齐登录用的 `sendMsg`。
     async fn send_rpc(
@@ -407,12 +428,11 @@ impl Gateway {
             rpc_phase_ok(phase, require_online)?;
         }
         let is_heartbeat = method.eq_ignore_ascii_case("Heartbeat");
-        if require_online && !is_heartbeat {
-            let pending = self.inner.requests.pending_count();
-            if pending >= crate::constants::MAX_PENDING_RPC {
-                return Err(NetworkError::QueueFull { pending });
-            }
-        }
+        let _slot = if require_online && !is_heartbeat {
+            Some(self.acquire_rpc_slot().await?)
+        } else {
+            None
+        };
 
         let (seq, rx) = self.inner.requests.call(service, method);
         let token = crate::utils::random::create_gateway_token();
@@ -515,6 +535,7 @@ impl Gateway {
             share_cfg_id: 0,
             scene_id: "1234567".to_string(),
             report_data: Some(report_data.clone()),
+            extra: Default::default(),
         };
         let body = prost::Message::encode_to_vec(&req);
 
@@ -587,7 +608,7 @@ impl Gateway {
 
     /// 发 Heartbeat 请求（同步服务器时间 + 维持连接）
     pub async fn heartbeat(&self, gid: i64, client_version: &str) -> Result<HeartbeatReply> {
-        let req = HeartbeatRequest { gid, client_version: client_version.to_string() };
+        let req = HeartbeatRequest { gid, client_version: client_version.to_string(), field_3: 0 };
         let body = prost::Message::encode_to_vec(&req);
         // 对齐 network.ts：Heartbeat 走 sendMsgAsync 默认 20s，不能用 5s（忙时易误超时→掉线）
         let reply_bytes = self

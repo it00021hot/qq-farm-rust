@@ -19,6 +19,14 @@ pub enum ActivityErrorCode {
     InvalidQingmeiIngredients,
     DuplicateQingmeiUid,
     InsufficientQingmei,
+    QixiUnavailable,
+    QixiBridgeUnavailable,
+    QixiGiftUnavailable,
+    InsufficientQixiSachet,
+    QixiResponseInvalid,
+    QixiGiftFailed,
+    InvalidQixiFriendGid,
+    InvalidQixiSachetCount,
 }
 
 impl ActivityErrorCode {
@@ -41,6 +49,14 @@ impl ActivityErrorCode {
             Self::InvalidQingmeiIngredients => "INVALID_QINGMEI_INGREDIENTS",
             Self::DuplicateQingmeiUid => "DUPLICATE_QINGMEI_UID",
             Self::InsufficientQingmei => "INSUFFICIENT_QINGMEI",
+            Self::QixiUnavailable => "QIXI_UNAVAILABLE",
+            Self::QixiBridgeUnavailable => "QIXI_BRIDGE_UNAVAILABLE",
+            Self::QixiGiftUnavailable => "QIXI_GIFT_UNAVAILABLE",
+            Self::InsufficientQixiSachet => "INSUFFICIENT_QIXI_SACHET",
+            Self::QixiResponseInvalid => "QIXI_RESPONSE_INVALID",
+            Self::QixiGiftFailed => "QIXI_GIFT_FAILED",
+            Self::InvalidQixiFriendGid => "INVALID_QIXI_FRIEND_GID",
+            Self::InvalidQixiSachetCount => "INVALID_QIXI_SACHET_COUNT",
         }
     }
 }

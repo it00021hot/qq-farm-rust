@@ -14,6 +14,8 @@ message ActivityContent {
     int64 end_time = 7;
     int64 sort_order = 8;
     int64 field_20 = 20;
+    int64 field_21 = 21;
+    int64 field_22 = 22;
     int64 field_23 = 23;
 }
 
@@ -26,7 +28,7 @@ message StarSandGoods {
     int64 goods_id = 1;
     ActivityItem item = 2;
     ActivityItem cost = 3;
-    int64 status = 4; // Previously decoded as field_4.
+    int64 status = 4;
     bool owned = 5;
     int64 sort_order = 6;
     bytes name = 7;
@@ -66,12 +68,42 @@ message ConstellationData {
 
 message ActivityData {
     ActivityContent activity = 1;
+    repeated ActivityData children = 2;
     StarSandGoodsList catalog = 102;
     QingMeiDailySeedData qingmei_daily_seed = 103;
     QingMeiBrewData qingmei_brew = 108;
     ConstellationData constellation = 110;
-    QingMeiBrewStarted qingmei_brew_started = 113;
+    QixiBridgeConfig qixi_bridge = 112;
+    QixiGiftProgress qixi_gift = 113;
     QingMeiQuote qingmei_quote = 114;
+}
+
+message ActivityWindow {
+    int64 id = 1;
+    string name = 2;
+    int64 begin_time = 3;
+    int64 end_time = 4;
+}
+
+message ActivityListRequest {}
+
+message ActivityListReply {
+    repeated ActivityData activities = 1;
+    repeated ActivityWindow activity_windows = 2;
+}
+
+message SetSplashedRequest {
+    int64 activity_id = 1;
+}
+
+message SetSplashedReply {}
+
+message GetGroupRequest {
+    int64 group_id = 1;
+}
+
+message GetGroupReply {
+    ActivityData group = 1;
 }
 
 message QingMeiDailySeedGrant {
@@ -94,6 +126,33 @@ message QingMeiBrewData {
     int64 base_price = 7;
     repeated int64 ingredient_item_ids = 8 [packed = true];
     int64 guaranteed_price = 9;
+}
+
+message QixiBridgeStage {
+    int64 stage = 1;
+    ActivityItem cost = 2;
+    repeated ActivityItem rewards = 3;
+    int64 status = 4;
+}
+
+message QixiBridgeConfig {
+    repeated ActivityItem display_items = 1;
+    repeated QixiBridgeStage stages = 2;
+    int64 current_stage = 3;
+}
+
+message QixiGiftExchange {
+    ActivityItem sent_item = 1;
+    ActivityItem received_item = 2;
+    bool field_3 = 3;
+    bool enabled = 4;
+}
+
+message QixiGiftProgress {
+    int64 sent_count = 1;
+    int64 field_2 = 2;
+    int64 field_3 = 3;
+    QixiGiftExchange exchange = 4;
 }
 
 message QingMeiBrewStarted {
@@ -171,6 +230,32 @@ message SettleQingMeiBrewRequest {
     Params params = 114;
 }
 
+message ClaimQixiBridgeRewardsRequest {
+    message Params { int64 claim_mode = 1; }
+    int64 activity_id = 1;
+    int64 operate_type = 2;
+    Params params = 125;
+}
+
+message GiftQixiSachetRequest {
+    message Params {
+        int64 friend_gid = 1;
+        int64 count = 2;
+    }
+    int64 activity_id = 1;
+    int64 operate_type = 2;
+    Params params = 124;
+}
+
+message QixiGiftResult {
+    bool success = 1;
+}
+
+message QixiBridgeRewardResult {
+    repeated int64 claimed_stages = 1 [packed = true];
+    repeated corepb.Item rewards = 2;
+}
+
 message ActivityOperateReply {
     int64 activity_id = 1;
     int64 operate_type = 2;
@@ -179,6 +264,8 @@ message ActivityOperateReply {
     QingMeiBrewStarted qingmei_brew_started = 113;
     QingMeiQuote qingmei_quote = 114;
     QingMeiSettlement qingmei_settlement = 115;
+    QixiGiftResult qixi_gift_result = 125;
+    QixiBridgeRewardResult qixi_bridge_result = 126;
 }
 
 message ActiviesChangeNotify {

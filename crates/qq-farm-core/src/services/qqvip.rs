@@ -4,8 +4,9 @@
 //!
 //! ## 协议
 //!
-//! - `gamepb.qqvippb.QQVipService.GetDailyGiftStatus` — 拉取每日礼包状态
-//! - `gamepb.qqvippb.QQVipService.ClaimDailyGift` — 领取每日礼包
+//! - `gamepb.qqvippb.QQVipService.GetQQVipRewardsStatus` — 拉取会员礼包状态
+//! - `gamepb.qqvippb.QQVipService.ClaimQQVipRewards` — 领取会员礼包
+//! - `gamepb.qqvippb.QQVipService.RefreshVipInfo` — 刷新会员信息
 //!
 //! ## 业务
 //!
@@ -22,7 +23,8 @@ use crate::error::Result;
 use crate::network::gateway::Gateway;
 use crate::proto::generated::corepb::Item;
 use crate::proto::generated::gamepb::qqvippb::{
-    ClaimDailyGiftReply, ClaimDailyGiftRequest, GetDailyGiftStatusReply, GetDailyGiftStatusRequest,
+    ClaimQqVipRewardsReply, ClaimQqVipRewardsRequest, GetQqVipRewardsStatusReply,
+    GetQqVipRewardsStatusRequest, RefreshVipInfoRequest,
 };
 
 const VIP_SERVICE: &str = "gamepb.qqvippb.QQVipService";
@@ -66,34 +68,49 @@ impl QQVipService {
         }
     }
 
-    /// 拉取每日礼包状态
-    ///
-    /// # Errors
-    /// - 网络 / 网关错误
-    /// - protobuf 解码失败
-    pub async fn get_daily_gift_status(&self) -> Result<GetDailyGiftStatusReply> {
+    /// 拉取会员礼包状态（先 RefreshVipInfo）。
+    pub async fn get_daily_gift_status(&self) -> Result<GetQqVipRewardsStatusReply> {
+        let _ = self
+            .gateway
+            .request(VIP_SERVICE, "RefreshVipInfo", &RefreshVipInfoRequest {}.encode_to_vec())
+            .await;
         let body = self
             .gateway
             .request(
                 VIP_SERVICE,
-                "GetDailyGiftStatus",
-                &GetDailyGiftStatusRequest {}.encode_to_vec(),
+                "GetQQVipRewardsStatus",
+                &GetQqVipRewardsStatusRequest {}.encode_to_vec(),
             )
             .await?;
-        Ok(GetDailyGiftStatusReply::decode(&body[..])?)
+        Ok(GetQqVipRewardsStatusReply::decode(&body[..])?)
     }
 
-    /// 领取每日礼包
-    ///
-    /// # Errors
-    /// - 网络 / 网关错误
-    /// - protobuf 解码失败
-    pub async fn claim_daily_gift(&self) -> Result<ClaimDailyGiftReply> {
+    fn claimable_reward_types(status: &GetQqVipRewardsStatusReply) -> Vec<i32> {
+        status
+            .reward_statuses
+            .iter()
+            .filter(|item| item.enabled && item.can_claim)
+            .map(|item| item.reward_type)
+            .filter(|reward_type| *reward_type > 0)
+            .collect()
+    }
+
+    /// 领取当前可领的会员礼包。
+    pub async fn claim_daily_gift(&self) -> Result<ClaimQqVipRewardsReply> {
+        let status = self.get_daily_gift_status().await?;
+        let reward_types = Self::claimable_reward_types(&status);
+        if reward_types.is_empty() {
+            return Ok(ClaimQqVipRewardsReply::default());
+        }
         let body = self
             .gateway
-            .request(VIP_SERVICE, "ClaimDailyGift", &ClaimDailyGiftRequest {}.encode_to_vec())
+            .request(
+                VIP_SERVICE,
+                "ClaimQQVipRewards",
+                &ClaimQqVipRewardsRequest { reward_types }.encode_to_vec(),
+            )
             .await?;
-        Ok(ClaimDailyGiftReply::decode(&body[..])?)
+        Ok(ClaimQqVipRewardsReply::decode(&body[..])?)
     }
 
     /// 每日自动领取
@@ -115,9 +132,9 @@ impl QQVipService {
                 return false;
             }
         };
-        *self.last_has_gift.lock() = Some(status.has_gift);
-        *self.last_can_claim.lock() = Some(status.can_claim);
-        if !status.can_claim {
+        *self.last_has_gift.lock() = Some(status.reward_statuses.iter().any(|item| item.enabled));
+        *self.last_can_claim.lock() = Some(!Self::claimable_reward_types(&status).is_empty());
+        if Self::claimable_reward_types(&status).is_empty() {
             self.mark_done_today();
             *self.last_result.lock() = "none";
             tracing::info!("[会员] 今日暂无可领取会员礼包");

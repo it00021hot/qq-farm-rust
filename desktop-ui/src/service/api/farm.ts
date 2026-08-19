@@ -72,8 +72,10 @@ interface FriendSummaryDto {
   gid?: number;
   name?: string;
   nickname?: string;
+  remark?: string;
   avatarUrl?: string;
   avatar?: string;
+  avatar_url?: string;
   level?: number;
   gold?: number;
   plant?: {
@@ -145,10 +147,10 @@ function toFriendRecord(raw: FriendSummaryDto, accountId: number): Api.Farm.Frie
   return {
     accountId,
     gid,
-    nickname: String(raw.nickname ?? raw.name ?? `GID:${gid}`),
+    nickname: String(raw.nickname ?? raw.name ?? raw.remark ?? '').trim(),
     level: Number(raw.level ?? 0) || undefined,
     gold: Number(raw.gold ?? 0) || undefined,
-    avatar: String(raw.avatar ?? raw.avatarUrl ?? ''),
+    avatar: String(raw.avatar ?? raw.avatarUrl ?? raw.avatar_url ?? ''),
     plant: raw.plant
       ? {
           stealNum: Number(raw.plant.stealNum ?? 0),
@@ -270,10 +272,6 @@ export function fetchFarmWxLoginCode(taskId: string) {
   return invokeFlat<{ code: string }>('wx_login_code', { taskId });
 }
 
-export function fetchDestroyFarmWxLogin(taskId: string) {
-  return invokeFlat('wx_login_destroy', { taskId });
-}
-
 export function fetchCreateFarmWxQuickLoginSession() {
   return invokeFlat<{
     sessionId: string;
@@ -354,6 +352,121 @@ export function fetchModifyFarmAutomation(data: Api.Farm.AccountAutomationModify
     accountId: aid(accountId),
     snapshot
   });
+}
+
+export function fetchFertilizerCheckAndBuy(accountId: number | string) {
+  return invokeFlat('farm_fertilizer_check_and_buy', { accountId: aid(accountId) });
+}
+
+interface DeviceInfoPayload {
+  os: string;
+  clientVersion: string;
+  sysSoftware: string;
+  network: string;
+  memory: string;
+  deviceId: string;
+  userAgent: string;
+}
+
+export interface SystemConfigPayload {
+  serverUrl: string;
+  clientVersion: string;
+  platform: string;
+  os: string;
+  deviceInfo: DeviceInfoPayload;
+}
+
+export interface SystemConfigResponse {
+  saved: SystemConfigPayload | null;
+  default: SystemConfigPayload;
+  current?: unknown;
+}
+
+function normalizeSystemConfig(source: unknown, fallback: SystemConfigPayload): SystemConfigPayload {
+  const row = (source && typeof source === 'object' ? source : {}) as Record<string, unknown>;
+  const deviceRow =
+    row.deviceInfo && typeof row.deviceInfo === 'object'
+      ? (row.deviceInfo as Record<string, unknown>)
+      : {};
+  return {
+    serverUrl: String(row.serverUrl ?? row.server_url ?? fallback.serverUrl ?? ''),
+    clientVersion: String(row.clientVersion ?? row.client_version ?? fallback.clientVersion ?? ''),
+    platform: String(row.platform ?? fallback.platform ?? 'qq'),
+    os: String(row.os ?? fallback.os ?? 'Windows'),
+    deviceInfo: {
+      os: String(deviceRow.os ?? fallback.deviceInfo.os ?? 'Windows'),
+      clientVersion: String(
+        deviceRow.clientVersion ?? deviceRow.client_version ?? fallback.deviceInfo.clientVersion ?? ''
+      ),
+      sysSoftware: String(
+        deviceRow.sysSoftware ?? deviceRow.sys_software ?? fallback.deviceInfo.sysSoftware ?? ''
+      ),
+      network: String(deviceRow.network ?? fallback.deviceInfo.network ?? 'wifi'),
+      memory: String(deviceRow.memory ?? fallback.deviceInfo.memory ?? ''),
+      deviceId: String(deviceRow.deviceId ?? deviceRow.device_id ?? fallback.deviceInfo.deviceId ?? ''),
+      userAgent: String(deviceRow.userAgent ?? deviceRow.user_agent ?? fallback.deviceInfo.userAgent ?? '')
+    }
+  };
+}
+
+const DEFAULT_DEVICE_INFO: DeviceInfoPayload = {
+  os: 'Windows',
+  clientVersion: '',
+  sysSoftware: 'Windows',
+  network: 'wifi',
+  memory: '16384',
+  deviceId: 'DESKTOP-PC<WPC>',
+  userAgent: ''
+};
+
+const DEFAULT_SYSTEM_CONFIG: SystemConfigPayload = {
+  serverUrl: '',
+  clientVersion: '',
+  platform: 'qq',
+  os: 'Windows',
+  deviceInfo: { ...DEFAULT_DEVICE_INFO }
+};
+
+export async function fetchGetDevicePresets() {
+  const res = await invokeFlat<any[]>('get_device_presets');
+  if (res.error) return res;
+  return { ...res, data: Array.isArray(res.data) ? res.data : [] };
+}
+
+export async function fetchGetSystemConfig() {
+  const res = await invokeFlat<any>('get_system_config');
+  if (res.error) return res as FlatResponseData<any, SystemConfigResponse>;
+  const raw = res.data || {};
+  const fallback = normalizeSystemConfig(raw.default, DEFAULT_SYSTEM_CONFIG);
+  return {
+    data: {
+      saved: raw.saved ? normalizeSystemConfig(raw.saved, fallback) : null,
+      default: fallback,
+      current: raw.current
+    },
+    error: null,
+    response: {} as any
+  };
+}
+
+export function fetchSetSystemConfig(cfg: SystemConfigPayload) {
+  return invokeFlat('set_system_config', cfg);
+}
+
+export async function fetchResetSystemConfig() {
+  const res = await invokeFlat<any>('reset_system_config');
+  if (res.error) return res;
+  const raw = res.data || {};
+  const fallback = normalizeSystemConfig(raw.default, DEFAULT_SYSTEM_CONFIG);
+  return {
+    data: {
+      saved: raw.saved ? normalizeSystemConfig(raw.saved, fallback) : null,
+      default: fallback,
+      current: raw.current
+    },
+    error: null,
+    response: {} as any
+  };
 }
 
 function toOfflineReminder(raw: any): Api.Farm.OfflineReminder {
@@ -464,17 +577,6 @@ export async function fetchGetFarmFriendList(params?: Api.Farm.FriendSearchParam
   };
 }
 
-export async function fetchSyncFarmFriends(accountId: number) {
-  const res = await invokeFlat<any>('friend_sync', { accountId: aid(accountId) });
-  if (res.error) return res;
-  const arr = Array.isArray(res.data) ? res.data : [];
-  return {
-    data: { accountId, count: arr.length, synced: true },
-    error: null,
-    response: {} as any
-  };
-}
-
 export function fetchGetFarmFriendLands(params: Api.Farm.FriendLandsParams) {
   return invokeFlat('friend_lands', {
     accountId: aid(params.accountId),
@@ -545,12 +647,19 @@ export function fetchSettleFarmActivityGreenPlumBrew(data: Api.Farm.ActivityClai
   return invokeFlat('activity_qingmei_brew_settle', { accountId: aid(data.accountId) });
 }
 
-export function fetchClaimFarmActivityTask(data: Api.Farm.ActivityClaimParams) {
-  return invokeFlat('activity_snapshot', { accountId: aid(data.accountId) });
+export function fetchClaimFarmActivityQixiBridge(data: Api.Farm.ActivityClaimParams) {
+  return invokeFlat('activity_claim_qixi_bridge', { accountId: aid(data.accountId) });
 }
 
-export function fetchClaimFarmActivityGift(data: Api.Farm.ActivityClaimParams) {
-  return invokeFlat('activity_snapshot', { accountId: aid(data.accountId) });
+export function fetchGiftFarmActivityQixiSachet(data: Api.Farm.ActivityClaimParams) {
+  const body = data as any;
+  const count = Math.trunc(Number(body.sachetCount ?? body.count ?? 0));
+  return invokeFlat('activity_gift_qixi_sachet', {
+    accountId: aid(data.accountId),
+    friendGid: body.friendGid,
+    sachetCount: count,
+    count
+  });
 }
 
 export async function fetchGetFarmAnalyticsDetail(params?: any) {

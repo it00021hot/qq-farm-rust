@@ -12,4 +12,4 @@ pub mod settings;
 pub mod snapshot;
 
 #[allow(unused_imports)]
-pub use dto::{AccountSummary, DesktopSnapshot, SettingsSummary};
+pub use dto::{AccountSummary, DesktopSnapshot};

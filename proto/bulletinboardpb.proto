@@ -13,6 +13,7 @@ message BulletinItem {
 
 // ============ 请求/回复 ============
 message GetBulletinListRequest {
+    int64 page_size = 2;
     int64 count = 1;        // 获取数量
 }
 
@@ -35,7 +36,11 @@ message BulletinDetail {
 }
 
 message GetBulletinDetailReply {
-    BulletinDetail detail = 1;
+    string title = 1;
+    string content = 2;
+    string begin_time = 3;
+    string end_time = 4;
+    string image_url = 5;
 }
 
 // ============ 通知 ============

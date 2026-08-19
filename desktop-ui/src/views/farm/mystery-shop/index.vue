@@ -82,7 +82,7 @@ watch(
 </script>
 
 <template>
-  <div class="min-h-500px flex-col-stretch gap-16px overflow-hidden lt-sm:overflow-auto">
+  <div class="h-full min-h-500px flex-col-stretch gap-16px overflow-auto">
     <NCard :bordered="false" class="card-wrapper" title="神秘商人">
       <template #header-extra>
         <NButton size="small" :loading="loading" @click="loadShop">刷新</NButton>

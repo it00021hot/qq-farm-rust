@@ -1,26 +1,56 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
-import { NButton, NCard, NEmpty, NInputNumber, NModal, NProgress, NSpace, NSpin, NTag, useMessage } from 'naive-ui';
+import {
+  NButton,
+  NCard,
+  NCollapse,
+  NCollapseItem,
+  NEmpty,
+  NInputNumber,
+  NModal,
+  NProgress,
+  NSpace,
+  NSpin,
+  NTag,
+  useMessage
+} from 'naive-ui';
 import {
   fetchClaimFarmActivityGreenPlum,
   fetchClaimFarmActivityPass,
+  fetchClaimFarmActivityQixiBridge,
   fetchClaimFarmActivitySolarTerm,
   fetchContinueFarmActivityGreenPlumBrew,
   fetchExchangeFarmActivityShop,
   fetchGetFarmActivitySnapshot,
+  fetchGetFarmFriendList,
+  fetchGiftFarmActivityQixiSachet,
   fetchLightFarmActivityConstellation,
   fetchSettleFarmActivityGreenPlumBrew,
   fetchStartFarmActivityGreenPlumBrew
 } from '@/service/api';
 import { useFarmAccountStore } from '@/store/modules/farm-account';
 import { resolveCatalogImage } from '@/views/farm/game-config/shared';
+import ActivityRulesDialog from './activity-rules-dialog.vue';
+import { normalizeActivityRules } from './rules';
 import { $t } from '@/locales';
+import QixiView from './qixi-view.vue';
 
 defineOptions({
   name: 'FarmActivity'
 });
 
-type ActivityTab = 'travel' | 'constellation' | 'shop' | 'solar' | 'greenPlum';
+type ActivityTab = 'travel' | 'constellation' | 'shop' | 'solar';
+type GameplayKey = 'stellar' | 'qixi' | 'greenPlum';
+type ActivityStatus = 'active' | 'upcoming' | 'ended';
+type ActivityDirectoryItem = {
+  id?: string;
+  name?: string;
+  startTime?: number | string;
+  endTime?: number | string;
+  gameplayKey?: string | null;
+  detailTarget?: string | null;
+  gameplayTargets?: string[];
+};
 type RewardItem = {
   id?: string | number;
   name?: string;
@@ -124,11 +154,54 @@ type GreenPlum = {
     settle?: { enabled?: boolean; available?: boolean };
   };
 };
+type QixiReward = RewardItem & { id?: string | number };
+type QixiStage = {
+  id?: string;
+  stage?: number;
+  statusCode?: string;
+  completed?: boolean;
+  claimed?: boolean;
+  claimable?: boolean;
+  current?: boolean;
+  cost?: QixiReward;
+  rewards?: QixiReward[];
+};
+type Qixi = {
+  groupId?: string;
+  activityId?: string;
+  name?: string;
+  title?: string;
+  startTime?: string | number;
+  endTime?: string | number;
+  active?: boolean;
+  feather?: QixiReward;
+  sachet?: QixiReward;
+  receivedSachet?: QixiReward;
+  balances?: {
+    feather?: string | null;
+    sachet?: string | null;
+    receivedSachet?: string | null;
+    known?: boolean;
+  };
+  bridge?: {
+    currentStage?: number;
+    stages?: QixiStage[];
+    claimable?: boolean;
+  };
+  gift?: {
+    sentCount?: string;
+  };
+  actions?: {
+    bridge?: { enabled?: boolean; available?: boolean };
+    gift?: { enabled?: boolean; available?: boolean };
+  };
+};
 
 const farmAccountStore = useFarmAccountStore();
 const message = useMessage();
 
 const activeTab = ref<ActivityTab>('travel');
+const selectedGameplay = ref<GameplayKey | null>(null);
 const loading = ref(false);
 const pendingKey = ref<string | null>(null);
 const season = ref<Record<string, unknown>>({});
@@ -136,6 +209,10 @@ const constellation = ref<Record<string, unknown>>({});
 const shop = ref<Record<string, unknown>>({});
 const solarTerms = ref<Record<string, unknown>>({});
 const greenPlum = ref<GreenPlum>({});
+const qixi = ref<Qixi>({});
+const directory = ref<ActivityDirectoryItem[]>([]);
+const qixiFriends = ref<Api.Farm.Friend[]>([]);
+const qixiFriendsLoading = ref(false);
 const capabilities = ref<Record<string, boolean>>({});
 const actions = ref<Record<string, Api.Farm.ActivityAction>>({});
 const clockNow = ref(Date.now());
@@ -145,6 +222,8 @@ const shopCategory = ref('__all__');
 const exchangeOpen = ref(false);
 const exchangeGoods = ref<ShopGoods | null>(null);
 const exchangeCount = ref(1);
+const travelRulesOpen = ref(false);
+const constellationRulesOpen = ref(false);
 
 let clockTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -152,9 +231,9 @@ const allTabs: Array<{ key: ActivityTab; labelKey: App.I18n.I18nKey }> = [
   { key: 'travel', labelKey: 'page.farm.activity.tabTravel' },
   { key: 'constellation', labelKey: 'page.farm.activity.tabConstellation' },
   { key: 'shop', labelKey: 'page.farm.activity.tabShop' },
-  { key: 'solar', labelKey: 'page.farm.activity.tabSolar' },
-  { key: 'greenPlum', labelKey: 'page.farm.activity.tabGreenPlum' }
+  { key: 'solar', labelKey: 'page.farm.activity.tabSolar' }
 ];
+const dateFormatter = new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' });
 
 const pass = computed(() => (season.value.pass as Record<string, unknown> | undefined) || {});
 const passNodes = computed(() => ((pass.value.nodes as PassNode[]) || []).slice());
@@ -166,6 +245,9 @@ const passPercent = computed(() => {
   return Math.min(100, Math.max(0, (passProgress.value / passProgressMax.value) * 100));
 });
 const hasClaimablePass = computed(() => passNodes.value.some(node => node.claimable));
+const passRules = computed(() => normalizeActivityRules(pass.value.rules));
+const constellationRules = computed(() => normalizeActivityRules(constellation.value.rules));
+const greenPlumRules = computed(() => normalizeActivityRules(greenPlum.value.rules));
 
 const constellationGroups = computed(() => {
   const groups = ((constellation.value.groups as ConstellationGroup[]) || []).slice();
@@ -220,20 +302,13 @@ const selectedSolar = computed(() => solarTermList.value.find(term => term.id ==
 
 const greenPlumActive = computed(() => greenPlum.value.known === true && greenPlum.value.active === true);
 const greenPlumEnd = computed(() => Number(greenPlum.value.endTime || 0) || undefined);
+const qixiKnown = computed(() => Boolean(qixi.value.name || qixi.value.groupId));
+const qixiEnd = computed(() => Number(qixi.value.endTime || 0) || undefined);
 const greenPlumBalance = computed(() => {
   if (greenPlum.value.balanceKnown === false) return '--';
   return greenPlum.value.balance ?? '0';
 });
-const visibleTabs = computed(() =>
-  allTabs
-    .filter(tab => (tab.key === 'greenPlum' ? greenPlumActive.value : true))
-    .map(tab => {
-      if (tab.key === 'greenPlum' && greenPlum.value.name) {
-        return { ...tab, label: String(greenPlum.value.name) };
-      }
-      return { ...tab, label: '' };
-    })
-);
+const visibleTabs = computed(() => allTabs.map(tab => ({ ...tab, label: '' })));
 const greenPlumStarted = computed(() => greenPlum.value.started === true);
 const greenPlumFinished = computed(() => greenPlum.value.finished === true);
 const greenPlumRound = computed(() => Number(greenPlum.value.currentRound || 0));
@@ -281,7 +356,91 @@ const greenPlumCanSettle = computed(() => {
   return greenPlumQuotes.value.length > 0 || greenPlumFinished.value;
 });
 
+const stellarAvailable = computed(
+  () => Boolean(season.value.title || shop.value.title || constellation.value.title || solarTermList.value.length)
+);
+
+function activityTimestamp(value: unknown) {
+  const n = Number(value || 0);
+  if (!n) return 0;
+  return n > 1e12 ? n : n * 1000;
+}
+
+function activityStatus(activity: ActivityDirectoryItem): ActivityStatus {
+  const now = clockNow.value;
+  const end = activityTimestamp(activity.endTime);
+  const start = activityTimestamp(activity.startTime);
+  if (end && now >= end) return 'ended';
+  if (start && now < start) return 'upcoming';
+  return 'active';
+}
+
+function resolveGameplay(activity: ActivityDirectoryItem): GameplayKey | null {
+  const key =
+    activity.gameplayKey ||
+    (activity.detailTarget === 'qixi'
+      ? 'qixi'
+      : activity.detailTarget === 'greenPlum'
+        ? 'greenPlum'
+        : activity.detailTarget
+          ? 'stellar'
+          : null);
+  if (key === 'qixi' || key === 'stellar' || key === 'greenPlum') return key;
+  return null;
+}
+
+const displayActivities = computed(() => {
+  const entries = directory.value.length
+    ? [...directory.value]
+    : stellarAvailable.value
+      ? [
+          {
+            id: String((season.value.pass as { activityId?: string } | undefined)?.activityId || season.value.id || 'stellar'),
+            name: String(season.value.title || $t('page.farm.activity.tabTravel')),
+            startTime: Number(season.value.startTime || 0),
+            endTime: Number(season.value.endTime || 0),
+            gameplayKey: 'stellar',
+            gameplayTargets: ['travel', 'constellation', 'shop', 'solar'],
+            detailTarget: 'travel'
+          } satisfies ActivityDirectoryItem
+        ]
+      : [];
+  if (greenPlumActive.value && !entries.some(item => item.gameplayKey === 'greenPlum' || item.detailTarget === 'greenPlum')) {
+    entries.push({
+      id: String(greenPlum.value.activityId || greenPlum.value.brewActivityId || 'greenPlum'),
+      name: String(greenPlum.value.name || $t('page.farm.activity.tabGreenPlum')),
+      startTime: Number(greenPlum.value.startTime || 0),
+      endTime: Number(greenPlum.value.endTime || 0),
+      gameplayKey: 'greenPlum',
+      detailTarget: 'greenPlum'
+    });
+  }
+  if (qixiKnown.value && !entries.some(item => resolveGameplay(item) === 'qixi')) {
+    entries.push({
+      id: String(qixi.value.groupId || qixi.value.activityId || 'qixi'),
+      name: String(qixi.value.name || qixi.value.title || $t('page.farm.activity.tabQixi')),
+      startTime: Number(qixi.value.startTime || 0),
+      endTime: Number(qixi.value.endTime || 0),
+      gameplayKey: 'qixi',
+      detailTarget: 'qixi'
+    });
+  }
+  const rank: Record<ActivityStatus, number> = { active: 0, upcoming: 1, ended: 2 };
+  return entries.sort((left, right) => {
+    const leftStatus = activityStatus(left);
+    const rightStatus = activityStatus(right);
+    if (leftStatus !== rightStatus) return rank[leftStatus] - rank[rightStatus];
+    return activityTimestamp(left.startTime) - activityTimestamp(right.startTime);
+  });
+});
+
 const pageTitle = computed(() => {
+  if (selectedGameplay.value === 'qixi') {
+    return String(qixi.value.name || qixi.value.title || $t('page.farm.activity.tabQixi'));
+  }
+  if (selectedGameplay.value === 'greenPlum') {
+    return String(greenPlum.value.name || $t('page.farm.activity.tabGreenPlum'));
+  }
   if (activeTab.value === 'shop') {
     return String(shop.value.title || shop.value.name || $t('page.farm.activity.tabShop'));
   }
@@ -298,24 +457,20 @@ const pageTitle = computed(() => {
         $t('page.farm.activity.tabSolar')
     );
   }
-  if (activeTab.value === 'greenPlum') {
-    return String(greenPlum.value.name || $t('page.farm.activity.tabGreenPlum'));
-  }
   return String(season.value.title || $t('page.farm.activity.tabTravel'));
 });
 
 const remainingText = computed(() => {
   let endTime: number | undefined;
-  if (activeTab.value === 'shop') endTime = Number(shop.value.endTime || 0) || undefined;
+  if (selectedGameplay.value === 'qixi') endTime = qixiEnd.value;
+  else if (selectedGameplay.value === 'greenPlum') endTime = greenPlumEnd.value;
+  else if (activeTab.value === 'shop') endTime = Number(shop.value.endTime || 0) || undefined;
   else if (activeTab.value === 'constellation') {
     endTime = Number(constellation.value.endTime || season.value.endTime || 0) || undefined;
   } else if (activeTab.value === 'solar') {
     endTime = Number(selectedSolar.value?.endTime || season.value.endTime || 0) || undefined;
-  } else if (activeTab.value === 'greenPlum') {
-    endTime = greenPlumEnd.value;
   } else endTime = Number(season.value.endTime || 0) || undefined;
   if (!endTime) return '';
-  // Support both ms and sec timestamps.
   const endMs = endTime > 1e12 ? endTime : endTime * 1000;
   const diff = Math.max(0, endMs - clockNow.value);
   if (diff === 0) return $t('page.farm.activity.ended');
@@ -333,8 +488,7 @@ const tabBadges = computed(() => ({
     ['lightable', 'claimableUnknown'].includes(String(g.visualState || ''))
   ),
   shop: shopGoods.value.some(g => g.exchangeable),
-  solar: solarTermList.value.some(t => t.claimable || t.canClaim),
-  greenPlum: greenPlumActive.value && actionEnabled('claimGreenPlum')
+  solar: solarTermList.value.some(t => t.claimable || t.canClaim)
 }));
 
 function actionEnabled(key: string): boolean {
@@ -348,9 +502,10 @@ function rewardImage(item?: RewardItem) {
 }
 
 function formatRewardLabel(item: RewardItem) {
-  const name = item.name || item.id || '?';
+  const name = String(item.name || '').trim();
+  const label = name && !/^\d+$/.test(name) ? name : '';
   const count = item.count == null ? '' : `×${item.count}`;
-  return `${name}${count}`;
+  return `${label}${count}`.trim();
 }
 
 function claimSuccessMessage(data: Record<string, unknown> | null | undefined) {
@@ -431,13 +586,55 @@ function ensureActiveTabVisible() {
   activeTab.value = visibleTabs.value[0]?.key || 'travel';
 }
 
+function activityHasGameplay(activity: ActivityDirectoryItem) {
+  return resolveGameplay(activity) !== null;
+}
+
+function activityStatusLabel(activity: ActivityDirectoryItem) {
+  return {
+    active: $t('page.farm.activity.statusActive'),
+    upcoming: $t('page.farm.activity.statusUpcoming'),
+    ended: $t('page.farm.activity.statusEnded')
+  }[activityStatus(activity)];
+}
+
+function formatActivityPeriod(activity: ActivityDirectoryItem) {
+  const startMs = activityTimestamp(activity.startTime);
+  const endMs = activityTimestamp(activity.endTime);
+  const start = startMs ? dateFormatter.format(startMs) : '';
+  const end = endMs ? dateFormatter.format(endMs) : '';
+  if (start && end) return `${start} - ${end}`;
+  if (start) return `${start} ${$t('page.farm.activity.statusUpcoming')}`;
+  if (end) return `${end} ${$t('page.farm.activity.statusEnded')}`;
+  return $t('page.farm.activity.periodPending');
+}
+
+function openActivity(activity: ActivityDirectoryItem) {
+  const gameplay = resolveGameplay(activity);
+  if (!gameplay) return;
+  if (gameplay === 'stellar') {
+    const target = activity.detailTarget;
+    if (target === 'constellation' || target === 'shop' || target === 'solar' || target === 'travel') {
+      activeTab.value = target;
+    }
+  }
+  selectedGameplay.value = gameplay;
+  if (gameplay === 'qixi') void loadQixiFriends();
+}
+
+function goBackToList() {
+  selectedGameplay.value = null;
+}
+
 function applySnapshot(data: Api.Farm.ActivitySnapshot) {
   const snap = (data.snapshot || data) as Api.Farm.ActivitySnapshot;
   season.value = (snap.season as Record<string, unknown>) || {};
   constellation.value = (snap.constellation as Record<string, unknown>) || {};
   shop.value = (snap.shop as Record<string, unknown>) || {};
   solarTerms.value = (snap.solarTerms as Record<string, unknown>) || {};
-  greenPlum.value = (snap.greenPlum as GreenPlum) || {};
+  greenPlum.value = (snap.greenPlum as GreenPlum) || (snap.qingMei as GreenPlum) || {};
+  qixi.value = (snap.qixi as Qixi) || {};
+  directory.value = Array.isArray(snap.activities) ? (snap.activities as ActivityDirectoryItem[]) : [];
   capabilities.value = snap.capabilities || data.capabilities || {};
   actions.value = snap.actions || data.actions || {};
   ensureActiveTabVisible();
@@ -458,6 +655,8 @@ async function loadActivities() {
     shop.value = {};
     solarTerms.value = {};
     greenPlum.value = {};
+    qixi.value = {};
+    directory.value = [];
     return;
   }
   loading.value = true;
@@ -684,6 +883,76 @@ function setGreenPlumIngredientCount(uid: string, value: unknown) {
   };
 }
 
+async function loadQixiFriends(force = false) {
+  if (!farmAccountStore.currentAccountId) {
+    qixiFriends.value = [];
+    return;
+  }
+  qixiFriendsLoading.value = true;
+  try {
+    const { error, data } = await fetchGetFarmFriendList({
+      current: 1,
+      size: 500,
+      accountId: farmAccountStore.currentAccountId,
+      force
+    });
+    if (!error && data) {
+      qixiFriends.value = data.records || [];
+    }
+  } finally {
+    qixiFriendsLoading.value = false;
+  }
+}
+
+async function claimQixiBridge() {
+  if (!farmAccountStore.currentAccountId) return;
+  pendingKey.value = 'qixiBridge';
+  try {
+    const { error, data } = await fetchClaimFarmActivityQixiBridge({
+      accountId: farmAccountStore.currentAccountId
+    });
+    if (error) {
+      message.error(error.message || $t('page.farm.activity.claimFailed'));
+      return;
+    }
+    notifyClaimResult(data as Record<string, unknown>);
+    if (data) applySnapshot(data as Api.Farm.ActivitySnapshot);
+    else await loadActivities();
+  } finally {
+    pendingKey.value = null;
+  }
+}
+
+async function giftQixiSachet(payload: { friendGid: string; count: number }) {
+  if (!farmAccountStore.currentAccountId) return;
+  const count = Math.trunc(Number(payload.count));
+  if (!payload.friendGid || count < 1) return;
+  const friend = qixiFriends.value.find(item => String(item.gid) === String(payload.friendGid));
+  const friendName =
+    String(friend?.nickname || friend?.name || '').trim() || $t('page.farm.activity.qixiFriendFallback');
+  pendingKey.value = 'qixiGift';
+  try {
+    const { error, data } = await fetchGiftFarmActivityQixiSachet({
+      accountId: farmAccountStore.currentAccountId,
+      friendGid: payload.friendGid,
+      count,
+      sachetCount: count
+    });
+    if (error) {
+      message.error(error.message || $t('page.farm.activity.claimFailed'));
+      return;
+    }
+    notifyClaimResult({
+      ...(data as Record<string, unknown>),
+      message: $t('page.farm.activity.qixiGiftSuccess', { name: friendName, count })
+    });
+    if (data) applySnapshot(data as Api.Farm.ActivitySnapshot);
+    else await loadActivities();
+  } finally {
+    pendingKey.value = null;
+  }
+}
+
 function greenPlumIngredientCount(uid: string) {
   return greenPlumIngredientCounts.value[uid] || 1;
 }
@@ -691,7 +960,15 @@ function greenPlumIngredientCount(uid: string) {
 watch(
   () => farmAccountStore.currentAccountId,
   () => {
+    selectedGameplay.value = null;
     void loadActivities();
+  }
+);
+
+watch(
+  () => selectedGameplay.value,
+  gameplay => {
+    if (gameplay === 'qixi') void loadQixiFriends();
   }
 );
 
@@ -734,23 +1011,76 @@ onUnmounted(() => {
       :description="$t('page.farm.common.selectAccount')"
     />
 
-    <template v-else>
+    <template v-else-if="!selectedGameplay">
       <div class="flex flex-wrap items-center justify-between gap-12px">
         <div>
-          <div class="text-18px font-medium">{{ pageTitle }}</div>
-          <div v-if="remainingText" class="mt-4px text-12px text-gray-500">{{ remainingText }}</div>
+          <div class="text-12px text-gray-500">{{ $t('page.farm.activity.title') }}</div>
+          <div class="text-18px font-medium">
+            {{ displayActivities.length ? $t('page.farm.activity.listTitle') : $t('page.farm.activity.noActivities') }}
+          </div>
         </div>
-        <NSpace align="center">
-          <span v-if="activeTab === 'shop' || activeTab === 'travel'" class="text-13px text-amber-600">
-            {{ $t('page.farm.activity.starSand') }} {{ shopBalance }}
-          </span>
-          <NButton size="small" :loading="loading" @click="loadActivities">
-            {{ $t('common.refresh') }}
-          </NButton>
-        </NSpace>
+        <NButton size="small" :loading="loading" @click="loadActivities">
+          {{ $t('common.refresh') }}
+        </NButton>
+      </div>
+      <NSpin :show="loading">
+        <NEmpty v-if="!loading && !displayActivities.length" class="py-48px" :description="$t('page.farm.activity.noActivities')" />
+        <div v-else class="grid gap-12px md:grid-cols-2 xl:grid-cols-3">
+          <button
+            v-for="activity in displayActivities"
+            :key="String(activity.id || activity.name)"
+            type="button"
+            class="rounded-8px border border-gray-200 px-16px py-14px text-left dark:border-gray-700"
+            :class="activityHasGameplay(activity) ? 'hover:border-primary' : 'opacity-60'"
+            :disabled="!activityHasGameplay(activity)"
+            @click="openActivity(activity)"
+          >
+            <div class="mb-8px flex items-center justify-between gap-8px">
+              <NTag size="tiny" :type="activityStatus(activity) === 'active' ? 'success' : 'default'" :bordered="false">
+                {{ activityStatusLabel(activity) }}
+              </NTag>
+            </div>
+            <div class="text-16px font-medium">{{ activity.name }}</div>
+            <div class="mt-6px text-12px text-gray-500">{{ formatActivityPeriod(activity) }}</div>
+            <div class="mt-10px text-12px" :class="activityHasGameplay(activity) ? 'text-primary' : 'text-gray-400'">
+              {{ activityHasGameplay(activity) ? $t('page.farm.activity.viewDetail') : $t('page.farm.activity.unsupported') }}
+            </div>
+          </button>
+        </div>
+      </NSpin>
+    </template>
+
+    <template v-else>
+      <div>
+        <NButton size="small" secondary @click="goBackToList">
+          <template #icon>
+            <icon-ic-round-arrow-back class="text-icon" />
+          </template>
+          {{ $t('page.farm.activity.backToList') }}
+        </NButton>
+        <div class="mt-12px flex flex-wrap items-center justify-between gap-12px">
+          <div>
+            <div class="text-18px font-medium">{{ pageTitle }}</div>
+            <div v-if="remainingText" class="mt-4px text-12px text-gray-500">{{ remainingText }}</div>
+          </div>
+          <NSpace align="center">
+            <span
+              v-if="selectedGameplay === 'stellar' && (activeTab === 'shop' || activeTab === 'travel')"
+              class="text-13px text-amber-600"
+            >
+              {{ $t('page.farm.activity.starSand') }} {{ shopBalance }}
+            </span>
+            <NButton size="small" :loading="loading" @click="loadActivities">
+              {{ $t('common.refresh') }}
+            </NButton>
+          </NSpace>
+        </div>
       </div>
 
-      <div class="flex flex-wrap gap-8px border-b border-gray-200 pb-12px dark:border-gray-700">
+      <div
+        v-if="selectedGameplay === 'stellar'"
+        class="flex flex-wrap gap-8px border-b border-gray-200 pb-12px dark:border-gray-700"
+      >
         <NButton
           v-for="tab in visibleTabs"
           :key="tab.key"
@@ -767,6 +1097,7 @@ onUnmounted(() => {
       </div>
 
       <NSpin :show="loading">
+        <template v-if="selectedGameplay === 'stellar'">
         <!-- 千星游记 -->
         <NCard v-show="activeTab === 'travel'" :bordered="false" size="small" class="card-wrapper">
           <div
@@ -783,7 +1114,12 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <div class="mb-12px text-12px text-gray-500">{{ $t('page.farm.activity.travelTip') }}</div>
+          <div class="mb-12px flex flex-wrap items-center gap-8px text-12px text-gray-500">
+            <span>{{ $t('page.farm.activity.travelTip') }}</span>
+            <NButton v-if="passRules" size="tiny" quaternary @click="travelRulesOpen = true">
+              {{ $t('page.farm.activity.viewRules') }}
+            </NButton>
+          </div>
 
           <NEmpty v-if="!passNodes.length" class="py-24px" :description="$t('common.noData')" />
           <div v-else class="flex-col gap-10px">
@@ -840,6 +1176,11 @@ onUnmounted(() => {
 
         <!-- 观星礼录 -->
         <NCard v-show="activeTab === 'constellation'" :bordered="false" size="small" class="card-wrapper">
+          <div v-if="constellationRules" class="mb-12px flex justify-end">
+            <NButton size="small" quaternary @click="constellationRulesOpen = true">
+              {{ $t('page.farm.activity.viewRules') }}
+            </NButton>
+          </div>
           <NEmpty v-if="!constellationGroups.length" class="py-24px" :description="$t('common.noData')" />
           <template v-else>
             <div class="mb-12px flex flex-wrap gap-8px">
@@ -1050,8 +1391,20 @@ onUnmounted(() => {
             </div>
           </div>
         </NCard>
+        </template>
+        <QixiView
+          v-else-if="selectedGameplay === 'qixi'"
+          :activity="qixi"
+          :friends="qixiFriends"
+          :friends-loading="qixiFriendsLoading"
+          :pending-bridge="pendingKey === 'qixiBridge'"
+          :pending-gift="pendingKey === 'qixiGift'"
+          @claim-bridge="claimQixiBridge"
+          @gift="giftQixiSachet"
+          @refresh-friends="loadQixiFriends(true)"
+        />
         <!-- 青梅 -->
-        <NCard v-show="activeTab === 'greenPlum'" :bordered="false" size="small" class="card-wrapper">
+        <NCard v-else-if="selectedGameplay === 'greenPlum'" :bordered="false" size="small" class="card-wrapper">
           <div class="mb-12px rounded-8px bg-emerald-50 px-14px py-12px dark:bg-emerald-900/20">
             <div class="text-16px font-medium">
               {{ greenPlum.name || $t('page.farm.activity.greenPlumBrew') }}
@@ -1308,6 +1661,21 @@ onUnmounted(() => {
               </div>
             </template>
           </div>
+
+          <NCollapse v-if="greenPlumRules" class="mt-16px" :default-expanded-names="['rules']">
+            <NCollapseItem
+              :title="greenPlumRules.title || $t('page.farm.activity.qixiRules')"
+              name="rules"
+            >
+              <p
+                v-for="(paragraph, index) in greenPlumRules.paragraphs"
+                :key="index"
+                class="mb-8px whitespace-pre-line text-13px leading-relaxed"
+              >
+                {{ paragraph }}
+              </p>
+            </NCollapseItem>
+          </NCollapse>
         </NCard>
       </NSpin>
     </template>
@@ -1333,6 +1701,17 @@ onUnmounted(() => {
         </NButton>
       </div>
     </NModal>
+
+    <ActivityRulesDialog
+      :open="travelRulesOpen"
+      :rules="passRules"
+      @close="travelRulesOpen = false"
+    />
+    <ActivityRulesDialog
+      :open="constellationRulesOpen"
+      :rules="constellationRules"
+      @close="constellationRulesOpen = false"
+    />
   </div>
 </template>
 

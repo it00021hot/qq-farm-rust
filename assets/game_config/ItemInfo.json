@@ -286,7 +286,8 @@
     "jumps": "[43]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": 2026030202
+    "activity_id": 2026030202,
+    "to_see": null
   },
   {
     "id": 1018,
@@ -313,7 +314,8 @@
     "jumps": "[48]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": 2026060101
+    "activity_id": 2026060101,
+    "to_see": null
   },
   {
     "id": 1019,
@@ -388,7 +390,8 @@
     "jumps": "[56]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": 2026061902
+    "activity_id": 2026061902,
+    "to_see": null
   },
   {
     "id": 1022,
@@ -439,7 +442,87 @@
     "jumps": "[59]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
+  },
+  {
+    "id": 1024,
+    "type": 19,
+    "name": "鹊羽",
+    "interaction_type": null,
+    "sells": null,
+    "sell_cond": "活动结束后:2026081801",
+    "cond_sells": "1001:100",
+    "level": null,
+    "target_id": null,
+    "asset_name": null,
+    "icon_res": "gui/texture/icon/icon_qixi_feather/spriteFrame",
+    "max_count": 99999,
+    "max_own": 9999999999999,
+    "duration": null,
+    "can_use": null,
+    "desc": "活动特殊货币，可在鹊桥寄情活动内筑建鹊桥，活动结束后可出售为金币。",
+    "effectDesc": "鹊羽",
+    "trait_id ": null,
+    "layer": null,
+    "rarity": null,
+    "rarity_color": null,
+    "jumps": "[63]"
+  },
+  {
+    "id": 1025,
+    "type": 19,
+    "name": "鹊羽香囊",
+    "interaction_type": null,
+    "sells": null,
+    "sell_cond": "活动结束后:2026081801",
+    "cond_sells": "1001:10000",
+    "level": null,
+    "target_id": null,
+    "asset_name": null,
+    "icon_res": "gui/texture/icon/pack_qixi_silkbag_1/spriteFrame",
+    "max_count": 99999,
+    "max_own": 9999999999999,
+    "duration": null,
+    "can_use": null,
+    "desc": "在鹊桥寄情活动内赠送给好友，也可在活动结束后出售为金币。",
+    "effectDesc": "鹊羽香囊",
+    "trait_id ": null,
+    "layer": null,
+    "rarity": 2,
+    "rarity_color": "A8C1F4",
+    "jumps": "[64]",
+    "jumps_dtype": null,
+    "ware_scale": null,
+    "activity_id": 2026081802
+  },
+  {
+    "id": 1026,
+    "type": 19,
+    "name": "鹊羽香囊",
+    "interaction_type": null,
+    "sells": "1001:10000",
+    "sell_cond": null,
+    "cond_sells": null,
+    "level": null,
+    "target_id": null,
+    "asset_name": null,
+    "icon_res": "gui/texture/icon/pack_qixi_silkbag_2/spriteFrame",
+    "max_count": 1,
+    "max_own": 9999999999999,
+    "duration": null,
+    "can_use": null,
+    "desc": "{0}在鹊桥寄情活动期间赠送，能查看好友赠送寄语，也可出售为金币。",
+    "effectDesc": "鹊羽香囊",
+    "trait_id ": null,
+    "layer": null,
+    "rarity": 2,
+    "rarity_color": "A8C1F4",
+    "jumps": null,
+    "jumps_dtype": null,
+    "ware_scale": null,
+    "activity_id": 2026081802,
+    "to_see": 1
   },
   {
     "id": 1101,
@@ -928,7 +1011,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 3002,
@@ -955,7 +1039,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 4001,
@@ -982,7 +1067,288 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
+  },
+  {
+    "id": 5001,
+    "type": 23,
+    "name": "天气采集瓶",
+    "interaction_type": null,
+    "sells": null,
+    "sell_cond": "道具过期后:expire_time",
+    "cond_sells": "1001:1000",
+    "level": null,
+    "target_id": null,
+    "asset_name": null,
+    "icon_res": "gui/texture/icon/icon_weatherBottle_1/spriteFrame",
+    "max_count": 999,
+    "max_own": 999,
+    "duration": null,
+    "can_use": 1,
+    "desc": "雨落成诗活动道具，在有雷雨天的好友农场使用，可随机获得三种天气瓶。",
+    "effectDesc": "<outline color=#3194CB width=2 ><b>在<color=#c6ff00>雷雨状态的好友家</color>使用可得天气瓶。</b></outline>",
+    "trait_id ": null,
+    "layer": null,
+    "rarity": 4,
+    "rarity_color": "D1A21E",
+    "jumps": "[81]",
+    "jumps_dtype": null,
+    "ware_scale": null,
+    "activity_id": 2026070303,
+    "to_see": null
+  },
+  {
+    "id": 5002,
+    "type": 23,
+    "name": "雷雨召唤瓶",
+    "interaction_type": null,
+    "sells": null,
+    "sell_cond": "道具过期后:expire_time",
+    "cond_sells": "1001:10000",
+    "level": null,
+    "target_id": null,
+    "asset_name": null,
+    "icon_res": "gui/texture/icon/icon_weatherBottle_2/spriteFrame",
+    "max_count": 999,
+    "max_own": 999,
+    "duration": null,
+    "can_use": 1,
+    "desc": "雨落成诗活动道具，在自己农场使用，可召唤一场持续20分钟的雷雨。",
+    "effectDesc": "<outline color=#3194CB width=2 ><b>可召唤一场<color=#c6ff00>持续20分钟</color>的雷雨。</b></outline>",
+    "trait_id ": null,
+    "layer": null,
+    "rarity": 4,
+    "rarity_color": "D1A21E",
+    "jumps": "[81]",
+    "jumps_dtype": null,
+    "ware_scale": null,
+    "activity_id": 2026070303,
+    "to_see": null
+  },
+  {
+    "id": 5003,
+    "type": 23,
+    "name": "闪电变异瓶",
+    "interaction_type": "additemuseItem",
+    "sells": null,
+    "sell_cond": "道具过期后:expire_time",
+    "cond_sells": "1001:10000",
+    "level": null,
+    "target_id": null,
+    "asset_name": null,
+    "icon_res": "gui/texture/icon/icon_weatherBottle_3/spriteFrame",
+    "max_count": 999,
+    "max_own": 999,
+    "duration": null,
+    "can_use": 1,
+    "desc": "雨落成诗活动道具，使未成熟的作物立即发生闪电变异，种子、枯萎阶段和天工作物不可用。",
+    "effectDesc": "<outline color=#3194CB width=2 ><b>使未成熟的1*1作物立即发生<color=#c6ff00>闪电变异</color>。</b></outline>",
+    "trait_id ": null,
+    "layer": null,
+    "rarity": 4,
+    "rarity_color": "D1A21E",
+    "jumps": "[82]",
+    "jumps_dtype": null,
+    "ware_scale": null,
+    "activity_id": 2026070303,
+    "to_see": null
+  },
+  {
+    "id": 5004,
+    "type": 23,
+    "name": "霹雳引雷瓶",
+    "interaction_type": "additemuseItem",
+    "sells": null,
+    "sell_cond": "道具过期后:expire_time",
+    "cond_sells": "1001:10000",
+    "level": null,
+    "target_id": null,
+    "asset_name": null,
+    "icon_res": "gui/texture/icon/icon_weatherBottle_4/spriteFrame",
+    "max_count": 999,
+    "max_own": 999,
+    "duration": null,
+    "can_use": 1,
+    "desc": "雨落成诗活动道具，使好友的作物变成雷击木，售价x1.5倍！双方各得雷纹礼盒*1。天工作物，以及处于种子、成熟、枯萎阶段或已变为雷击木的作物，无法使用。",
+    "effectDesc": "<outline color=#3194CB width=2 ><b>使好友的作物变成雷击木，<color=#c6ff00>售价x1.5倍</color>！</b></outline>",
+    "trait_id ": null,
+    "layer": null,
+    "rarity": 4,
+    "rarity_color": "D1A21E",
+    "jumps": "[82]",
+    "jumps_dtype": null,
+    "ware_scale": null,
+    "activity_id": 2026070303,
+    "to_see": null
+  },
+  {
+    "id": 5005,
+    "type": 23,
+    "name": "青蛙使坏瓶",
+    "interaction_type": null,
+    "sells": null,
+    "sell_cond": "道具过期后:expire_time",
+    "cond_sells": "1001:100",
+    "level": null,
+    "target_id": null,
+    "asset_name": null,
+    "icon_res": "gui/texture/icon/icon_weatherBottle_5/spriteFrame",
+    "max_count": 999,
+    "max_own": 999,
+    "duration": null,
+    "can_use": 1,
+    "desc": "雨落成诗活动道具，在好友农场放出一只捣乱的小青蛙，可得30经验。",
+    "effectDesc": "<outline color=#3194CB width=2 ><b>在好友农场放出一只小青蛙。</b></outline>",
+    "trait_id ": null,
+    "layer": null,
+    "rarity": 3,
+    "rarity_color": "B09DED",
+    "jumps": "[81]",
+    "jumps_dtype": null,
+    "ware_scale": null,
+    "activity_id": 2026070303,
+    "to_see": null
+  },
+  {
+    "id": 5006,
+    "type": 23,
+    "name": "乌云使坏瓶",
+    "interaction_type": "additemuseItem",
+    "sells": null,
+    "sell_cond": "道具过期后:expire_time",
+    "cond_sells": "1001:100",
+    "level": null,
+    "target_id": null,
+    "asset_name": null,
+    "icon_res": "gui/texture/icon/icon_weatherBottle_6/spriteFrame",
+    "max_count": 999,
+    "max_own": 999,
+    "duration": null,
+    "can_use": 1,
+    "desc": "雨落成诗活动道具，在好友作物上放出一朵乌云，可得30经验。",
+    "effectDesc": "<outline color=#3194CB width=2 ><b>在好友作物上放出一朵乌云。</b></outline>",
+    "trait_id ": null,
+    "layer": null,
+    "rarity": 3,
+    "rarity_color": "B09DED",
+    "jumps": "[82]",
+    "jumps_dtype": null,
+    "ware_scale": null,
+    "activity_id": 2026070303,
+    "to_see": null
+  },
+  {
+    "id": 5007,
+    "type": 11,
+    "name": "百宝惊喜瓶",
+    "interaction_type": null,
+    "sells": null,
+    "sell_cond": null,
+    "cond_sells": null,
+    "level": null,
+    "target_id": null,
+    "asset_name": null,
+    "icon_res": "gui/texture/icon/icon_weatherBottle_7/spriteFrame",
+    "max_count": 999,
+    "max_own": 999,
+    "duration": null,
+    "can_use": 1,
+    "desc": "雨落成诗活动道具，打开后可获得有机化肥（1小时）*5，化肥（1小时）*5，金币*2万。",
+    "effectDesc": "打开后获得道具。",
+    "trait_id ": null,
+    "layer": null,
+    "rarity": 3,
+    "rarity_color": "B09DED",
+    "jumps": "[82]",
+    "jumps_dtype": null,
+    "ware_scale": null,
+    "activity_id": 2026070303,
+    "to_see": null
+  },
+  {
+    "id": 5008,
+    "type": 11,
+    "name": "雷纹礼盒",
+    "interaction_type": null,
+    "sells": null,
+    "sell_cond": null,
+    "cond_sells": null,
+    "level": null,
+    "target_id": null,
+    "asset_name": null,
+    "icon_res": "gui/texture/icon/pack_weatherBottle/spriteFrame",
+    "max_count": 999,
+    "max_own": 999,
+    "duration": null,
+    "can_use": 1,
+    "desc": "使用霹雳引雷瓶或收获雷击木可得，打开后可获得金豆豆*5，金币*2万。",
+    "effectDesc": "使用霹雳引雷瓶或收获雷击木可得。",
+    "trait_id ": null,
+    "layer": null,
+    "rarity": 3,
+    "rarity_color": "B09DED",
+    "jumps": null,
+    "jumps_dtype": null,
+    "ware_scale": null,
+    "activity_id": null,
+    "to_see": null
+  },
+  {
+    "id": 5009,
+    "type": 28,
+    "name": "雷击木",
+    "interaction_type": null,
+    "sells": null,
+    "sell_cond": null,
+    "cond_sells": null,
+    "level": null,
+    "target_id": null,
+    "asset_name": null,
+    "icon_res": "gui/texture/icon/icon_weather_wood/spriteFrame",
+    "max_count": 999,
+    "max_own": 999,
+    "duration": null,
+    "can_use": null,
+    "desc": "作物被使用霹雳引雷瓶后获得。",
+    "effectDesc": "作物被使用霹雳引雷瓶后获得。",
+    "trait_id ": null,
+    "layer": null,
+    "rarity": 4,
+    "rarity_color": "D1A21E",
+    "jumps": null,
+    "jumps_dtype": null,
+    "ware_scale": null,
+    "activity_id": null,
+    "to_see": null
+  },
+  {
+    "id": 5010,
+    "type": 28,
+    "name": "黄金·雷击木",
+    "interaction_type": null,
+    "sells": null,
+    "sell_cond": null,
+    "cond_sells": null,
+    "level": null,
+    "target_id": null,
+    "asset_name": null,
+    "icon_res": "gui/texture/icon/icon_weather_goldenWood/spriteFrame",
+    "max_count": 999,
+    "max_own": 999,
+    "duration": null,
+    "can_use": null,
+    "desc": "黄金作物被使用霹雳引雷瓶后获得。",
+    "effectDesc": "黄金作物被使用霹雳引雷瓶后获得。",
+    "trait_id ": null,
+    "layer": null,
+    "rarity": 4,
+    "rarity_color": "D1A21E",
+    "jumps": null,
+    "jumps_dtype": null,
+    "ware_scale": null,
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 10001,
@@ -1166,7 +1532,7 @@
     "id": 10015,
     "type": 4,
     "name": "放置使坏虫道具",
-    "interaction_type": "addbadbugsocialItem",
+    "interaction_type": "additemuseItem",
     "sells": null,
     "sell_cond": null,
     "cond_sells": null,
@@ -1187,7 +1553,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 10016,
@@ -1214,13 +1581,14 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 10017,
     "type": 4,
     "name": "放置使坏足球道具",
-    "interaction_type": "addbadgrasssocialItem",
+    "interaction_type": "additemuseItem",
     "sells": null,
     "sell_cond": null,
     "cond_sells": null,
@@ -1241,7 +1609,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 10018,
@@ -1268,7 +1637,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 10019,
@@ -1288,6 +1658,34 @@
     "can_use": null,
     "desc": "铲除作物",
     "effectDesc": null
+  },
+  {
+    "id": 10020,
+    "type": 4,
+    "name": "放置鹊食",
+    "interaction_type": "addbadgrasssocialItem",
+    "sells": null,
+    "sell_cond": null,
+    "cond_sells": null,
+    "level": null,
+    "target_id": null,
+    "asset_name": null,
+    "icon_res": "gui/texture/icon/icon_grass_eraser/spriteFrame",
+    "max_count": 1,
+    "max_own": 1,
+    "duration": null,
+    "can_use": null,
+    "desc": "放置鹊食",
+    "effectDesc": "放置鹊食",
+    "trait_id ": null,
+    "layer": null,
+    "rarity": null,
+    "rarity_color": null,
+    "jumps": null,
+    "jumps_dtype": null,
+    "ware_scale": null,
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 80001,
@@ -1314,7 +1712,8 @@
     "jumps": "[31]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 80002,
@@ -1341,7 +1740,8 @@
     "jumps": "[31]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 80003,
@@ -1368,7 +1768,8 @@
     "jumps": "[31]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 80004,
@@ -1395,7 +1796,8 @@
     "jumps": "[31]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 80011,
@@ -1422,7 +1824,8 @@
     "jumps": "[31]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 80012,
@@ -1449,7 +1852,8 @@
     "jumps": "[31]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 80013,
@@ -1476,7 +1880,8 @@
     "jumps": "[31]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 80014,
@@ -1503,7 +1908,8 @@
     "jumps": "[31]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 90001,
@@ -1766,7 +2172,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 100004,
@@ -1793,7 +2200,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 100005,
@@ -1820,7 +2228,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 100006,
@@ -1847,7 +2256,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 100007,
@@ -1874,7 +2284,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 100008,
@@ -2015,7 +2426,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 100111,
@@ -2232,7 +2644,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 101202,
@@ -2259,7 +2672,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 101203,
@@ -2286,7 +2700,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 101204,
@@ -2313,7 +2728,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 101205,
@@ -2340,7 +2756,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 101206,
@@ -2367,7 +2784,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 101251,
@@ -2394,7 +2812,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 101252,
@@ -2421,7 +2840,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 101253,
@@ -2448,7 +2868,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 101254,
@@ -2475,7 +2896,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 101301,
@@ -2502,7 +2924,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 101302,
@@ -2529,7 +2952,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 101303,
@@ -2556,7 +2980,36 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
+  },
+  {
+    "id": 101304,
+    "type": 11,
+    "name": "千星游记礼包",
+    "interaction_type": null,
+    "sells": null,
+    "sell_cond": null,
+    "cond_sells": null,
+    "level": 1,
+    "target_id": null,
+    "asset_name": null,
+    "icon_res": "gui/texture/icon/pack_svip_SeasonLimited/spriteFrame",
+    "max_count": 999,
+    "max_own": 999,
+    "duration": null,
+    "can_use": 1,
+    "desc": "SVIP特权礼包，心许千灯星垂野活动限定；打开后，随机获得以下道具：20000金币、赛季限定种子*1~2",
+    "effectDesc": "千星游记限定随机礼包",
+    "trait_id ": null,
+    "layer": null,
+    "rarity": 3,
+    "rarity_color": "B09DED",
+    "jumps": null,
+    "jumps_dtype": null,
+    "ware_scale": null,
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 101310,
@@ -2583,7 +3036,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 101311,
@@ -2610,7 +3064,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 101315,
@@ -2637,7 +3092,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 101316,
@@ -2664,7 +3120,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 101321,
@@ -2691,7 +3148,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 101323,
@@ -2718,7 +3176,82 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
+  },
+  {
+    "id": 101324,
+    "type": 11,
+    "name": "鹊羽礼包",
+    "interaction_type": null,
+    "sells": null,
+    "sell_cond": null,
+    "cond_sells": null,
+    "level": 1,
+    "target_id": null,
+    "asset_name": null,
+    "icon_res": "gui/texture/icon/pack_qixi/spriteFrame",
+    "max_count": 999,
+    "max_own": 999,
+    "duration": null,
+    "can_use": 1,
+    "desc": "打开后会的奖励1个鹊羽",
+    "effectDesc": "鹊羽礼包",
+    "trait_id ": null,
+    "layer": null,
+    "rarity": 3,
+    "rarity_color": "B09DED",
+    "jumps": null,
+    "jumps_dtype": null,
+    "ware_scale": null,
+    "activity_id": null,
+    "to_see": null
+  },
+  {
+    "id": 101325,
+    "type": 11,
+    "name": "鹊桥寄情礼包·一",
+    "interaction_type": null,
+    "sells": null,
+    "sell_cond": null,
+    "cond_sells": null,
+    "level": 1,
+    "target_id": null,
+    "asset_name": null,
+    "icon_res": "gui/texture/icon/pack_qixi/spriteFrame",
+    "max_count": 999,
+    "max_own": 999,
+    "duration": null,
+    "can_use": 1,
+    "desc": "打开后，可获得200点券，4袋8小时化肥。",
+    "effectDesc": "通过鹊桥寄情活动获得",
+    "trait_id ": null,
+    "layer": null,
+    "rarity": 3,
+    "rarity_color": "B09DED"
+  },
+  {
+    "id": 101326,
+    "type": 11,
+    "name": "鹊桥寄情礼包·二",
+    "interaction_type": null,
+    "sells": null,
+    "sell_cond": null,
+    "cond_sells": null,
+    "level": 1,
+    "target_id": null,
+    "asset_name": null,
+    "icon_res": "gui/texture/icon/pack_qixi/spriteFrame",
+    "max_count": 999,
+    "max_own": 999,
+    "duration": null,
+    "can_use": 1,
+    "desc": "打开后，可获得200点券，4袋8小时化肥。",
+    "effectDesc": "通过鹊桥寄情活动获得",
+    "trait_id ": null,
+    "layer": null,
+    "rarity": 3,
+    "rarity_color": "B09DED"
   },
   {
     "id": 101330,
@@ -2745,7 +3278,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 101331,
@@ -2772,7 +3306,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 101351,
@@ -2799,7 +3334,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 101400,
@@ -2826,7 +3362,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 101401,
@@ -2853,7 +3390,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 101402,
@@ -2880,7 +3418,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 101403,
@@ -2907,7 +3446,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 101501,
@@ -2934,7 +3474,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 101601,
@@ -2961,7 +3502,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 101602,
@@ -2988,7 +3530,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 101603,
@@ -3015,7 +3558,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 29999,
@@ -3042,7 +3586,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 29998,
@@ -3069,7 +3614,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20002,
@@ -3096,7 +3642,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20003,
@@ -3123,7 +3670,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20059,
@@ -3150,7 +3698,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20065,
@@ -3177,7 +3726,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20064,
@@ -3204,7 +3754,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20060,
@@ -3231,7 +3782,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20061,
@@ -3258,7 +3810,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20004,
@@ -3285,7 +3838,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20066,
@@ -3312,7 +3866,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20005,
@@ -3339,7 +3894,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20071,
@@ -3366,7 +3922,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20096,
@@ -3393,7 +3950,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20099,
@@ -3420,7 +3978,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20006,
@@ -3447,7 +4006,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20051,
@@ -3474,7 +4034,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20120,
@@ -3501,7 +4062,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20259,
@@ -3528,7 +4090,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20007,
@@ -3555,7 +4118,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20098,
@@ -3582,7 +4146,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20305,
@@ -3609,7 +4174,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20105,
@@ -3636,7 +4202,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20008,
@@ -3663,7 +4230,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20037,
@@ -3690,7 +4258,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20041,
@@ -3717,7 +4286,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20161,
@@ -3744,7 +4314,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20110,
@@ -3771,7 +4342,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20143,
@@ -3798,7 +4370,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20147,
@@ -3825,7 +4398,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20162,
@@ -3852,7 +4426,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20009,
@@ -3879,7 +4454,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20097,
@@ -3906,7 +4482,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20306,
@@ -3933,7 +4510,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20103,
@@ -3960,7 +4538,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20010,
@@ -3987,7 +4566,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20308,
@@ -4014,7 +4594,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20091,
@@ -4041,7 +4622,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20073,
@@ -4068,7 +4650,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20001,
@@ -4095,7 +4678,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20011,
@@ -4122,7 +4706,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20062,
@@ -4149,7 +4734,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20104,
@@ -4176,7 +4762,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20135,
@@ -4203,7 +4790,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20141,
@@ -4230,7 +4818,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20142,
@@ -4257,7 +4846,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20145,
@@ -4284,7 +4874,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20014,
@@ -4311,7 +4902,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20070,
@@ -4338,7 +4930,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20015,
@@ -4365,7 +4958,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20100,
@@ -4392,7 +4986,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20018,
@@ -4419,7 +5014,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20047,
@@ -4446,7 +5042,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20019,
@@ -4473,7 +5070,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20128,
@@ -4500,7 +5098,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20013,
@@ -4527,7 +5126,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20044,
@@ -4554,7 +5154,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20072,
@@ -4581,7 +5182,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20396,
@@ -4608,7 +5210,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20023,
@@ -4635,7 +5238,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20095,
@@ -4662,7 +5266,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20026,
@@ -4689,7 +5294,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20050,
@@ -4716,7 +5322,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20027,
@@ -4743,7 +5350,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20036,
@@ -4770,7 +5378,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20043,
@@ -4797,7 +5406,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20029,
@@ -4824,7 +5434,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20049,
@@ -4851,7 +5462,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20052,
@@ -4878,7 +5490,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20031,
@@ -4905,7 +5518,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20045,
@@ -4932,7 +5546,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20054,
@@ -4959,7 +5574,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20442,
@@ -4986,7 +5602,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20033,
@@ -5013,7 +5630,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20055,
@@ -5040,7 +5658,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20034,
@@ -5067,7 +5686,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20413,
@@ -5094,7 +5714,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20035,
@@ -5121,7 +5742,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20067,
@@ -5148,7 +5770,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20038,
@@ -5175,7 +5798,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20053,
@@ -5202,7 +5826,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20080,
@@ -5229,7 +5854,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20039,
@@ -5256,7 +5882,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20056,
@@ -5283,7 +5910,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20075,
@@ -5310,7 +5938,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20042,
@@ -5337,7 +5966,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20057,
@@ -5364,7 +5994,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20048,
@@ -5391,7 +6022,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20058,
@@ -5418,7 +6050,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20079,
@@ -5445,7 +6078,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20218,
@@ -5472,7 +6106,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20077,
@@ -5499,7 +6134,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20220,
@@ -5526,7 +6162,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20076,
@@ -5553,7 +6190,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20116,
@@ -5580,7 +6218,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20126,
@@ -5607,7 +6246,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20063,
@@ -5634,7 +6274,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20221,
@@ -5661,7 +6302,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20068,
@@ -5688,7 +6330,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20222,
@@ -5715,7 +6358,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20078,
@@ -5742,7 +6386,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20074,
@@ -5769,7 +6414,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20083,
@@ -5796,7 +6442,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20225,
@@ -5823,7 +6470,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20084,
@@ -5850,7 +6498,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20226,
@@ -5877,7 +6526,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20085,
@@ -5904,7 +6554,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20227,
@@ -5931,7 +6582,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20086,
@@ -5958,7 +6610,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20228,
@@ -5985,7 +6638,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20087,
@@ -6012,7 +6666,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20235,
@@ -6039,7 +6694,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20088,
@@ -6066,7 +6722,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20201,
@@ -6093,7 +6750,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20089,
@@ -6120,7 +6778,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20202,
@@ -6147,7 +6806,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20090,
@@ -6174,7 +6834,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20229,
@@ -6201,7 +6862,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20174,
@@ -6228,7 +6890,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20204,
@@ -6255,7 +6918,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20022,
@@ -6282,7 +6946,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20242,
@@ -6309,7 +6974,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20188,
@@ -6336,7 +7002,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20106,
@@ -6363,7 +7030,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20101,
@@ -6390,7 +7058,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20102,
@@ -6417,7 +7086,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20182,
@@ -6444,7 +7114,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20069,
@@ -6471,7 +7142,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20124,
@@ -6498,7 +7170,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20115,
@@ -6525,7 +7198,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20187,
@@ -6552,7 +7226,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20131,
@@ -6579,7 +7254,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20132,
@@ -6606,7 +7282,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20172,
@@ -6633,7 +7310,8 @@
     "jumps": "[11]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 21542,
@@ -6660,7 +7338,8 @@
     "jumps": "[40]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20329,
@@ -6687,7 +7366,8 @@
     "jumps": "[71]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20112,
@@ -6714,7 +7394,8 @@
     "jumps": "[41]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20025,
@@ -6741,7 +7422,8 @@
     "jumps": "[41]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20121,
@@ -6768,7 +7450,8 @@
     "jumps": "[41]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20109,
@@ -6795,7 +7478,8 @@
     "jumps": "[41]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20224,
@@ -6822,7 +7506,8 @@
     "jumps": "[41]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20249,
@@ -6849,7 +7534,8 @@
     "jumps": "[41]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 21135,
@@ -6876,7 +7562,8 @@
     "jumps": "[42]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20184,
@@ -6903,7 +7590,8 @@
     "jumps": "[43]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20193,
@@ -6930,7 +7618,8 @@
     "jumps": "[43]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20256,
@@ -6957,7 +7646,8 @@
     "jumps": "[43]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20261,
@@ -6984,7 +7674,8 @@
     "jumps": "[43]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20257,
@@ -7011,7 +7702,8 @@
     "jumps": "[43]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20258,
@@ -7038,7 +7730,8 @@
     "jumps": "[43]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20304,
@@ -7065,7 +7758,8 @@
     "jumps": "[43]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20122,
@@ -7092,7 +7786,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20134,
@@ -7119,7 +7814,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20139,
@@ -7146,7 +7842,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20140,
@@ -7173,7 +7870,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20144,
@@ -7200,7 +7898,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20154,
@@ -7227,7 +7926,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20263,
@@ -7254,7 +7954,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20269,
@@ -7281,7 +7982,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20199,
@@ -7308,7 +8010,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20262,
@@ -7335,7 +8038,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20223,
@@ -7362,7 +8066,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20185,
@@ -7389,7 +8094,8 @@
     "jumps": "[48]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20267,
@@ -7416,7 +8122,8 @@
     "jumps": "[48]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20133,
@@ -7443,7 +8150,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20176,
@@ -7470,7 +8178,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20186,
@@ -7497,7 +8206,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20251,
@@ -7524,7 +8234,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 21044,
@@ -7551,7 +8262,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 21038,
@@ -7578,7 +8290,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 21474,
@@ -7605,7 +8318,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20243,
@@ -7632,7 +8346,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 21134,
@@ -7659,7 +8374,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 26127,
@@ -7686,7 +8402,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20167,
@@ -7713,16 +8430,17 @@
     "jumps": "[45]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 21221,
     "type": 5,
     "name": "青梅种子",
     "interaction_type": "plant",
-    "sells": "1001:1000",
-    "sell_cond": null,
-    "cond_sells": null,
+    "sells": null,
+    "sell_cond": "活动区间外:2026081202",
+    "cond_sells": "1001:1000",
     "level": 21,
     "target_id": null,
     "asset_name": "Crop_1221",
@@ -7737,10 +8455,11 @@
     "layer": null,
     "rarity": 2,
     "rarity_color": "A8C1F4",
-    "jumps": "[57]",
+    "jumps": "[85]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": 2026081202,
+    "to_see": null
   },
   {
     "id": 20264,
@@ -7767,7 +8486,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20108,
@@ -7794,7 +8514,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 26032,
@@ -7821,7 +8542,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 21251,
@@ -7848,7 +8570,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 21050,
@@ -7875,7 +8598,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 21404,
@@ -7902,7 +8626,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 21037,
@@ -7929,7 +8654,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 21353,
@@ -7956,7 +8682,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 21380,
@@ -7983,7 +8710,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20129,
@@ -8010,7 +8738,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20375,
@@ -8037,7 +8766,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20136,
@@ -8064,7 +8794,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20111,
@@ -8091,7 +8822,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20118,
@@ -8118,7 +8850,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20114,
@@ -8145,7 +8878,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20165,
@@ -8172,7 +8906,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20107,
@@ -8199,7 +8934,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20130,
@@ -8226,7 +8962,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20123,
@@ -8253,7 +8990,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20046,
@@ -8280,7 +9018,8 @@
     "jumps": "[41]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20416,
@@ -8307,7 +9046,8 @@
     "jumps": "[43]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 21032,
@@ -8334,7 +9074,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 29003,
@@ -8361,7 +9102,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20219,
@@ -8388,7 +9130,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 20092,
@@ -8415,7 +9158,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30184,
@@ -8442,7 +9186,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30193,
@@ -8469,7 +9214,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30256,
@@ -8496,7 +9242,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30261,
@@ -8523,7 +9270,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30263,
@@ -8550,7 +9298,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30154,
@@ -8577,7 +9326,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30223,
@@ -8604,7 +9354,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30224,
@@ -8631,7 +9382,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30134,
@@ -8658,7 +9410,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30136,
@@ -8685,7 +9438,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30139,
@@ -8712,7 +9466,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30140,
@@ -8739,7 +9494,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30269,
@@ -8766,7 +9522,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30111,
@@ -8793,7 +9550,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30257,
@@ -8820,7 +9578,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30258,
@@ -8847,7 +9606,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30122,
@@ -8874,7 +9634,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30144,
@@ -8901,7 +9662,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30118,
@@ -8928,7 +9690,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30112,
@@ -8955,7 +9718,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30113,
@@ -8982,7 +9746,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30025,
@@ -9009,7 +9774,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30249,
@@ -9036,7 +9802,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30265,
@@ -9063,7 +9830,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30121,
@@ -9090,7 +9858,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30129,
@@ -9117,7 +9886,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30109,
@@ -9144,7 +9914,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30185,
@@ -9171,7 +9942,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30114,
@@ -9198,7 +9970,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30264,
@@ -9225,7 +9998,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30266,
@@ -9252,7 +10026,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30304,
@@ -9279,7 +10054,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30165,
@@ -9306,7 +10082,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30107,
@@ -9333,7 +10110,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30130,
@@ -9360,7 +10138,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30108,
@@ -9387,7 +10166,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30186,
@@ -9414,7 +10194,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30123,
@@ -9441,7 +10222,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30199,
@@ -9468,7 +10250,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 30262,
@@ -9495,7 +10278,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": 0.6,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40002,
@@ -9522,7 +10306,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40003,
@@ -9549,7 +10334,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40059,
@@ -9576,7 +10362,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40065,
@@ -9603,7 +10390,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40064,
@@ -9630,7 +10418,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40060,
@@ -9657,7 +10446,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40061,
@@ -9684,7 +10474,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40004,
@@ -9711,7 +10502,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40066,
@@ -9738,7 +10530,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40005,
@@ -9765,7 +10558,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40071,
@@ -9792,7 +10586,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40096,
@@ -9819,7 +10614,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40099,
@@ -9846,7 +10642,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40006,
@@ -9873,7 +10670,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40051,
@@ -9900,7 +10698,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40120,
@@ -9927,7 +10726,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40259,
@@ -9954,7 +10754,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40007,
@@ -9981,7 +10782,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40098,
@@ -10008,7 +10810,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40305,
@@ -10035,7 +10838,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40105,
@@ -10062,7 +10866,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40008,
@@ -10089,7 +10894,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40037,
@@ -10116,7 +10922,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40041,
@@ -10143,7 +10950,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40161,
@@ -10170,7 +10978,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40110,
@@ -10197,7 +11006,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40143,
@@ -10224,7 +11034,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40147,
@@ -10251,7 +11062,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40162,
@@ -10278,7 +11090,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40009,
@@ -10305,7 +11118,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40097,
@@ -10332,7 +11146,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40306,
@@ -10359,7 +11174,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40103,
@@ -10386,7 +11202,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40010,
@@ -10413,7 +11230,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40308,
@@ -10440,7 +11258,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40091,
@@ -10467,7 +11286,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40073,
@@ -10494,7 +11314,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40001,
@@ -10521,7 +11342,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40011,
@@ -10548,7 +11370,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40062,
@@ -10575,7 +11398,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40104,
@@ -10602,7 +11426,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40135,
@@ -10629,7 +11454,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40141,
@@ -10656,7 +11482,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40142,
@@ -10683,7 +11510,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40145,
@@ -10710,7 +11538,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40014,
@@ -10737,7 +11566,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40070,
@@ -10764,7 +11594,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40015,
@@ -10791,7 +11622,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40100,
@@ -10818,7 +11650,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40018,
@@ -10845,7 +11678,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40047,
@@ -10872,7 +11706,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40019,
@@ -10899,7 +11734,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40128,
@@ -10926,7 +11762,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40013,
@@ -10953,7 +11790,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40044,
@@ -10980,7 +11818,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40072,
@@ -11007,7 +11846,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40396,
@@ -11034,7 +11874,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40023,
@@ -11061,7 +11902,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40095,
@@ -11088,7 +11930,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40026,
@@ -11115,7 +11958,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40050,
@@ -11142,7 +11986,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40027,
@@ -11169,7 +12014,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40036,
@@ -11196,7 +12042,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40043,
@@ -11223,7 +12070,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40029,
@@ -11250,7 +12098,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40049,
@@ -11277,7 +12126,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40052,
@@ -11304,7 +12154,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40031,
@@ -11331,7 +12182,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40045,
@@ -11358,7 +12210,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40054,
@@ -11385,7 +12238,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40442,
@@ -11412,7 +12266,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40033,
@@ -11439,7 +12294,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40055,
@@ -11466,7 +12322,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40034,
@@ -11493,7 +12350,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40413,
@@ -11520,7 +12378,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40035,
@@ -11547,7 +12406,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40067,
@@ -11574,7 +12434,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40038,
@@ -11601,7 +12462,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40053,
@@ -11628,7 +12490,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40080,
@@ -11655,7 +12518,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40039,
@@ -11682,7 +12546,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40056,
@@ -11709,7 +12574,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40075,
@@ -11736,7 +12602,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40042,
@@ -11763,7 +12630,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40057,
@@ -11790,7 +12658,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40048,
@@ -11817,7 +12686,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40058,
@@ -11844,7 +12714,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40079,
@@ -11871,7 +12742,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40218,
@@ -11898,7 +12770,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40077,
@@ -11925,7 +12798,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40220,
@@ -11952,7 +12826,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40076,
@@ -11979,7 +12854,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40116,
@@ -12006,7 +12882,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40126,
@@ -12033,7 +12910,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40063,
@@ -12060,7 +12938,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40221,
@@ -12087,7 +12966,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40068,
@@ -12114,7 +12994,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40222,
@@ -12141,7 +13022,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40078,
@@ -12168,7 +13050,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40074,
@@ -12195,7 +13078,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40083,
@@ -12222,7 +13106,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40225,
@@ -12249,7 +13134,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40084,
@@ -12276,7 +13162,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40226,
@@ -12303,7 +13190,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40085,
@@ -12330,7 +13218,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40227,
@@ -12357,7 +13246,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40086,
@@ -12384,7 +13274,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40228,
@@ -12411,7 +13302,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40087,
@@ -12438,7 +13330,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40235,
@@ -12465,7 +13358,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40088,
@@ -12492,7 +13386,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40201,
@@ -12519,7 +13414,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40089,
@@ -12546,7 +13442,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40202,
@@ -12573,7 +13470,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40090,
@@ -12600,7 +13498,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40229,
@@ -12627,7 +13526,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40174,
@@ -12654,7 +13554,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40204,
@@ -12681,7 +13582,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40022,
@@ -12708,7 +13610,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40242,
@@ -12735,7 +13638,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40188,
@@ -12762,7 +13666,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40106,
@@ -12789,7 +13694,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40101,
@@ -12816,7 +13722,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40102,
@@ -12843,7 +13750,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40182,
@@ -12870,7 +13778,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40069,
@@ -12897,7 +13806,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40124,
@@ -12924,7 +13834,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40115,
@@ -12951,7 +13862,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40187,
@@ -12978,7 +13890,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40131,
@@ -13005,7 +13918,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40132,
@@ -13032,7 +13946,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40172,
@@ -13059,7 +13974,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40112,
@@ -13086,7 +14002,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40025,
@@ -13113,7 +14030,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40121,
@@ -13140,7 +14058,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40109,
@@ -13167,7 +14086,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40224,
@@ -13194,7 +14114,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40249,
@@ -13221,7 +14142,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 41135,
@@ -13248,7 +14170,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40184,
@@ -13275,7 +14198,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40193,
@@ -13302,7 +14226,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40256,
@@ -13329,7 +14254,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40261,
@@ -13356,7 +14282,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40257,
@@ -13383,7 +14310,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40258,
@@ -13410,7 +14338,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40304,
@@ -13437,7 +14366,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 49001,
@@ -13464,7 +14394,8 @@
     "jumps": "[43]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 49002,
@@ -13491,7 +14422,8 @@
     "jumps": "[43]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40122,
@@ -13518,7 +14450,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40134,
@@ -13545,7 +14478,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40139,
@@ -13572,7 +14506,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40140,
@@ -13599,7 +14534,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40144,
@@ -13626,7 +14562,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40154,
@@ -13653,7 +14590,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40263,
@@ -13680,7 +14618,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40269,
@@ -13707,7 +14646,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40199,
@@ -13734,7 +14674,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40262,
@@ -13761,7 +14702,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40223,
@@ -13788,7 +14730,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40185,
@@ -13815,7 +14758,8 @@
     "jumps": "[48]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40267,
@@ -13842,7 +14786,8 @@
     "jumps": "[48]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40133,
@@ -13869,7 +14814,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40176,
@@ -13896,7 +14842,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40186,
@@ -13923,7 +14870,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40251,
@@ -13950,7 +14898,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 41044,
@@ -13977,7 +14926,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 41038,
@@ -14004,7 +14954,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 41474,
@@ -14031,7 +14982,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40243,
@@ -14058,7 +15010,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 41134,
@@ -14085,7 +15038,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 46127,
@@ -14112,7 +15066,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 46109,
@@ -14139,7 +15094,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 41032,
@@ -14166,7 +15122,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40167,
@@ -14193,7 +15150,8 @@
     "jumps": "[45]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40804,
@@ -14220,7 +15178,8 @@
     "jumps": "[45]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 41221,
@@ -14228,7 +15187,7 @@
     "name": "青梅",
     "interaction_type": null,
     "sells": null,
-    "sell_cond": "活动结束后:2026080102",
+    "sell_cond": "活动区间外:2026081202",
     "cond_sells": "1001:240",
     "level": 21,
     "target_id": null,
@@ -14238,16 +15197,17 @@
     "max_own": 999990,
     "duration": null,
     "can_use": null,
-    "desc": "卖给商人后，可以获得金币，活动期间不售卖。",
+    "desc": "卖给商人后，可以获得金币，活动期间不可售卖。",
     "effectDesc": "卖给商人后，可以获得金币。",
     "trait_id ": null,
     "layer": null,
     "rarity": 2,
     "rarity_color": "A8C1F4",
-    "jumps": "[57]",
+    "jumps": "[85]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40264,
@@ -14274,7 +15234,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40108,
@@ -14301,7 +15262,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 46032,
@@ -14328,7 +15290,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 41251,
@@ -14355,7 +15318,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 41050,
@@ -14382,7 +15346,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 41404,
@@ -14409,7 +15374,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 41037,
@@ -14436,7 +15402,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 41353,
@@ -14463,7 +15430,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 41380,
@@ -14490,7 +15458,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40129,
@@ -14517,7 +15486,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40375,
@@ -14544,7 +15514,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 49003,
@@ -14571,7 +15542,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40136,
@@ -14598,7 +15570,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40111,
@@ -14625,7 +15598,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40118,
@@ -14652,7 +15626,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40114,
@@ -14679,7 +15654,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40165,
@@ -14706,7 +15682,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40107,
@@ -14733,7 +15710,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40130,
@@ -14760,7 +15738,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40123,
@@ -14787,7 +15766,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 41542,
@@ -14814,7 +15794,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40329,
@@ -14841,7 +15822,8 @@
     "jumps": "[71]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40219,
@@ -14868,7 +15850,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40046,
@@ -14895,7 +15878,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40092,
@@ -14922,7 +15906,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 40416,
@@ -14949,7 +15934,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040112,
@@ -14976,7 +15962,8 @@
     "jumps": "[41]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040025,
@@ -15003,7 +15990,8 @@
     "jumps": "[41]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040121,
@@ -15030,7 +16018,8 @@
     "jumps": "[41]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040109,
@@ -15057,7 +16046,8 @@
     "jumps": "[41]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040224,
@@ -15084,7 +16074,8 @@
     "jumps": "[41]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040249,
@@ -15111,7 +16102,8 @@
     "jumps": "[41]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1041135,
@@ -15138,7 +16130,8 @@
     "jumps": "[42]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040184,
@@ -15165,7 +16158,8 @@
     "jumps": "[43]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040193,
@@ -15192,7 +16186,8 @@
     "jumps": "[43]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040256,
@@ -15219,7 +16214,8 @@
     "jumps": "[43]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040261,
@@ -15246,7 +16242,8 @@
     "jumps": "[43]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040257,
@@ -15273,7 +16270,8 @@
     "jumps": "[43]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040258,
@@ -15300,7 +16298,8 @@
     "jumps": "[43]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040304,
@@ -15327,7 +16326,8 @@
     "jumps": "[43]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040046,
@@ -15354,7 +16354,8 @@
     "jumps": "[41]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040416,
@@ -15381,7 +16382,8 @@
     "jumps": "[43]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1049001,
@@ -15408,7 +16410,8 @@
     "jumps": "[43]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040122,
@@ -15435,7 +16438,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040134,
@@ -15462,7 +16466,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040139,
@@ -15489,7 +16494,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040140,
@@ -15516,7 +16522,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040144,
@@ -15543,7 +16550,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040154,
@@ -15570,7 +16578,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040263,
@@ -15597,7 +16606,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040269,
@@ -15624,7 +16634,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040199,
@@ -15651,7 +16662,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040262,
@@ -15678,7 +16690,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040223,
@@ -15705,7 +16718,8 @@
     "jumps": null,
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040185,
@@ -15732,7 +16746,8 @@
     "jumps": "[48]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040267,
@@ -15759,7 +16774,8 @@
     "jumps": "[48]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040133,
@@ -15786,7 +16802,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040176,
@@ -15813,7 +16830,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040186,
@@ -15840,7 +16858,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040251,
@@ -15867,7 +16886,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1041044,
@@ -15894,7 +16914,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1041038,
@@ -15921,7 +16942,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1041474,
@@ -15948,7 +16970,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040243,
@@ -15975,7 +16998,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1041134,
@@ -16002,7 +17026,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1046127,
@@ -16029,7 +17054,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1046109,
@@ -16056,7 +17082,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1041032,
@@ -16083,7 +17110,8 @@
     "jumps": "[47]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040167,
@@ -16110,7 +17138,8 @@
     "jumps": "[45]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1041221,
@@ -16134,10 +17163,11 @@
     "layer": null,
     "rarity": 2,
     "rarity_color": "A8C1F4",
-    "jumps": "[57]",
+    "jumps": "[85]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040264,
@@ -16164,7 +17194,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040108,
@@ -16191,7 +17222,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1046032,
@@ -16218,7 +17250,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1041251,
@@ -16245,7 +17278,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1041050,
@@ -16272,7 +17306,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1041404,
@@ -16299,7 +17334,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1041037,
@@ -16326,7 +17362,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1041353,
@@ -16353,7 +17390,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1041380,
@@ -16380,7 +17418,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040129,
@@ -16407,7 +17446,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1040375,
@@ -16434,7 +17474,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 1049003,
@@ -16461,7 +17502,8 @@
     "jumps": "[60]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 201001,
@@ -16851,7 +17893,8 @@
     "jumps": "[61]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 202008,
@@ -16878,7 +17921,8 @@
     "jumps": "[61]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 203001,
@@ -17076,7 +18120,8 @@
     "jumps": "[61]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 203009,
@@ -17103,7 +18148,8 @@
     "jumps": "[61]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 204001,
@@ -17450,7 +18496,8 @@
     "jumps": "[61]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 205008,
@@ -17477,7 +18524,8 @@
     "jumps": "[61]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 206001,
@@ -17649,7 +18697,8 @@
     "jumps": "[61]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 206008,
@@ -17676,7 +18725,8 @@
     "jumps": "[61]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 207001,
@@ -17872,7 +18922,8 @@
     "jumps": "[61]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 207009,
@@ -17899,7 +18950,8 @@
     "jumps": "[61]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 208001,
@@ -18098,7 +19150,8 @@
     "jumps": "[61]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 208009,
@@ -18125,13 +19178,14 @@
     "jumps": "[61]",
     "jumps_dtype": null,
     "ware_scale": null,
-    "activity_id": null
+    "activity_id": null,
+    "to_see": null
   },
   {
     "id": 301101,
     "type": 23,
     "name": "黄金虫",
-    "interaction_type": "addbadbugsocialItem",
+    "interaction_type": "additemuseItem",
     "sells": null,
     "sell_cond": null,
     "cond_sells": null,
@@ -18142,7 +19196,7 @@
     "max_count": 99999,
     "max_own": 999990,
     "duration": null,
-    "can_use": null,
+    "can_use": 1,
     "desc": "在好友农场放置可获得30经验，仅限好友本人清除，可获得相同奖励。",
     "effectDesc": "在好友农场放置可获得30经验，仅限好友本人清除，可获得相同奖励。",
     "trait_id ": null,
@@ -18154,7 +19208,7 @@
     "id": 301102,
     "type": 23,
     "name": "足球",
-    "interaction_type": "addfootballsocialItem",
+    "interaction_type": "additemuseItem",
     "sells": null,
     "sell_cond": null,
     "cond_sells": null,
@@ -18165,7 +19219,7 @@
     "max_count": 99999,
     "max_own": 999990,
     "duration": null,
-    "can_use": null,
+    "can_use": 1,
     "desc": "在好友农场放置可获得30经验，仅限好友本人清除，可获得金豆奖励，通过足球狂欢季活动获取。",
     "effectDesc": "通过足球狂欢季活动获取，在好友农场放置可获得30经验。",
     "trait_id ": null,
@@ -18176,6 +19230,33 @@
     "jumps_dtype": null,
     "ware_scale": null,
     "activity_id": 2026071501
+  },
+  {
+    "id": 301103,
+    "type": 23,
+    "name": "鹊羽灵露",
+    "interaction_type": "additemuseItem",
+    "sells": null,
+    "sell_cond": "活动结束后:2026081801",
+    "cond_sells": "1001:100",
+    "level": 1,
+    "target_id": null,
+    "asset_name": null,
+    "icon_res": "gui/texture/icon/icon_qixi_water/spriteFrame",
+    "max_count": 99999,
+    "max_own": 999990,
+    "duration": null,
+    "can_use": 1,
+    "desc": "鹊桥寄情活动期间内，可在自己或好友农场使用，使用时立即获得1根鹊羽，农场主人收获作物时可获得一定数量的鹊羽，2品及以下作物不可使用。",
+    "effectDesc": "鹊桥寄情活动期间内，可在自己或好友农场使用。",
+    "trait_id ": null,
+    "layer": null,
+    "rarity": 2,
+    "rarity_color": "A8C1F4",
+    "jumps": null,
+    "jumps_dtype": null,
+    "ware_scale": null,
+    "activity_id": 2026081802
   },
   {
     "id": 401001,
@@ -18254,5 +19335,29 @@
     "jumps": "[62]",
     "jumps_dtype": null,
     "ware_scale": null
+  },
+  {
+    "id": 401004,
+    "type": 10,
+    "name": "鹊桥寄情铭牌",
+    "interaction_type": null,
+    "sells": null,
+    "sell_cond": null,
+    "cond_sells": null,
+    "level": 1,
+    "target_id": 401004,
+    "asset_name": null,
+    "icon_res": "gui/texture/nameplate/icon/icon_nameplate_qixi_1/spriteFrame",
+    "max_count": 99,
+    "max_own": 99,
+    "duration": null,
+    "can_use": null,
+    "desc": "鹊桥寄情活动获取，使用后可进行专属铭牌个性化设置。",
+    "effectDesc": "鹊桥寄情活动获取，使用后可进行专属铭牌个性化设置。",
+    "trait_id ": null,
+    "layer": null,
+    "rarity": 2,
+    "rarity_color": "A8C1F4",
+    "jumps": "[63]"
   }
 ]

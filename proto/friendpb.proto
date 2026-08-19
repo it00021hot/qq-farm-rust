@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package gamepb.friendpb;
 
+import "avatarframepb.proto";
+
 // ============ 好友农场摘要信息 ============
 message Plant {
     int64 dry_time_sec = 1;      // 缺水倒计时秒
@@ -33,9 +35,40 @@ message GameFriend {
     Tags tags = 8;
     Plant plant = 9;
     int32 authorized_status = 10;
+    FriendIllustrated illustrated = 12;
+    repeated gamepb.avatarframepb.AvatarFrame equip_avatar_frames = 13;
+    int64 exp = 14;
+    bool field_15 = 15;
+    FriendTitle title = 16;
+    FriendActivity activity = 18;
+    int64 last_active_time = 19;
     // field 11 reserved
     // Illustrated illustrated = 12;  // 略
     // repeated AvatarFrame equip_avatar_frames = 13;  // 略
+}
+
+message FriendIllustrated {
+    int64 current = 1;
+    int64 target = 2;
+}
+
+message FriendTitle {
+    int64 title_id = 1;
+}
+
+message FriendActivity {
+    int64 activity_id = 1;
+    int64 progress = 2;
+    int64 updated_at = 3;
+}
+
+message RecommendedFriend {
+    int64 gid = 1;
+    string name = 2;
+    string avatar_url = 3;
+    int64 level = 4;
+    int64 updated_at = 5;
+    string open_id = 6;
 }
 
 // ============ 请求/回复 ============
@@ -69,6 +102,7 @@ message SyncAllReply {
     repeated GameFriend game_friends = 1;
     // repeated Invitation invitations = 2;  // 略
     int64 application_count = 3;
+    repeated RecommendedFriend recommended_friends = 5;
 }
 
 // ============ 好友申请 (微信同玩) ============

@@ -39,9 +39,9 @@ pub enum NetworkError {
     #[error("connection phase error: {0}")]
     Phase(String),
 
-    /// 请求队列已满
-    #[error("request queue full (pending={pending})")]
-    QueueFull { pending: usize },
+    /// 请求等待队列已满
+    #[error("请求等待队列已满 (pending={pending}, queued={queued})")]
+    QueueFull { pending: usize, queued: usize },
 
     /// 请求超时（对齐 TS `请求超时: ${methodName} (seq=${seq}, pending=${pending})`）
     #[error("请求超时: {method_name} (seq={client_seq}, pending={pending})")]

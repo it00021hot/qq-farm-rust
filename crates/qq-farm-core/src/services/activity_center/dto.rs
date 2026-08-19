@@ -360,16 +360,87 @@ pub(crate) fn bytes_to_text(b: &[u8]) -> String {
     String::from_utf8_lossy(b).into_owned()
 }
 
+fn plain_text(value: &str) -> String {
+    let mut out = value.replace("<br/>", "\n").replace("<br />", "\n").replace("<br>", "\n");
+    while let Some(start) = out.find('<') {
+        if let Some(rel_end) = out[start..].find('>') {
+            out.replace_range(start..start + rel_end + 1, "");
+        } else {
+            break;
+        }
+    }
+    html_unescape(&out).trim().to_string()
+}
+
+fn html_unescape(value: &str) -> String {
+    value
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+}
+
+fn collect_strings(value: &serde_json::Value, out: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(s) => {
+            let text = plain_text(s);
+            if !text.is_empty() && !out.iter().any(|existing| existing == &text) {
+                out.push(text);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_strings(item, out);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for item in map.values() {
+                collect_strings(item, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 pub(crate) fn text_content(bytes: &[u8]) -> serde_json::Value {
     let text = bytes_to_text(bytes);
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return serde_json::json!({ "title": "", "paragraphs": [] });
     }
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
-        return v;
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+        return serde_json::json!({ "title": "", "paragraphs": [plain_text(trimmed)] });
+    };
+    if let Some(tips) = parsed.get("tips") {
+        let title = tips
+            .get("title")
+            .and_then(serde_json::Value::as_str)
+            .map(plain_text)
+            .unwrap_or_default();
+        let paragraphs: Vec<String> = tips
+            .get("txt")
+            .and_then(serde_json::Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(plain_text)
+                    .filter(|line| !line.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !paragraphs.is_empty() {
+            return serde_json::json!({ "title": title, "paragraphs": paragraphs });
+        }
     }
-    serde_json::json!({ "title": "", "paragraphs": [trimmed] })
+    if parsed.get("paragraphs").and_then(serde_json::Value::as_array).is_some() {
+        return parsed;
+    }
+    let mut paragraphs = Vec::new();
+    collect_strings(&parsed, &mut paragraphs);
+    serde_json::json!({ "title": "", "paragraphs": paragraphs })
 }
 
 pub(crate) fn constellation_identity(

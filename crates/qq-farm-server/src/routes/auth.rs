@@ -4,7 +4,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use axum::{
-    extract::{Query, State},
+    extract::State,
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -14,7 +14,7 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::context::{ok, ok_data, ok_empty, AdminContext, ApiError, ApiResult};
+use crate::context::{ok_data, ok_empty, AdminContext, ApiError, ApiResult};
 
 static STARTED_AT: OnceLock<Instant> = OnceLock::new();
 
@@ -33,7 +33,6 @@ pub fn router() -> Router<Arc<AdminContext>> {
         .route("/api/ping", get(ping))
         .route("/api/game-version", get(game_version))
         .route("/api/auth/validate", get(validate))
-        .route("/api/scheduler", get(scheduler))
 }
 
 #[derive(Debug, Deserialize)]
@@ -57,14 +56,6 @@ struct ChangePasswordBody {
     old_password: String,
     #[serde(alias = "newPassword", alias = "new_password")]
     new_password: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LoginLogsQuery {
-    #[serde(default)]
-    limit: Option<usize>,
-    #[serde(default)]
-    offset: Option<usize>,
 }
 
 /// 登录：validate → bindSession → addLoginLog
@@ -292,52 +283,4 @@ async fn validate(
         }
         None => Err(ApiError::Unauthorized("invalid token".to_string())),
     }
-}
-
-async fn scheduler(State(ctx): State<Arc<AdminContext>>) -> ApiResult<serde_json::Value> {
-    let state = ctx.engine.runtime_state();
-    let workers: Vec<_> = state
-        .workers
-        .lock()
-        .iter()
-        .map(|(id, w)| serde_json::json!({ "accountId": id, "name": w.account_name }))
-        .collect();
-    let global_logs = state.global_logs.lock().len();
-    let account_logs = state.account_logs.lock().len();
-    ok(json!({
-        "ok": true,
-        "workers": workers,
-        "globalLogCount": global_logs,
-        "accountLogCount": account_logs,
-    }))
-}
-
-async fn get_login_logs(
-    State(_ctx): State<Arc<AdminContext>>,
-    Query(q): Query<LoginLogsQuery>,
-) -> ApiResult<serde_json::Value> {
-    let limit = q.limit.unwrap_or(100);
-    let offset = q.offset.unwrap_or(0);
-    let (logs, total) = qq_farm_core::models::user_store::auth::get_login_logs(limit, offset);
-    ok_data(json!({ "logs": logs, "total": total }))
-}
-
-async fn delete_login_logs(State(_ctx): State<Arc<AdminContext>>) -> ApiResult<serde_json::Value> {
-    qq_farm_core::models::user_store::auth::clear_login_logs();
-    ok_empty()
-}
-
-/// admin 用的 login-logs GET（从 admin 路由引用）
-pub async fn admin_list_login_logs(
-    State(_ctx): State<Arc<AdminContext>>,
-    Query(q): Query<LoginLogsQuery>,
-) -> ApiResult<serde_json::Value> {
-    get_login_logs(State(_ctx), Query(q)).await
-}
-
-/// admin 用的 login-logs DELETE
-pub async fn admin_delete_login_logs(
-    State(_ctx): State<Arc<AdminContext>>,
-) -> ApiResult<serde_json::Value> {
-    delete_login_logs(State(_ctx)).await
 }

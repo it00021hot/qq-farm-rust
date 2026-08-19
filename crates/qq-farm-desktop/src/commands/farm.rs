@@ -1,11 +1,10 @@
-//! 农场操作、背包、自动化、日志。
+//! 农场操作、背包、日志。
 
 use serde_json::Value;
 use tauri::State;
 
 use qq_farm_app::accounts;
 use qq_farm_app::farm;
-use qq_farm_core::models::store::account_config as cfg;
 
 use crate::error::{IpcError, IpcResult};
 use crate::state::DesktopState;
@@ -118,27 +117,6 @@ pub async fn farm_daily_gifts(
     farm::daily_gift_overview(&state.app, &account_id).await.map_err(IpcError::from)
 }
 
-/// 读取自动化配置。
-#[tauri::command]
-pub fn farm_get_automation(state: State<'_, DesktopState>, account_id: String) -> IpcResult<Value> {
-    ensure(&state, &account_id)?;
-    Ok(serde_json::to_value(cfg::get_automation(Some(&account_id))).unwrap_or(Value::Null))
-}
-
-/// 设置自动化单项。
-#[tauri::command]
-pub fn farm_set_automation(
-    state: State<'_, DesktopState>,
-    account_id: String,
-    key: String,
-    value: Value,
-    extra: Option<Value>,
-) -> IpcResult<Value> {
-    ensure(&state, &account_id)?;
-    farm::set_automation(&state.app, &account_id, &key, value, extra.unwrap_or(Value::Null))
-        .map_err(IpcError::from)
-}
-
 /// 全局 / 账号日志。
 #[tauri::command]
 pub fn farm_get_logs(
@@ -200,4 +178,14 @@ pub fn farm_set_plant_blacklist(
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
     Ok(farm::set_plant_blacklist(&account_id, seed_ids))
+}
+
+/// 保存设置后立即检测并购买化肥。
+#[tauri::command]
+pub async fn farm_fertilizer_check_and_buy(
+    state: State<'_, DesktopState>,
+    account_id: String,
+) -> IpcResult<Value> {
+    ensure(&state, &account_id)?;
+    farm::fertilizer_check_and_buy(&state.app, &account_id).await.map_err(IpcError::from)
 }

@@ -4,7 +4,7 @@
 //! - `status:update` `{ accountId, status }`
 //! - `log:new`
 //! - `account-log:new`
-//! - `logs:snapshot` / `account-logs:snapshot`
+//! - `logs:snapshot`
 //! - `subscribed` / `ready`
 
 use std::sync::Arc;
@@ -232,25 +232,6 @@ fn push_snapshots(
         "logs": logs
     });
     let _ = socket.emit("logs:snapshot", &logs_payload);
-    let account_logs: Vec<_> = state
-        .account_logs
-        .lock()
-        .iter()
-        .rev()
-        .filter(|l| {
-            if !account_id.is_empty() {
-                l.account_id == account_id
-            } else if is_admin {
-                true
-            } else {
-                owned.contains(&l.account_id)
-            }
-        })
-        .take(100)
-        .cloned()
-        .collect();
-    let account_logs_payload = json!({ "logs": account_logs });
-    let _ = socket.emit("account-logs:snapshot", &account_logs_payload);
 }
 
 /// 兼容旧 `/ws`（E2E / 调试）。须带 `?token=` 或 `x-admin-token`，与 Socket.IO 鉴权对齐。

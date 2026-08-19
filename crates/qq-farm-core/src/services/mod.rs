@@ -38,6 +38,7 @@ pub mod ace;
 pub mod activity;
 pub mod activity_center;
 pub mod activity_center_state;
+pub mod activity_windows;
 pub mod analytics;
 pub mod auth;
 pub mod commerce;

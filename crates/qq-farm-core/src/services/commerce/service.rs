@@ -428,7 +428,7 @@ impl CommerceService {
             npc: Some(MysteryNpcDto {
                 id: npc.npc_id,
                 reward,
-                stock: i64::from(npc.stock_count),
+                stock: 0,
                 price: price_dto,
                 original_price: unit_original_price * reward_count,
                 unit_price,

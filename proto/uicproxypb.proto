@@ -12,8 +12,8 @@ message TextResult {
 
 // ============ 请求/回复 ============
 message TextItem {
-    string uid = 1;
-    string text = 2;
+    string text = 1;
+    string uid = 2;
 }
 
 message BatchModerateTextRequest {

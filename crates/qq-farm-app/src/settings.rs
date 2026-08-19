@@ -89,11 +89,6 @@ pub fn default_settings() -> Value {
     json!(qq_farm_core::models::store::account_config::get_default_account_config())
 }
 
-/// 设置 UI 主题。
-pub fn set_theme(theme: &str) {
-    qq_farm_core::models::store::global_config::set_ui_theme(theme);
-}
-
 /// 读取离线提醒（用户覆盖优先，否则全局默认）。
 #[must_use]
 pub fn get_offline_reminder(username: Option<&str>) -> OfflineReminder {

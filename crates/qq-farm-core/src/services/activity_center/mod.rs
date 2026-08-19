@@ -8,9 +8,11 @@
 //! - `serializeMutation` 复杂并发（defer，rate limiter 已在 1F-6 覆盖）
 
 mod constellation;
+mod directory;
 mod dto;
 mod error;
 mod qingmei;
+mod qixi;
 mod rpc;
 mod season;
 mod shop;
@@ -43,7 +45,9 @@ pub use crate::constants::{
     LIGHT_CONSTELLATION_OPERATE_TYPE, QINGMEI_BREW_ACTIVITY_ID, QINGMEI_DAILY_ACTIVITY_ID,
     QINGMEI_DAILY_ALREADY_CLAIMED_CODE, QINGMEI_DAILY_GRANT_ID, QINGMEI_ITEM_ID,
     QINGMEI_SHARED_SETTLEMENT_MODE, QINGMEI_SHARE_SCENE, QINGMEI_SHARE_SOURCE,
-    QUERY_QINGMEI_OPERATE_TYPE, QUERY_SHOP_OPERATE_TYPE, SELL_QINGMEI_BREW_OPERATE_TYPE,
+    QUERY_QINGMEI_OPERATE_TYPE, QUERY_SHOP_OPERATE_TYPE, QIXI_BRIDGE_ACTIVITY_ID,
+    QIXI_BRIDGE_OPERATE_TYPE, QIXI_FEATHER_ITEM_ID, QIXI_GIFT_ACTIVITY_ID, QIXI_GIFT_OPERATE_TYPE,
+    QIXI_GROUP_ID, QIXI_RECEIVED_SACHET_ITEM_ID, QIXI_SACHET_ITEM_ID, SELL_QINGMEI_BREW_OPERATE_TYPE,
     SHOP_ACTIVITY_TYPE, START_QINGMEI_BREW_OPERATE_TYPE,
 };
 
@@ -70,6 +74,8 @@ pub struct ActivityCenterService {
     gateway: Arc<Gateway>,
     /// 购买 / 点亮等写操作串行化
     mutation_lock: Arc<AsyncMutex<()>>,
+    /// 快照单飞，避免活动+背包并发打满网关
+    snapshot_lock: Arc<AsyncMutex<()>>,
     /// 缓存上一次拉取的赛季信息（用于轻量刷新）
     cached_season: Mutex<Option<GetSeasonInfoReply>>,
     qingmei_seed_claimed_date: Mutex<String>,
@@ -85,6 +91,7 @@ impl ActivityCenterService {
         Self {
             gateway,
             mutation_lock: Arc::new(AsyncMutex::new(())),
+            snapshot_lock: Arc::new(AsyncMutex::new(())),
             cached_season: Mutex::new(None),
             qingmei_seed_claimed_date: Mutex::new(String::new()),
             account_id: Mutex::new(String::new()),
@@ -119,8 +126,9 @@ impl ActivityCenterService {
         *self.qingmei_seed_claimed_date.lock() == beijing_date_key()
     }
 
-    /// 获取活动中心完整快照（聚合 season + star sand + solar terms + qingmei）
+    /// 获取活动中心完整快照（聚合 season + star sand + solar terms + qingmei + qixi）
     pub async fn get_activity_center_snapshot(&self) -> Result<serde_json::Value> {
+        let _guard = self.snapshot_lock.lock().await;
         self.snapshot_with_shop(None).await
     }
 
@@ -140,7 +148,9 @@ impl ActivityCenterService {
             Err(e) => Err(Error::internal(e.to_string())),
         };
         let solar_result = self.get_current_solar_terms().await;
+        let _ = crate::services::activity_windows::ensure_activity_windows(&self.gateway).await;
         let qingmei_result = self.get_current_qingmei_activity().await;
+        let qixi_result = self.get_current_qixi_activity().await;
         let season = season_result.as_ref().ok().cloned();
         let warehouse = self.warehouse.lock().clone();
         let shop_result = if let Some(shop) = shop_override {
@@ -153,19 +163,53 @@ impl ActivityCenterService {
         let shop = shop_result.as_ref().ok().cloned();
         let solar_terms = solar_result.as_ref().ok().cloned();
         let qingmei = qingmei_result.as_ref().ok().cloned();
+        let qixi = qixi_result.as_ref().ok().cloned().unwrap_or_else(|| serde_json::json!({}));
         let constellation = season.as_ref().and_then(|s| self.build_constellation_dto(s, None));
-        let actions = build_actions(&season, &solar_terms, constellation.as_ref(), shop.as_ref());
+        let mut actions = build_actions(&season, &solar_terms, constellation.as_ref(), shop.as_ref());
+        if let Some(obj) = actions.as_object_mut() {
+            if let Some(qixi_actions) = qixi.get("actions").and_then(|v| v.as_object()) {
+                if let Some(bridge) = qixi_actions.get("bridge") {
+                    obj.insert("qixiBridge".into(), bridge.clone());
+                }
+                if let Some(gift) = qixi_actions.get("gift") {
+                    obj.insert("qixiGift".into(), gift.clone());
+                }
+            }
+        }
+        let qixi_bridge_enabled = actions
+            .get("qixiBridge")
+            .and_then(|v| v.get("enabled"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let qixi_gift_enabled = actions
+            .get("qixiGift")
+            .and_then(|v| v.get("enabled"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let activities = directory::build_activity_directory(
+            &crate::config::activity_windows::activity_windows_snapshot(),
+            season.as_ref(),
+            shop.as_ref(),
+            solar_terms.as_ref(),
+            constellation.as_ref(),
+            &qixi,
+        );
         Ok(serde_json::json!({
             "season": season,
             "constellation": constellation,
             "shop": shop,
             "solarTerms": solar_terms,
             "qingMei": qingmei,
+            "greenPlum": qingmei,
+            "qixi": qixi,
+            "activities": activities,
             "capabilities": {
                 "claimPass": true,
                 "lightConstellation": true,
                 "claimSolar": true,
                 "exchange": true,
+                "claimQixiBridge": qixi_bridge_enabled,
+                "giftQixiSachet": qixi_gift_enabled,
             },
             "actions": actions,
             "errors": {
@@ -173,6 +217,7 @@ impl ActivityCenterService {
                 "shop": settled_error(&shop_result),
                 "solarTerms": settled_error(&solar_result),
                 "qingMei": settled_error(&qingmei_result),
+                "qixi": settled_error(&qixi_result),
             },
         }))
     }

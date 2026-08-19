@@ -20,5 +20,6 @@ message GetRechargeInfoReply {
 }
 
 message RechargeInfoNotify {
-    int64 status = 1;
+    string transaction_id = 1;
+    string source = 2;
 }

@@ -103,3 +103,9 @@ export function logText(payload: Record<string, unknown>): string {
     '';
   return humanizeLogMessage(raw);
 }
+
+/** Dashboard log event filter options (align qq-farm-bot). */
+export const LOG_EVENT_FILTER_OPTIONS: Array<{ label: string; value: string }> = [
+  { label: '所有事件', value: '' },
+  ...Object.entries(EVENT_LABELS).map(([value, label]) => ({ label, value }))
+];

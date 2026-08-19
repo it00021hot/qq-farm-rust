@@ -20,7 +20,7 @@ import {
   ORGANIC_FERTILIZER_ID
 } from '@/constants/items';
 import { $t } from '@/locales';
-import { getLogEventLabel, humanizeLogMessage, logText, shouldShowEventChip } from './log-events';
+import { getLogEventLabel, humanizeLogMessage, LOG_EVENT_FILTER_OPTIONS, logText, shouldShowEventChip } from './log-events';
 
 defineOptions({
   name: 'FarmDashboard'
@@ -73,6 +73,7 @@ const autoScroll = ref(true);
 let logSeq = 0;
 
 const filterModule = ref('');
+const filterEvent = ref('');
 const filterLevel = ref('');
 const filterKeyword = ref('');
 
@@ -187,6 +188,7 @@ const filteredLogs = computed(() => {
       const tags = tagMap[filterModule.value] || [];
       if (!tags.some(t => log.tag.includes(t) || log.message.includes(t))) return false;
     }
+    if (filterEvent.value && log.event !== filterEvent.value) return false;
     if (filterLevel.value === 'warn' && !log.isWarn) return false;
     if (filterLevel.value === 'info' && log.isWarn) return false;
     if (keyword && !`${log.message} ${log.tag} ${log.event}`.toLowerCase().includes(keyword)) return false;
@@ -736,6 +738,7 @@ onUnmounted(() => {
             <span>{{ $t('page.farm.dashboard.runningLogs') }}</span>
             <NSpace size="small">
               <NSelect v-model:value="filterModule" size="small" class="w-100px" :options="MODULE_OPTIONS" />
+              <NSelect v-model:value="filterEvent" size="small" class="w-120px" :options="LOG_EVENT_FILTER_OPTIONS" />
               <NSelect v-model:value="filterLevel" size="small" class="w-100px" :options="LEVEL_OPTIONS" />
               <NInput
                 v-model:value="filterKeyword"
@@ -765,7 +768,7 @@ onUnmounted(() => {
               v-if="shouldShowEventChip(log.tag, log.event)"
               class="mr-8px rounded-full bg-blue-50 px-6px py-1px text-11px text-blue-500 dark:bg-blue-900/20"
             >
-              {{ log.event }}
+              {{ getLogEventLabel(log.event) }}
             </span>
             <span :class="log.isWarn ? 'text-error' : ''">{{ log.message }}</span>
           </div>

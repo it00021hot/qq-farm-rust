@@ -45,6 +45,7 @@ message GetInteractInfoRequest {}
 
 message GetInteractInfoReply {
     repeated InteractInfo infos = 1;
+    int64 server_time = 2;
 }
 
 // --- 获取互动摘要 ---

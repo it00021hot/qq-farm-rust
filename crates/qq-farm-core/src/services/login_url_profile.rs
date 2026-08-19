@@ -175,6 +175,7 @@ mod tests {
         assert!(is_valid_version("1.0.0"));
         assert!(is_valid_version("1.0.0-beta"));
         assert!(is_valid_version("1.13.1.6_20260723"));
+        assert!(is_valid_version("1.13.2.8_20260723"));
         assert!(is_valid_version("v1.2.3-rc1_build42"));
     }
 

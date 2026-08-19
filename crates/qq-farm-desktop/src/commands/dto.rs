@@ -1,6 +1,5 @@
 //! 桌面 IPC DTO（camelCase；复杂面板载荷可用 `serde_json::Value`）。
 
-use qq_farm_core::models::types::PlantingStrategy;
 use serde::{Deserialize, Serialize};
 
 /// 账号摘要。
@@ -26,22 +25,6 @@ pub struct DesktopSnapshot {
     pub worker_count: usize,
     pub account_count: usize,
     pub accounts: Vec<AccountSummary>,
-}
-
-/// 设置只读摘要。
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SettingsSummary {
-    pub account_id: String,
-    pub strategy: PlantingStrategy,
-    pub preferred_seed: i64,
-    pub farm_interval_sec: i64,
-    pub farm_min_sec: i64,
-    pub farm_max_sec: i64,
-    pub automation_farm: bool,
-    pub automation_friend: bool,
-    pub automation_task: bool,
-    pub automation_sell: bool,
 }
 
 /// 微信扫码创建结果。

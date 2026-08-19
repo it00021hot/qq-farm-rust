@@ -1,7 +1,7 @@
 <script setup lang="tsx">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import dayjs from 'dayjs';
-import { NButton, NPopconfirm, NTag, NTooltip } from 'naive-ui';
+import { NButton, NModal, NPopconfirm, NTag, NTooltip } from 'naive-ui';
 import { farmAuthStatusRecord, farmPlatformRecord, farmRunStatusRecord } from '@/constants/business';
 import {
   fetchDeleteFarmAccount,
@@ -199,6 +199,55 @@ async function handleDelete(id: number) {
   }
 }
 
+const clearStoppedLoading = ref(false);
+const showClearStoppedConfirm = ref(false);
+
+const stoppedAccountsOnPage = computed(() => data.value.filter(row => row.runStatus !== 1));
+const stoppedAccountsCount = computed(() => stoppedAccountsOnPage.value.length);
+
+function openClearStoppedConfirm() {
+  if (stoppedAccountsCount.value === 0) {
+    window.$message?.info($t('page.farm.account.noStoppedAccounts'));
+    return;
+  }
+  showClearStoppedConfirm.value = true;
+}
+
+async function confirmClearStopped() {
+  clearStoppedLoading.value = true;
+  try {
+    const ids = stoppedAccountsOnPage.value.map(row => row.id);
+    let deletedCount = 0;
+    for (const id of ids) {
+      const { error } = await fetchDeleteFarmAccount(id);
+      if (!error) deletedCount += 1;
+    }
+    showClearStoppedConfirm.value = false;
+    window.$message?.success($t('page.farm.account.clearStoppedSuccess', { count: deletedCount }));
+    await refreshList(searchParams.value.current || 1);
+  } finally {
+    clearStoppedLoading.value = false;
+  }
+}
+
+async function handleBatchDelete() {
+  if (!checkedRowKeys.value.length) return;
+  const selected = data.value.filter(row => checkedRowKeys.value.includes(row.id));
+  const stopped = selected.filter(row => row.runStatus !== 1);
+  if (!stopped.length) {
+    window.$message?.warning($t('page.farm.account.batchDeleteStoppedOnly'));
+    return;
+  }
+  let deletedCount = 0;
+  for (const row of stopped) {
+    const { error } = await fetchDeleteFarmAccount(row.id);
+    if (!error) deletedCount += 1;
+  }
+  checkedRowKeys.value = [];
+  window.$message?.success($t('page.farm.account.clearStoppedSuccess', { count: deletedCount }));
+  await refreshList(searchParams.value.current || 1);
+}
+
 async function refreshList(page: number = 1) {
   await getDataByPage(page);
   void farmAccountStore.loadAccounts();
@@ -234,14 +283,12 @@ useFarmWs({
           :disabled-delete="checkedRowKeys.length === 0"
           :loading="loading"
           @add="onAdd"
+          @delete="handleBatchDelete"
           @refresh="() => refreshList()"
         >
-          <template #default>
-            <NButton size="small" ghost type="primary" @click="onAdd">
-              <template #icon>
-                <icon-ic-round-plus class="text-icon" />
-              </template>
-              {{ $t('common.add') }}
+          <template #prefix>
+            <NButton size="small" ghost type="error" :loading="clearStoppedLoading" @click="openClearStoppedConfirm">
+              {{ $t('page.farm.account.clearStopped') }}
             </NButton>
           </template>
         </TableHeaderOperation>
@@ -265,6 +312,18 @@ useFarmWs({
       :operate-type="operateType"
       :row-data="editingData"
       @submitted="() => refreshList()"
+    />
+
+    <NModal
+      v-model:show="showClearStoppedConfirm"
+      preset="dialog"
+      type="warning"
+      :title="$t('page.farm.account.clearStoppedTitle')"
+      :content="$t('page.farm.account.clearStoppedConfirm', { count: stoppedAccountsCount })"
+      :positive-text="$t('common.confirm')"
+      :negative-text="$t('common.cancel')"
+      :loading="clearStoppedLoading"
+      @positive-click="confirmClearStopped"
     />
   </div>
 </template>

@@ -15,8 +15,14 @@ pub const FRIEND_LIST_COALESCE_MS: u64 = 800;
 /// 好友 LandsNotify 按 gid 去抖，避免连发气泡打满 GetGameFriends。
 pub const FRIEND_LANDS_NOTIFY_DEBOUNCE_MS: u64 = 500;
 pub const QQ_FRIEND_LIST_BATCH_SIZE: usize = 35;
-/// 普通 RPC 排队上限；Heartbeat 不受此限（Go 无 QueueFull）。
-pub const MAX_PENDING_RPC: usize = 32;
+/// 网关 in-flight 上限（对齐 bot `MAX_IN_FLIGHT_REQUESTS`）；Heartbeat 不受此限。
+pub const MAX_IN_FLIGHT_REQUESTS: usize = 5;
+/// 网关等待队列上限（对齐 bot `MAX_QUEUED_REQUESTS`）。
+pub const MAX_QUEUED_REQUESTS: usize = 100;
+/// 活动窗口缓存 TTL（对齐 bot `activity-windows.ts`）。
+pub const ACTIVITY_WINDOWS_CACHE_TTL_MS: u64 = 5 * 60 * 1000;
+/// 活动窗口刷新失败日志节流。
+pub const ACTIVITY_WINDOWS_RETRY_LOG_INTERVAL_MS: u64 = 60 * 1000;
 /// 仅 Login / Heartbeat 使用的短超时；其它游戏 RPC 等到回包或断线。
 pub const LOGIN_TIMEOUT_MS: u64 = 20_000;
 pub const HEARTBEAT_RPC_TIMEOUT_MS: u64 = 20_000;

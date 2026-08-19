@@ -477,6 +477,9 @@ declare namespace Api {
       shop: Record<string, unknown>;
       solarTerms: Record<string, unknown>;
       greenPlum?: Record<string, unknown>;
+      qixi?: Record<string, unknown>;
+      qingMei?: Record<string, unknown>;
+      activities?: Array<Record<string, unknown>>;
       capabilities?: Record<string, boolean>;
       actions?: Record<string, ActivityAction>;
       errors?: Record<string, string>;
@@ -500,6 +503,8 @@ declare namespace Api {
       activityId?: string;
       operateType?: number;
       ingredients?: Array<{ uid: number | string; count: number }>;
+      friendGid?: string | number;
+      sachetCount?: number;
     };
 
     /** analytics / daily stats */

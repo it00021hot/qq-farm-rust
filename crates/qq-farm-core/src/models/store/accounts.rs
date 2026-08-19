@@ -380,8 +380,20 @@ mod tests {
 
     #[test]
     #[serial(accounts)]
+    #[serial(farm_data_dir)]
     fn file_save_load_roundtrip() {
         reset();
+        let tmp = std::env::temp_dir().join(format!(
+            "qq-farm-accounts-roundtrip-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let prev = std::env::var("FARM_DATA_DIR").ok();
+        let _ = fs::create_dir_all(&tmp);
+        std::env::set_var("FARM_DATA_DIR", &tmp);
         add_or_update_account(make_account("1", "a1", "u1"));
         let data = accounts_data();
         save_to_file(&data).expect("save");
@@ -389,8 +401,11 @@ mod tests {
         assert_eq!(loaded.accounts.len(), 1);
         assert_eq!(loaded.accounts[0].id, "1");
         assert!(!loaded.accounts[0].has_wx_auth());
-        // 清理
-        let _ = fs::remove_file(accounts_file());
+        let _ = fs::remove_dir_all(&tmp);
+        match prev {
+            Some(v) => std::env::set_var("FARM_DATA_DIR", v),
+            None => std::env::remove_var("FARM_DATA_DIR"),
+        }
     }
 
     #[test]

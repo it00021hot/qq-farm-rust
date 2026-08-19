@@ -26,6 +26,10 @@ message SolarTermsConfig {
 
 message GetSolarTermsRequest {}
 
+message GetSolarTermsRedDotRequest {}
+
+message GetSolarTermsRedDotReply {}
+
 message GetSolarTermsReply {
     repeated SolarTermInfo terms = 1;
     int64 server_time = 2;

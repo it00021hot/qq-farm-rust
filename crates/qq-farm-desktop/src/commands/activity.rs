@@ -13,13 +13,6 @@ fn ensure(state: &DesktopState, account_id: &str) -> IpcResult<()> {
     accounts::ensure_account_access(&state.acl, account_id).map_err(IpcError::from)
 }
 
-/// 兼容 stub（提示使用 `activity_snapshot`）。
-#[tauri::command]
-pub fn activity_state(state: State<'_, DesktopState>, account_id: String) -> IpcResult<Value> {
-    ensure(&state, &account_id)?;
-    activity::activity_state(&state.app, &account_id).map_err(IpcError::from)
-}
-
 /// 活动中心快照。
 #[tauri::command]
 pub async fn activity_snapshot(
@@ -116,4 +109,55 @@ pub async fn activity_qingmei_brew_settle(
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
     activity::settle_qingmei_brew(&state.app, &account_id).await.map_err(IpcError::from)
+}
+
+/// 领取鹊桥阶段奖励。
+#[tauri::command]
+pub async fn activity_claim_qixi_bridge(
+    state: State<'_, DesktopState>,
+    account_id: String,
+) -> IpcResult<Value> {
+    ensure(&state, &account_id)?;
+    activity::claim_qixi_bridge(&state.app, &account_id).await.map_err(IpcError::from)
+}
+
+fn json_i64(value: &Value) -> i64 {
+    match value {
+        Value::Number(n) => n
+            .as_i64()
+            .or_else(|| n.as_u64().map(|v| v as i64))
+            .or_else(|| n.as_f64().map(|v| v.trunc() as i64))
+            .unwrap_or(0),
+        Value::String(s) => s.trim().parse().unwrap_or(0),
+        _ => 0,
+    }
+}
+
+/// 赠送鹊羽香囊。
+#[tauri::command]
+pub async fn activity_gift_qixi_sachet(
+    state: State<'_, DesktopState>,
+    account_id: String,
+    friend_gid: Value,
+    sachet_count: Option<Value>,
+    count: Option<Value>,
+) -> IpcResult<Value> {
+    ensure(&state, &account_id)?;
+    let gid = json_i64(&friend_gid);
+    let n = sachet_count.as_ref().or(count.as_ref()).map(json_i64).unwrap_or(0);
+    activity::gift_qixi_sachet(&state.app, &account_id, gid, n).await.map_err(IpcError::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn json_i64_reads_int_float_and_string() {
+        assert_eq!(json_i64(&json!(3)), 3);
+        assert_eq!(json_i64(&json!(2.9)), 2);
+        assert_eq!(json_i64(&json!("4")), 4);
+        assert_eq!(json_i64(&json!(null)), 0);
+    }
 }

@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
+use tokio::sync::{broadcast, Mutex as AsyncMutex};
 
 use crate::constants::{
     FERTILIZER_CONTAINER_LIMIT_HOURS, NORMAL_CONTAINER_ID, ORGANIC_CONTAINER_ID, SELL_BATCH_SIZE,
@@ -87,6 +88,7 @@ pub struct WarehouseService {
     fertilizer_gift_done_date_key: Mutex<String>,
     fertilizer_gift_last_open_at: Mutex<i64>,
     account_id: Mutex<String>,
+    pending_bag: AsyncMutex<Option<broadcast::Sender<std::result::Result<BagReply, String>>>>,
 }
 
 impl WarehouseService {
@@ -97,6 +99,7 @@ impl WarehouseService {
             fertilizer_gift_done_date_key: Mutex::new(String::new()),
             fertilizer_gift_last_open_at: Mutex::new(0),
             account_id: Mutex::new(String::new()),
+            pending_bag: AsyncMutex::new(None),
         }
     }
 
@@ -104,12 +107,38 @@ impl WarehouseService {
         *self.account_id.lock() = account_id.to_string();
     }
 
-    /// 拉取背包
+    /// 拉取背包（并发调用共用一次 RPC）。
     pub async fn get_bag(&self) -> Result<BagReply> {
-        let req = BagRequest {};
-        let body =
-            self.gateway.request("gamepb.itempb.ItemService", "Bag", &req.encode_to_vec()).await?;
-        Ok(BagReply::decode(&body)?)
+        {
+            let pending = self.pending_bag.lock().await;
+            if let Some(tx) = pending.as_ref() {
+                let mut rx = tx.subscribe();
+                drop(pending);
+                return match rx.recv().await {
+                    Ok(Ok(bag)) => Ok(bag),
+                    Ok(Err(e)) => Err(crate::error::Error::internal(e)),
+                    Err(_) => self.fetch_bag().await,
+                };
+            }
+        }
+        let (tx, _) = broadcast::channel(8);
+        {
+            *self.pending_bag.lock().await = Some(tx.clone());
+        }
+        let result = self.fetch_bag().await;
+        {
+            *self.pending_bag.lock().await = None;
+        }
+        let shared = match &result {
+            Ok(bag) => Ok(bag.clone()),
+            Err(e) => Err(e.to_string()),
+        };
+        let _ = tx.send(shared);
+        result
+    }
+
+    async fn fetch_bag(&self) -> Result<BagReply> {
+        Self::get_bag_via(&self.gateway).await
     }
 
     /// 拉取背包（无 WarehouseService 实例时使用）
@@ -128,11 +157,17 @@ impl WarehouseService {
             return Err(crate::error::Error::Business("没有可出售的物品".to_string()));
         }
         let gc = crate::config::game_config::global();
-        for &(id, count, _) in items {
+        let bag_items = self.get_bag().await.ok().map(|bag| get_bag_items(&bag)).unwrap_or_default();
+        for &(id, count, uid) in items {
             if id <= 0 || count <= 0 {
                 return Err(crate::error::Error::Business("出售物品参数无效".to_string()));
             }
-            let sell_info = gc.get_effective_sell_info_by_id(id);
+            let expire = bag_items
+                .iter()
+                .find(|it| it.id == id && (uid <= 0 || it.uid == uid))
+                .map(|it| it.expire_time)
+                .unwrap_or(0);
+            let sell_info = gc.get_effective_sell_info_by_id_at(id, expire);
             if !sell_info.sellable {
                 let name = gc
                     .get_item_by_id(id)
@@ -305,7 +340,7 @@ impl WarehouseService {
             if !is_fruit_item_id(it.id) {
                 continue;
             }
-            if !gc.get_effective_sell_info_by_id(it.id).sellable {
+            if !gc.get_effective_sell_info_by_id_at(it.id, it.expire_time).sellable {
                 continue;
             }
             let fruit_name = gc.get_fruit_name(it.id);
@@ -585,6 +620,7 @@ pub fn get_bag_items(bag: &BagReply) -> Vec<BagItemLite> {
                 count: i.count,
                 uid: i.uid,
                 mutant_types: get_mutant_types_from_slice(&i.mutant_types),
+                expire_time: i.expire_time,
             })
             .collect()
     } else {
@@ -680,8 +716,18 @@ pub fn build_bag_detail_from_items(raw_items: &[BagItemLite]) -> BagDetail {
         }
         let interaction_type =
             item_info.as_ref().and_then(|i| i.interaction_type.clone()).unwrap_or_default();
-        let sell_info =
-            item_info.as_ref().map(|i| gc.get_effective_sell_info(i)).unwrap_or_default();
+        let sell_info = item_info
+            .as_ref()
+            .map(|i| {
+                gc.get_effective_sell_info_at(
+                    i,
+                    &crate::config::sell_conditions::SellConditionContext::now(
+                        crate::utils::time::get_server_time_secs(),
+                    ),
+                    it.expire_time,
+                )
+            })
+            .unwrap_or_default();
         let (price_id, price) =
             if let Some(&(c, p)) = sell_info.sells.first() { (c, p) } else { (0, 0) };
         let price_unit = match price_id {
@@ -773,17 +819,27 @@ pub struct BagItemLite {
     pub count: i64,
     pub uid: i64,
     pub mutant_types: Vec<i64>,
+    pub expire_time: i64,
 }
 
 impl BagItemLite {
     #[must_use]
     pub fn new(id: i64, count: i64, uid: i64) -> Self {
-        Self { id, count, uid, mutant_types: vec![] }
+        Self { id, count, uid, mutant_types: vec![], expire_time: 0 }
     }
 }
 
 fn core_item(id: i64, count: i64, uid: i64) -> CoreItem {
-    CoreItem { id, count, expire_time: 0, uid, is_new: false, mutant_types: vec![], show: None }
+    CoreItem {
+        id,
+        count,
+        expire_time: 0,
+        uid,
+        is_new: false,
+        mutant_types: vec![],
+        show: None,
+        source_info: None,
+    }
 }
 
 /// 判断是否是果实
@@ -1064,8 +1120,8 @@ mod tests {
     #[test]
     fn bag_detail_splits_by_uid_not_item_id() {
         let detail = build_bag_detail_from_items(&[
-            BagItemLite { id: 41221, count: 2, uid: 100, mutant_types: vec![1] },
-            BagItemLite { id: 41221, count: 3, uid: 200, mutant_types: vec![] },
+            BagItemLite { id: 41221, count: 2, uid: 100, mutant_types: vec![1], expire_time: 0 },
+            BagItemLite { id: 41221, count: 3, uid: 200, mutant_types: vec![], expire_time: 0 },
             BagItemLite::new(1011, 3600, 0),
         ]);
         assert_eq!(detail.items.len(), 3);
