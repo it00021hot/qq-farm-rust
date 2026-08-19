@@ -539,4 +539,30 @@
 - 好友列表 25 条/页分页；概览日志 eventType 筛选；账号页清理已停止 + 批量删已停止
 - 能力状态：plan v2 剩余 UI 缺口已补齐
 
+### 2026-08-19 — 游戏配置分页 / 作物图标 / 看板日志布局
+
+- 游戏配置页：搜索/筛选后本地分页表格（`NDataTable` + `pagination`），图标改 `<img>` 失败回退 emoji
+- 图标：`resolveCatalogImage` 在 Tauri 环境走 `farmcfg://` 自定义协议，Vite dev 仍走 `/game-config/*`
+- 看板日志：隐藏 `avatar_probe`（人机头像诊断 / 小果头像）日志；筛选栏 grid 对齐；日志区加高并用固定列 grid 对齐时间/模块/事件/正文
+- 能力状态：游戏配置可分页浏览且图标恢复；看板不再刷头像诊断噪音，日志列对齐 bot 观感
+
+### 2026-08-19 — 游戏配置改为账号管理式搜索+分页表
+
+- 桌面「游戏配置」对齐账号管理布局：折叠搜索卡（`NCard` + `NCollapse` + `NForm`）+ `TableHeaderOperation` + `useNaivePaginatedTable` / `NDataTable` 远程分页
+- 种子/果实/道具仍为页内 Tab；筛选与翻页走本地缓存切片，IPC `config_list_*` 不变
+- 能力状态：游戏配置列表交互与账号管理一致（搜索、列设置、新增/批量删除、分页）
+
+### 2026-08-19 — 游戏配置果实/道具价格对齐 sells
+
+- 桌面 IPC `config_list_fruits` / `config_list_items` 原先直接序列化 Item，没有 `price`/`priceId`
+- 现从 `sells`（果实无则回退 `cond_sells`）解析首个报价，对齐面板 HTTP `/api/config/fruits|items`
+- 道具列表排除种子(type=5)与果实(type=6)
+- 能力状态：游戏配置果实/道具价格不再全是 0 金币
+
+### 2026-08-19 — 游戏配置种子等级取 ItemInfo.level
+
+- `get_all_seeds` 原先用 Plant.json `land_level_need`（全为 1），桌面种子列表等级全是 Lv.1
+- 改为优先 ItemInfo.level，没有再回退 land_level_need（对齐 bot `getAllSeeds` / 种植策略）
+- 能力状态：种子列表等级与 ItemInfo 一致
+
 

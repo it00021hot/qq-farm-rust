@@ -451,7 +451,13 @@ impl GameConfig {
                 x.seed_id.map(|sid| SeedInfo {
                     seed_id: sid,
                     name: x.name.clone(),
-                    required_level: x.land_level_need.unwrap_or(1),
+                    // Plant.json 的 land_level_need 全为 1；等级以 ItemInfo.level 为准（对齐 TS getAllSeeds）
+                    required_level: self
+                        .get_item_by_id(sid)
+                        .and_then(|i| i.level)
+                        .filter(|l| *l > 0)
+                        .or(x.land_level_need)
+                        .unwrap_or(0),
                     plant_id: x.id,
                     price: self.get_seed_price(sid),
                     image: mapped_item_image(sid),
@@ -881,6 +887,9 @@ mod tests {
         assert!(seeds.iter().any(|s| s.seed_id == 29999));
         let one = seeds.iter().find(|s| s.seed_id == 29999).unwrap();
         assert_eq!(one.image, "/game-config/seed_images_named/29999.png");
+        assert_eq!(one.required_level, 1);
+        let pumpkin = seeds.iter().find(|s| s.seed_id == 29998).expect("哈哈南瓜种子");
+        assert_eq!(pumpkin.required_level, 31);
     }
 
     #[test]

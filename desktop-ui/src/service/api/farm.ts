@@ -450,7 +450,7 @@ export async function fetchGetSystemConfig() {
 }
 
 export function fetchSetSystemConfig(cfg: SystemConfigPayload) {
-  return invokeFlat('set_system_config', cfg);
+  return invokeFlat('set_system_config', { cfg });
 }
 
 export async function fetchResetSystemConfig() {

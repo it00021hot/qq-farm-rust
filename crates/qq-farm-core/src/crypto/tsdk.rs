@@ -255,6 +255,15 @@ impl TsdkRuntime {
         let store = &mut inner.store;
         let exports = &inner.exports;
 
+        // 诊断：alloc failed 往往意味着 wasm 内存持续增长
+        let memory_bytes = exports.memory.data(&*store).len();
+        tracing::debug!(
+            decrypt,
+            input_len = input.len(),
+            memory_bytes,
+            "tsdk transform begin"
+        );
+
         // 1. alloc
         let len = (input.len().max(1)) as i32;
         let mut alloc_res = [Val::I32(0); 1];
@@ -264,23 +273,42 @@ impl TsdkRuntime {
             .map_err(|e| Error::crypto(format!("alloc failed: {e}")))?;
         let ptr = i32_val(&alloc_res, 0)?;
 
-        // 2. 写入
-        write_bytes(store, &exports.memory, ptr, input)?;
+        // 2. 写入 + 失败时确保 free(ptr)
+        if let Err(e) = write_bytes(store, &exports.memory, ptr, input) {
+            let _ = exports
+                .free
+                .call(&mut *store, &mut [Val::I32(ptr)], &mut []);
+            return Err(e);
+        }
 
-        // 3. 加密/解密
+        // 3. 加密/解密 + 失败时确保 free(ptr)
         let func = if decrypt { &exports.decrypt } else { &exports.encrypt };
-        func.call(&mut *store, &mut [Val::I32(ptr), Val::I32(input.len() as i32)], &mut [])
+        let enc_res = func.call(&mut *store, &mut [Val::I32(ptr), Val::I32(input.len() as i32)], &mut [])
             .map_err(|e| {
                 Error::crypto(format!(
                     "{} failed: {e}",
                     if decrypt { "decrypt" } else { "encrypt" }
                 ))
-            })?;
+            });
+        if let Err(e) = enc_res {
+            let _ = exports
+                .free
+                .call(&mut *store, &mut [Val::I32(ptr)], &mut []);
+            return Err(e);
+        }
 
-        // 4. 读出
-        let result = read_bytes(store, &exports.memory, ptr, input.len())?;
+        // 4. 读出 + 失败时确保 free(ptr)
+        let result = match read_bytes(store, &exports.memory, ptr, input.len()) {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = exports
+                    .free
+                    .call(&mut *store, &mut [Val::I32(ptr)], &mut []);
+                return Err(e);
+            }
+        };
 
-        // 5. 释放
+        // 5. 释放（成功路径）
         exports
             .free
             .call(&mut *store, &mut [Val::I32(ptr)], &mut [])
@@ -373,10 +401,16 @@ impl TsdkRuntime {
 
         // 调 N(lengthPtr) → 返回 data ptr (length 已写入 lengthPtr)
         let mut ret = [Val::I32(0); 1];
-        exports
+        if let Err(e) = exports
             .n
             .call(&mut *store, &mut [Val::I32(length_ptr)], &mut ret)
-            .map_err(|e| Error::crypto(format!("N() failed: {e}")))?;
+            .map_err(|e| Error::crypto(format!("N() failed: {e}")))
+        {
+            let _ = exports
+                .free
+                .call(&mut *store, &mut [Val::I32(length_ptr)], &mut []);
+            return Err(e);
+        }
         let data_ptr = i32_val(&ret, 0)?;
         if data_ptr == 0 {
             exports
@@ -387,13 +421,35 @@ impl TsdkRuntime {
         }
 
         // 读 length (i32 little-endian)
-        let len_bytes = read_bytes(store, &exports.memory, length_ptr, 4)?;
+        let len_bytes = match read_bytes(store, &exports.memory, length_ptr, 4) {
+            Ok(b) => b,
+            Err(e) => {
+                let _ = exports
+                    .free
+                    .call(&mut *store, &mut [Val::I32(data_ptr)], &mut []);
+                let _ = exports
+                    .free
+                    .call(&mut *store, &mut [Val::I32(length_ptr)], &mut []);
+                return Err(e);
+            }
+        };
         let data_len =
             i32::from_le_bytes([len_bytes[0], len_bytes[1], len_bytes[2], len_bytes[3]]) as usize;
 
         // 读 data
         let data = if data_len > 0 {
-            read_bytes(store, &exports.memory, data_ptr, data_len)?
+            match read_bytes(store, &exports.memory, data_ptr, data_len) {
+                Ok(d) => d,
+                Err(e) => {
+                    let _ = exports
+                        .free
+                        .call(&mut *store, &mut [Val::I32(data_ptr)], &mut []);
+                    let _ = exports
+                        .free
+                        .call(&mut *store, &mut [Val::I32(length_ptr)], &mut []);
+                    return Err(e);
+                }
+            }
         } else {
             Vec::new()
         };
@@ -422,6 +478,13 @@ impl TsdkRuntime {
         let store = &mut inner.store;
         let exports = &inner.exports;
 
+        let memory_bytes = exports.memory.data(&*store).len();
+        tracing::debug!(
+            input_len = data.len(),
+            memory_bytes,
+            "tsdk send_data_from_server begin"
+        );
+
         let cap = data.len() as i32;
         let mut alloc_res = [Val::I32(0); 1];
         exports
@@ -429,12 +492,23 @@ impl TsdkRuntime {
             .call(&mut *store, &mut [Val::I32(cap)], &mut alloc_res)
             .map_err(|e| Error::crypto(format!("alloc failed: {e}")))?;
         let ptr = i32_val(&alloc_res, 0)?;
-        write_bytes(store, &exports.memory, ptr, data)?;
+        if let Err(e) = write_bytes(store, &exports.memory, ptr, data) {
+            let _ = exports
+                .free
+                .call(&mut *store, &mut [Val::I32(ptr)], &mut []);
+            return Err(e);
+        }
 
-        exports
+        if let Err(e) = exports
             .o
             .call(&mut *store, &mut [Val::I32(ptr), Val::I32(data.len() as i32)], &mut [])
-            .map_err(|e| Error::crypto(format!("O() failed: {e}")))?;
+            .map_err(|e| Error::crypto(format!("O() failed: {e}")))
+        {
+            let _ = exports
+                .free
+                .call(&mut *store, &mut [Val::I32(ptr)], &mut []);
+            return Err(e);
+        }
 
         exports
             .free

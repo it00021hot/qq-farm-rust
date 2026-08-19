@@ -20,7 +20,14 @@ import {
   ORGANIC_FERTILIZER_ID
 } from '@/constants/items';
 import { $t } from '@/locales';
-import { getLogEventLabel, humanizeLogMessage, LOG_EVENT_FILTER_OPTIONS, logText, shouldShowEventChip } from './log-events';
+import {
+  getLogEventLabel,
+  humanizeLogMessage,
+  isHiddenLogEvent,
+  LOG_EVENT_FILTER_OPTIONS,
+  logText,
+  shouldShowEventChip
+} from './log-events';
 
 defineOptions({
   name: 'FarmDashboard'
@@ -32,6 +39,7 @@ interface FarmLogRow {
   time: string;
   tag: string;
   event: string;
+  eventKey: string;
   message: string;
   isWarn: boolean;
 }
@@ -179,6 +187,7 @@ const filteredOperations = computed(() => {
 const filteredLogs = computed(() => {
   const keyword = filterKeyword.value.trim().toLowerCase();
   return logs.value.filter(log => {
+    if (isHiddenLogEvent(log.eventKey, log.event, log.message)) return false;
     if (filterModule.value) {
       const tagMap: Record<string, string[]> = {
         farm: ['农场', '收获', '种植', '施肥', '务农'],
@@ -188,7 +197,7 @@ const filteredLogs = computed(() => {
       const tags = tagMap[filterModule.value] || [];
       if (!tags.some(t => log.tag.includes(t) || log.message.includes(t))) return false;
     }
-    if (filterEvent.value && log.event !== filterEvent.value) return false;
+    if (filterEvent.value && log.eventKey !== filterEvent.value) return false;
     if (filterLevel.value === 'warn' && !log.isWarn) return false;
     if (filterLevel.value === 'info' && log.isWarn) return false;
     if (keyword && !`${log.message} ${log.tag} ${log.event}`.toLowerCase().includes(keyword)) return false;
@@ -246,14 +255,17 @@ function tickCountdowns() {
   if (localStealRemain.value > 0) localStealRemain.value -= 1;
 }
 
-function pushLog(tag: string, message: string, event = '', isWarn = false, ts?: number) {
+function pushLog(tag: string, message: string, event = '', isWarn = false, ts?: number, eventKey = '') {
   const at = ts && ts > 0 ? ts : Date.now();
+  const resolvedEventKey = eventKey || event;
+  if (isHiddenLogEvent(resolvedEventKey, event, message)) return;
   logs.value.push({
     id: ++logSeq,
     ts: at,
     time: dayjs(at).format('HH:mm:ss'),
     tag,
     event,
+    eventKey: resolvedEventKey,
     message,
     isWarn
   });
@@ -268,18 +280,25 @@ function pushLog(tag: string, message: string, event = '', isWarn = false, ts?: 
 function applyLogEntries(entries: Api.Farm.LogEntry[]) {
   logSeq = 0;
   const list = [...(entries || [])].sort((a, b) => (Number(a.ts) || 0) - (Number(b.ts) || 0));
-  logs.value = list.map(e => {
-    const at = Number(e.ts) || (e.time ? dayjs(e.time).valueOf() : Date.now());
-    return {
-      id: ++logSeq,
-      ts: at,
-      time: dayjs(at).format('HH:mm:ss'),
-      tag: e.tag || '系统',
-      event: getLogEventLabel(e.meta?.event || ''),
-      message: humanizeLogMessage(e.msg || ''),
-      isWarn: Boolean(e.isWarn)
-    };
-  });
+  logs.value = list
+    .filter(
+      e =>
+        !isHiddenLogEvent(e.meta?.event || '', getLogEventLabel(e.meta?.event || ''), humanizeLogMessage(e.msg || ''))
+    )
+    .map(e => {
+      const at = Number(e.ts) || (e.time ? dayjs(e.time).valueOf() : Date.now());
+      const eventKey = String(e.meta?.event || '');
+      return {
+        id: ++logSeq,
+        ts: at,
+        time: dayjs(at).format('HH:mm:ss'),
+        tag: e.tag || '系统',
+        event: getLogEventLabel(eventKey),
+        eventKey,
+        message: humanizeLogMessage(e.msg || ''),
+        isWarn: Boolean(e.isWarn)
+      };
+    });
   nextTick(() => {
     if (logContainer.value) {
       logContainer.value.scrollTop = logContainer.value.scrollHeight;
@@ -519,10 +538,7 @@ const { connected, connect } = useFarmWs({
       if (current && accountId && accountId !== current) return;
       // Avoid full-panel refetch storms (NSpin / bag flash). Match Go: apply when
       // payload carries status; otherwise silent status-only refresh.
-      const bodyStatus =
-        body.status && typeof body.status === 'object'
-          ? (body.status as Api.Farm.Status)
-          : null;
+      const bodyStatus = body.status && typeof body.status === 'object' ? (body.status as Api.Farm.Status) : null;
       if (bodyStatus && (bodyStatus.level != null || bodyStatus.gold != null || bodyStatus.nick)) {
         applyStatus({
           ...bodyStatus,
@@ -543,7 +559,17 @@ const { connected, connect } = useFarmWs({
       if (current && accountId && accountId !== current) return;
       const formatted = formatEventMessage(type, payload);
       const rawTs = Number((payload as { ts?: number; time?: number }).ts || (payload as { time?: number }).time || 0);
-      pushLog(formatted.tag, formatted.message, formatted.event, formatted.isWarn, rawTs > 0 ? rawTs : undefined);
+      const eventKey = String(
+        (payload as Record<string, unknown>).event || (payload as Record<string, unknown>).action || ''
+      );
+      pushLog(
+        formatted.tag,
+        formatted.message,
+        formatted.event,
+        formatted.isWarn,
+        rawTs > 0 ? rawTs : undefined,
+        eventKey
+      );
       return;
     }
 
@@ -594,7 +620,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="min-h-500px flex-col-stretch gap-16px overflow-auto">
+  <div class="h-full min-h-500px flex-col-stretch gap-16px overflow-hidden lt-sm:overflow-auto">
     <div class="flex-y-center justify-between">
       <h2 class="text-18px font-medium">{{ $t('page.farm.dashboard.title') }}</h2>
       <NSpace>
@@ -731,8 +757,13 @@ onUnmounted(() => {
       </NGrid>
     </NSpin>
 
-    <div class="grid gap-16px md:grid-cols-[minmax(0,1fr)_280px]">
-      <NCard :bordered="false" size="small" class="card-wrapper">
+    <div class="flex min-h-0 flex-1 flex-col items-stretch gap-16px md:flex-row">
+      <NCard
+        :bordered="false"
+        size="small"
+        class="log-card card-wrapper min-h-0 flex-1 overflow-hidden"
+        content-class="log-card-body"
+      >
         <template #header>
           <div class="flex flex-wrap items-center justify-between gap-8px">
             <span>{{ $t('page.farm.dashboard.runningLogs') }}</span>
@@ -753,7 +784,8 @@ onUnmounted(() => {
         </template>
         <div
           ref="logContainer"
-          class="h-300px overflow-y-auto rounded-8px bg-gray-50 p-12px font-mono text-13px dark:bg-gray-900"
+          class="log-scroll-area overflow-y-auto rounded-8px bg-gray-50 p-12px font-mono text-13px dark:bg-gray-900"
+          :class="{ 'flex-center': !filteredLogs.length }"
           @scroll="onLogScroll"
         >
           <div v-if="!filteredLogs.length" class="py-32px text-center text-gray-400">
@@ -775,7 +807,7 @@ onUnmounted(() => {
         </div>
       </NCard>
 
-      <div class="flex-col gap-16px">
+      <div class="flex w-full min-h-0 flex-col gap-16px md:w-280px">
         <NCard :title="$t('page.farm.dashboard.nextChecksTitle')" :bordered="false" size="small" class="card-wrapper">
           <div class="flex-col gap-12px">
             <div class="flex-y-center justify-between">
@@ -793,11 +825,16 @@ onUnmounted(() => {
           </div>
         </NCard>
 
-        <NCard :title="$t('page.farm.dashboard.todayStats')" :bordered="false" size="small" class="card-wrapper">
-          <div v-if="!isOnline" class="py-24px text-center text-gray-400">
-            <div class="mb-8px text-28px">📡</div>
+        <NCard
+          :title="$t('page.farm.dashboard.todayStats')"
+          :bordered="false"
+          size="small"
+          class="stats-card card-wrapper min-h-0 flex-1"
+        >
+          <div v-if="!isOnline" class="h-full min-h-120px flex-col-center gap-8px py-24px text-center text-gray-400">
+            <div class="text-28px">📡</div>
             <div>{{ $t('page.farm.dashboard.accountOffline') }}</div>
-            <div class="mt-4px text-12px">{{ $t('page.farm.personal.notRunning') }}</div>
+            <div class="text-12px">{{ $t('page.farm.personal.notRunning') }}</div>
           </div>
           <div v-else class="grid grid-cols-2 gap-8px">
             <div
@@ -817,3 +854,120 @@ onUnmounted(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+.log-card-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.log-filter-grid {
+  display: grid;
+  flex: 1;
+  grid-template-columns: repeat(4, minmax(96px, 1fr)) auto;
+  gap: 8px;
+  align-items: center;
+  min-width: min(100%, 560px);
+}
+
+.log-clear-btn {
+  justify-self: end;
+}
+
+.log-scroll-area {
+  flex: 1 1 0;
+  min-height: 0;
+  height: 100%;
+}
+
+.log-card {
+  display: flex !important;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.log-card :deep(.n-card-header) {
+  flex-shrink: 0;
+}
+
+.log-card :deep(.n-card__content),
+.log-card :deep(.log-card-body) {
+  display: flex !important;
+  flex: 1 1 0 !important;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.stats-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.stats-card :deep(.n-card__content) {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.log-row {
+  display: grid;
+  grid-template-columns: 72px 56px 88px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 24px;
+}
+
+.log-col-time,
+.log-col-tag,
+.log-col-event {
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.log-col-time {
+  justify-content: center;
+}
+
+.log-col-tag,
+.log-col-event {
+  line-height: 1.2;
+}
+
+.log-col-message {
+  min-width: 0;
+}
+
+@media (max-width: 768px) {
+  .log-filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .log-clear-btn {
+    grid-column: 1 / -1;
+    justify-self: stretch;
+  }
+
+  .log-row {
+    grid-template-columns: 64px 52px minmax(0, 1fr);
+  }
+
+  .log-col-event {
+    display: none;
+  }
+}
+</style>

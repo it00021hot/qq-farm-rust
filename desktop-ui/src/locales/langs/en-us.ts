@@ -890,7 +890,7 @@ const local: App.I18n.Schema = {
         tabSeeds: 'Seeds',
         tabFruits: 'Fruits',
         tabItems: 'Items',
-        keyword: 'Search name or ID',
+        keyword: 'Keyword',
         seed: 'Seed',
         fruit: 'Fruit',
         item: 'Item',

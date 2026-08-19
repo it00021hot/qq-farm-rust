@@ -1,4 +1,5 @@
 import { GOLD_BEAN_ITEM_ID } from '@/constants/items';
+import { isTauriRuntime } from '@/service/tauri/client';
 
 function catalogRelativePath(path: string): string {
   const normalized = path.startsWith('/') ? path : `/${path}`;
@@ -6,25 +7,25 @@ function catalogRelativePath(path: string): string {
 }
 
 /**
- * Resolve catalog icon path (`/game-config/...`) as a same-origin URL.
+ * Resolve catalog icon path for game config assets.
  *
- * Vite middleware, `dist/game-config` (tauri builtin static server / packaged
- * asset protocol) all serve this prefix. Do not use `farmcfg://` here: after
- * dropping `devUrl`, `tauri dev` is `http://127.0.0.1` and would 404 those.
+ * - Vite dev/preview: same-origin `/game-config/*` (middleware + dist copy).
+ * - Tauri webview: `farmcfg://` custom protocol (reliable in dev + packaged).
  */
 export function resolveCatalogImage(path?: string | null): string {
   if (!path) return '';
-  if (
-    /^https?:\/\//i.test(path) ||
-    path.startsWith('data:') ||
-    path.startsWith('farmcfg:') ||
-    path.startsWith('asset:')
-  ) {
+  if (/^https?:\/\//i.test(path) || path.startsWith('data:')) {
+    return path.startsWith('//') ? `https:${path}` : path;
+  }
+  if (path.startsWith('farmcfg:') || path.startsWith('asset:')) {
     return path;
   }
 
   const rel = catalogRelativePath(path);
   if (!rel) return '';
+  if (isTauriRuntime()) {
+    return `farmcfg://localhost/${rel}`;
+  }
   return `/game-config/${rel}`;
 }
 
@@ -58,6 +59,8 @@ export const priceIdOptions = [
   { label: '金豆豆', value: GOLD_BEAN_ITEM_ID },
   { label: '钻石', value: 1004 }
 ];
+
+export type GameConfigTab = 'seeds' | 'fruits' | 'items';
 
 export const rarityOptions = [
   { label: '普通', value: 0 },

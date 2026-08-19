@@ -525,10 +525,16 @@ pub async fn visit_friend_for_steal(
                     .into_iter()
                     .collect();
                 let names = plant_names.join("/");
-                actions.push(if names.is_empty() {
-                    format!("偷{}", steal_result.ok)
+                // 与 `do_steal_op()` 保持一致：当 `score_gained > 0` 时追加价值提示
+                let score_hint = if steal_result.score_gained > 0 {
+                    format!("，获得积分x{}", steal_result.score_gained)
                 } else {
-                    format!("偷{}({names})", steal_result.ok)
+                    String::new()
+                };
+                actions.push(if names.is_empty() {
+                    format!("偷{}{}", steal_result.ok, score_hint)
+                } else {
+                    format!("偷{}({names}){}", steal_result.ok, score_hint)
                 });
                 total_actions.steal += steal_result.ok;
                 crate::services::stats::record_operation_for(

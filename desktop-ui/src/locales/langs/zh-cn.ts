@@ -861,7 +861,8 @@ const local: App.I18n.Schema = {
         reminderMsg: '内容',
         offlineDeleteSec: '离线删除账号 (秒)',
         offlineDeleteHint: '0 表示不删除',
-        offlineHint: '账号掉线时推送到所选渠道。Webhook 填接口地址，其他渠道填 Token。未填写地址或 Token 时不会推送，也不会在运行日志里报错。',
+        offlineHint:
+          '账号掉线时推送到所选渠道。Webhook 填接口地址，其他渠道填 Token。未填写地址或 Token 时不会推送，也不会在运行日志里报错。',
         system: '运行环境',
         runtimeEnv: '运行环境',
         devicePresets: '设备预设',
@@ -885,7 +886,7 @@ const local: App.I18n.Schema = {
         tabSeeds: '种子',
         tabFruits: '果实',
         tabItems: '道具',
-        keyword: '搜索名称或 ID',
+        keyword: '关键词',
         seed: '种子',
         fruit: '果实',
         item: '道具',

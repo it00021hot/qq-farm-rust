@@ -615,6 +615,19 @@ declare namespace Api {
       label: string;
     };
 
+    type GameConfigSearchParams = CommonType.RecordNullable<
+      CommonSearchParams & {
+        keyword?: string;
+        seasons?: number;
+        rarity?: number;
+        itemType?: number;
+      }
+    >;
+
+    type GameConfigSeedList = Common.PaginatingQueryRecord<GameConfigSeed>;
+    type GameConfigFruitList = Common.PaginatingQueryRecord<GameConfigFruit>;
+    type GameConfigItemList = Common.PaginatingQueryRecord<GameConfigItem>;
+
     type GameConfigSeedWriteParams = {
       seedId: number;
       name?: string;

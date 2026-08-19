@@ -104,8 +104,23 @@ export function logText(payload: Record<string, unknown>): string {
   return humanizeLogMessage(raw);
 }
 
+/** Internal event keys hidden from the dashboard log panel. */
+export const HIDDEN_LOG_EVENT_KEYS = new Set(['avatar_probe']);
+
 /** Dashboard log event filter options (align qq-farm-bot). */
 export const LOG_EVENT_FILTER_OPTIONS: Array<{ label: string; value: string }> = [
   { label: '所有事件', value: '' },
-  ...Object.entries(EVENT_LABELS).map(([value, label]) => ({ label, value }))
+  ...Object.entries(EVENT_LABELS)
+    .filter(([value]) => !HIDDEN_LOG_EVENT_KEYS.has(value))
+    .map(([value, label]) => ({ label, value }))
 ];
+
+export function isHiddenLogEvent(eventKey?: string | null, eventLabel?: string | null, message?: string | null): boolean {
+  const key = String(eventKey || '').trim();
+  if (key && HIDDEN_LOG_EVENT_KEYS.has(key)) return true;
+  const label = String(eventLabel || '').trim();
+  if (label === EVENT_LABELS.avatar_probe) return true;
+  // Avoid fuzzy message matching: it can accidentally hide unrelated logs.
+  // We only hide by exact event key / label.
+  return false;
+}
