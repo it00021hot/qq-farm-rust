@@ -1,6 +1,4 @@
-import { convertFileSrc } from '@tauri-apps/api/core';
 import { GOLD_BEAN_ITEM_ID } from '@/constants/items';
-import { isTauriRuntime } from '@/service/tauri/client';
 
 function catalogRelativePath(path: string): string {
   if (path.startsWith('farmcfg:')) {
@@ -17,8 +15,8 @@ function catalogRelativePath(path: string): string {
 /**
  * Resolve catalog icon path for game config assets.
  *
- * - Vite dev/preview: same-origin `/game-config/*` (middleware + dist copy).
- * - Tauri webview: platform-specific `farmcfg` URL from `convertFileSrc`.
+ * Vite dev/preview serves `/game-config/*` through middleware, while Tauri
+ * embeds the same path from `dist/game-config` in `frontendDist`.
  */
 export function resolveCatalogImage(path?: string | null): string {
   if (!path) return '';
@@ -31,9 +29,6 @@ export function resolveCatalogImage(path?: string | null): string {
 
   const rel = catalogRelativePath(path);
   if (!rel) return '';
-  if (isTauriRuntime()) {
-    return convertFileSrc(`/${rel}`, 'farmcfg');
-  }
   return `/game-config/${rel}`;
 }
 
