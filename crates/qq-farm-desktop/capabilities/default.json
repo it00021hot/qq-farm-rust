@@ -18,6 +18,7 @@
     "core:window:allow-show",
     "core:window:allow-set-focus",
     "dialog:default",
+    "opener:default",
     "process:default",
     "updater:default",
     "allow-desktop-commands"

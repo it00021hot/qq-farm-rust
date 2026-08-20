@@ -26,7 +26,7 @@ pub fn run() {
     paths::prepare_data_dir();
     qq_farm_core::utils::logger::init();
 
-    // RuntimeEngine / AppEvent 桥依赖当前线程的 Tokio runtime（与旧 GPUI 入口一致）。
+    // 单一 Tokio runtime：业务 `tokio::spawn` 与 Tauri async_runtime 共用，避免双 runtime。
     let runtime = Box::leak(Box::new(
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -34,10 +34,14 @@ pub fn run() {
             .build()
             .expect("tokio runtime"),
     ));
-    let _enter = runtime.enter();
+    let handle = runtime.handle().clone();
+    tauri::async_runtime::set(handle.clone());
+    // setup / sync IPC 线程上的 `tokio::spawn` 需要当前线程已 enter。
+    let _enter = handle.enter();
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .register_uri_scheme_protocol("farmcfg", |_ctx, request| assets::handle_request(request))
@@ -134,6 +138,10 @@ pub fn run() {
             commands::settings::get_offline_reminder,
             commands::settings::set_offline_reminder,
             commands::settings::test_offline_reminder,
+            commands::settings::get_qq_bot_bind_status,
+            commands::settings::start_qq_bot_bind,
+            commands::settings::poll_qq_bot_bind,
+            commands::settings::unbind_qq_bot,
             commands::settings::get_device_presets,
             commands::settings::get_system_config,
             commands::settings::set_system_config,

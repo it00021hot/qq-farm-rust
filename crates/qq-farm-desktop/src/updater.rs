@@ -32,31 +32,19 @@ async fn run_check(app: AppHandle, show_up_to_date: bool, timeout: Duration) {
         Ok(Ok(Some(version))) => prompt_and_install(app, version).await,
         Ok(Ok(None)) => {
             if show_up_to_date {
-                app.dialog()
-                    .message("已是最新版本")
-                    .title("软件更新")
-                    .kind(MessageDialogKind::Info)
-                    .blocking_show();
+                show_info(&app, "已是最新版本").await;
             }
         }
         Ok(Err(e)) => {
             tracing::warn!(error = %e, "updater check failed");
             if show_up_to_date {
-                app.dialog()
-                    .message(format!("检查更新失败：{e}"))
-                    .title("软件更新")
-                    .kind(MessageDialogKind::Error)
-                    .blocking_show();
+                show_error(&app, format!("检查更新失败：{e}")).await;
             }
         }
         Err(_) => {
             tracing::warn!("updater check timed out");
             if show_up_to_date {
-                app.dialog()
-                    .message("检查更新超时")
-                    .title("软件更新")
-                    .kind(MessageDialogKind::Error)
-                    .blocking_show();
+                show_error(&app, "检查更新超时").await;
             }
         }
     }
@@ -72,13 +60,11 @@ async fn check_inner(app: &AppHandle) -> Result<Option<String>, String> {
 }
 
 async fn prompt_and_install(app: AppHandle, version: String) {
-    let go = app
-        .dialog()
-        .message(format!("发现新版本 {version}，是否立即更新？"))
-        .title("软件更新")
-        .kind(MessageDialogKind::Info)
-        .buttons(MessageDialogButtons::OkCancelCustom("立即更新".to_string(), "稍后".to_string()))
-        .blocking_show();
+    let go = confirm_update(
+        &app,
+        format!("发现新版本 {version}，是否立即更新？"),
+    )
+    .await;
     if !go {
         return;
     }
@@ -86,42 +72,77 @@ async fn prompt_and_install(app: AppHandle, version: String) {
     let updater = match app.updater() {
         Ok(u) => u,
         Err(e) => {
-            app.dialog()
-                .message(format!("无法启动更新：{e}"))
-                .title("软件更新")
-                .kind(MessageDialogKind::Error)
-                .blocking_show();
+            show_error(&app, format!("无法启动更新：{e}")).await;
             return;
         }
     };
     let update = match updater.check().await {
         Ok(Some(u)) => u,
         Ok(None) => {
-            app.dialog()
-                .message("已是最新版本")
-                .title("软件更新")
-                .kind(MessageDialogKind::Info)
-                .blocking_show();
+            show_info(&app, "已是最新版本").await;
             return;
         }
         Err(e) => {
-            app.dialog()
-                .message(format!("检查更新失败：{e}"))
-                .title("软件更新")
-                .kind(MessageDialogKind::Error)
-                .blocking_show();
+            show_error(&app, format!("检查更新失败：{e}")).await;
             return;
         }
     };
 
     if let Err(e) = update.download_and_install(|_, _| {}, || {}).await {
         tracing::error!(error = %e, "updater install failed");
-        app.dialog()
-            .message(format!("安装更新失败：{e}"))
-            .title("软件更新")
-            .kind(MessageDialogKind::Error)
-            .blocking_show();
+        show_error(&app, format!("安装更新失败：{e}")).await;
         return;
     }
     app.restart();
+}
+
+/// NSAlert / Win32 对话框必须在 UI 主线程；后台 Tokio 任务里 `blocking_show` 会卡死或崩。
+async fn show_info(app: &AppHandle, message: impl Into<String>) {
+    let message = message.into();
+    let app = app.clone();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let _ = app.clone().run_on_main_thread(move || {
+        app.dialog()
+            .message(message)
+            .title("软件更新")
+            .kind(MessageDialogKind::Info)
+            .blocking_show();
+        let _ = tx.send(());
+    });
+    let _ = rx.await;
+}
+
+async fn show_error(app: &AppHandle, message: impl Into<String>) {
+    let message = message.into();
+    let app = app.clone();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let _ = app.clone().run_on_main_thread(move || {
+        app.dialog()
+            .message(message)
+            .title("软件更新")
+            .kind(MessageDialogKind::Error)
+            .blocking_show();
+        let _ = tx.send(());
+    });
+    let _ = rx.await;
+}
+
+async fn confirm_update(app: &AppHandle, message: impl Into<String>) -> bool {
+    let message = message.into();
+    let app = app.clone();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let _ = app.clone().run_on_main_thread(move || {
+        let go = app
+            .dialog()
+            .message(message)
+            .title("软件更新")
+            .kind(MessageDialogKind::Info)
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "立即更新".to_string(),
+                "稍后".to_string(),
+            ))
+            .blocking_show();
+        let _ = tx.send(go);
+    });
+    rx.await.unwrap_or(false)
 }

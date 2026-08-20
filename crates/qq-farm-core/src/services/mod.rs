@@ -13,7 +13,7 @@
 //! - [`mall`] — 商城自动购买化肥 / 免费礼包（1G-3）
 //! - [`monthcard`] — 月卡每日礼包（1G-3）
 //! - [`commerce`] — 商城 + 神秘商店业务编排 + DTO（1G-3）
-//! - [`push`] — 推送服务 webhook 实现（1G-3）
+//! - [`qq_bot`] — QQ 官方机器人主动通知
 //! - [`qqvip`] — QQ 会员每日礼包（1G-4）
 //! - [`invite`] — 邀请码处理（ReportArkClick 模拟点击分享链接）（1G-4）
 //! - [`guide`] — 新手引导 / 节点奖励（1G-4）
@@ -54,7 +54,7 @@ pub mod mall;
 pub mod monthcard;
 pub mod mystery_shop;
 pub mod pay;
-pub mod push;
+pub mod qq_bot;
 pub mod qqvip;
 pub mod qrlogin;
 pub mod randomdrop;

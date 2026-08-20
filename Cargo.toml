@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.4"
+version = "0.2.2"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT OR Apache-2.0"
@@ -119,8 +119,9 @@ qq-farm-app = { path = "crates/qq-farm-app" }
 opt-level = 3
 lto = "thin"
 codegen-units = 1
-strip = "symbols"
-panic = "abort"
+# 保留符号便于符号化崩溃栈；后台 task panic 需 unwind 才能被 Tokio 隔离
+strip = "none"
+panic = "unwind"
 
 [profile.dev]
 opt-level = 0

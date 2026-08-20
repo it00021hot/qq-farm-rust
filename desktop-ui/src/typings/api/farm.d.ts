@@ -113,14 +113,42 @@ declare namespace Api {
       end?: string;
     };
 
+    type QqBotBinding = {
+      userOpenid: string;
+      boundAt?: number;
+      nickname?: string;
+    };
+
     type OfflineReminder = {
-      channel: string;
-      reloginUrlMode: string;
-      endpoint: string;
-      token: string;
+      provider: 'none' | 'qq_bot' | 'wechat_bot';
+      qqBot: {
+        appId: string;
+        clientSecret: string;
+      };
+      qqBotBinding: QqBotBinding;
+      wechatBot: Record<string, never>;
       title: string;
       msg: string;
       offlineDeleteSec: number;
+    };
+
+    type QqBotBindStatus = {
+      credentialsConfigured: boolean;
+      bound: boolean;
+      binding: QqBotBinding;
+      botInviteUrl: string;
+    };
+
+    type QqBotBindStart = {
+      sessionId: string;
+      botInviteUrl: string;
+      qrDataUrl: string;
+      expiresAt: number;
+    };
+
+    type QqBotBindPoll = {
+      status: 'pending' | 'bound' | 'expired';
+      binding?: QqBotBinding | null;
     };
 
     type AccountAutomationDetail = {

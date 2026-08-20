@@ -117,8 +117,8 @@ pub fn game_config_static_dir() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use serial_test::serial;
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn get_resource_root_returns_path() {

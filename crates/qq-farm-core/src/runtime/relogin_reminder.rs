@@ -7,13 +7,13 @@
 //! - `getOfflineAutoDeleteMs` — 计算自动删除离线账号的延迟（用户级配置覆盖全局）
 //! - `applyReloginCode` — 应用新 code（更新或新增账号 + 重启 worker）
 //! - `startReloginWatcher` — 轮询登录码状态（`maxRounds = 120`，1s/轮）
-//! - `triggerOfflineReminder` — 触发离线提醒（webhook/qq_link/qr_link）
+//! - `triggerOfflineReminder` — 触发 QQ Bot 离线提醒与重登录二维码
 //!
 //! ## 与原 TS 的差异
 //!
 //! - 用 `tokio::sync::Mutex` 持有 `reloginWatchers`（跨 await）
 //! - `WorkerControls` 通过 trait 注入（可 mock）
-//! - `miniProgramLoginSession` / `sendPushooMessage` 通过具体 service 引用
+//! - `miniProgramLoginSession` / `QqBotService` 通过具体 service 引用
 //! - 轮询协程用 tokio spawn（不阻塞调用方）
 //! - 移除原 `getAccounts()` 直接调用，改为 `accounts::get_accounts()`
 
@@ -26,14 +26,19 @@ use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::sleep;
 
 use crate::models::store::accounts::{self, AccountRecord};
-use crate::models::store::global_config::{self, OfflineReminder};
-use crate::services::push::{PushPayload, PushResult, PushService};
+use crate::models::store::global_config::{self, NotificationProvider, OfflineReminder};
+use crate::services::qq_bot::QqBotService;
 use crate::services::qrlogin::{MiniProgramLoginSession, MpStatus, MpStatusResult};
 
 /// watcher 轮询上限（原 TS `maxRounds = 120`）
 pub const MAX_WATCHER_ROUNDS: u32 = 120;
 /// watcher 单轮间隔
 pub const WATCHER_INTERVAL_MS: u64 = 1000;
+
+fn public_qr_image_url(content: &str) -> String {
+    let encoded: String = url::form_urlencoded::byte_serialize(content.as_bytes()).collect();
+    format!("https://quickchart.io/qr?size=300&margin=1&text={encoded}")
+}
 
 /// 重登录码载荷
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -46,6 +51,16 @@ pub struct ReloginCodePayload {
     pub auth_code: String,
     #[serde(default)]
     pub uin: String,
+}
+
+/// 账号通知类型：下线、上线、应用宝授权二维码。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountNoticeKind {
+    #[default]
+    Offline,
+    Online,
+    YybQr,
 }
 
 /// 离线提醒载荷
@@ -61,6 +76,8 @@ pub struct OfflineReminderPayload {
     pub reason: String,
     #[serde(default)]
     pub offline_ms: i64,
+    #[serde(default)]
+    pub kind: AccountNoticeKind,
 }
 
 /// worker 控制接口（依赖注入）。
@@ -108,7 +125,7 @@ struct WatcherState {
 /// 重登录提醒服务
 pub struct ReloginReminderService {
     mini_program_login: Arc<MiniProgramLoginSession>,
-    push: Arc<PushService>,
+    qq_bot: Arc<QqBotService>,
     worker_controls: Arc<dyn WorkerControls>,
     logger: Arc<dyn ReminderLogger>,
     /// watcher 集合（key → startedAt）
@@ -126,13 +143,13 @@ impl ReloginReminderService {
     #[must_use]
     pub fn new(
         mini_program_login: Arc<MiniProgramLoginSession>,
-        push: Arc<PushService>,
+        qq_bot: Arc<QqBotService>,
         worker_controls: Arc<dyn WorkerControls>,
         logger: Arc<dyn ReminderLogger>,
     ) -> Self {
         Self {
             mini_program_login,
-            push,
+            qq_bot,
             worker_controls,
             logger,
             relogin_watchers: Arc::new(AsyncMutex::new(HashMap::new())),
@@ -163,6 +180,11 @@ impl ReloginReminderService {
             }
         }
         global_config::get_offline_reminder()
+    }
+
+    #[must_use]
+    pub fn qq_bot(&self) -> Arc<QqBotService> {
+        self.qq_bot.clone()
     }
 
     /// 应用新 code（更新或新增账号 + 重启/启动 worker）
@@ -342,17 +364,22 @@ impl ReloginReminderService {
         });
     }
 
-    /// 触发下线提醒
+    /// 触发账号通知（下线 / 上线 / 应用宝二维码）
     pub async fn trigger_offline_reminder(self: Arc<Self>, payload: OfflineReminderPayload) {
         let account_id = payload.account_id.trim().to_string();
         let account_name = payload.account_name.trim().to_string();
         let reason =
             if payload.reason.is_empty() { "unknown".to_string() } else { payload.reason.clone() };
+        let kind_label = match payload.kind {
+            AccountNoticeKind::Offline => "下线",
+            AccountNoticeKind::Online => "上线",
+            AccountNoticeKind::YybQr => "应用宝授权二维码",
+        };
 
         self.logger.log(
             "系统",
             &format!(
-                "触发下线提醒: 账号={}, 原因={}",
+                "触发{kind_label}通知: 账号={}, 原因={}",
                 if !account_name.is_empty() { &account_name } else { &account_id },
                 reason
             ),
@@ -360,6 +387,7 @@ impl ReloginReminderService {
                 "accountId": account_id,
                 "accountName": account_name,
                 "reason": reason,
+                "kind": kind_label,
             })),
         );
 
@@ -383,71 +411,41 @@ impl ReloginReminderService {
 
         let cfg = self.get_offline_reminder_config(&username);
         if !cfg.is_configured() {
-            tracing::debug!(account_id = %account_id, "未配置下线提醒，跳过");
+            tracing::debug!(account_id = %account_id, "未配置账号通知，跳过");
             return;
         }
-
-        self.logger.log(
-            "系统",
-            &format!("下线提醒配置: 渠道={}, 标题={}", cfg.channel, cfg.title),
-            Some(serde_json::json!({
-                "channel": cfg.channel,
-                "title": cfg.title,
-                "username": username,
-            })),
-        );
-
-        let channel = cfg.channel.trim().to_lowercase();
-        let relogin_url_mode = cfg.relogin_url_mode.trim().to_lowercase();
-        let endpoint = cfg.endpoint.trim().to_string();
-        let token = cfg.token.trim().to_string();
-        let base_title = cfg.title.trim().to_string();
-        let title = if !account_name.is_empty() {
-            format!("{base_title} {account_name}")
-        } else {
-            base_title.clone()
+        if cfg.provider == NotificationProvider::WechatBot {
+            self.logger.log("错误", "微信机器人暂未实现", None);
+            return;
+        }
+        let Some(send_config) = cfg.send_config() else {
+            self.logger.log("错误", "QQ 通知未绑定", None);
+            return;
         };
-        let mut content = cfg.msg.trim().to_string();
 
-        let needs_token = channel != "webhook";
-        if channel.is_empty()
-            || (needs_token && token.is_empty())
-            || title.is_empty()
-            || content.is_empty()
-        {
-            self.logger.log(
-                "错误",
-                &format!(
-                    "下线提醒配置不完整: channel={}, token={}, title={}, content={}",
-                    channel,
-                    if token.is_empty() { "未设置" } else { "已设置" },
-                    title,
-                    content
-                ),
-                None,
-            );
-            return;
-        }
-        if channel == "webhook" && endpoint.is_empty() {
-            self.logger.log("错误", "Webhook 渠道未设置接口地址", None);
-            return;
-        }
+        let acc_label = if !account_name.is_empty() {
+            account_name.clone()
+        } else if !account_id.is_empty() {
+            account_id.clone()
+        } else {
+            "未知账号".to_string()
+        };
+        let content = match payload.kind {
+            AccountNoticeKind::Offline => format!("账号 {acc_label} 已下线"),
+            AccountNoticeKind::Online => format!("账号 {acc_label} 已上线"),
+            AccountNoticeKind::YybQr => {
+                format!("账号 {acc_label} 应用宝授权失效，请扫描二维码重新登录")
+            }
+        };
 
-        // qq_link / qr_link：拉新登录码 + 拼链接
-        if relogin_url_mode == "qq_link" || relogin_url_mode == "qr_link" {
+        let mut qr_image_url = None;
+        if payload.kind == AccountNoticeKind::YybQr {
             match self.mini_program_login.request_login_code().await {
                 Ok(qr) => {
                     let login_code = qr.code.trim().to_string();
                     let qq_url = qr.url.trim().to_string();
-                    let qr_code_url = qr.image.trim().to_string();
                     if !qq_url.is_empty() {
-                        if relogin_url_mode == "qq_link" {
-                            content = format!("{content}\n\n重登录链接: {qq_url}");
-                        } else {
-                            let qrcode_text =
-                                if !qr_code_url.is_empty() { qr_code_url } else { qq_url };
-                            content = format!("{content}\n\n重登录二维码链接: {qrcode_text}");
-                        }
+                        qr_image_url = Some(public_qr_image_url(&qq_url));
                     }
                     if !login_code.is_empty() {
                         let svc = self.clone();
@@ -460,28 +458,24 @@ impl ReloginReminderService {
             }
         }
 
-        // 推送
-        let push_payload = PushPayload {
-            channel: channel.clone(),
-            endpoint: endpoint.clone(),
-            token: token.clone(),
-            title: title.clone(),
-            content: content.clone(),
-        };
-        let ret: PushResult = self.push.send(&push_payload).await;
-
-        let acc_name = if !payload.account_name.is_empty() {
-            payload.account_name.clone()
-        } else if !payload.account_id.is_empty() {
-            payload.account_id.clone()
-        } else {
-            String::new()
-        };
+        let ret = self.qq_bot.send_text(&send_config, "", &content).await;
         if ret.ok {
-            self.logger.log("系统", &format!("下线提醒发送成功: {acc_name}"), None);
+            self.logger.log("系统", &format!("账号通知发送成功: {content}"), None);
+            if let Some(image_url) = qr_image_url {
+                let qr_result = self.qq_bot.send_qr_image(&send_config, &image_url).await;
+                if qr_result.ok {
+                    self.logger.log("系统", &format!("应用宝授权二维码发送成功: {acc_label}"), None);
+                } else {
+                    self.logger.log(
+                        "错误",
+                        &format!("应用宝授权二维码发送失败: {}", qr_result.msg),
+                        None,
+                    );
+                }
+            }
         } else {
             let msg = if ret.msg.is_empty() { "unknown" } else { ret.msg.as_str() };
-            self.logger.log("错误", &format!("下线提醒发送失败: {msg}"), None);
+            self.logger.log("错误", &format!("账号通知发送失败: {msg}"), None);
         }
     }
 
@@ -564,7 +558,41 @@ fn now_ms() -> i64 {
 mod tests {
     use super::*;
     use parking_lot::Mutex;
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// 隔离会落盘的 global_config 写操作，避免覆盖真实 `store.json`。
+    struct TempFarmData {
+        prev: Option<String>,
+        dir: PathBuf,
+    }
+
+    impl TempFarmData {
+        fn enter() -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "qq-farm-relogin-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ));
+            let _ = std::fs::create_dir_all(&dir);
+            let prev = std::env::var("FARM_DATA_DIR").ok();
+            std::env::set_var("FARM_DATA_DIR", &dir);
+            Self { prev, dir }
+        }
+    }
+
+    impl Drop for TempFarmData {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+            match &self.prev {
+                Some(v) => std::env::set_var("FARM_DATA_DIR", v),
+                None => std::env::remove_var("FARM_DATA_DIR"),
+            }
+        }
+    }
 
     /// 测试用 logger
     #[derive(Default)]
@@ -608,12 +636,12 @@ mod tests {
     /// 构造一个 service（测试辅助）
     fn make_service() -> (Arc<ReloginReminderService>, Arc<TestLogger>, Arc<CountingControls>) {
         let mp = Arc::new(MiniProgramLoginSession::new());
-        let push = Arc::new(PushService::new());
+        let qq_bot = Arc::new(QqBotService::new());
         let controls = Arc::new(CountingControls::default());
         let logger = Arc::new(TestLogger::default());
         let svc = ReloginReminderService::new(
             mp,
-            push,
+            qq_bot,
             controls.clone() as Arc<dyn WorkerControls>,
             logger.clone() as Arc<dyn ReminderLogger>,
         );
@@ -630,7 +658,9 @@ mod tests {
 
     #[test]
     #[serial_test::serial(relogin)]
+    #[serial_test::serial(farm_data_dir)]
     fn get_offline_auto_delete_ms_user_override() {
+        let _dir = TempFarmData::enter();
         // 先重置全局（避免被其他测试污染）
         global_config::set_offline_reminder(OfflineReminder::default());
         let (svc, _, _) = make_service();
@@ -644,36 +674,38 @@ mod tests {
 
     #[test]
     #[serial_test::serial(relogin)]
+    #[serial_test::serial(farm_data_dir)]
     fn get_offline_reminder_config_falls_back_to_global() {
+        let _dir = TempFarmData::enter();
         global_config::set_offline_reminder(OfflineReminder::default());
         let (svc, _, _) = make_service();
         global_config::set_offline_reminder(OfflineReminder {
-            channel: "webhook".to_string(),
             title: "T".to_string(),
             msg: "M".to_string(),
-            token: "tok".to_string(),
             ..Default::default()
         });
         let cfg = svc.get_offline_reminder_config("nobody");
-        assert_eq!(cfg.channel, "webhook");
+        assert_eq!(cfg.title, "T");
     }
 
     #[test]
     #[serial_test::serial(relogin)]
+    #[serial_test::serial(farm_data_dir)]
     fn get_offline_reminder_config_user_priority() {
+        let _dir = TempFarmData::enter();
         global_config::set_offline_reminder(OfflineReminder::default());
         global_config::delete_user_offline_reminder("alice");
         let (svc, _, _) = make_service();
         global_config::set_offline_reminder(OfflineReminder {
-            channel: "global".to_string(),
+            title: "global".to_string(),
             ..Default::default()
         });
         global_config::set_user_offline_reminder(
             "alice",
-            OfflineReminder { channel: "user".to_string(), ..Default::default() },
+            OfflineReminder { title: "user".to_string(), ..Default::default() },
         );
         let cfg = svc.get_offline_reminder_config("alice");
-        assert_eq!(cfg.channel, "user");
+        assert_eq!(cfg.title, "user");
     }
 
     #[test]
@@ -728,7 +760,9 @@ mod tests {
 
     #[test]
     #[serial_test::serial(relogin)]
+    #[serial_test::serial(farm_data_dir)]
     fn offline_reminder_incomplete_config_no_push() {
+        let _dir = TempFarmData::enter();
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         global_config::set_offline_reminder(OfflineReminder::default());
         let (svc, logger, _) = make_service();
@@ -743,14 +777,16 @@ mod tests {
             .await;
             // 不完整，应该不发
             let logs = logger.logs.lock().clone();
-            assert!(logs.iter().any(|(_, m)| m.contains("触发下线提醒")));
-            assert!(!logs.iter().any(|(_, m)| m.contains("下线提醒配置: 渠道=")));
+            assert!(logs.iter().any(|(_, m)| m.contains("触发下线通知") || m.contains("触发下线提醒")));
+            assert!(!logs.iter().any(|(_, m)| m.contains("下线提醒配置: provider=")));
         });
     }
 
     #[test]
     #[serial_test::serial(relogin)]
+    #[serial_test::serial(farm_data_dir)]
     fn offline_reminder_factory_default_skips_without_error() {
+        let _dir = TempFarmData::enter();
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         global_config::set_offline_reminder(global_config::default_offline_reminder());
         let (svc, logger, _) = make_service();
@@ -763,63 +799,9 @@ mod tests {
             })
             .await;
             let logs = logger.logs.lock().clone();
-            assert!(logs.iter().any(|(_, m)| m.contains("触发下线提醒")));
+            assert!(logs.iter().any(|(_, m)| m.contains("触发下线通知") || m.contains("触发下线提醒")));
             assert!(!logs.iter().any(|(_, m)| m.contains("下线提醒配置不完整")));
-            assert!(!logs.iter().any(|(_, m)| m.contains("下线提醒配置: 渠道=")));
-        });
-    }
-
-    #[test]
-    #[serial_test::serial(relogin)]
-    fn offline_reminder_webhook_missing_endpoint_blocks() {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        global_config::set_offline_reminder(OfflineReminder::default());
-        let (svc, logger, _) = make_service();
-        global_config::set_offline_reminder(OfflineReminder {
-            channel: "webhook".to_string(),
-            token: "tok".to_string(),
-            title: "T".to_string(),
-            msg: "M".to_string(),
-            endpoint: "".to_string(),
-            ..Default::default()
-        });
-        rt.block_on(async {
-            svc.trigger_offline_reminder(OfflineReminderPayload {
-                account_id: "a1".to_string(),
-                account_name: "n".to_string(),
-                ..Default::default()
-            })
-            .await;
-            let logs = logger.logs.lock().clone();
-            assert!(logs.iter().any(|(_, m)| m.contains("Webhook 渠道未设置接口地址")));
-        });
-    }
-
-    #[test]
-    #[serial_test::serial(relogin)]
-    fn offline_reminder_logs_trigger() {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        global_config::set_offline_reminder(OfflineReminder::default());
-        let (svc, logger, _) = make_service();
-        global_config::set_offline_reminder(OfflineReminder {
-            channel: "webhook".to_string(),
-            token: "tok".to_string(),
-            endpoint: "https://example.com/hook".to_string(),
-            title: "T".to_string(),
-            msg: "M".to_string(),
-            ..Default::default()
-        });
-        rt.block_on(async {
-            svc.trigger_offline_reminder(OfflineReminderPayload {
-                account_id: "a1".to_string(),
-                account_name: "n1".to_string(),
-                reason: "ws_close".to_string(),
-                ..Default::default()
-            })
-            .await;
-            let logs = logger.logs.lock().clone();
-            assert!(logs.iter().any(|(_, m)| m.contains("触发下线提醒")));
-            assert!(logs.iter().any(|(_, m)| m.contains("下线提醒配置")));
+            assert!(!logs.iter().any(|(_, m)| m.contains("下线提醒配置: provider=")));
         });
     }
 
@@ -827,6 +809,10 @@ mod tests {
     fn offline_reminder_payload_default_reason_is_unknown() {
         let payload = OfflineReminderPayload::default();
         assert_eq!(payload.reason, "");
+        assert_eq!(payload.kind, AccountNoticeKind::Offline);
+        let qr = public_qr_image_url("https://example.com/login?a=1");
+        assert!(qr.starts_with("https://quickchart.io/qr?"));
+        assert!(qr.contains("https%3A%2F%2Fexample.com%2Flogin%3Fa%3D1"));
     }
 
     #[test]

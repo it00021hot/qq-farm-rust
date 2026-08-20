@@ -79,5 +79,10 @@ pub fn assemble_app_context(max_workers: usize, gateway_origin: &str) -> AppCont
     }));
     engine.spawn_event_bridge();
     engine.spawn_wx_keepalive();
-    AppContext::new(engine)
+    engine
+        .qq_bot()
+        .reconcile_background(qq_farm_core::models::store::global_config::gateway_qq_bot_config());
+    let ctx = AppContext::new(engine);
+    crate::qq_bot_bind::restore_saved_bindings(&ctx);
+    ctx
 }

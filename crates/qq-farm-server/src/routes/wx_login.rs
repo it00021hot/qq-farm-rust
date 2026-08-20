@@ -179,9 +179,10 @@ async fn confirm_quick_task(
     Json(body): Json<QuickConfirmBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let owner = owner_from_headers(&ctx, &headers);
-    let r = wx_login::confirm_quick_session_for(&ctx.wx, &session_id, &body.redirect_url, Some(&owner))
-        .await
-        .map_err(ApiError::from)?;
+    let r =
+        wx_login::confirm_quick_session_for(&ctx.wx, &session_id, &body.redirect_url, Some(&owner))
+            .await
+            .map_err(ApiError::from)?;
     Ok(Json(json!({
         "ok": true,
         "data": {

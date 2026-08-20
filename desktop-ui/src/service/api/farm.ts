@@ -480,12 +480,23 @@ export async function fetchResetSystemConfig() {
   };
 }
 
+function toQqBotBinding(raw: any): Api.Farm.QqBotBinding {
+  return {
+    userOpenid: String(raw?.userOpenid ?? raw?.user_openid ?? ''),
+    boundAt: Number(raw?.boundAt ?? raw?.bound_at ?? 0) || undefined,
+    nickname: String(raw?.nickname ?? '')
+  };
+}
+
 function toOfflineReminder(raw: any): Api.Farm.OfflineReminder {
   return {
-    channel: String(raw?.channel ?? 'none'),
-    reloginUrlMode: String(raw?.reloginUrlMode ?? raw?.relogin_url_mode ?? 'none'),
-    endpoint: String(raw?.endpoint ?? ''),
-    token: String(raw?.token ?? ''),
+    provider: ['qq_bot', 'wechat_bot'].includes(String(raw?.provider)) ? raw.provider : 'none',
+    qqBot: {
+      appId: String(raw?.qqBot?.appId ?? ''),
+      clientSecret: String(raw?.qqBot?.clientSecret ?? '')
+    },
+    qqBotBinding: toQqBotBinding(raw?.qqBotBinding ?? raw?.qq_bot_binding ?? {}),
+    wechatBot: {},
     title: String(raw?.title ?? ''),
     msg: String(raw?.msg ?? ''),
     offlineDeleteSec: Number(raw?.offlineDeleteSec ?? raw?.offline_delete_sec ?? 0)
@@ -506,6 +517,58 @@ export async function fetchSaveOfflineReminder(cfg: Api.Farm.OfflineReminder) {
 
 export async function fetchTestOfflineReminder(cfg: Api.Farm.OfflineReminder) {
   return invokeFlat<{ ok: boolean; code?: string; msg?: string }>('test_offline_reminder', { cfg });
+}
+
+export async function fetchGetQqBotBindStatus() {
+  const res = await invokeFlat<any>('get_qq_bot_bind_status');
+  if (res.error) return res as FlatResponseData<any, Api.Farm.QqBotBindStatus>;
+  const raw = res.data || {};
+  return {
+    data: {
+      credentialsConfigured: Boolean(raw?.credentialsConfigured),
+      bound: Boolean(raw?.bound),
+      binding: toQqBotBinding(raw?.binding ?? {}),
+      botInviteUrl: String(raw?.botInviteUrl ?? '')
+    } satisfies Api.Farm.QqBotBindStatus,
+    error: null,
+    response: {} as any
+  };
+}
+
+export async function fetchStartQqBotBind() {
+  const res = await invokeFlat<any>('start_qq_bot_bind');
+  if (res.error) return res as FlatResponseData<any, Api.Farm.QqBotBindStart>;
+  const raw = res.data || {};
+  return {
+    data: {
+      sessionId: String(raw?.sessionId ?? ''),
+      botInviteUrl: String(raw?.botInviteUrl ?? ''),
+      qrDataUrl: String(raw?.qrDataUrl ?? ''),
+      expiresAt: Number(raw?.expiresAt ?? 0)
+    } satisfies Api.Farm.QqBotBindStart,
+    error: null,
+    response: {} as any
+  };
+}
+
+export async function fetchPollQqBotBind(sessionId: string) {
+  const res = await invokeFlat<any>('poll_qq_bot_bind', { sessionId });
+  if (res.error) return res as FlatResponseData<any, Api.Farm.QqBotBindPoll>;
+  const raw = res.data || {};
+  return {
+    data: {
+      status: ['pending', 'bound', 'expired'].includes(String(raw?.status)) ? raw.status : 'expired',
+      binding: raw?.binding ? toQqBotBinding(raw.binding) : null
+    } satisfies Api.Farm.QqBotBindPoll,
+    error: null,
+    response: {} as any
+  };
+}
+
+export async function fetchUnbindQqBot() {
+  const res = await invokeFlat<any>('unbind_qq_bot');
+  if (res.error) return res as FlatResponseData<any, Api.Farm.OfflineReminder>;
+  return { data: toOfflineReminder(res.data), error: null, response: {} as any };
 }
 
 export function fetchGetFarmLands(accountId: number) {

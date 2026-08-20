@@ -35,6 +35,7 @@ tracing-subscriber = { workspace = true }
 dotenvy = { workspace = true }
 thiserror = { workspace = true }
 dirs = "5"
+tauri-plugin-opener = "2.5.4"
 
 [lints]
 workspace = true

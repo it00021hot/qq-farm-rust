@@ -45,9 +45,9 @@ pub use crate::constants::{
     LIGHT_CONSTELLATION_OPERATE_TYPE, QINGMEI_BREW_ACTIVITY_ID, QINGMEI_DAILY_ACTIVITY_ID,
     QINGMEI_DAILY_ALREADY_CLAIMED_CODE, QINGMEI_DAILY_GRANT_ID, QINGMEI_ITEM_ID,
     QINGMEI_SHARED_SETTLEMENT_MODE, QINGMEI_SHARE_SCENE, QINGMEI_SHARE_SOURCE,
-    QUERY_QINGMEI_OPERATE_TYPE, QUERY_SHOP_OPERATE_TYPE, QIXI_BRIDGE_ACTIVITY_ID,
-    QIXI_BRIDGE_OPERATE_TYPE, QIXI_FEATHER_ITEM_ID, QIXI_GIFT_ACTIVITY_ID, QIXI_GIFT_OPERATE_TYPE,
-    QIXI_GROUP_ID, QIXI_RECEIVED_SACHET_ITEM_ID, QIXI_SACHET_ITEM_ID, SELL_QINGMEI_BREW_OPERATE_TYPE,
+    QIXI_BRIDGE_ACTIVITY_ID, QIXI_BRIDGE_OPERATE_TYPE, QIXI_FEATHER_ITEM_ID, QIXI_GIFT_ACTIVITY_ID,
+    QIXI_GIFT_OPERATE_TYPE, QIXI_GROUP_ID, QIXI_RECEIVED_SACHET_ITEM_ID, QIXI_SACHET_ITEM_ID,
+    QUERY_QINGMEI_OPERATE_TYPE, QUERY_SHOP_OPERATE_TYPE, SELL_QINGMEI_BREW_OPERATE_TYPE,
     SHOP_ACTIVITY_TYPE, START_QINGMEI_BREW_OPERATE_TYPE,
 };
 
@@ -165,7 +165,8 @@ impl ActivityCenterService {
         let qingmei = qingmei_result.as_ref().ok().cloned();
         let qixi = qixi_result.as_ref().ok().cloned().unwrap_or_else(|| serde_json::json!({}));
         let constellation = season.as_ref().and_then(|s| self.build_constellation_dto(s, None));
-        let mut actions = build_actions(&season, &solar_terms, constellation.as_ref(), shop.as_ref());
+        let mut actions =
+            build_actions(&season, &solar_terms, constellation.as_ref(), shop.as_ref());
         if let Some(obj) = actions.as_object_mut() {
             if let Some(qixi_actions) = qixi.get("actions").and_then(|v| v.as_object()) {
                 if let Some(bridge) = qixi_actions.get("bridge") {

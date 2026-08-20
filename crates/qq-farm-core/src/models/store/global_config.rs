@@ -26,32 +26,136 @@ impl Default for UIConfig {
     }
 }
 
-/// 离线提醒配置
+/// 通知提供方。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationProvider {
+    #[default]
+    None,
+    QqBot,
+    WechatBot,
+}
+
+/// 全局 QQ 官方机器人凭据（部署者配置一次，用户不可见）。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct QqBotCredentials {
+    pub app_id: String,
+    pub client_secret: String,
+    #[serde(default)]
+    pub bot_invite_url: String,
+}
+
+impl QqBotCredentials {
+    #[must_use]
+    pub fn is_complete(&self) -> bool {
+        !self.app_id.trim().is_empty() && !self.client_secret.trim().is_empty()
+    }
+
+    #[must_use]
+    pub fn invite_url(&self) -> String {
+        self.bot_invite_url.trim().to_string()
+    }
+}
+
+/// 用户扫码绑定结果。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QqBotBinding {
+    pub user_openid: String,
+    #[serde(default)]
+    pub bound_at: i64,
+    #[serde(default)]
+    pub nickname: String,
+}
+
+impl QqBotBinding {
+    #[must_use]
+    pub fn is_bound(&self) -> bool {
+        !self.user_openid.trim().is_empty()
+    }
+}
+
+/// QQ Bot 运行时发送配置（凭据 + 目标用户）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QqBotConfig {
+    pub app_id: String,
+    pub client_secret: String,
+    pub user_openid: String,
+}
+
+impl QqBotConfig {
+    #[must_use]
+    pub fn has_credentials(&self) -> bool {
+        !self.app_id.trim().is_empty() && !self.client_secret.trim().is_empty()
+    }
+
+    #[must_use]
+    pub fn is_complete(&self) -> bool {
+        self.has_credentials() && !self.user_openid.trim().is_empty()
+    }
+
+    #[must_use]
+    pub fn from_credentials(credentials: &QqBotCredentials) -> Option<Self> {
+        if !credentials.is_complete() {
+            return None;
+        }
+        Some(Self {
+            app_id: credentials.app_id.trim().to_string(),
+            client_secret: credentials.client_secret.trim().to_string(),
+            user_openid: String::new(),
+        })
+    }
+
+    #[must_use]
+    pub fn from_parts(credentials: &QqBotCredentials, binding: &QqBotBinding) -> Option<Self> {
+        if !credentials.is_complete() || !binding.is_bound() {
+            return None;
+        }
+        Some(Self {
+            app_id: credentials.app_id.trim().to_string(),
+            client_secret: credentials.client_secret.trim().to_string(),
+            user_openid: binding.user_openid.trim().to_string(),
+        })
+    }
+}
+
+/// 微信机器人预留配置。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WechatBotConfig {}
+
+/// 离线提醒配置。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OfflineReminder {
-    pub channel: String,
-    #[serde(alias = "relogin_url_mode")]
-    pub relogin_url_mode: String,
-    pub endpoint: String,
-    pub token: String,
+    pub provider: NotificationProvider,
+    #[serde(default, rename = "qqBotBinding")]
+    pub qq_bot_binding: QqBotBinding,
+    pub wechat_bot: WechatBotConfig,
     pub title: String,
     pub msg: String,
-    #[serde(alias = "offline_delete_sec")]
     pub offline_delete_sec: i64,
 }
 
 impl OfflineReminder {
-    /// 是否已填到可尝试推送。
-    ///
-    /// 出厂默认 `channel=webhook` 但地址/token 都空，不算已配置，避免刷运行日志。
+    /// 是否已配置为可发送的机器人。
     #[must_use]
     pub fn is_configured(&self) -> bool {
-        let channel = self.channel.trim().to_ascii_lowercase();
-        if channel.is_empty() || channel == "none" {
-            return false;
-        }
-        !self.endpoint.trim().is_empty() || !self.token.trim().is_empty()
+        self.provider == NotificationProvider::QqBot
+            && self.qq_bot_binding.is_bound()
+            && effective_qq_bot_credentials().is_complete()
+    }
+
+    #[must_use]
+    pub fn send_config(&self) -> Option<QqBotConfig> {
+        QqBotConfig::from_parts(&effective_qq_bot_credentials(), &self.qq_bot_binding)
+    }
+}
+
+impl Default for OfflineReminder {
+    fn default() -> Self {
+        default_offline_reminder()
     }
 }
 
@@ -59,10 +163,9 @@ impl OfflineReminder {
 #[must_use]
 pub fn default_offline_reminder() -> OfflineReminder {
     OfflineReminder {
-        channel: "webhook".to_string(),
-        relogin_url_mode: "none".to_string(),
-        endpoint: String::new(),
-        token: String::new(),
+        provider: NotificationProvider::None,
+        qq_bot_binding: QqBotBinding::default(),
+        wechat_bot: WechatBotConfig::default(),
         title: "账号下线提醒".to_string(),
         msg: "账号下线".to_string(),
         offline_delete_sec: 0,
@@ -104,6 +207,8 @@ pub struct GlobalConfigState {
     pub announcement_read_records: HashMap<String, i64>,
     /// 系统配置（设备 / serverUrl / clientVersion 等）
     pub system_config: Option<SystemConfig>,
+    /// QQ 官方机器人全局凭据
+    pub qq_bot_credentials: QqBotCredentials,
 }
 
 impl GlobalConfigState {
@@ -117,6 +222,7 @@ impl GlobalConfigState {
             announcement: Announcement::default(),
             announcement_read_records: HashMap::new(),
             system_config: None,
+            qq_bot_credentials: QqBotCredentials::default(),
         }
     }
 }
@@ -195,6 +301,65 @@ pub fn delete_user_offline_reminder(username: &str) -> bool {
         let _ = save_global_config();
     }
     removed
+}
+
+/// 当前 Gateway 需要的 QQ Bot 凭据。
+#[must_use]
+pub fn gateway_qq_bot_config() -> Option<QqBotConfig> {
+    QqBotConfig::from_credentials(&effective_qq_bot_credentials())
+}
+
+/// 读取持久化的 QQ Bot 凭据。
+#[must_use]
+pub fn get_qq_bot_credentials() -> QqBotCredentials {
+    STATE.read().qq_bot_credentials.clone()
+}
+
+/// 保存 QQ Bot 凭据。
+pub fn set_qq_bot_credentials(credentials: QqBotCredentials) {
+    STATE.write().qq_bot_credentials = credentials;
+    let _ = save_global_config();
+}
+
+/// 生效中的 QQ Bot 凭据：环境变量优先，其次持久化配置。
+#[must_use]
+pub fn effective_qq_bot_credentials() -> QqBotCredentials {
+    let env_app = std::env::var("QQ_FARM_QQ_BOT_APP_ID").unwrap_or_default();
+    let env_secret = std::env::var("QQ_FARM_QQ_BOT_APP_SECRET").unwrap_or_default();
+    let env_url = std::env::var("QQ_FARM_QQ_BOT_INVITE_URL").unwrap_or_default();
+    if !env_app.trim().is_empty() && !env_secret.trim().is_empty() {
+        return QqBotCredentials {
+            app_id: env_app,
+            client_secret: env_secret,
+            bot_invite_url: env_url,
+        };
+    }
+    get_qq_bot_credentials()
+}
+
+/// 将绑定结果写入用户离线提醒。
+pub fn apply_qq_bot_binding(username: &str, binding: QqBotBinding) {
+    let mut reminder = get_user_offline_reminder(username).unwrap_or_else(get_offline_reminder);
+    reminder.provider = NotificationProvider::QqBot;
+    reminder.qq_bot_binding = binding;
+    set_user_offline_reminder(username, reminder);
+}
+
+/// 清除用户 QQ Bot 绑定。
+pub fn clear_qq_bot_binding(username: &str) {
+    let mut reminder = get_user_offline_reminder(username).unwrap_or_else(get_offline_reminder);
+    reminder.qq_bot_binding = QqBotBinding::default();
+    if reminder.provider == NotificationProvider::QqBot {
+        reminder.provider = NotificationProvider::None;
+    }
+    set_user_offline_reminder(username, reminder);
+}
+
+/// 当前所有已启用且配置完整的 QQ Bot。
+#[deprecated(note = "use gateway_qq_bot_config instead")]
+#[must_use]
+pub fn configured_qq_bots() -> Vec<QqBotConfig> {
+    gateway_qq_bot_config().into_iter().collect()
 }
 
 // =====================================================================
@@ -306,6 +471,7 @@ pub fn save_global_config() -> std::io::Result<()> {
         "announcement": state.announcement,
         "announcementReadRecords": state.announcement_read_records,
         "systemConfig": state.system_config,
+        "qqBotCredentials": state.qq_bot_credentials,
     });
     let body = serde_json::to_string_pretty(&data).map_err(std::io::Error::other)?;
 
@@ -316,8 +482,14 @@ pub fn save_global_config() -> std::io::Result<()> {
         }
     }
     let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, body)?;
-    fs::rename(&tmp, &path)?;
+    if let Err(e) = fs::write(&tmp, &body) {
+        tracing::error!(path = %tmp.display(), error = %e, "写入 store.json.tmp 失败");
+        return Err(e);
+    }
+    if let Err(e) = fs::rename(&tmp, &path) {
+        tracing::error!(path = %path.display(), error = %e, "原子替换 store.json 失败");
+        return Err(e);
+    }
     Ok(())
 }
 
@@ -372,6 +544,11 @@ pub fn load_global_config() -> std::io::Result<()> {
             new_global.system_config = Some(parsed);
         }
     }
+    if let Some(creds) = data.get("qqBotCredentials") {
+        if let Ok(parsed) = serde_json::from_value::<QqBotCredentials>(creds.clone()) {
+            new_global.qq_bot_credentials = parsed;
+        }
+    }
     set_state(new_global);
 
     // 加载 account configs。默认/回退始终用代码里的 DefaultAccountConfig，
@@ -406,39 +583,82 @@ pub fn load_global_config() -> std::io::Result<()> {
 mod tests {
     use super::*;
     use serial_test::serial;
+    use std::fs;
 
-    fn reset() {
+    /// 把会落盘的 store 操作隔离到临时目录，避免覆盖开发/安装包的 `store.json`。
+    struct TempFarmData {
+        prev: Option<String>,
+        dir: PathBuf,
+    }
+
+    impl TempFarmData {
+        fn enter() -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "qq-farm-global-cfg-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ));
+            let _ = fs::create_dir_all(&dir);
+            let prev = std::env::var("FARM_DATA_DIR").ok();
+            std::env::set_var("FARM_DATA_DIR", &dir);
+            Self { prev, dir }
+        }
+    }
+
+    impl Drop for TempFarmData {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.dir);
+            match &self.prev {
+                Some(v) => std::env::set_var("FARM_DATA_DIR", v),
+                None => std::env::remove_var("FARM_DATA_DIR"),
+            }
+        }
+    }
+
+    fn reset() -> TempFarmData {
+        let guard = TempFarmData::enter();
         set_state(GlobalConfigState::new());
+        crate::models::store::account_config::set_state(
+            crate::models::store::account_config::AccountConfigState::new(),
+        );
+        guard
     }
 
     #[test]
     #[serial(global_config)]
+    #[serial(farm_data_dir)]
     fn ui_theme_default() {
-        reset();
+        let _dir = reset();
         let ui = get_ui();
         assert_eq!(ui.theme, "light");
     }
 
     #[test]
     #[serial(global_config)]
+    #[serial(farm_data_dir)]
     fn ui_theme_set_valid() {
-        reset();
+        let _dir = reset();
         set_ui_theme("dark");
         assert_eq!(get_ui().theme, "dark");
     }
 
     #[test]
     #[serial(global_config)]
+    #[serial(farm_data_dir)]
     fn ui_theme_set_invalid_ignored() {
-        reset();
+        let _dir = reset();
         set_ui_theme("invalid");
         assert_eq!(get_ui().theme, "light");
     }
 
     #[test]
     #[serial(global_config)]
+    #[serial(farm_data_dir)]
     fn announcement_show_logic() {
-        reset();
+        let _dir = reset();
         // 空公告不显示
         assert!(!should_show_announcement("user1"));
         // 设置公告
@@ -457,8 +677,9 @@ mod tests {
 
     #[test]
     #[serial(global_config)]
+    #[serial(farm_data_dir)]
     fn announcement_show_always_when_not_show_once() {
-        reset();
+        let _dir = reset();
         set_announcement(Announcement {
             content: "Always show".to_string(),
             show_once: false,
@@ -471,8 +692,9 @@ mod tests {
 
     #[test]
     #[serial(global_config)]
+    #[serial(farm_data_dir)]
     fn user_offline_reminder_crud() {
-        reset();
+        let _dir = reset();
         let r = default_offline_reminder();
         set_user_offline_reminder("alice", r.clone());
         assert!(get_user_offline_reminder("alice").is_some());
@@ -481,41 +703,75 @@ mod tests {
     }
 
     #[test]
-    fn factory_offline_reminder_is_not_configured() {
+    #[serial(global_config)]
+    #[serial(farm_data_dir)]
+    fn qq_bot_offline_reminder_requires_binding_and_credentials() {
+        let _dir = reset();
         assert!(!default_offline_reminder().is_configured());
         assert!(!OfflineReminder::default().is_configured());
-        assert!(OfflineReminder {
-            channel: "webhook".into(),
-            endpoint: "https://example.com/hook".into(),
+        let mut reminder = OfflineReminder {
+            provider: NotificationProvider::QqBot,
+            qq_bot_binding: QqBotBinding {
+                user_openid: "openid".into(),
+                bound_at: 1,
+                nickname: String::new(),
+            },
             ..Default::default()
-        }
-        .is_configured());
-        assert!(OfflineReminder {
-            channel: "bark".into(),
-            token: "key".into(),
-            ..Default::default()
-        }
-        .is_configured());
-        assert!(!OfflineReminder {
-            channel: "none".into(),
-            token: "key".into(),
-            ..Default::default()
-        }
-        .is_configured());
+        };
+        assert!(!reminder.is_configured());
+        set_qq_bot_credentials(QqBotCredentials {
+            app_id: "app".into(),
+            client_secret: "secret".into(),
+            bot_invite_url: String::new(),
+        });
+        assert!(reminder.is_configured());
+        assert!(reminder.send_config().is_some());
+        reminder.provider = NotificationProvider::WechatBot;
+        assert!(!reminder.is_configured());
+    }
+
+    #[test]
+    fn qq_bot_credentials_invite_url_is_explicit_only() {
+        let creds = QqBotCredentials {
+            app_id: "123".into(),
+            client_secret: "sec".into(),
+            bot_invite_url: String::new(),
+        };
+        assert!(creds.invite_url().is_empty());
+        let with_url = QqBotCredentials {
+            bot_invite_url: "https://example.com/bot".into(),
+            ..creds
+        };
+        assert_eq!(with_url.invite_url(), "https://example.com/bot");
+    }
+
+    #[test]
+    fn legacy_notification_shape_is_rejected() {
+        let legacy = serde_json::json!({
+            "channel": "webhook",
+            "endpoint": "https://example.com",
+            "token": "legacy",
+            "title": "old",
+            "msg": "old",
+            "offlineDeleteSec": 0
+        });
+        assert!(serde_json::from_value::<OfflineReminder>(legacy).is_err());
     }
 
     #[test]
     #[serial(global_config)]
+    #[serial(farm_data_dir)]
     fn admin_password_hash_set_get() {
-        reset();
+        let _dir = reset();
         set_admin_password_hash("hash_abc".to_string());
         assert_eq!(get_admin_password_hash(), "hash_abc");
     }
 
     #[test]
     #[serial(global_config)]
+    #[serial(farm_data_dir)]
     fn system_config_roundtrip() {
-        reset();
+        let _dir = reset();
         let mut sys = crate::config::system_config::SystemConfig::default_system();
         sys.server_url = "wss://test.com".to_string();
         set_system_config(sys.clone());

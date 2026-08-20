@@ -133,9 +133,5 @@ pub async fn gift_qixi_sachet(
     count: i64,
 ) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
-    loop_
-        .activity_center()
-        .gift_qixi_sachet(friend_gid, count)
-        .await
-        .map_err(AppError::from_core)
+    loop_.activity_center().gift_qixi_sachet(friend_gid, count).await.map_err(AppError::from_core)
 }

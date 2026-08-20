@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { openUrl } from '@tauri-apps/plugin-opener';
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import {
   NButton,
   NCard,
-  NCollapse,
-  NCollapseItem,
   NDivider,
   NEmpty,
   NForm,
@@ -18,7 +17,8 @@ import {
   NTabPane,
   NTabs,
   NTag,
-  NText
+  NText,
+  NTimePicker
 } from 'naive-ui';
 import {
   farmAllFertilizerLandTypes,
@@ -34,12 +34,16 @@ import {
   fetchGetFarmBagSeeds,
   fetchGetFarmSeeds,
   fetchGetOfflineReminder,
+  fetchGetQqBotBindStatus,
   fetchGetSystemConfig,
   fetchModifyFarmAutomation,
+  fetchPollQqBotBind,
   fetchResetSystemConfig,
   fetchSaveOfflineReminder,
   fetchSetSystemConfig,
+  fetchStartQqBotBind,
   fetchTestOfflineReminder,
+  fetchUnbindQqBot,
   type SystemConfigPayload
 } from '@/service/api';
 import { useFarmAccountStore } from '@/store/modules/farm-account';
@@ -144,73 +148,51 @@ const fertilizerBuy = reactive({
 });
 
 const offline = reactive<Api.Farm.OfflineReminder>({
-  channel: 'none',
-  reloginUrlMode: 'none',
-  endpoint: '',
-  token: '',
+  provider: 'none',
+  qqBot: {
+    appId: '',
+    clientSecret: ''
+  },
+  qqBotBinding: {
+    userOpenid: '',
+    boundAt: 0,
+    nickname: ''
+  },
+  wechatBot: {},
   title: '账号下线提醒',
   msg: '账号下线',
   offlineDeleteSec: 0
 });
 
-const CHANNEL_DOCS: Record<string, string> = {
-  qmsg: 'https://qmsg.zendee.cn/',
-  serverchan: 'https://sct.ftqq.com/',
-  pushplus: 'https://www.pushplus.plus/',
-  pushplushxtrip: 'https://pushplus.hxtrip.com/',
-  dingtalk: 'https://open.dingtalk.com/document/group/custom-robot-access',
-  wecom: 'https://guole.fun/posts/626/',
-  wecombot: 'https://developer.work.weixin.qq.com/document/path/91770',
-  bark: 'https://github.com/Finb/Bark',
-  gocqhttp: 'https://docs.go-cqhttp.org/api/',
-  onebot: 'https://docs.go-cqhttp.org/api/',
-  atri: 'https://blog.tianli0.top/',
-  pushdeer: 'https://www.pushdeer.com/',
-  igot: 'https://push.hellyw.com/',
-  telegram: 'https://core.telegram.org/bots',
-  feishu: 'https://www.feishu.cn/hc/zh-CN/articles/360024984973',
-  ifttt: 'https://ifttt.com/maker_webhooks',
-  discord: 'https://discord.com/developers/docs/resources/webhook#execute-webhook',
-  wxpusher: 'https://wxpusher.zjiecode.com/docs/#/'
-};
+const qqBotBindStatus = reactive<Api.Farm.QqBotBindStatus>({
+  credentialsConfigured: false,
+  bound: false,
+  binding: { userOpenid: '' },
+  botInviteUrl: ''
+});
+const qqBotBindSessionId = ref('');
+const qqBotBindQrDataUrl = ref('');
+const qqBotBindLoading = ref(false);
+const qqBotBindPolling = ref(false);
+let qqBotBindPollTimer: ReturnType<typeof setInterval> | null = null;
 
-const channelOptions = computed(() => [
-  { label: $t('page.farm.settings.channelNone'), value: 'none' },
-  { label: 'Webhook', value: 'webhook' },
-  { label: 'Qmsg 酱', value: 'qmsg' },
-  { label: 'Server 酱', value: 'serverchan' },
-  { label: 'Push Plus', value: 'pushplus' },
-  { label: 'Push Plus Hxtrip', value: 'pushplushxtrip' },
-  { label: '钉钉', value: 'dingtalk' },
-  { label: '企业微信', value: 'wecom' },
-  { label: 'Bark', value: 'bark' },
-  { label: 'Go-cqhttp', value: 'gocqhttp' },
-  { label: 'OneBot', value: 'onebot' },
-  { label: 'Atri', value: 'atri' },
-  { label: 'PushDeer', value: 'pushdeer' },
-  { label: 'iGot', value: 'igot' },
-  { label: 'Telegram', value: 'telegram' },
-  { label: '飞书', value: 'feishu' },
-  { label: 'IFTTT', value: 'ifttt' },
-  { label: '企业微信群机器人', value: 'wecombot' },
-  { label: 'Discord', value: 'discord' },
-  { label: 'WxPusher', value: 'wxpusher' }
-]);
+const qqBotCredentialsReady = computed(
+  () => Boolean(offline.qqBot.appId.trim()) && Boolean(offline.qqBot.clientSecret.trim())
+);
 
-const reloginUrlModeOptions = computed(() => [
-  { label: $t('page.farm.settings.reloginNone'), value: 'none' },
-  { label: $t('page.farm.settings.reloginQqLink'), value: 'qq_link' },
-  { label: $t('page.farm.settings.reloginQrLink'), value: 'qr_link' }
-]);
-
-const currentChannelDocUrl = computed(() => {
-  const key = String(offline.channel || '')
-    .trim()
-    .toLowerCase();
-  return CHANNEL_DOCS[key] || '';
+const qqBotBindStateLabel = computed(() => {
+  if (qqBotBindPolling.value) return $t('page.farm.settings.qqBotBindWaiting');
+  if (qqBotBindStatus.bound || offline.qqBotBinding.userOpenid) return $t('page.farm.settings.qqBotBindBound');
+  return $t('page.farm.settings.qqBotBindUnbound');
 });
 
-const endpointEnabled = computed(() => offline.channel === 'webhook');
+const providerOptions = computed(() => [
+  { label: $t('page.farm.settings.providerNone'), value: 'none' },
+  { label: $t('page.farm.settings.providerQqBot'), value: 'qq_bot' },
+  { label: $t('page.farm.settings.providerWechatBot'), value: 'wechat_bot', disabled: true }
+]);
+
+const currentProviderDocUrl = computed(() => (offline.provider === 'qq_bot' ? 'https://bot.q.qq.com/wiki/' : ''));
 
 /** Bot AutomationConfig keys only (qq-farm-bot Settings) */
 const automation = reactive<Api.Farm.AutomationConfig>({
@@ -782,13 +764,121 @@ async function handleResetSystemConfig() {
 }
 
 function applyOffline(data: Api.Farm.OfflineReminder) {
-  offline.channel = data.channel || 'none';
-  offline.reloginUrlMode = data.reloginUrlMode || 'none';
-  offline.endpoint = data.endpoint || '';
-  offline.token = data.token || '';
+  offline.provider = data.provider || 'none';
+  offline.qqBot.appId = data.qqBot?.appId || '';
+  offline.qqBot.clientSecret = data.qqBot?.clientSecret || '';
+  offline.qqBotBinding = {
+    userOpenid: data.qqBotBinding?.userOpenid || '',
+    boundAt: Number(data.qqBotBinding?.boundAt || 0),
+    nickname: data.qqBotBinding?.nickname || ''
+  };
   offline.title = data.title || '';
   offline.msg = data.msg || '';
   offline.offlineDeleteSec = Number(data.offlineDeleteSec || 0);
+}
+
+async function loadQqBotBindStatus() {
+  const { error, data } = await fetchGetQqBotBindStatus();
+  if (error || !data) return;
+  qqBotBindStatus.credentialsConfigured = data.credentialsConfigured;
+  qqBotBindStatus.bound = data.bound;
+  qqBotBindStatus.binding = data.binding;
+  qqBotBindStatus.botInviteUrl = data.botInviteUrl;
+  if (data.bound && data.binding?.userOpenid) {
+    offline.qqBotBinding = { ...data.binding };
+    if (offline.provider === 'none') offline.provider = 'qq_bot';
+  }
+}
+
+function stopQqBotBindPolling() {
+  if (qqBotBindPollTimer) {
+    clearInterval(qqBotBindPollTimer);
+    qqBotBindPollTimer = null;
+  }
+  qqBotBindPolling.value = false;
+}
+
+async function pollQqBotBindOnce() {
+  if (!qqBotBindSessionId.value) return;
+  const { error, data } = await fetchPollQqBotBind(qqBotBindSessionId.value);
+  if (error || !data) return;
+    if (data.status === 'bound' && data.binding?.userOpenid) {
+    stopQqBotBindPolling();
+    offline.provider = 'qq_bot';
+    offline.qqBotBinding = { ...data.binding };
+    qqBotBindStatus.bound = true;
+    qqBotBindStatus.binding = { ...data.binding };
+    qqBotBindSessionId.value = '';
+    qqBotBindQrDataUrl.value = '';
+    window.$message?.success($t('page.farm.settings.qqBotBindSuccess'));
+    const { error, data: reminder } = await fetchGetOfflineReminder();
+    if (!error && reminder) applyOffline(reminder);
+    await loadQqBotBindStatus();
+    return;
+  }
+  if (data.status === 'expired') {
+    stopQqBotBindPolling();
+    qqBotBindSessionId.value = '';
+    qqBotBindQrDataUrl.value = '';
+    window.$message?.warning($t('page.farm.settings.qqBotBindExpired'));
+  }
+}
+
+function startQqBotBindPolling() {
+  stopQqBotBindPolling();
+  qqBotBindPolling.value = true;
+  void pollQqBotBindOnce();
+  qqBotBindPollTimer = setInterval(() => {
+    void pollQqBotBindOnce();
+  }, 2000);
+}
+
+async function handleStartQqBotBind() {
+  if (qqBotBindPolling.value || qqBotBindLoading.value) return;
+  if (!qqBotCredentialsReady.value) {
+    window.$message?.warning($t('page.farm.settings.qqBotCredentialsMissing'));
+    return;
+  }
+  qqBotBindLoading.value = true;
+  try {
+    const { error: saveError } = await fetchSaveOfflineReminder(offlinePayload());
+    if (saveError) return;
+    const { error, data } = await fetchStartQqBotBind();
+    if (error || !data?.sessionId) return;
+    offline.provider = 'qq_bot';
+    qqBotBindSessionId.value = data.sessionId;
+    qqBotBindQrDataUrl.value = data.qrDataUrl || '';
+    qqBotBindStatus.botInviteUrl = data.botInviteUrl || qqBotBindStatus.botInviteUrl;
+    startQqBotBindPolling();
+  } finally {
+    qqBotBindLoading.value = false;
+  }
+}
+
+async function handleUnbindQqBot() {
+  qqBotBindLoading.value = true;
+  try {
+    stopQqBotBindPolling();
+    const { error, data } = await fetchUnbindQqBot();
+    if (!error && data) applyOffline(data);
+    qqBotBindStatus.bound = false;
+    qqBotBindStatus.binding = { userOpenid: '' };
+    qqBotBindSessionId.value = '';
+    qqBotBindQrDataUrl.value = '';
+    window.$message?.success($t('page.farm.settings.qqBotUnbindSuccess'));
+  } finally {
+    qqBotBindLoading.value = false;
+  }
+}
+
+async function openBotInvite() {
+  const url = qqBotBindStatus.botInviteUrl;
+  if (!url) return;
+  try {
+    await openUrl(url);
+  } catch (error) {
+    window.$message?.error(`${$t('page.farm.settings.botDocsOpenFail')}: ${String(error)}`);
+  }
 }
 
 async function loadOffline() {
@@ -796,14 +886,22 @@ async function loadOffline() {
   if (!error && data) {
     applyOffline(data);
   }
+  await loadQqBotBindStatus();
 }
 
 function offlinePayload(): Api.Farm.OfflineReminder {
   return {
-    channel: offline.channel || 'none',
-    reloginUrlMode: offline.reloginUrlMode || 'none',
-    endpoint: offline.endpoint || '',
-    token: offline.token || '',
+    provider: offline.provider || 'none',
+    qqBot: {
+      appId: offline.qqBot.appId || '',
+      clientSecret: offline.qqBot.clientSecret || ''
+    },
+    qqBotBinding: {
+      userOpenid: offline.qqBotBinding.userOpenid || '',
+      boundAt: Number(offline.qqBotBinding.boundAt || 0),
+      nickname: offline.qqBotBinding.nickname || ''
+    },
+    wechatBot: {},
     title: offline.title || '',
     msg: offline.msg || '',
     offlineDeleteSec: Number(offline.offlineDeleteSec || 0)
@@ -838,10 +936,14 @@ async function handleTestOffline() {
   }
 }
 
-function openChannelDocs() {
-  const url = currentChannelDocUrl.value;
+async function openProviderDocs() {
+  const url = currentProviderDocUrl.value;
   if (!url) return;
-  window.open(url, '_blank', 'noopener,noreferrer');
+  try {
+    await openUrl(url);
+  } catch (error) {
+    window.$message?.error(`${$t('page.farm.settings.botDocsOpenFail')}: ${String(error)}`);
+  }
 }
 
 watch(
@@ -931,6 +1033,10 @@ onMounted(async () => {
     await farmAccountStore.loadAccounts();
   }
   await Promise.all([loadConfig(), loadOffline(), loadDevicePresets(), loadSystemConfig()]);
+});
+
+onUnmounted(() => {
+  stopQqBotBindPolling();
 });
 </script>
 
@@ -1081,16 +1187,29 @@ onMounted(async () => {
             </div>
 
             <NDivider title-placement="left">{{ $t('page.farm.settings.quietHours') }}</NDivider>
-            <NSpace align="center" class="mb-12px">
-              <span>{{ $t('page.farm.settings.quietHoursEnable') }}</span>
-              <NSwitch v-model:value="quietHours.enabled" />
-            </NSpace>
-            <div v-if="quietHours.enabled" class="grid max-w-480px gap-12px sm:grid-cols-2">
+            <div class="grid gap-12px sm:grid-cols-2 md:grid-cols-3">
+              <NFormItem :label="$t('page.farm.settings.quietHoursEnable')">
+                <NSwitch v-model:value="quietHours.enabled" />
+              </NFormItem>
               <NFormItem :label="$t('page.farm.settings.quietStart')">
-                <NInput v-model:value="quietHours.start" placeholder="01:00" />
+                <NTimePicker
+                  v-model:formatted-value="quietHours.start"
+                  class="w-full"
+                  format="HH:mm"
+                  value-format="HH:mm"
+                  :clearable="false"
+                  :disabled="!quietHours.enabled"
+                />
               </NFormItem>
               <NFormItem :label="$t('page.farm.settings.quietEnd')">
-                <NInput v-model:value="quietHours.end" placeholder="07:30" />
+                <NTimePicker
+                  v-model:formatted-value="quietHours.end"
+                  class="w-full"
+                  format="HH:mm"
+                  value-format="HH:mm"
+                  :clearable="false"
+                  :disabled="!quietHours.enabled"
+                />
               </NFormItem>
             </div>
 
@@ -1291,53 +1410,77 @@ onMounted(async () => {
         <NCard :bordered="false" size="small" class="card-wrapper">
           <NText depth="3" class="mb-16px block text-12px">{{ $t('page.farm.settings.offlineHint') }}</NText>
           <NForm label-placement="left" :label-width="140">
-            <div class="grid max-w-640px gap-12px sm:grid-cols-2">
-              <NFormItem :label="$t('page.farm.settings.channel')">
+            <div class="grid max-w-640px gap-12px">
+              <NFormItem :label="$t('page.farm.settings.provider')">
                 <div class="flex w-full gap-8px">
-                  <NSelect v-model:value="offline.channel" class="flex-1" filterable :options="channelOptions" />
+                  <NSelect v-model:value="offline.provider" class="flex-1" :options="providerOptions" />
                   <NButton
-                    size="small"
-                    :disabled="!currentChannelDocUrl"
-                    @click="openChannelDocs"
+                    :disabled="!currentProviderDocUrl"
+                    @click="openProviderDocs"
                   >
-                    {{ $t('page.farm.settings.channelDocs') }}
+                    {{ $t('page.farm.settings.botDocs') }}
                   </NButton>
                 </div>
               </NFormItem>
-              <NFormItem :label="$t('page.farm.settings.reloginUrl')">
-                <NSelect v-model:value="offline.reloginUrlMode" class="w-full" :options="reloginUrlModeOptions" />
-              </NFormItem>
-            </div>
-            <div class="grid max-w-640px gap-12px">
-              <NFormItem :label="$t('page.farm.settings.endpoint')">
-                <NInput
-                  v-model:value="offline.endpoint"
-                  :disabled="!endpointEnabled"
-                  placeholder="https://"
-                />
-              </NFormItem>
-              <NFormItem :label="$t('page.farm.settings.token')">
-                <NInput v-model:value="offline.token" :placeholder="$t('page.farm.settings.token')" />
-              </NFormItem>
-              <div class="grid gap-12px sm:grid-cols-2">
-                <NFormItem :label="$t('page.farm.settings.reminderTitle')">
-                  <NInput v-model:value="offline.title" />
+              <template v-if="offline.provider === 'qq_bot'">
+                <NFormItem :label="$t('page.farm.settings.qqBotAppId')">
+                  <NInput v-model:value="offline.qqBot.appId" />
                 </NFormItem>
-                <NFormItem :label="$t('page.farm.settings.offlineDeleteSec')">
-                  <NInputNumber v-model:value="offline.offlineDeleteSec" class="w-full" :min="0" />
+                <NFormItem :label="$t('page.farm.settings.qqBotClientSecret')">
+                  <NInput
+                    v-model:value="offline.qqBot.clientSecret"
+                    type="password"
+                    show-password-on="click"
+                  />
                 </NFormItem>
-              </div>
-              <NFormItem :label="$t('page.farm.settings.reminderMsg')">
-                <NInput v-model:value="offline.msg" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" />
-              </NFormItem>
+                <NText depth="3" class="text-12px">{{ $t('page.farm.settings.qqBotHint') }}</NText>
+                <NFormItem :label="$t('page.farm.settings.qqBotBindStatus')">
+                  <div class="flex w-full flex-col gap-12px">
+                    <NTag :type="qqBotBindStatus.bound || offline.qqBotBinding.userOpenid ? 'success' : 'default'">
+                      {{ qqBotBindStateLabel }}
+                    </NTag>
+                    <NText v-if="offline.qqBotBinding.nickname" depth="3" class="text-12px">
+                      {{ offline.qqBotBinding.nickname }}
+                    </NText>
+                    <div v-if="qqBotBindQrDataUrl" class="flex flex-col items-start gap-8px">
+                      <img :src="qqBotBindQrDataUrl" alt="qq-bot-bind-qr" class="h-180px w-180px rounded-8px border border-[var(--n-border-color)]" />
+                      <NText depth="3" class="text-12px">{{ $t('page.farm.settings.qqBotBindScanHint') }}</NText>
+                    </div>
+                    <NText v-else-if="qqBotBindPolling" depth="3" class="text-12px">
+                      {{ $t('page.farm.settings.qqBotBindManualHint') }}
+                    </NText>
+                    <div class="flex flex-wrap gap-8px">
+                      <NButton
+                        type="primary"
+                        :loading="qqBotBindLoading"
+                        :disabled="!qqBotCredentialsReady || qqBotBindPolling"
+                        @click="handleStartQqBotBind"
+                      >
+                        {{ qqBotBindPolling ? $t('page.farm.settings.qqBotBindWaiting') : $t('page.farm.settings.qqBotBindStart') }}
+                      </NButton>
+                      <NButton
+                        :disabled="!qqBotBindStatus.botInviteUrl"
+                        @click="openBotInvite"
+                      >
+                        {{ $t('page.farm.settings.qqBotOpenBot') }}
+                      </NButton>
+                      <NButton
+                        :disabled="!qqBotBindStatus.bound && !offline.qqBotBinding.userOpenid"
+                        @click="handleUnbindQqBot"
+                      >
+                        {{ $t('page.farm.settings.qqBotUnbind') }}
+                      </NButton>
+                    </div>
+                  </div>
+                </NFormItem>
+              </template>
             </div>
           </NForm>
-          <NText depth="3" class="text-12px">{{ $t('page.farm.settings.offlineDeleteHint') }}</NText>
           <div class="mt-16px flex justify-end gap-8px border-t border-[var(--n-border-color)] pt-16px">
             <NButton
               size="small"
               :loading="offlineTesting"
-              :disabled="offlineSaving || offline.channel === 'none'"
+              :disabled="offlineSaving || offline.provider !== 'qq_bot' || (!qqBotBindStatus.bound && !offline.qqBotBinding.userOpenid)"
               @click="handleTestOffline"
             >
               {{ $t('page.farm.settings.testOffline') }}

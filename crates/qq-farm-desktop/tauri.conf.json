@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "QQ Farm",
-  "version": "0.1.4",
+  "version": "0.2.2",
   "identifier": "com.qqfarm.rust",
   "build": {
     "beforeDevCommand": {
@@ -41,7 +41,10 @@
   "bundle": {
     "active": true,
     "createUpdaterArtifacts": true,
-    "targets": ["nsis", "dmg"],
+    "targets": [
+      "nsis",
+      "dmg"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

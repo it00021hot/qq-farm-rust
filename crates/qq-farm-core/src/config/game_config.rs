@@ -172,27 +172,46 @@ impl GameConfig {
 
     fn load_plants(&self) {
         let json = include_str!("../../../../assets/game_config/Plant.json");
-        let plants: Vec<Plant> = serde_json::from_str(json).expect("Plant.json parse failed");
-        *self.plant_map.write() = Some(plants);
+        match serde_json::from_str::<Vec<Plant>>(json) {
+            Ok(plants) => *self.plant_map.write() = Some(plants),
+            Err(e) => {
+                tracing::error!(error = %e, "Plant.json parse failed; using empty list");
+                *self.plant_map.write() = Some(Vec::new());
+            }
+        }
     }
 
     fn load_items(&self) {
         let json = include_str!("../../../../assets/game_config/ItemInfo.json");
-        let items: Vec<Item> = serde_json::from_str(json).expect("ItemInfo.json parse failed");
-        *self.item_map.write() = Some(items);
+        match serde_json::from_str::<Vec<Item>>(json) {
+            Ok(items) => *self.item_map.write() = Some(items),
+            Err(e) => {
+                tracing::error!(error = %e, "ItemInfo.json parse failed; using empty list");
+                *self.item_map.write() = Some(Vec::new());
+            }
+        }
     }
 
     fn load_lands(&self) {
         let json = include_str!("../../../../assets/game_config/Land.json");
-        let lands: Vec<Land> = serde_json::from_str(json).expect("Land.json parse failed");
-        *self.land_map.write() = Some(lands);
+        match serde_json::from_str::<Vec<Land>>(json) {
+            Ok(lands) => *self.land_map.write() = Some(lands),
+            Err(e) => {
+                tracing::error!(error = %e, "Land.json parse failed; using empty list");
+                *self.land_map.write() = Some(Vec::new());
+            }
+        }
     }
 
     fn load_role_levels(&self) {
         let json = include_str!("../../../../assets/game_config/RoleLevel.json");
-        let levels: Vec<RoleLevel> =
-            serde_json::from_str(json).expect("RoleLevel.json parse failed");
-        *self.role_level.write() = Some(levels);
+        match serde_json::from_str::<Vec<RoleLevel>>(json) {
+            Ok(levels) => *self.role_level.write() = Some(levels),
+            Err(e) => {
+                tracing::error!(error = %e, "RoleLevel.json parse failed; using empty list");
+                *self.role_level.write() = Some(Vec::new());
+            }
+        }
     }
 
     fn overlay_dir() -> std::path::PathBuf {
@@ -713,7 +732,11 @@ impl GameConfig {
 
     /// 按物品 id + 堆叠过期时间解析可售信息。
     #[must_use]
-    pub fn get_effective_sell_info_by_id_at(&self, item_id: i64, expire_time: i64) -> EffectiveSellInfo {
+    pub fn get_effective_sell_info_by_id_at(
+        &self,
+        item_id: i64,
+        expire_time: i64,
+    ) -> EffectiveSellInfo {
         match self.get_item_by_id(item_id) {
             Some(item) => self.get_effective_sell_info_at(
                 &item,
@@ -961,7 +984,9 @@ mod tests {
 
     #[test]
     fn conditional_sells_unlock_after_activity_ends() {
-        use crate::config::activity_windows::{clear_activity_windows_for_test, set_activity_windows, ActivityWindow};
+        use crate::config::activity_windows::{
+            clear_activity_windows_for_test, set_activity_windows, ActivityWindow,
+        };
         use crate::config::sell_conditions::SellConditionContext;
 
         clear_activity_windows_for_test();

@@ -22,11 +22,7 @@ GitHub: {github}"
 
     let app_menu = SubmenuBuilder::new(app, "QQ Farm")
         // macOS 上禁止使用原生 AboutMetadata，避免和托盘/自定义 about 对话框叠加触发 double about。
-        .about(if cfg!(target_os = "macos") {
-            None::<AboutMetadata>
-        } else {
-            Some(about)
-        })
+        .about(if cfg!(target_os = "macos") { None::<AboutMetadata> } else { Some(about) })
         .separator()
         .hide()
         .hide_others()

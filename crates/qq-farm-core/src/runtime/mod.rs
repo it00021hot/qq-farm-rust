@@ -15,6 +15,7 @@ pub mod engine;
 pub mod events;
 pub mod relogin_reminder;
 pub mod runtime_state;
+pub mod safe_spawn;
 pub mod scheduler;
 pub mod worker;
 pub mod worker_handle;

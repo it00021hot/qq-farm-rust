@@ -25,7 +25,7 @@ native-tls = { version = "0.2", features = ["vendored"] }
 tokio-native-tls = "0.3"
 tokio-stream = { version = "0.1", features = ["sync"] }
 
-# HTTP 客户端（仅 push service 使用）
+# HTTP 客户端
 reqwest = { workspace = true }
 
 # 错误处理
@@ -77,3 +77,4 @@ prost-build = { workspace = true }
 
 [dev-dependencies]
 serial_test = "3"
+axum = { workspace = true, features = ["ws"] }

@@ -13,11 +13,7 @@ pub struct SellConditionContext {
 impl SellConditionContext {
     #[must_use]
     pub fn now(now_sec: i64) -> Self {
-        Self {
-            now_sec,
-            expire_time: 0,
-            activity_windows_loaded: activity_windows_loaded(),
-        }
+        Self { now_sec, expire_time: 0, activity_windows_loaded: activity_windows_loaded() }
     }
 
     #[must_use]
@@ -39,9 +35,10 @@ fn parse_sell_conditions(condition: &str) -> Vec<ParsedSellCondition> {
         .map(str::trim)
         .filter(|part| !part.is_empty())
         .map(|part| match part.split_once(':') {
-            Some((ty, value)) => {
-                ParsedSellCondition { type_name: ty.trim().to_string(), value: value.trim().to_string() }
-            }
+            Some((ty, value)) => ParsedSellCondition {
+                type_name: ty.trim().to_string(),
+                value: value.trim().to_string(),
+            },
             None => ParsedSellCondition { type_name: part.to_string(), value: String::new() },
         })
         .collect()
@@ -61,7 +58,10 @@ fn is_activity_active(window: Option<&ActivityWindow>, now_sec: i64) -> bool {
     }
 }
 
-fn is_single_sell_condition_satisfied(cond: &ParsedSellCondition, ctx: &SellConditionContext) -> bool {
+fn is_single_sell_condition_satisfied(
+    cond: &ParsedSellCondition,
+    ctx: &SellConditionContext,
+) -> bool {
     if cond.type_name == "道具过期后" {
         return ctx.expire_time > 0 && ctx.now_sec >= ctx.expire_time;
     }
@@ -91,14 +91,21 @@ mod tests {
     use crate::config::activity_windows::{clear_activity_windows_for_test, set_activity_windows};
 
     fn window(id: &str, begin: i64, end: i64) -> ActivityWindow {
-        ActivityWindow { id: id.to_string(), name: id.to_string(), begin_time: begin, end_time: end }
+        ActivityWindow {
+            id: id.to_string(),
+            name: id.to_string(),
+            begin_time: begin,
+            end_time: end,
+        }
     }
 
     #[test]
     fn item_expire_requires_timestamp() {
-        let ctx = SellConditionContext { now_sec: 100, expire_time: 0, activity_windows_loaded: true };
+        let ctx =
+            SellConditionContext { now_sec: 100, expire_time: 0, activity_windows_loaded: true };
         assert!(!is_sell_condition_satisfied("道具过期后", &ctx));
-        let ctx = SellConditionContext { now_sec: 100, expire_time: 90, activity_windows_loaded: true };
+        let ctx =
+            SellConditionContext { now_sec: 100, expire_time: 90, activity_windows_loaded: true };
         assert!(is_sell_condition_satisfied("道具过期后", &ctx));
     }
 
@@ -106,9 +113,11 @@ mod tests {
     fn activity_ended_uses_cached_window() {
         clear_activity_windows_for_test();
         set_activity_windows(vec![window("2026081800", 1, 50)]);
-        let ctx = SellConditionContext { now_sec: 60, expire_time: 0, activity_windows_loaded: true };
+        let ctx =
+            SellConditionContext { now_sec: 60, expire_time: 0, activity_windows_loaded: true };
         assert!(is_sell_condition_satisfied("活动结束后:2026081800", &ctx));
-        let ctx = SellConditionContext { now_sec: 40, expire_time: 0, activity_windows_loaded: true };
+        let ctx =
+            SellConditionContext { now_sec: 40, expire_time: 0, activity_windows_loaded: true };
         assert!(!is_sell_condition_satisfied("活动结束后:2026081800", &ctx));
         clear_activity_windows_for_test();
     }

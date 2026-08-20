@@ -45,6 +45,10 @@ pub fn router() -> Router<Arc<AdminContext>> {
         .route("/api/settings/default", get(get_default_settings))
         .route("/api/settings/offline-reminder", post(set_offline_reminder))
         .route("/api/settings/offline-reminder/test", post(test_offline_reminder))
+        .route("/api/settings/qq-bot/status", get(get_qq_bot_bind_status))
+        .route("/api/settings/qq-bot/bind/start", post(start_qq_bot_bind))
+        .route("/api/settings/qq-bot/bind/poll", get(poll_qq_bot_bind))
+        .route("/api/settings/qq-bot/unbind", post(unbind_qq_bot))
 }
 
 #[derive(Debug, Deserialize)]
@@ -363,14 +367,14 @@ async fn set_offline_reminder(
     Json(body): Json<OfflineReminderBody>,
 ) -> ApiResult<serde_json::Value> {
     let _ = body.account_id;
-    let cfg: qq_farm_core::models::store::global_config::OfflineReminder =
-        serde_json::from_value(body.cfg).unwrap_or_default();
     let username = current_session(&ctx, &headers).map(|s| s.username).unwrap_or_default();
-    if username.is_empty() {
-        qq_farm_core::models::store::global_config::set_offline_reminder(cfg);
-    } else {
-        qq_farm_core::models::store::global_config::set_user_offline_reminder(&username, cfg);
-    }
+    qq_farm_app::settings::set_offline_reminder(
+        if username.is_empty() { None } else { Some(username.as_str()) },
+        body.cfg,
+    );
+    ctx.engine
+        .qq_bot()
+        .reconcile_background(qq_farm_core::models::store::global_config::gateway_qq_bot_config());
     ok_empty()
 }
 
@@ -381,37 +385,61 @@ async fn test_offline_reminder(
 ) -> ApiResult<serde_json::Value> {
     let _ = body.account_id;
     let username = current_session(&ctx, &headers).map(|s| s.username).unwrap_or_default();
-    let cfg = if username.is_empty() {
-        qq_farm_core::models::store::global_config::get_offline_reminder()
-    } else {
-        qq_farm_core::models::store::global_config::get_user_offline_reminder(&username)
-            .unwrap_or_else(qq_farm_core::models::store::global_config::get_offline_reminder)
-    };
-    let merged: qq_farm_core::models::store::global_config::OfflineReminder =
-        serde_json::from_value(body.cfg).unwrap_or(cfg);
-    let push = qq_farm_core::services::push::PushService::new();
-    let result = push
-        .send(&qq_farm_core::services::push::PushPayload {
-            channel: merged.channel.clone(),
-            endpoint: merged.endpoint.clone(),
-            token: merged.token.clone(),
-            title: if merged.title.is_empty() {
-                "离线提醒测试".to_string()
-            } else {
-                merged.title.clone()
-            },
-            content: if merged.msg.is_empty() {
-                "这是一条离线提醒测试".to_string()
-            } else {
-                merged.msg.clone()
-            },
-        })
-        .await;
-    if result.ok {
+    let app = ctx.app_context();
+    let result =
+        qq_farm_app::settings::test_offline_reminder(&app, Some(&username), body.cfg).await?;
+    if result.get("ok").and_then(serde_json::Value::as_bool).unwrap_or(false) {
         ok_empty()
     } else {
-        Ok(Json(json!({ "ok": false, "error": result.msg })))
+        Ok(Json(result))
     }
+}
+
+async fn get_qq_bot_bind_status(
+    State(ctx): State<Arc<AdminContext>>,
+    headers: axum::http::HeaderMap,
+) -> ApiResult<serde_json::Value> {
+    let username = current_session(&ctx, &headers).map(|s| s.username).unwrap_or_default();
+    ok_data(qq_farm_app::qq_bot_bind::qq_bot_bind_status(Some(&username)))
+}
+
+async fn start_qq_bot_bind(
+    State(ctx): State<Arc<AdminContext>>,
+    headers: axum::http::HeaderMap,
+) -> ApiResult<serde_json::Value> {
+    let username = current_session(&ctx, &headers).map(|s| s.username).unwrap_or_default();
+    if username.is_empty() {
+        return Err(ApiError::Unauthorized("未登录".into()));
+    }
+    let result = qq_farm_app::qq_bot_bind::start_qq_bot_bind(&ctx.app_context(), &username)?;
+    ok_data(serde_json::to_value(result).unwrap_or_default())
+}
+
+#[derive(Debug, Deserialize)]
+struct BindPollQuery {
+    #[serde(default, alias = "sessionId")]
+    session_id: String,
+}
+
+async fn poll_qq_bot_bind(
+    State(ctx): State<Arc<AdminContext>>,
+    Query(query): Query<BindPollQuery>,
+) -> ApiResult<serde_json::Value> {
+    let result = qq_farm_app::qq_bot_bind::poll_qq_bot_bind(&ctx.app_context(), &query.session_id);
+    ok_data(serde_json::to_value(result).unwrap_or_default())
+}
+
+async fn unbind_qq_bot(
+    State(ctx): State<Arc<AdminContext>>,
+    headers: axum::http::HeaderMap,
+) -> ApiResult<serde_json::Value> {
+    let username = current_session(&ctx, &headers).map(|s| s.username).unwrap_or_default();
+    if username.is_empty() {
+        return Err(ApiError::Unauthorized("未登录".into()));
+    }
+    qq_farm_app::qq_bot_bind::unbind_qq_bot(&username);
+    ctx.engine.qq_bot().bind_sessions().clear_user(&username);
+    ok_empty()
 }
 
 #[derive(Debug, Deserialize)]

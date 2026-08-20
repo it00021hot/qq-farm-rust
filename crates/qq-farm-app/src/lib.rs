@@ -22,6 +22,7 @@ pub mod farm;
 pub mod friend;
 pub mod session;
 pub mod settings;
+pub mod qq_bot_bind;
 pub mod wx_login;
 
 pub use error::{AppError, AppResult};

@@ -157,7 +157,8 @@ impl WarehouseService {
             return Err(crate::error::Error::Business("没有可出售的物品".to_string()));
         }
         let gc = crate::config::game_config::global();
-        let bag_items = self.get_bag().await.ok().map(|bag| get_bag_items(&bag)).unwrap_or_default();
+        let bag_items =
+            self.get_bag().await.ok().map(|bag| get_bag_items(&bag)).unwrap_or_default();
         for &(id, count, uid) in items {
             if id <= 0 || count <= 0 {
                 return Err(crate::error::Error::Business("出售物品参数无效".to_string()));

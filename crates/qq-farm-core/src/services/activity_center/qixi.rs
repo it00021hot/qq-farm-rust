@@ -38,7 +38,8 @@ fn qixi_activity_active(begin_time: i64, end_time: i64, server_time: i64) -> boo
 }
 
 fn bag_balances(items: &[CoreItem], ids: &[i64]) -> Option<std::collections::HashMap<i64, i64>> {
-    let mut out: std::collections::HashMap<i64, i64> = ids.iter().copied().map(|id| (id, 0)).collect();
+    let mut out: std::collections::HashMap<i64, i64> =
+        ids.iter().copied().map(|id| (id, 0)).collect();
     let wanted: std::collections::HashSet<i64> = ids.iter().copied().collect();
     for item in items {
         if wanted.contains(&item.id) && item.count > 0 {
@@ -81,7 +82,9 @@ impl ActivityCenterService {
             gift_child = bridge_child;
         }
         let (Some(bridge_child), Some(gift_child)) = (bridge_child, gift_child) else {
-            return Err(qixi_err(ActivityErrorCode::QixiUnavailable, "服务端未发现鹊桥寄情活动").into());
+            return Err(
+                qixi_err(ActivityErrorCode::QixiUnavailable, "服务端未发现鹊桥寄情活动").into()
+            );
         };
         let bridge_activity = bridge_child.activity.as_ref().ok_or_else(|| {
             qixi_err(ActivityErrorCode::QixiUnavailable, "服务端未发现鹊桥寄情活动")
@@ -99,11 +102,10 @@ impl ActivityCenterService {
             .iter()
             .map(|stage| {
                 let status_code = stage.status.to_string();
-                let completed =
-                    status_code == "2" || (current_stage > 0 && stage.stage > 0 && stage.stage <= current_stage);
+                let completed = status_code == "2"
+                    || (current_stage > 0 && stage.stage > 0 && stage.stage <= current_stage);
                 let claimable = bridge_claimable && stage.stage == current_stage;
-                let rewards: Vec<ItemDto> =
-                    stage.rewards.iter().map(activity_item_dto).collect();
+                let rewards: Vec<ItemDto> = stage.rewards.iter().map(activity_item_dto).collect();
                 let cost = stage
                     .cost
                     .as_ref()
@@ -125,8 +127,10 @@ impl ActivityCenterService {
         let feather_balance = balance_text(balances, QIXI_FEATHER_ITEM_ID);
         let sachet_balance = balance_text(balances, QIXI_SACHET_ITEM_ID);
         let received_balance = balance_text(balances, QIXI_RECEIVED_SACHET_ITEM_ID);
-        let active = qixi_activity_active(bridge_activity.begin_time, bridge_activity.end_time, server_time);
-        let sachet_count = sachet_balance.as_deref().and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+        let active =
+            qixi_activity_active(bridge_activity.begin_time, bridge_activity.end_time, server_time);
+        let sachet_count =
+            sachet_balance.as_deref().and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
         let gift_enabled = active && (balances.is_none() || sachet_count > 0);
         let display_items: Vec<ItemDto> =
             config.display_items.iter().map(activity_item_dto).collect();
@@ -138,7 +142,8 @@ impl ActivityCenterService {
         });
         if let Some(ex) = gift.exchange.as_ref() {
             if let Some(sent) = ex.sent_item.as_ref() {
-                exchange["sentItem"] = serde_json::to_value(activity_item_dto(sent)).unwrap_or_default();
+                exchange["sentItem"] =
+                    serde_json::to_value(activity_item_dto(sent)).unwrap_or_default();
             }
             if let Some(received) = ex.received_item.as_ref() {
                 exchange["receivedItem"] =
@@ -224,7 +229,11 @@ impl ActivityCenterService {
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         if !enabled {
-            return Err(qixi_err(ActivityErrorCode::QixiBridgeUnavailable, "当前没有可领取的鹊桥奖励").into());
+            return Err(qixi_err(
+                ActivityErrorCode::QixiBridgeUnavailable,
+                "当前没有可领取的鹊桥奖励",
+            )
+            .into());
         }
         let req = ClaimQixiBridgeRewardsRequest {
             activity_id: QIXI_BRIDGE_ACTIVITY_ID,
@@ -233,12 +242,14 @@ impl ActivityCenterService {
                 claim_mode: 0,
             }),
         };
-        let body =
-            self.gateway.request(ACTIVITY_SERVICE, "Operate", &req.encode_to_vec()).await?;
+        let body = self.gateway.request(ACTIVITY_SERVICE, "Operate", &req.encode_to_vec()).await?;
         let reply = ActivityOperateReply::decode(&body[..])?;
-        if reply.activity_id != QIXI_BRIDGE_ACTIVITY_ID || reply.operate_type != QIXI_BRIDGE_OPERATE_TYPE
+        if reply.activity_id != QIXI_BRIDGE_ACTIVITY_ID
+            || reply.operate_type != QIXI_BRIDGE_OPERATE_TYPE
         {
-            return Err(qixi_err(ActivityErrorCode::QixiResponseInvalid, "鹊桥领取回包不匹配").into());
+            return Err(
+                qixi_err(ActivityErrorCode::QixiResponseInvalid, "鹊桥领取回包不匹配").into()
+            );
         }
         let mut claimed = Vec::new();
         let mut rewards: Vec<ItemDto> = Vec::new();
@@ -266,10 +277,18 @@ impl ActivityCenterService {
     /// 向好友赠送鹊羽香囊。
     pub async fn gift_qixi_sachet(&self, friend_gid: i64, count: i64) -> Result<serde_json::Value> {
         if friend_gid <= 0 {
-            return Err(qixi_err(ActivityErrorCode::InvalidQixiFriendGid, "好友 GID 必须是正十进制整数").into());
+            return Err(qixi_err(
+                ActivityErrorCode::InvalidQixiFriendGid,
+                "好友 GID 必须是正十进制整数",
+            )
+            .into());
         }
         if count <= 0 {
-            return Err(qixi_err(ActivityErrorCode::InvalidQixiSachetCount, "赠送数量必须是正十进制整数").into());
+            return Err(qixi_err(
+                ActivityErrorCode::InvalidQixiSachetCount,
+                "赠送数量必须是正十进制整数",
+            )
+            .into());
         }
         let _guard = self.mutation_lock.lock().await;
         let activity = self.get_current_qixi_activity().await?;
@@ -278,9 +297,14 @@ impl ActivityCenterService {
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         if !enabled {
-            return Err(qixi_err(ActivityErrorCode::QixiGiftUnavailable, "当前无法赠送鹊羽香囊").into());
+            return Err(
+                qixi_err(ActivityErrorCode::QixiGiftUnavailable, "当前无法赠送鹊羽香囊").into()
+            );
         }
-        let known = activity.pointer("/balances/known").and_then(serde_json::Value::as_bool).unwrap_or(false);
+        let known = activity
+            .pointer("/balances/known")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
         if known {
             let have = activity
                 .pointer("/balances/sachet")
@@ -288,22 +312,31 @@ impl ActivityCenterService {
                 .and_then(|s| s.parse::<i64>().ok())
                 .unwrap_or(0);
             if have < count {
-                return Err(qixi_err(ActivityErrorCode::InsufficientQixiSachet, "鹊羽香囊数量不足").into());
+                return Err(qixi_err(
+                    ActivityErrorCode::InsufficientQixiSachet,
+                    "鹊羽香囊数量不足",
+                )
+                .into());
             }
         }
         let req = GiftQixiSachetRequest {
             activity_id: QIXI_GIFT_ACTIVITY_ID,
             operate_type: QIXI_GIFT_OPERATE_TYPE,
-            params: Some(crate::proto::generated::gamepb::activitypb::gift_qixi_sachet_request::Params {
-                friend_gid,
-                count,
-            }),
+            params: Some(
+                crate::proto::generated::gamepb::activitypb::gift_qixi_sachet_request::Params {
+                    friend_gid,
+                    count,
+                },
+            ),
         };
-        let body =
-            self.gateway.request(ACTIVITY_SERVICE, "Operate", &req.encode_to_vec()).await?;
+        let body = self.gateway.request(ACTIVITY_SERVICE, "Operate", &req.encode_to_vec()).await?;
         let reply = ActivityOperateReply::decode(&body[..])?;
-        if reply.activity_id != QIXI_GIFT_ACTIVITY_ID || reply.operate_type != QIXI_GIFT_OPERATE_TYPE {
-            return Err(qixi_err(ActivityErrorCode::QixiResponseInvalid, "赠送香囊回包不匹配").into());
+        if reply.activity_id != QIXI_GIFT_ACTIVITY_ID
+            || reply.operate_type != QIXI_GIFT_OPERATE_TYPE
+        {
+            return Err(
+                qixi_err(ActivityErrorCode::QixiResponseInvalid, "赠送香囊回包不匹配").into()
+            );
         }
         if reply.qixi_gift_result.as_ref().is_some_and(|r| !r.success) {
             return Err(qixi_err(ActivityErrorCode::QixiGiftFailed, "赠送鹊羽香囊失败").into());

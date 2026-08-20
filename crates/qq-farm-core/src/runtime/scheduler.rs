@@ -118,6 +118,8 @@ impl Scheduler {
     ) {
         self.clear(name);
         let cancel = self.inner.cancel.clone();
+        // Tokio `interval` panics if period is zero — clamp to 1ms floor.
+        let interval = interval.max(Duration::from_millis(1));
         let interval_ms = interval.as_millis() as u64;
         let interval_tokio = interval;
         let task_name = name.to_string();
@@ -125,7 +127,7 @@ impl Scheduler {
         let prevent_overlap = options.prevent_overlap;
         let run_immediately = options.run_immediately;
 
-        let handle = tokio::spawn(async move {
+        let handle = crate::runtime::safe_spawn::spawn_logged("scheduler_interval", async move {
             let mut ticker = tokio::time::interval(interval_tokio);
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             // bot：默认首拍在 delay 之后；runImmediately 才立刻跑
@@ -146,7 +148,7 @@ impl Scheduler {
                         }
                         let task = task_for_run.clone();
                         let running = running.clone();
-                        tokio::spawn(async move {
+                        crate::runtime::safe_spawn::spawn_logged("scheduler_tick", async move {
                             task().await;
                             running.store(false, Ordering::Release);
                         });
@@ -173,12 +175,12 @@ impl Scheduler {
         let cancel = self.inner.cancel.clone();
         let delay_ms = delay.as_millis() as u64;
         let task_name = name.to_string();
-        let handle = tokio::spawn(async move {
+        let handle = crate::runtime::safe_spawn::spawn_logged("scheduler_timeout", async move {
             tokio::select! {
                 _ = cancel.cancelled() => return,
                 _ = tokio::time::sleep(delay) => {
                     // 到期后另起 task 跑回调，clear() 只取消尚未开火的 timer。
-                    tokio::spawn(async move {
+                    crate::runtime::safe_spawn::spawn_logged("scheduler_timeout_fire", async move {
                         task().await;
                     });
                 }
@@ -314,6 +316,26 @@ mod tests {
         let n = counter.load(Ordering::SeqCst);
         scheduler.shutdown();
         assert!(n >= 3, "expected >=3 ticks, got {n}");
+    }
+
+    #[tokio::test]
+    async fn zero_interval_does_not_panic() {
+        let scheduler = Scheduler::new("zero");
+        let counter = Arc::new(AtomicUsize::new(0));
+        let c2 = counter.clone();
+        scheduler.set_interval_task(
+            "z",
+            Duration::from_millis(0),
+            Arc::new(move || {
+                let c = c2.clone();
+                Box::pin(async move {
+                    c.fetch_add(1, Ordering::SeqCst);
+                })
+            }),
+        );
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        scheduler.shutdown();
+        assert!(counter.load(Ordering::SeqCst) >= 1);
     }
 
     #[tokio::test]

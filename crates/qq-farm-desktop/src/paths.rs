@@ -20,15 +20,17 @@ fn default_os_data_dir() -> Option<PathBuf> {
     }
 }
 
-/// `dotenv` + release 默认 `FARM_DATA_DIR`。须在 `logger::init` 之前调用。
+/// `dotenv` + 默认 `FARM_DATA_DIR`（开发 / 安装包同一 OS 应用数据目录）。
+/// 须在 `logger::init` 之前调用。
 pub fn prepare_data_dir() {
     dotenvy::dotenv().ok();
-    if env_unset("FARM_DATA_DIR") && !cfg!(debug_assertions) {
+    if env_unset("FARM_DATA_DIR") {
         if let Some(dir) = default_os_data_dir() {
             if let Err(e) = std::fs::create_dir_all(&dir) {
                 eprintln!("create data dir failed ({}): {e}", dir.display());
             }
             std::env::set_var("FARM_DATA_DIR", &dir);
+            eprintln!("FARM_DATA_DIR={}", dir.display());
         }
     }
 }

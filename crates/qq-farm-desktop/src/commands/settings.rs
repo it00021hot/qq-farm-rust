@@ -5,8 +5,9 @@ use tauri::State;
 
 use qq_farm_app::accounts;
 use qq_farm_app::admin;
+use qq_farm_app::qq_bot_bind;
 use qq_farm_app::settings;
-use qq_farm_core::models::store::global_config::OfflineReminder;
+use qq_farm_core::services::qq_bot::{BindPollResult, BindStartResult};
 
 use crate::error::{IpcError, IpcResult};
 use crate::state::DesktopState;
@@ -33,23 +34,59 @@ const DESKTOP_USERNAME: &str = "local";
 
 /// 读取下线提醒（桌面单用户）。
 #[tauri::command]
-pub fn get_offline_reminder() -> IpcResult<OfflineReminder> {
-    Ok(settings::get_offline_reminder(Some(DESKTOP_USERNAME)))
+pub fn get_offline_reminder() -> IpcResult<Value> {
+    Ok(settings::offline_reminder_view(Some(DESKTOP_USERNAME)))
 }
 
 /// 保存下线提醒。
 #[tauri::command]
-pub fn set_offline_reminder(cfg: OfflineReminder) -> IpcResult<OfflineReminder> {
-    let value = serde_json::to_value(&cfg).unwrap_or_default();
-    settings::set_offline_reminder(Some(DESKTOP_USERNAME), value);
-    Ok(settings::get_offline_reminder(Some(DESKTOP_USERNAME)))
+pub fn set_offline_reminder(state: State<'_, DesktopState>, cfg: Value) -> IpcResult<Value> {
+    settings::set_offline_reminder(Some(DESKTOP_USERNAME), cfg);
+    state
+        .app
+        .engine
+        .qq_bot()
+        .reconcile_background(qq_farm_core::models::store::global_config::gateway_qq_bot_config());
+    Ok(settings::offline_reminder_view(Some(DESKTOP_USERNAME)))
 }
 
 /// 测试下线提醒推送（不落盘）。
 #[tauri::command]
-pub async fn test_offline_reminder(cfg: OfflineReminder) -> IpcResult<Value> {
-    let value = serde_json::to_value(&cfg).unwrap_or_default();
-    settings::test_offline_reminder(Some(DESKTOP_USERNAME), value).await.map_err(IpcError::from)
+pub async fn test_offline_reminder(state: State<'_, DesktopState>, cfg: Value) -> IpcResult<Value> {
+    settings::test_offline_reminder(&state.app, Some(DESKTOP_USERNAME), cfg)
+        .await
+        .map_err(IpcError::from)
+}
+
+/// QQ Bot 绑定状态。
+#[tauri::command]
+pub fn get_qq_bot_bind_status() -> IpcResult<Value> {
+    Ok(qq_bot_bind::qq_bot_bind_status(Some(DESKTOP_USERNAME)))
+}
+
+/// 启动 QQ Bot 扫码绑定。
+#[tauri::command]
+pub fn start_qq_bot_bind(state: State<'_, DesktopState>) -> IpcResult<BindStartResult> {
+    qq_bot_bind::start_qq_bot_bind(&state.app, DESKTOP_USERNAME).map_err(IpcError::from)
+}
+
+/// 轮询 QQ Bot 绑定状态。
+#[tauri::command]
+pub fn poll_qq_bot_bind(state: State<'_, DesktopState>, session_id: String) -> IpcResult<BindPollResult> {
+    Ok(qq_bot_bind::poll_qq_bot_bind(&state.app, &session_id))
+}
+
+/// 解绑 QQ Bot 通知。
+#[tauri::command]
+pub fn unbind_qq_bot(state: State<'_, DesktopState>) -> IpcResult<Value> {
+    qq_bot_bind::unbind_qq_bot(DESKTOP_USERNAME);
+    state
+        .app
+        .engine
+        .qq_bot()
+        .bind_sessions()
+        .clear_user(DESKTOP_USERNAME);
+    Ok(settings::offline_reminder_view(Some(DESKTOP_USERNAME)))
 }
 
 /// 设备预设列表。

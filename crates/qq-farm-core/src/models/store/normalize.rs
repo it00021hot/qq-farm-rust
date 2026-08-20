@@ -41,29 +41,6 @@ pub const ALLOWED_BAG_SEED_FALLBACK_STRATEGIES: [BagSeedFallbackStrategy; 6] = [
     BagSeedFallbackStrategy::MaxFertProfit,
 ];
 
-/// 推送渠道白名单
-pub const PUSHOO_CHANNELS: &[&str] = &[
-    "webhook",
-    "qmsg",
-    "serverchan",
-    "pushplus",
-    "pushplushxtrip",
-    "dingtalk",
-    "wecom",
-    "bark",
-    "gocqhttp",
-    "onebot",
-    "atri",
-    "pushdeer",
-    "igot",
-    "telegram",
-    "feishu",
-    "ifttt",
-    "wecombot",
-    "discord",
-    "wxpusher",
-];
-
 /// 默认施肥土地类型
 pub const DEFAULT_FERTILIZER_LAND_TYPES: &[FertilizerLandType] = &[
     FertilizerLandType::PurpleGold,

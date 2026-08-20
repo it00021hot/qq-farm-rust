@@ -73,8 +73,8 @@
 | 面板鉴权与账号 | 齐 | 登录注册（无卡密）、账号 CRUD、设置 | `routes/auth`, `account`, `admin` |
 | 面板农场/好友/活动/商业 API | 齐 | 与 Vue 面板契约兼容，可挂 3007 | `qq-farm-server/src/routes/*` |
 | Socket 状态/日志推送 | 齐 | `status:update` / `log:new` 等 | `socket.rs` |
-| 离线重登提醒 | 齐 | 掉线可提醒 | `runtime/relogin_reminder.rs` |
-| 推送通知 | 齐 | 面板 `channelOptions` 全部 19 渠道可路由发送 | `services/push.rs` |
+| 离线重登提醒 | Rust 增强 | QQ 官方机器人主动单聊提醒；应用宝失败附重登录二维码 | `runtime/relogin_reminder.rs` |
+| 推送通知 | Rust 增强 | Rust 原生 QQ Bot AccessToken + Gateway + C2C；微信 Bot 预留 | `services/qq_bot` |
 | 统计 / 状态汇总 | 齐 | 效率与状态可给面板 | `stats`, `status`, `analytics` |
 
 ---
@@ -579,5 +579,30 @@
 - 图片：前端硬编码 `farmcfg://localhost/...`，macOS 可用但 Windows WebView2 需要 `http://farmcfg.localhost/...`；改用 Tauri `convertFileSrc(path, "farmcfg")` 按平台生成 URL
 - 验证：资源协议同时覆盖 `farmcfg://localhost/...` 与 Windows `http://farmcfg.localhost/...`
 - 能力状态：macOS 可拖动窗口；Windows 作物、背包、商城和活动图片恢复
+
+### 2026-08-20 — 重连等待细分 / 设置页交互
+
+- 应用宝账号掉线后第 1 次重连等待 3 分钟，第 2～3 次各等待 1 分钟；客户端启动后的首次自动重连等待 1 分钟
+- 设置页好友静默时段改为同排时间选择器；推送渠道官网通过 Tauri opener 交给系统默认浏览器打开
+- 能力状态：重连日志与实际等待一致；桌面 WebView 点击渠道官网不再无响应
+
+### 2026-08-20 — 下线推送渠道下架
+
+- Qmsg 酱与 Push Plus 服务已下线，从桌面设置、渠道白名单和推送路由中移除（含 Push Plus Hxtrip）
+- 历史配置仍选中已下架渠道时按未配置处理，设置页回退为「不推送」，避免持续发送失败
+
+### 2026-08-20 — QQ Bot 扫码绑定
+
+- 下线提醒改为扫码绑定：用户不再手填 AppID/AppSecret/user_openid，设置页仅展示绑定状态、扫码入口、解绑与测试推送
+- 设置页填写 QQ 机器人 AppID/AppSecret，再扫码绑定通知对象；环境变量仍可覆盖全局凭据
+- Gateway 监听 `C2C_MESSAGE_CREATE` 自动采集 `user_openid` 并保存绑定；绑定成功自动回复确认消息；发送“解绑”可清除绑定
+- 绑定后固定推送三类通知：账号下线、账号上线、应用宝授权二维码；设置页不再配置标题/内容/删除秒数
+- 上线/下线通知文案与日志按类型区分；踢下线并进入应用宝重连时也会立即推送下线通知
+- 绑定不再使用猜测的 `q.qq.com/qqbot/{appId}` 假链接（会 404）；点绑定后用手机 QQ 直接给机器人发消息即可
+
+### 2026-08-20 — 桌面设置持久化目录对齐
+
+- `cargo tauri dev` 与安装包共用 OS 数据目录 `QQFarmRust`（不再默认写仓库 `data/`）；设置落在该目录下的 `store.json`
+- 会写 `store.json` 的单测改为临时 `FARM_DATA_DIR`，避免覆盖真实配置；保存离线提醒时若 payload 解失败或 binding 为空则保留已有绑定
 
 

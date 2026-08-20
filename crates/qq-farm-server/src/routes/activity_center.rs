@@ -335,9 +335,7 @@ async fn gift_qixi_sachet(
 ) -> ApiResult<Value> {
     let id = resolve_account_id(&ctx, &headers, body.account_id.as_deref())?;
     let friend_gid = json_i64(&body.friend_gid).unwrap_or(0);
-    let count = json_i64(&body.sachet_count)
-        .or_else(|| json_i64(&body.count))
-        .unwrap_or(0);
+    let count = json_i64(&body.sachet_count).or_else(|| json_i64(&body.count)).unwrap_or(0);
     activity_app_result(
         qq_farm_app::activity::gift_qixi_sachet(&ctx.app_context(), &id, friend_gid, count).await,
     )

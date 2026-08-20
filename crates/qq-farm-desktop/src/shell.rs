@@ -93,10 +93,8 @@ fn open_path(path: &Path) -> std::io::Result<()> {
 pub fn show_about(app: &AppHandle) {
     // 避免某些 macOS 菜单事件触发同一动作两次（导致 About 连弹）
     static LAST_ABOUT_MS: AtomicU64 = AtomicU64::new(0);
-    let now_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
+    let now_ms =
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
     let last = LAST_ABOUT_MS.load(Ordering::Relaxed);
     if now_ms.saturating_sub(last) < 1500 {
         return;

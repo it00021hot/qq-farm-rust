@@ -636,7 +636,11 @@ impl FriendApi {
 
     /// 检查某操作是否可执行。协议已去掉 `CheckCanOperate`，配额改走 `OperationLimit`。
     /// 无 RPC 时 fail-open，避免挡住帮助/偷菜。
-    pub async fn check_can_operate(&self, _host_gid: i64, _operation_id: i64) -> Result<(bool, i64)> {
+    pub async fn check_can_operate(
+        &self,
+        _host_gid: i64,
+        _operation_id: i64,
+    ) -> Result<(bool, i64)> {
         Ok((true, 0))
     }
 }

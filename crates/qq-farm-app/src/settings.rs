@@ -1,6 +1,9 @@
 //! 设置面板编排。
 
-use qq_farm_core::models::store::global_config::OfflineReminder;
+use qq_farm_core::models::store::global_config::{
+    effective_qq_bot_credentials, set_qq_bot_credentials, NotificationProvider, OfflineReminder,
+    QqBotCredentials,
+};
 use serde_json::{json, Value};
 
 use crate::error::{AppError, AppResult};
@@ -18,7 +21,7 @@ pub fn settings_panel(account_id: &str, username: &str) -> Value {
     let automation = cfg::get_automation(id);
     let snap = cfg::get_config_snapshot(id).config;
     let ui = qq_farm_core::models::store::global_config::get_ui();
-    let offline = get_offline_reminder(Some(username));
+    let offline = offline_reminder_view(Some(username));
     json!({
         "intervals": {
             "farm": intervals.farm,
@@ -100,9 +103,41 @@ pub fn get_offline_reminder(username: Option<&str>) -> OfflineReminder {
     }
 }
 
+/// 设置面板用的离线提醒 JSON（附带机器人凭据，供填写 AppID/AppSecret）。
+#[must_use]
+pub fn offline_reminder_view(username: Option<&str>) -> Value {
+    let reminder = get_offline_reminder(username);
+    let mut value = serde_json::to_value(reminder).unwrap_or_else(|_| json!({}));
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "qqBot".into(),
+            serde_json::to_value(effective_qq_bot_credentials()).unwrap_or_else(|_| json!({})),
+        );
+    }
+    value
+}
+
 /// 设置离线提醒（全局或用户）。
 pub fn set_offline_reminder(username: Option<&str>, cfg: Value) {
-    let reminder: OfflineReminder = serde_json::from_value(cfg).unwrap_or_default();
+    if let Some(raw) = cfg.get("qqBot").cloned() {
+        if let Ok(credentials) = serde_json::from_value::<QqBotCredentials>(raw) {
+            if credentials.is_complete() {
+                set_qq_bot_credentials(credentials);
+            }
+        }
+    }
+    let Ok(mut reminder) = serde_json::from_value::<OfflineReminder>(cfg) else {
+        tracing::warn!("offline reminder payload deserialize failed; keep existing");
+        return;
+    };
+    // 保存凭据时前端可能带上空 binding；勿覆盖已绑定的 openid。
+    let existing = get_offline_reminder(username);
+    if reminder.qq_bot_binding.user_openid.trim().is_empty() && existing.qq_bot_binding.is_bound() {
+        reminder.qq_bot_binding = existing.qq_bot_binding;
+        if reminder.provider == NotificationProvider::None {
+            reminder.provider = existing.provider;
+        }
+    }
     if let Some(u) = username.filter(|s| !s.is_empty()) {
         qq_farm_core::models::store::global_config::set_user_offline_reminder(u, reminder);
     } else {
@@ -111,26 +146,29 @@ pub fn set_offline_reminder(username: Option<&str>, cfg: Value) {
 }
 
 /// 测试离线提醒推送。
-pub async fn test_offline_reminder(username: Option<&str>, cfg: Value) -> AppResult<Value> {
+pub async fn test_offline_reminder(
+    ctx: &AppContext,
+    username: Option<&str>,
+    cfg: Value,
+) -> AppResult<Value> {
+    if let Some(raw) = cfg.get("qqBot").cloned() {
+        if let Ok(credentials) = serde_json::from_value::<QqBotCredentials>(raw) {
+            if credentials.is_complete() {
+                set_qq_bot_credentials(credentials);
+            }
+        }
+    }
     let base = get_offline_reminder(username);
     let merged: OfflineReminder = serde_json::from_value(cfg).unwrap_or(base);
-    let push = qq_farm_core::services::push::PushService::new();
-    let result = push
-        .send(&qq_farm_core::services::push::PushPayload {
-            channel: merged.channel.clone(),
-            endpoint: merged.endpoint.clone(),
-            token: merged.token.clone(),
-            title: if merged.title.is_empty() {
-                "QQ Farm 离线提醒测试".into()
-            } else {
-                merged.title.clone()
-            },
-            content: if merged.msg.is_empty() {
-                "这是一条测试消息".into()
-            } else {
-                merged.msg.clone()
-            },
-        })
-        .await;
+    if merged.provider == NotificationProvider::WechatBot {
+        return Ok(json!({ "ok": false, "code": "not_implemented", "msg": "微信机器人暂未实现" }));
+    }
+    if merged.provider != NotificationProvider::QqBot {
+        return Ok(json!({ "ok": false, "code": "not_configured", "msg": "未启用 QQ 官方机器人通知" }));
+    }
+    let Some(send_config) = merged.send_config() else {
+        return Ok(json!({ "ok": false, "code": "not_bound", "msg": "请先扫码绑定 QQ 通知" }));
+    };
+    let result = ctx.engine.qq_bot().send_text(&send_config, "", "测试通知：下线").await;
     serde_json::to_value(result).map_err(|e| AppError::Internal(e.to_string()))
 }

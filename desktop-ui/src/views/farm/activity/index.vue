@@ -136,6 +136,7 @@ type GreenPlum = {
   maxRounds?: number;
   started?: boolean;
   finished?: boolean;
+  rules?: unknown;
   baseGold?: string;
   basePrice?: string;
   guaranteedPrice?: string;

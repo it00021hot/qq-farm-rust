@@ -61,9 +61,8 @@ pub async fn ensure_activity_windows(gateway: &Arc<Gateway>) -> Result<()> {
 }
 
 async fn refresh_activity_windows(gateway: &Arc<Gateway>) -> Result<()> {
-    let body = gateway
-        .request(ACTIVITY_SERVICE, "List", &ActivityListRequest {}.encode_to_vec())
-        .await?;
+    let body =
+        gateway.request(ACTIVITY_SERVICE, "List", &ActivityListRequest {}.encode_to_vec()).await?;
     let reply = ActivityListReply::decode(&body[..])?;
     let windows = decode_windows(&reply);
     if windows.is_empty() {

@@ -98,7 +98,15 @@ impl Worker {
         let account = self.account;
         let has_wx_auth = account.has_wx_auth();
 
-        tokio::spawn(async move {
+        let panic_account_id = account_id.clone();
+        let panic_account_name = account_name.clone();
+        let panic_event_tx = event_tx.clone();
+        let panic_engine = engine.clone();
+
+        crate::runtime::safe_spawn::spawn_logged_with_account(
+            "worker",
+            panic_account_id.clone(),
+            async move {
             if let Some(eng) = &engine {
                 crate::services::panel_log::register_with_runtime(
                     &account_id,
@@ -493,7 +501,25 @@ impl Worker {
             }
 
             let _ = event_tx.send(WorkerEvent::Stopped { account_id, reason: exit.reason });
-        });
+            },
+            move |account_id, msg| {
+                let _ = panic_event_tx.send(WorkerEvent::Stopped {
+                    account_id: account_id.to_string(),
+                    reason: format!("worker panicked: {msg}"),
+                });
+                let _ = panic_event_tx.send(WorkerEvent::Log {
+                    account_id: account_id.to_string(),
+                    account_name: panic_account_name,
+                    level: "error".to_string(),
+                    module: "system".to_string(),
+                    message: format!("Worker 异常退出（已隔离，进程继续运行）: {msg}"),
+                });
+                crate::services::panel_log::unregister(account_id);
+                if let Some(eng) = &panic_engine {
+                    eng.release_worker(account_id);
+                }
+            },
+        );
 
         handle
     }
@@ -635,10 +661,7 @@ fn emit_disconnect_log(
     let reason = disconnect_reason_label(source);
     let wx_reconnect = has_wx_auth;
     let message = if wx_reconnect {
-        format!(
-            "连接已断开，将在 {}后用应用宝授权重连（{reason}）",
-            crate::constants::wx_reconnect_delay_zh()
-        )
+        format!("连接已断开，将自动使用应用宝授权重连（{reason}）")
     } else {
         format!("连接已断开，不再使用旧 Code 重连（{reason}）")
     };

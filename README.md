@@ -103,7 +103,7 @@ git push origin v0.2.0
 | `FARM_CLIENT_VERSION` | `1.13.2.8_20260723` | 客户端版本 |
 | `ADMIN_PORT` | `3007` | HTTP / Socket.IO 端口 |
 | `RUST_LOG` | `info` | 日志级别 |
-| `FARM_DATA_DIR` | server：`<app_root>/data`；桌面安装包：OS 应用数据目录 `QQFarmRust` | 账号、用户、配置 |
+| `FARM_DATA_DIR` | server：`<app_root>/data`；桌面（dev/安装包）：OS 应用数据目录 `QQFarmRust` | 账号、用户、配置 |
 
 ## 运行时行为
 

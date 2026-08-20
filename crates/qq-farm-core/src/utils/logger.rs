@@ -9,9 +9,9 @@
 //! `tracing-subscriber` JSON 输出 + 自管文件 append。
 
 use std::fs;
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Once;
+use std::sync::{Arc, Once};
 
 use parking_lot::Mutex;
 use serde::Serialize;
@@ -165,12 +165,131 @@ struct LogEntry<'a> {
 static INIT: Once = Once::new();
 static LOG_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 
-/// 初始化日志（必须先调一次）
+/// 初始化日志（必须先调一次）：stderr + `logs/combined.log`，并安装 panic hook。
 pub fn init() {
     INIT.call_once(|| {
-        // tracing-subscriber：标准 error/warn/info/debug 输出
-        // 单测中可能重复调用，Once 保证
+        let _ = ensure_log_dir();
+        install_tracing_subscriber();
+        install_panic_hook();
     });
+}
+
+fn install_tracing_subscriber() {
+    use tracing_subscriber::fmt::writer::MakeWriterExt;
+    use tracing_subscriber::prelude::*;
+    use tracing_subscriber::EnvFilter;
+
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let dir = ensure_log_dir();
+    let combined = dir.join("combined.log");
+
+    let file_writer = match fs::OpenOptions::new().create(true).append(true).open(&combined) {
+        Ok(f) => Some(SharedFile(Arc::new(Mutex::new(f)))),
+        Err(e) => {
+            eprintln!("open combined.log failed ({}): {e}", combined.display());
+            None
+        }
+    };
+
+    let stderr_layer = tracing_subscriber::fmt::layer()
+        .with_ansi(cfg!(debug_assertions))
+        .with_target(true)
+        .with_thread_names(true)
+        .with_writer(io::stderr.with_max_level(tracing::Level::INFO));
+
+    let registry = tracing_subscriber::registry().with(filter).with(stderr_layer);
+
+    let result = if let Some(file_writer) = file_writer {
+        let file_layer = tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_target(true)
+            .with_thread_names(true)
+            .with_writer(file_writer);
+        registry.with(file_layer).try_init()
+    } else {
+        registry.try_init()
+    };
+    if let Err(e) = result {
+        eprintln!("tracing subscriber already set: {e}");
+    }
+}
+
+#[derive(Clone)]
+struct SharedFile(Arc<Mutex<fs::File>>);
+
+impl io::Write for SharedFile {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.lock().write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.lock().flush()
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedFile {
+    type Writer = SharedFile;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+/// 安装进程级 panic hook：写入 `logs/panic-*.log` + error.log，并保留默认钩子。
+pub fn install_panic_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current();
+        let name = thread.name().unwrap_or("<unnamed>");
+        let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "Box<dyn Any>".to_string()
+        };
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "<unknown>".to_string());
+        let body = format!("thread '{name}' panicked at {location}:\n{payload}\n");
+        eprintln!("{body}");
+        record_panic_raw(&body);
+        default_hook(info);
+    }));
+}
+
+/// 后台任务捕获到的 panic：写独立文件 + error.log。
+pub fn record_panic(label: &str, account_id: Option<&str>, message: &str) {
+    let account = account_id.unwrap_or("-");
+    let body = format!(
+        "ts={}\nlabel={label}\naccount_id={account}\npanic={message}\n",
+        chrono_like_now_iso()
+    );
+    record_panic_raw(&body);
+}
+
+fn record_panic_raw(body: &str) {
+    let dir = ensure_log_dir();
+    let stamp = chrono_like_now_compact();
+    write_to_path(&dir.join(format!("panic-{stamp}.log")), body);
+    append_fallback_log("error", &format!("{{\"level\":\"error\",\"message\":{}}}\n", json_escape(body)));
+}
+
+fn chrono_like_now_compact() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let days = now.div_euclid(86_400);
+    let secs_of_day = now.rem_euclid(86_400);
+    let h = secs_of_day / 3_600;
+    let m = (secs_of_day % 3_600) / 60;
+    let s = secs_of_day % 60;
+    let (y, mo, d) = civil_from_days(days);
+    format!("{y:04}{mo:02}{d:02}-{h:02}{m:02}{s:02}")
+}
+
+fn json_escape(s: &str) -> String {
+    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
 }
 
 /// 拿到 log 目录（不存在则创建）
@@ -367,5 +486,27 @@ mod tests {
     fn redact_no_match() {
         let out = redact_string_v2("just a normal message");
         assert_eq!(out, "just a normal message");
+    }
+
+    #[test]
+    fn record_panic_writes_file() {
+        let dir = ensure_log_dir();
+        record_panic("unit_test", Some("acc1"), "hello-panic");
+        let mut found = false;
+        if let Ok(entries) = fs::read_dir(&dir) {
+            for e in entries.flatten() {
+                let name = e.file_name().to_string_lossy().to_string();
+                if name.starts_with("panic-") && name.ends_with(".log") {
+                    if let Ok(body) = fs::read_to_string(e.path()) {
+                        if body.contains("hello-panic") && body.contains("unit_test") {
+                            found = true;
+                            let _ = fs::remove_file(e.path());
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(found, "expected panic-*.log under {}", dir.display());
     }
 }
