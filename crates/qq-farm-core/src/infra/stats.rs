@@ -186,8 +186,10 @@ pub fn save_persisted_stats(account_id: &str, data: &PersistedStats) {
             "{}.{pid}.{ts}.tmp",
             path.file_name().and_then(|n| n.to_str()).unwrap_or("stats.json")
         ));
-        let _ = fs::write(&tmp, body);
-        let _ = fs::rename(&tmp, &path);
+        let _ = crate::infra::spawn_blocking(move || {
+            let _ = fs::write(&tmp, &body);
+            let _ = fs::rename(&tmp, &path);
+        });
     }
 }
 

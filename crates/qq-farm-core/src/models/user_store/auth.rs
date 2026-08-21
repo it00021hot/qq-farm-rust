@@ -128,8 +128,10 @@ pub fn save_login_attempts() {
     if let Ok(body) = serde_json::to_string_pretty(&data) {
         let path = login_attempts_file();
         let tmp = path.with_extension("json.tmp");
-        let _ = fs::write(&tmp, body);
-        let _ = fs::rename(&tmp, &path);
+        let _ = crate::infra::spawn_blocking(move || {
+            let _ = fs::write(&tmp, &body);
+            let _ = fs::rename(&tmp, &path);
+        });
     }
 }
 
@@ -158,8 +160,10 @@ pub fn save_login_logs() {
     if let Ok(s) = serde_json::to_string_pretty(&body) {
         let path = login_logs_file();
         let tmp = path.with_extension("json.tmp");
-        let _ = fs::write(&tmp, s);
-        let _ = fs::rename(&tmp, &path);
+        let _ = crate::infra::spawn_blocking(move || {
+            let _ = fs::write(&tmp, &s);
+            let _ = fs::rename(&tmp, &path);
+        });
     }
 }
 

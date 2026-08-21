@@ -3,12 +3,14 @@
 //! 自 `services/` 迁出，供业务服务与 runtime 共用。
 
 pub mod automation;
+pub mod fs_async;
 pub mod json_db;
 pub mod panel_log;
 pub mod rate_limiter;
 pub mod stats;
 pub mod status;
 
+pub use fs_async::{spawn_blocking, spawn_blocking_detached, spawn_write_file};
 pub use json_db::{
     ensure_parent_dir, file_exists, file_size, list_files_with_ext, read_json_or,
     read_json_with_default, read_text_file, write_json_file_atomic, write_text_file_atomic,

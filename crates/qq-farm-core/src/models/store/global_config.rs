@@ -455,6 +455,9 @@ pub fn store_file() -> PathBuf {
 }
 
 /// 保存全局配置到文件（原子写）
+///
+/// **不阻塞调用方**：序列化在调用方（很快），fs::write + rename 跑在 blocking pool。
+/// 返回 `Ok(())` 仅表示调度成功；真正的 I/O 错误通过 `tracing::error!` 记录。
 pub fn save_global_config() -> std::io::Result<()> {
     use std::fs;
     let state = STATE.read().clone();
@@ -476,20 +479,23 @@ pub fn save_global_config() -> std::io::Result<()> {
     let body = serde_json::to_string_pretty(&data).map_err(std::io::Error::other)?;
 
     let path = store_file();
-    if let Some(parent) = path.parent() {
-        if !parent.exists() {
-            fs::create_dir_all(parent)?;
-        }
-    }
     let tmp = path.with_extension("json.tmp");
-    if let Err(e) = fs::write(&tmp, &body) {
-        tracing::error!(path = %tmp.display(), error = %e, "写入 store.json.tmp 失败");
-        return Err(e);
-    }
-    if let Err(e) = fs::rename(&tmp, &path) {
-        tracing::error!(path = %path.display(), error = %e, "原子替换 store.json 失败");
-        return Err(e);
-    }
+    let _ = crate::infra::spawn_blocking(move || -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            if !parent.exists() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        if let Err(e) = fs::write(&tmp, &body) {
+            tracing::error!(path = %tmp.display(), error = %e, "写入 store.json.tmp 失败");
+            return Err(e);
+        }
+        if let Err(e) = fs::rename(&tmp, &path) {
+            tracing::error!(path = %path.display(), error = %e, "原子替换 store.json 失败");
+            return Err(e);
+        }
+        Ok(())
+    });
     Ok(())
 }
 

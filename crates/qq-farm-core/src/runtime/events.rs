@@ -27,6 +27,16 @@ pub enum WorkerEvent {
     Log { account_id: String, account_name: String, level: String, module: String, message: String },
     /// 调度器快照（用于 UI 展示）
     Schedulers { schedulers: Vec<SchedulerSnapshot> },
+    /// TSDK wasm 连续失败达到阈值，请求 worker 重建 runtime。
+    /// worker 收到后应停掉 AceShared、销毁 TsdkRuntime、重新 `TsdkRuntime::load`、重启 ACE。
+    WasmReset {
+        account_id: String,
+        account_name: String,
+        /// 连续失败次数（用于诊断）
+        consecutive_fail_count: u32,
+        /// 触发重置的错误摘要
+        reason: String,
+    },
 }
 
 impl WorkerEvent {
@@ -38,7 +48,8 @@ impl WorkerEvent {
             | Self::Stopped { account_id, .. }
             | Self::Status { account_id, .. }
             | Self::Error { account_id, .. }
-            | Self::Log { account_id, .. } => Some(account_id),
+            | Self::Log { account_id, .. }
+            | Self::WasmReset { account_id, .. } => Some(account_id),
             Self::Schedulers { .. } => None,
         }
     }

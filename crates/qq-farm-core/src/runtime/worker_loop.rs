@@ -722,12 +722,19 @@ impl WorkerLoop {
                     let last_rx = gateway.last_rx_ms();
                     let last = last_hb.max(last_rx);
                     let elapsed = now - last;
+                    // TSDK 重建期放宽 silence 阈值到 90s，避免重建过程（wasm 编译 + 实例化）
+                    // 被静默超时误杀（重建期间 encrypt 都会短暂返回 Err，触发静默累加）。
+                    let effective_silence_ms = if gateway.is_rebuilding() {
+                        hb_timeout.as_millis().max(90_000) as i64
+                    } else {
+                        hb_timeout.as_millis() as i64
+                    };
                     // 杀号看入站帧 / 心跳成功，不看 pending（超时 cancel 会把 pending 打成 0）。
                     if heartbeat_silence_exceeded(
                         now,
                         last_hb,
                         last_rx,
-                        hb_timeout.as_millis() as i64,
+                        effective_silence_ms,
                     ) {
                         let miss_n = {
                             let mut g = miss.lock();

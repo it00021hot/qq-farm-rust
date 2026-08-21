@@ -438,10 +438,13 @@ impl Worker {
                         }
                         // 对齐 sendLogin 成功后的顺序：ACE → 金豆/设置 → 心跳/状态 → onLoginSuccess
                         let ace = Arc::new(crate::services::ace::AceShared::new());
+                        ace.set_event_sink(event_tx.clone(), account_name.clone());
                         let sender = Arc::new(crate::services::ace::GatewayAceSender {
                             gateway: gateway.clone(),
                         });
                         ace.start(sender, tsdk.clone());
+                        // clone 一份给 WasmReset handler，attach_ace 后原变量被 move
+                        let ace_for_reset = ace.clone();
                         worker_loop.attach_ace(ace);
 
                         let extras = worker_loop.clone();
@@ -462,6 +465,110 @@ impl Worker {
                         let sched = scheduler.clone();
                         tokio::spawn(async move {
                             wl.on_login_success(&sched).await;
+                        });
+
+                        // === 订阅 WasmReset：tsdk 连续失败时由 ACE 触发。
+                        // 完整流程：rebuild TSDK → 原子替换 Gateway.encryptor → 重启 ACE
+                        // rebuild 期间 Gateway.begin_rebuild 让 WorkerLoop 放宽 silence 阈值
+                        let mut reset_rx = event_tx.subscribe();
+                        let acc_id_for_reset = account_id.clone();
+                        let acc_name_for_reset = account_name.clone();
+                        let tsdk_for_reset = tsdk.clone();
+                        let gateway_for_reset = gateway.clone();
+                        let log_tx = event_tx.clone();
+                        tokio::spawn(async move {
+                            while let Ok(ev) = reset_rx.recv().await {
+                                if let WorkerEvent::WasmReset {
+                                    account_id,
+                                    consecutive_fail_count,
+                                    reason,
+                                    ..
+                                } = ev
+                                {
+                                    if !account_id.is_empty() && account_id != acc_id_for_reset {
+                                        continue;
+                                    }
+                                    tracing::error!(
+                                        account_id = %acc_id_for_reset,
+                                        consecutive_fail_count,
+                                        reason = %reason,
+                                        "TSDK wasm 连续失败达到阈值，开始重建"
+                                    );
+                                    let _ = log_tx.send(WorkerEvent::Log {
+                                        account_id: acc_id_for_reset.clone(),
+                                        account_name: acc_name_for_reset.clone(),
+                                        level: "warn".to_string(),
+                                        module: "tsdk".to_string(),
+                                        message: format!(
+                                            "TSDK 重建中：{} (连续失败 {} 次)",
+                                            reason, consecutive_fail_count
+                                        ),
+                                    });
+
+                                    // 1. 标记 rebuilding 期间，WorkerLoop 会放宽 silence 阈值
+                                    gateway_for_reset.begin_rebuild();
+                                    // 2. rebuild 是同步阻塞（wasm 编译 + 实例化），扔到 blocking pool
+                                    let tsdk_rebuild = tsdk_for_reset.clone();
+                                    let rebuild_result = tokio::task::spawn_blocking(move || {
+                                        tsdk_rebuild.rebuild()
+                                    })
+                                    .await;
+                                    match rebuild_result {
+                                        Ok(Ok(())) => {
+                                            // 3. 重建成功：原子换 Gateway 的 encryptor
+                                            let new_encryptor: Arc<dyn crate::network::encryptor::Encryptor> = Arc::new(
+                                                crate::network::encryptor::TsdkEncryptor::new(tsdk_for_reset.clone())
+                                            );
+                                            gateway_for_reset.replace_encryptor(new_encryptor);
+                                            // 4. 退出 rebuilding 状态
+                                            gateway_for_reset.end_rebuild();
+                                            // 5. 重启 ACE（旧 ACE 已停止，scheduler.clear_all 由 stop 触发）
+                                            let sender = Arc::new(crate::services::ace::GatewayAceSender {
+                                                gateway: gateway_for_reset.clone(),
+                                            });
+                                            ace_for_reset.start(sender, tsdk_for_reset.clone());
+                                            tracing::info!(
+                                                account_id = %acc_id_for_reset,
+                                                "TSDK 重建完成，ACE 已重启"
+                                            );
+                                            let _ = log_tx.send(WorkerEvent::Log {
+                                                account_id: acc_id_for_reset.clone(),
+                                                account_name: acc_name_for_reset.clone(),
+                                                level: "info".to_string(),
+                                                module: "tsdk".to_string(),
+                                                message: format!(
+                                                    "TSDK 重建完成（连续失败 {} 次）",
+                                                    consecutive_fail_count
+                                                ),
+                                            });
+                                        }
+                                        Ok(Err(e)) => {
+                                            // rebuild 失败：清 rebuilding，下次再有 reset 再试
+                                            gateway_for_reset.end_rebuild();
+                                            tracing::error!(
+                                                account_id = %acc_id_for_reset,
+                                                error = %e,
+                                                "TSDK 重建失败，下次 reset 时再试"
+                                            );
+                                            let _ = log_tx.send(WorkerEvent::Log {
+                                                account_id: acc_id_for_reset.clone(),
+                                                account_name: acc_name_for_reset.clone(),
+                                                level: "error".to_string(),
+                                                module: "tsdk".to_string(),
+                                                message: format!("TSDK 重建失败: {e}"),
+                                            });
+                                        }
+                                        Err(e) => {
+                                            gateway_for_reset.end_rebuild();
+                                            tracing::error!(
+                                                account_id = %acc_id_for_reset,
+                                                error = %e,
+                                                "TSDK rebuild 任务 panic"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
                         });
                     }
                     Err(e) => {

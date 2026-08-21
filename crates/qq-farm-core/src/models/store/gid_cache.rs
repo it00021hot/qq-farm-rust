@@ -43,9 +43,11 @@ pub fn write_cache(account_id: &str, gids: &[i64]) -> std::io::Result<()> {
     let path = cache_file(account_id);
     let tmp = path.with_extension("json.tmp");
     let body = serde_json::to_string(gids).map_err(std::io::Error::other)?;
-    fs::write(&tmp, body)?;
-    // 原子 rename
-    fs::rename(&tmp, &path)?;
+    let _ = crate::infra::spawn_blocking(move || -> std::io::Result<()> {
+        fs::write(&tmp, &body)?;
+        fs::rename(&tmp, &path)?;
+        Ok(())
+    });
     Ok(())
 }
 

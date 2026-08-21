@@ -106,8 +106,11 @@ fn write_json_atomic<T: serde::Serialize>(path: &PathBuf, value: &T) {
     let _ = ensure_data_dir();
     if let Ok(body) = serde_json::to_string_pretty(value) {
         let tmp = path.with_extension("json.tmp");
-        let _ = fs::write(&tmp, body);
-        let _ = fs::rename(&tmp, path);
+        let path = path.clone();
+        let _ = crate::infra::spawn_blocking(move || {
+            let _ = fs::write(&tmp, &body);
+            let _ = fs::rename(&tmp, &path);
+        });
     }
 }
 

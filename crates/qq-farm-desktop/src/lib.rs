@@ -69,6 +69,33 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_decorations(false);
                 let _ = window.set_shadow(true);
+
+                // 显式把窗口放到主显示器中央并设默认大小，覆盖 config 的 center 选项
+                // （config 的 center 在 set_decorations 之后偶尔会被重置；这里用主显示器尺寸重算）
+                if let Ok(Some(monitor)) = window.primary_monitor() {
+                    let mon_size = monitor.size();
+                    let mon_pos = monitor.position();
+                    let scale = monitor.scale_factor();
+                    // 1440 x 900 逻辑像素（与 tauri.conf.json 一致）
+                    let win_w = 1440.0_f64;
+                    let win_h = 900.0_f64;
+                    let mon_w_logical = mon_size.width as f64 / scale;
+                    let mon_h_logical = mon_size.height as f64 / scale;
+                    let mon_x_logical = mon_pos.x as f64 / scale;
+                    let mon_y_logical = mon_pos.y as f64 / scale;
+                    let x = mon_x_logical + (mon_w_logical - win_w) / 2.0;
+                    let y = mon_y_logical + (mon_h_logical - win_h) / 2.0;
+                    use tauri::{LogicalPosition, LogicalSize};
+                    let _ = window.set_size(LogicalSize::new(win_w, win_h));
+                    let _ = window.set_position(LogicalPosition::new(x, y));
+                    tracing::info!(
+                        win_w, win_h, x, y, mon_w_logical, mon_h_logical, scale,
+                        "主窗口已居中并设定尺寸"
+                    );
+                } else {
+                    // 拿不到主显示器时退化用 tauri.conf.json 的 center 选项
+                    let _ = window.center();
+                }
             }
 
             let cfg_dir = qq_farm_core::config::paths::game_config_static_dir();

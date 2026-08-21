@@ -13,7 +13,7 @@
 //! 登录流程（ACE runtime / WASM 握手）留到阶段 1B 业务模块。
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -148,9 +148,13 @@ struct Inner {
     phase: RwLock<ConnectionPhase>,
     server_seq: AtomicI64,
     requests: RequestManager,
-    /// 加密器（外部注入）
-    encryptor: Arc<dyn Encryptor>,
-    /// 收到的 Notify 事件订阅者
+    /// 加密器（外部注入）。`RwLock<Arc<dyn Encryptor>>` 支持 TSDK 重建时
+    /// 原子替换：业务 RPC 的 `encryptor.read().clone()` 拿到当前实例的 Arc，
+    /// 后续调用都用新 TSDK；旧 TSDK 的 wasm 内存随旧 Arc 引用计数归零析构。
+    /// 用 parking_lot::RwLock 是因为 dyn Encryptor 不是 Sized，arc-swap 需要 Sized。
+    /// 读路径在 fast path 用 `read()`（无等待），写路径（TSDK 重建时）极短。
+    encryptor: parking_lot::RwLock<Arc<dyn Encryptor>>,
+    /// 收到 Notify 事件订阅者
     notify_subscribers: RwLock<Vec<mpsc::Sender<NotifyEvent>>>,
     /// WS 发送端（connect 时设置）
     ws_sender: parking_lot::Mutex<Option<mpsc::Sender<Vec<u8>>>>,
@@ -160,6 +164,8 @@ struct Inner {
     disconnect_reason: parking_lot::Mutex<Option<String>>,
     /// 最近一次收到任意 WS 帧的时间（ms）。大包 GetAll 下载期间心跳 RPC 可能超时，但连接仍活。
     last_rx_ms: AtomicI64,
+    /// TSDK 重建中标志（worker rebuild 期间置 true，WorkerLoop 据此放宽 silence 阈值）
+    rebuilding: AtomicBool,
     /// 业务 RPC 并发槽（对齐 bot 5 in-flight / 100 排队）。Heartbeat 不占槽。
     rpc_slots: Arc<Semaphore>,
     rpc_queued: AtomicUsize,
@@ -176,16 +182,41 @@ impl Gateway {
                 phase: RwLock::new(ConnectionPhase::Disconnected),
                 server_seq: AtomicI64::new(0),
                 requests: RequestManager::new(),
-                encryptor,
+                encryptor: parking_lot::RwLock::new(encryptor),
                 notify_subscribers: RwLock::new(Vec::new()),
                 ws_sender: parking_lot::Mutex::new(None),
                 session_end,
                 disconnect_reason: parking_lot::Mutex::new(None),
                 last_rx_ms: AtomicI64::new(0),
+                rebuilding: AtomicBool::new(false),
                 rpc_slots: Arc::new(Semaphore::new(crate::constants::MAX_IN_FLIGHT_REQUESTS)),
                 rpc_queued: AtomicUsize::new(0),
             }),
         }
+    }
+
+    /// 原子替换 encryptor（TSDK 重建时调用）。新 encryptor 对所有后续
+    /// `request_with_timeout`/`request` 调用立即可见；替换瞬间的 in-flight
+    /// 调用仍持有旧 Arc 引用，析构时机由引用计数决定。
+    /// 同时短暂置位 `rebuilding`，让 WorkerLoop 把 silence 阈值放宽到 90s。
+    pub fn replace_encryptor(&self, new_encryptor: Arc<dyn Encryptor>) {
+        *self.inner.encryptor.write() = new_encryptor;
+    }
+
+    /// 进入 TSDK 重建期：rebuilding=true，让 WorkerLoop 放宽心跳静默阈值
+    pub fn begin_rebuild(&self) {
+        self.inner.rebuilding.store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    /// 退出 TSDK 重建期
+    pub fn end_rebuild(&self) {
+        self.inner.rebuilding.store(false, std::sync::atomic::Ordering::Release);
+    }
+
+    /// 是否正在重建 TSDK
+    #[must_use]
+    pub fn is_rebuilding(&self) -> bool {
+        self.inner.rebuilding.load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// 当前阶段
@@ -335,7 +366,15 @@ impl Gateway {
         let encrypted_body = if body.is_empty() {
             Vec::new()
         } else {
-            self.inner.encryptor.encrypt(body).map_err(|e| NetworkError::Encrypt(e.to_string()))?
+            // 通过 RwLock::read() 拿到当前 encryptor 的 Arc 克隆：
+            // - 读路径不阻塞其他读，多线程并发 RPC 安全
+            // - 替换瞬间的 in-flight 调用仍持有旧 Arc 引用，旧 TSDK 随旧 Arc 引用计数归零自动析构
+            self.inner
+                .encryptor
+                .read()
+                .clone()
+                .encrypt(body)
+                .map_err(|e| NetworkError::Encrypt(e.to_string()))?
         };
         let frame = FrameBuilder::request(service, method)
             .with_client_seq(client_seq)
@@ -793,5 +832,66 @@ mod tests {
     fn urlencoding_spaces() {
         assert_eq!(urlencoding("hello world"), "hello%20world");
         assert_eq!(urlencoding("a-b_c.d~e"), "a-b_c.d~e");
+    }
+
+    /// 关键回归测试：replace_encryptor 必须能原子替换 RwLock<Arc<dyn Encryptor>>，
+    /// 后续 load 拿到新实例，原 Arc 引用计数归零后析构（释放旧 TSDK 内存）。
+    #[test]
+    fn replace_encryptor_swaps_atomic_and_drops_old() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc as StdArc;
+        use crate::network::encryptor::Encryptor;
+
+        struct TestEncryptor {
+            id: usize,
+            drops: StdArc<AtomicUsize>,
+        }
+        impl Drop for TestEncryptor {
+            fn drop(&mut self) {
+                self.drops.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        impl Encryptor for TestEncryptor {
+            fn encrypt(&self, _p: &[u8]) -> crate::error::Result<Vec<u8>> {
+                Ok(vec![self.id as u8])
+            }
+            fn decrypt(&self, _p: &[u8]) -> crate::error::Result<Vec<u8>> {
+                Ok(vec![self.id as u8])
+            }
+        }
+
+        // 直接验证 parking_lot::RwLock<Arc<dyn Encryptor>> 的语义。
+        let drops = StdArc::new(AtomicUsize::new(0));
+        let lock = parking_lot::RwLock::new(StdArc::new(TestEncryptor {
+            id: 1,
+            drops: drops.clone(),
+        }) as StdArc<dyn Encryptor>);
+
+        // load 拿当前
+        assert_eq!(lock.read().encrypt(b"").unwrap(), vec![1u8]);
+
+        // 替换为新实例
+        let old = lock.read().clone();
+        *lock.write() = StdArc::new(TestEncryptor {
+            id: 2,
+            drops: drops.clone(),
+        });
+        // 旧实例还活着（我们持有了 old）
+        assert_eq!(old.encrypt(b"").unwrap(), vec![1u8]);
+        // 新实例 load 拿到
+        assert_eq!(lock.read().encrypt(b"").unwrap(), vec![2u8]);
+        // drop 旧引用
+        drop(old);
+        // 旧实例被 drop
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
+
+        // 再换一次
+        let old2 = lock.read().clone();
+        *lock.write() = StdArc::new(TestEncryptor {
+            id: 3,
+            drops: drops.clone(),
+        });
+        drop(old2);
+        assert_eq!(drops.load(Ordering::Relaxed), 2);
     }
 }

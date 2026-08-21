@@ -109,8 +109,10 @@ pub fn save_card_claim_records() {
     if let Ok(body) = serde_json::to_string_pretty(&data) {
         let path = card_claim_file();
         let tmp = path.with_extension("json.tmp");
-        let _ = fs::write(&tmp, body);
-        let _ = fs::rename(&tmp, &path);
+        let _ = crate::infra::spawn_blocking(move || {
+            let _ = fs::write(&tmp, &body);
+            let _ = fs::rename(&tmp, &path);
+        });
     }
 }
 

@@ -287,11 +287,16 @@ pub fn load_into_global() -> std::io::Result<usize> {
 }
 
 /// 把当前内存账号列表写回 `accounts.json`。失败只打日志，不回滚内存。
+///
+/// **不阻塞调用方**：fs::write + rename 跑在 `tokio::task::spawn_blocking` 上。
+/// 同步版本 `save_to_file` 保留给初始化 / 显式同步场景。
 pub fn persist_global() {
     let data = accounts_data();
-    if let Err(e) = save_to_file(&data) {
-        tracing::error!(error = %e, "failed to persist accounts.json");
-    }
+    let _ = crate::infra::spawn_blocking(move || {
+        if let Err(e) = save_to_file(&data) {
+            tracing::error!(error = %e, "failed to persist accounts.json");
+        }
+    });
 }
 
 #[cfg(test)]

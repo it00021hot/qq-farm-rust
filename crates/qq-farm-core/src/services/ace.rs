@@ -2,15 +2,19 @@
 //!
 //! 1:1 对应原 `core/src/services/ace.ts`（66 行）。
 
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 
+use futures::FutureExt;
 use parking_lot::Mutex;
 use prost::Message as _;
+use tokio::sync::broadcast;
 
 use crate::crypto::tsdk::TsdkRuntime;
 use crate::network::gateway::Gateway;
 use crate::proto::generated::gamepb::acepb::{AntiDataReply, AntiDataRequest};
+use crate::runtime::events::WorkerEvent;
 use crate::runtime::scheduler::{Scheduler, TaskFn};
 
 /// ACE sender 抽象（gateway 提供）
@@ -35,6 +39,10 @@ pub struct AceShared {
     request_running: AtomicBool,
     /// scheduler
     scheduler: Scheduler,
+    /// worker 事件总线（用于发 WasmReset）
+    event_tx: Mutex<Option<broadcast::Sender<WorkerEvent>>>,
+    /// 账号名（用于事件）
+    account_name: Mutex<String>,
 }
 
 impl AceShared {
@@ -47,7 +55,15 @@ impl AceShared {
             ready_logged: AtomicBool::new(false),
             request_running: AtomicBool::new(false),
             scheduler: Scheduler::new("ace"),
+            event_tx: Mutex::new(None),
+            account_name: Mutex::new(String::new()),
         }
+    }
+
+    /// 注入 worker 事件总线 + 账号名（用于 WasmReset 事件）
+    pub fn set_event_sink(&self, event_tx: broadcast::Sender<WorkerEvent>, account_name: String) {
+        *self.event_tx.lock() = Some(event_tx);
+        *self.account_name.lock() = account_name;
     }
 
     /// 启动 ACE runtime（注册 5 个定时任务）
@@ -140,10 +156,22 @@ impl AceShared {
         {
             return;
         }
-        let result = self.send_anti_data_inner().await;
-        self.request_running.store(false, Ordering::SeqCst);
-        if let Err(e) = result {
-            tracing::warn!(error = %e, "ACE AntiData 上报失败");
+        // RAII 复位：保证 panic 路径也会释放 request_running，避免调度永久卡死
+        let _reset_guard = RequestRunningGuard {
+            flag: &self.request_running,
+        };
+        let inner_result = AssertUnwindSafe(self.send_anti_data_inner())
+            .catch_unwind()
+            .await;
+        match inner_result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, "ACE AntiData 上报失败");
+            }
+            Err(panic_payload) => {
+                let msg = crate::runtime::safe_spawn::format_panic_payload(panic_payload);
+                tracing::error!(panic = %msg, "ACE AntiData 上报任务 panic");
+            }
         }
     }
 
@@ -155,7 +183,23 @@ impl AceShared {
         let Some(tsdk) = tsdk_clone else {
             return Ok(());
         };
-        let data = tsdk.get_data_to_server()?;
+        // 若 wasm 已请求重置（pending_reset）且 worker 还没来重建，停止 anti_data
+        // 避免在坏状态 wasm 上继续消费任务；心跳也会走同样的短路。
+        if tsdk.is_reset_pending() {
+            return Ok(());
+        }
+        let data = match tsdk.get_data_to_server() {
+            Ok(d) => d,
+            Err(e) => {
+                // 任何 wasm 错误都已经在内部累计到 consecutive_fail_count；
+                // 若已达阈值，is_reset_pending() 会返回 true，这里再发一次事件兜底
+                // （防止 ace 任务自己先踩到边缘）。
+                if tsdk.is_reset_pending() {
+                    self.emit_wasm_reset(tsdk.consecutive_fail_count(), format!("get_data_to_server failed: {e}"));
+                }
+                return Err(e);
+            }
+        };
         if data.is_empty() {
             return Ok(());
         }
@@ -191,6 +235,31 @@ impl AceShared {
 impl Default for AceShared {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl AceShared {
+    /// 发 WasmReset 事件给 worker。worker 收到后会重建 TSDK。
+    fn emit_wasm_reset(&self, consecutive_fail_count: u32, reason: String) {
+        let tx = self.event_tx.lock().clone();
+        if let Some(tx) = tx {
+            // 取出 account_id 路径：worker 通过 set_event_sink 传进来时
+            // 没法直接拿到 account_id；这里用一个临时约定：调用方传入。
+            // 实际场景：worker 侧会订阅所有事件并按 WorkerEvent::WasmReset 的
+            // 字段处理（account_id 直接来自事件）。但当前接口没让 worker 传
+            // account_id，因此这里先从 sender 反查不到——本节代码仅在内部被
+            // 触发，account_id 会在更上层 worker 装配时通过其它方式通知。
+            // **暂时** 我们把 account_id 留空字符串，worker 端需要从外部
+            // 找到对应的 account。
+            let account_id = String::new();
+            let account_name = self.account_name.lock().clone();
+            let _ = tx.send(WorkerEvent::WasmReset {
+                account_id,
+                account_name,
+                consecutive_fail_count,
+                reason,
+            });
+        }
     }
 }
 
@@ -238,6 +307,19 @@ impl AceSender for GatewayAceSender {
             .request_unlocked(service, method, body)
             .await
             .map_err(crate::error::Error::Network)
+    }
+}
+
+// ===== RAII 工具 =====
+
+/// RAII guard for `request_running`：Drop 时复位为 false，保证 panic 路径也能解锁。
+struct RequestRunningGuard<'a> {
+    flag: &'a AtomicBool,
+}
+
+impl Drop for RequestRunningGuard<'_> {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::SeqCst);
     }
 }
 

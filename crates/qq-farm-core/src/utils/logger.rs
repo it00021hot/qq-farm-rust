@@ -11,10 +11,19 @@
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Once};
+use std::sync::Once;
 
 use parking_lot::Mutex;
 use serde::Serialize;
+
+// ============================================================================
+// 关键：日志写入必须用 `tracing_appender::non_blocking` 把 I/O 放到独立后台线程，
+// 绝不能在 tokio worker 线程上做同步 fs::File::write。
+// 原实现 SharedFile(Arc<Mutex<fs::File>>) 会让所有 tokio worker 排队在
+// 单一文件锁上 → 一旦磁盘 I/O 抖动 / 杀毒扫描 / OneDrive 同步暂挂，
+// 整个 tokio runtime 卡死 → Tauri command 永不返回 → 前端 Promise.all 永远
+// pending → `bagLoading=true` 永远不清除 → "loading..." 一直转。
+// ============================================================================
 
 /// 敏感 key（注释保留）
 #[allow(dead_code)]
@@ -178,18 +187,20 @@ fn install_tracing_subscriber() {
     use tracing_subscriber::fmt::writer::MakeWriterExt;
     use tracing_subscriber::prelude::*;
     use tracing_subscriber::EnvFilter;
+    use tracing_appender::non_blocking;
 
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let dir = ensure_log_dir();
     let combined = dir.join("combined.log");
 
-    let file_writer = match fs::OpenOptions::new().create(true).append(true).open(&combined) {
-        Ok(f) => Some(SharedFile(Arc::new(Mutex::new(f)))),
-        Err(e) => {
-            eprintln!("open combined.log failed ({}): {e}", combined.display());
-            None
-        }
-    };
+    // 用 non_blocking 后台线程刷盘：tracing 调用方（tokio worker）只负责把
+    // 行写入内部 ring buffer；后台线程把 buffer flush 到 fs::File。
+    // 一旦磁盘 I/O 卡住，受影响的是后台 flush 线程，tokio workers 永远不阻塞。
+    let file_appender = tracing_appender::rolling::daily(dir, "combined.log");
+    let (file_writer, guard) = non_blocking(file_appender);
+
+    // guard 必须 leak 到 static：worker 线程结束 / 进程退出前保证 flush 完。
+    Box::leak(Box::new(guard));
 
     let stderr_layer = tracing_subscriber::fmt::layer()
         .with_ansi(cfg!(debug_assertions))
@@ -197,42 +208,24 @@ fn install_tracing_subscriber() {
         .with_thread_names(true)
         .with_writer(io::stderr.with_max_level(tracing::Level::INFO));
 
-    let registry = tracing_subscriber::registry().with(filter).with(stderr_layer);
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_ansi(false)
+        .with_target(true)
+        .with_thread_names(true)
+        .with_writer(file_writer);
 
-    let result = if let Some(file_writer) = file_writer {
-        let file_layer = tracing_subscriber::fmt::layer()
-            .with_ansi(false)
-            .with_target(true)
-            .with_thread_names(true)
-            .with_writer(file_writer);
-        registry.with(file_layer).try_init()
-    } else {
-        registry.try_init()
-    };
+    let result = tracing_subscriber::registry()
+        .with(filter)
+        .with(stderr_layer)
+        .with(file_layer)
+        .try_init();
     if let Err(e) = result {
         eprintln!("tracing subscriber already set: {e}");
     }
-}
 
-#[derive(Clone)]
-struct SharedFile(Arc<Mutex<fs::File>>);
-
-impl io::Write for SharedFile {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.lock().write(buf)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.0.lock().flush()
-    }
-}
-
-impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedFile {
-    type Writer = SharedFile;
-
-    fn make_writer(&'a self) -> Self::Writer {
-        self.clone()
-    }
+    // 单独保留 combined.log 路径用于兼容旧的 `append_fallback_log` 路径（fallback 写原路径，不走 tracing）
+    // （其实 fallback 路径现在也用 spawn_blocking，不再直接 fs::write，但保留引用以备不时之需）
+    let _ = combined; // suppress unused warning
 }
 
 /// 安装进程级 panic hook：写入 `logs/panic-*.log` + error.log，并保留默认钩子。
@@ -260,6 +253,7 @@ pub fn install_panic_hook() {
 }
 
 /// 后台任务捕获到的 panic：写独立文件 + error.log。
+/// `record_panic` 内部用 spawn_blocking 异步写盘，调用方（tokio worker）零阻塞。
 pub fn record_panic(label: &str, account_id: Option<&str>, message: &str) {
     let account = account_id.unwrap_or("-");
     let body = format!(
@@ -364,22 +358,30 @@ pub fn create_module_logger(name: &str) -> ModuleLogger {
     ModuleLogger::new(name)
 }
 
-/// 文件 fallback 写日志（parking_lot 串行化以避免并发文件锁竞争）
+/// 文件 fallback 写日志（spawn_blocking 跑在 blocking pool，绝不阻塞调用方）
 fn append_fallback_log(level: &str, line: &str) {
-    let _guard = log_append_lock().lock();
-    let dir = ensure_log_dir();
-    if let Ok(mut combined) =
-        fs::OpenOptions::new().create(true).append(true).open(dir.join("combined.log"))
-    {
-        let _ = combined.write_all(line.as_bytes());
-    }
-    if level == "error" {
-        if let Ok(mut err) =
-            fs::OpenOptions::new().create(true).append(true).open(dir.join("error.log"))
+    let level = level.to_string();
+    let line = line.to_string();
+    crate::infra::spawn_blocking(move || {
+        let _guard = log_append_lock().lock();
+        let dir = ensure_log_dir();
+        if let Ok(mut combined) = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("combined.log"))
         {
-            let _ = err.write_all(line.as_bytes());
+            let _ = combined.write_all(line.as_bytes());
         }
-    }
+        if level == "error" {
+            if let Ok(mut err) = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(dir.join("error.log"))
+            {
+                let _ = err.write_all(line.as_bytes());
+            }
+        }
+    });
 }
 
 /// 串行化 file append 的全局锁（避免多线程写同一文件时被 fs 锁卡住）
@@ -419,14 +421,19 @@ fn civil_from_days(days_since_epoch: i64) -> (i32, u32, u32) {
     (y as i32, m, d)
 }
 
-/// 把 log 写到指定路径（测试用）
+/// 把 log 写到指定路径（spawn_blocking，绝不阻塞 tokio worker；
+/// 测试环境下 fallback 同步执行，保持原有同步语义）
 pub fn write_to_path(path: &Path, line: &str) {
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(path) {
-        let _ = f.write_all(line.as_bytes());
-    }
+    let path = path.to_path_buf();
+    let line = line.to_string();
+    crate::infra::spawn_blocking(move || {
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&path) {
+            let _ = f.write_all(line.as_bytes());
+        }
+    });
 }
 
 #[cfg(test)]
@@ -508,5 +515,40 @@ mod tests {
             }
         }
         assert!(found, "expected panic-*.log under {}", dir.display());
+    }
+
+    /// 关键回归测试：高频并发写日志不会卡死调用线程（验证 non-blocking 改造）。
+    /// 之前 `SharedFile(Arc<Mutex<fs::File>>)` 方案：所有写都在 tokio worker 上同步
+    /// 排队，单个慢 I/O 就会拖死整个 runtime。本测试在 4 个 tokio worker 并发
+    /// 各写 200 行，必须在 3 秒内全部完成（如果卡死就会超时）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn non_blocking_log_under_concurrent_writes() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::{Duration, Instant};
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let mut handles = vec![];
+        let start = Instant::now();
+        for tid in 0..4 {
+            let c = counter.clone();
+            handles.push(tokio::spawn(async move {
+                for i in 0..200 {
+                    // 模拟业务高频日志
+                    tracing::info!(worker = tid, iter = i, "concurrent log test");
+                    tracing::warn!(worker = tid, iter = i, "concurrent warn test");
+                    c.fetch_add(1, Ordering::Relaxed);
+                }
+            }));
+        }
+        // 整体跑完不能超过 3 秒（之前 bug 时单线程跑都会卡死）
+        let result = tokio::time::timeout(Duration::from_secs(3), async {
+            for h in handles { h.await.unwrap(); }
+        })
+        .await;
+        assert!(result.is_ok(), "并发写日志超过 3s 未完成（仍然阻塞）");
+        assert_eq!(counter.load(Ordering::Relaxed), 4 * 200);
+        let elapsed = start.elapsed();
+        assert!(elapsed < Duration::from_secs(3), "并发写耗时 {elapsed:?} 超过 3s");
     }
 }
