@@ -118,11 +118,24 @@ pub async fn bag_use(
     uid: i64,
 ) -> AppResult<()> {
     let loop_ = require_worker_loop(ctx, account_id)?;
-    loop_
-        .warehouse()
-        .use_item(item_id, count.max(1), uid)
-        .await
-        .map(|_| ())
+    let result = loop_.warehouse().use_item(item_id, count.max(1), uid).await;
+    let (ok, err_text) = match &result {
+        Ok(_) => (true, None),
+        Err(e) => (false, Some(e.to_string())),
+    };
+    let message = match (ok, &err_text) {
+        (true, _) => format!("使用物品 {item_id} x{} 成功", count.max(1)),
+        (false, Some(err)) => format!("使用物品 {item_id} 失败: {err}"),
+        (false, None) => format!("使用物品 {item_id} 失败"),
+    };
+    qq_farm_core::services::panel_log::log(
+        account_id,
+        "背包",
+        message,
+        qq_farm_core::constants::PanelEvent::TaskClaim,
+        Some(serde_json::json!({ "module": "warehouse", "itemId": item_id, "count": count, "isWarn": !ok })),
+    );
+    result.map(|_| ())
         .map_err(AppError::from_core)
 }
 

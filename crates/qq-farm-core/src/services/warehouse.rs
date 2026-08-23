@@ -202,6 +202,14 @@ impl WarehouseService {
                 "物品数量不足: 需要 {count}，当前 {available}"
             )));
         }
+        // 对齐 node：锁定堆叠不参与使用
+        let candidates: Vec<_> = candidates.into_iter().filter(|it| !it.locked).collect();
+        let available: i64 = candidates.iter().map(|it| it.count).sum();
+        if available < count {
+            return Err(crate::error::Error::Business(format!(
+                "物品可用数量不足: 需要 {count}，当前 {available}（锁定的不计入）"
+            )));
+        }
         let single = candidates.iter().find(|it| it.count >= count).cloned();
         if single.is_none() && candidates.len() > 1 {
             let mut remaining = count;
@@ -630,6 +638,7 @@ pub fn get_bag_items(bag: &BagReply) -> Vec<BagItemLite> {
                 uid: i.uid,
                 mutant_types: get_mutant_types_from_slice(&i.mutant_types),
                 expire_time: i.expire_time,
+                locked: i.locked,
             })
             .collect()
     } else {
@@ -829,12 +838,14 @@ pub struct BagItemLite {
     pub uid: i64,
     pub mutant_types: Vec<i64>,
     pub expire_time: i64,
+    /// 是否锁定（对齐 node isItemLocked：锁定堆叠不可自动使用/出售）
+    pub locked: bool,
 }
 
 impl BagItemLite {
     #[must_use]
     pub fn new(id: i64, count: i64, uid: i64) -> Self {
-        Self { id, count, uid, mutant_types: vec![], expire_time: 0 }
+        Self { id, count, uid, mutant_types: vec![], expire_time: 0, locked: false, }
     }
 }
 
@@ -1130,8 +1141,8 @@ mod tests {
     #[test]
     fn bag_detail_splits_by_uid_not_item_id() {
         let detail = build_bag_detail_from_items(&[
-            BagItemLite { id: 41221, count: 2, uid: 100, mutant_types: vec![1], expire_time: 0 },
-            BagItemLite { id: 41221, count: 3, uid: 200, mutant_types: vec![], expire_time: 0 },
+            BagItemLite { id: 41221, count: 2, uid: 100, mutant_types: vec![1], expire_time: 0, locked: false, },
+            BagItemLite { id: 41221, count: 3, uid: 200, mutant_types: vec![], expire_time: 0, locked: false, },
             BagItemLite::new(1011, 3600, 0),
         ]);
         assert_eq!(detail.items.len(), 3);

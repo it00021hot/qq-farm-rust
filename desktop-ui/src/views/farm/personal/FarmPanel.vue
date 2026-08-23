@@ -2,7 +2,9 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { NButton, NCard, NEmpty, NPopconfirm, NSpace, NSpin, NTag, useMessage } from 'naive-ui';
 import { fetchFarmOperate, fetchGetFarmLands } from '@/service/api';
+import LandCountdown from '@/views/farm/shared/LandCountdown.vue';
 import { useFarmAccountStore } from '@/store/modules/farm-account';
+import { useManagedInterval } from '@/hooks/common/use-managed-interval';
 import { resolveCatalogImage } from '@/views/farm/game-config/shared';
 import {
   landCardClass,
@@ -108,7 +110,12 @@ async function loadLands() {
   try {
     const { data, error } = await fetchGetFarmLands(farmAccountStore.currentAccountId);
     if (!error && data) {
-      lands.value = data.lands || [];
+      // 记录绝对成熟时间戳，倒计时由 LandCountdown 用共享时钟渲染
+      const now = Math.floor(Date.now() / 1000);
+      lands.value = (data.lands || []).map((land: Api.Farm.LandRow) => ({
+        ...land,
+        matureAt: now + Number(land.matureInSec || 0)
+      }));
       summary.value = data.summary || null;
     }
   } finally {
@@ -132,36 +139,15 @@ async function handleOperate(op: OperateOp) {
   }
 }
 
-let tickTimer: ReturnType<typeof setInterval> | null = null;
-let refreshTimer: ReturnType<typeof setInterval> | null = null;
+const refreshTimer = useManagedInterval();
 
 function startTimers() {
   stopTimers();
-  tickTimer = setInterval(() => {
-    const ticked = tickMatureLands(lands.value);
-    lands.value = ticked.lands;
-    if (ticked.newlyRipe > 0 && summary.value) {
-      summary.value = {
-        ...summary.value,
-        harvestable: (summary.value.harvestable || 0) + ticked.newlyRipe,
-        growing: Math.max(0, (summary.value.growing || 0) - ticked.newlyRipe)
-      };
-    }
-  }, 1000);
-  refreshTimer = setInterval(() => {
-    void loadLands();
-  }, 60000);
+  refreshTimer.start(() => void loadLands(), 60000);
 }
 
 function stopTimers() {
-  if (tickTimer) {
-    clearInterval(tickTimer);
-    tickTimer = null;
-  }
-  if (refreshTimer) {
-    clearInterval(refreshTimer);
-    refreshTimer = null;
-  }
+  refreshTimer.stop();
 }
 
 watch(
@@ -236,19 +222,7 @@ defineExpose({ refresh: loadLands });
           <div class="truncate text-center text-13px font-medium" :title="land.plantName">
             {{ land.plantName || '-' }}
           </div>
-          <div class="text-center text-12px opacity-70">
-            <span v-if="land.matureInSec && land.matureInSec > 0" class="text-orange-500">
-              {{ formatDuration(land.matureInSec) }}
-            </span>
-            <span v-else>{{ land.phaseName || '-' }}</span>
-          </div>
-          <div
-            v-if="land.matureInSec && land.matureInSec > 0 && land.totalGrowTime"
-            class="farm-progress"
-            :class="soilLevelClass(land.level)"
-          >
-            <div class="farm-progress-fill" :style="{ width: `${growProgress(land)}%` }" />
-          </div>
+          <LandCountdown :at="land.matureAt || 0" :total="land.totalGrowTime || 0" :level="land.level" :phase="land.phaseName" />
           <div class="flex-center flex-wrap gap-4px">
             <span v-if="soilLabel(land.level)" class="farm-soil-badge" :class="soilLevelClass(land.level)">
               {{ soilLabel(land.level) }}

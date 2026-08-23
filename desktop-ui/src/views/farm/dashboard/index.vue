@@ -10,6 +10,7 @@ import {
   fetchGetFarmStatusDetail
 } from '@/service/api';
 import { useFarmAccountStore } from '@/store/modules/farm-account';
+import { useManagedInterval } from '@/hooks/common/use-managed-interval';
 import { useFarmWs } from '@/hooks/business/farm-ws';
 import {
   COUPON_ITEM_ID,
@@ -89,8 +90,8 @@ const localFarmRemain = ref(0);
 const localHelpRemain = ref(0);
 const localStealRemain = ref(0);
 const localUptime = ref(0);
-let countdownTimer: ReturnType<typeof setInterval> | null = null;
-let bagTimer: ReturnType<typeof setInterval> | null = null;
+const countdownTimer = useManagedInterval();
+const bagTimer = useManagedInterval();
 
 const currentAccount = computed(
   () => farmAccountStore.accounts.find(a => a.id === farmAccountStore.currentAccountId) || null
@@ -204,6 +205,16 @@ const filteredLogs = computed(() => {
     return true;
   });
 });
+
+// 渲染截断：最多渲染 300 条，展开后全量（避免上千条 DOM 拖垮滚动）
+const LOG_RENDER_CAP = 300;
+const logExpanded = ref(false);
+const visibleLogs = computed(() =>
+  logExpanded.value ? filteredLogs.value : filteredLogs.value.slice(-LOG_RENDER_CAP)
+);
+const hiddenLogCount = computed(() =>
+  logExpanded.value ? 0 : Math.max(0, filteredLogs.value.length - LOG_RENDER_CAP)
+);
 
 function formatClock(sec: number): string {
   if (sec <= 0) return '00:00:00';
@@ -605,18 +616,15 @@ onMounted(async () => {
   await refresh();
   await loadLogs();
   connect();
-  countdownTimer = setInterval(tickCountdowns, 1000);
-  bagTimer = setInterval(() => {
+  countdownTimer.start(tickCountdowns, 1000);
+  bagTimer.start(() => {
     if (isOnline.value) {
       void loadBag();
     }
   }, 30000);
 });
 
-onUnmounted(() => {
-  if (countdownTimer) clearInterval(countdownTimer);
-  if (bagTimer) clearInterval(bagTimer);
-});
+
 </script>
 
 <template>
@@ -791,7 +799,11 @@ onUnmounted(() => {
           <div v-if="!filteredLogs.length" class="py-32px text-center text-gray-400">
             {{ $t('page.farm.dashboard.noEvents') }}
           </div>
-          <div v-for="log in filteredLogs" :key="log.id" class="mb-6px break-all">
+          <div
+            v-for="log in visibleLogs"
+            :key="log.id"
+            class="cv-auto mb-6px break-all"
+          >
             <span class="mr-8px text-gray-400">[{{ log.time }}]</span>
             <span class="mr-8px rounded-full px-6px py-1px text-11px font-bold" :class="getLogTagClass(log.tag)">
               {{ log.tag }}
@@ -803,6 +815,14 @@ onUnmounted(() => {
               {{ getLogEventLabel(log.event) }}
             </span>
             <span :class="log.isWarn ? 'text-error' : ''">{{ log.message }}</span>
+          </div>
+          <div v-if="hiddenLogCount > 0" class="mt-8px text-center">
+            <NButton size="tiny" quaternary type="primary" @click="logExpanded = true">
+              显示更早的 {{ hiddenLogCount }} 条日志
+            </NButton>
+          </div>
+          <div v-else-if="logExpanded && filteredLogs.length > LOG_RENDER_CAP" class="mt-8px text-center">
+            <NButton size="tiny" quaternary @click="logExpanded = false"> 收起 </NButton>
           </div>
         </div>
       </NCard>

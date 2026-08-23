@@ -57,6 +57,9 @@ use crate::services::task::TaskService;
 use crate::services::warehouse::WarehouseService;
 
 /// 编排层配置（interval 范围等）
+mod heartbeat;
+mod status;
+
 #[derive(Debug, Clone)]
 pub struct WorkerLoopConfig {
     /// 状态上报间隔
@@ -143,6 +146,13 @@ pub struct WorkerLoop {
     ace: Mutex<Option<Arc<crate::services::ace::AceShared>>>,
     /// 神秘商人自动化去重状态（visitKey 记忆）
     mystery_auto_state: Mutex<crate::services::mystery_shop_auto::MysteryShopAutoState>,
+    /// 上次已广播的状态 JSON（内容不变时跳过广播，对齐 node 哈希门控）
+    last_status_json: Mutex<String>,
+    /// 状态脏标记：业务事件（收获/物品/推送/配置）置位，status_sync 只在
+    /// 脏或距上次广播超过 30s 时才重建 payload（消除空转序列化）
+    status_dirty: AtomicBool,
+    /// 上次状态广播时间（ms）
+    last_status_sent_ms: AtomicI64,
     /// worker 启动时刻（对齐 TS `process.uptime()`）
     started_at: std::time::Instant,
 }
@@ -320,6 +330,9 @@ impl WorkerLoop {
             mystery_auto_state: Mutex::new(
                 crate::services::mystery_shop_auto::MysteryShopAutoState::default(),
             ),
+            last_status_json: Mutex::new(String::new()),
+            status_dirty: AtomicBool::new(true),
+            last_status_sent_ms: AtomicI64::new(0),
             started_at: std::time::Instant::now(),
         }
     }
@@ -613,6 +626,7 @@ impl WorkerLoop {
 
     /// 对齐 network.ts ItemNotify
     pub fn apply_item_notify(&self, items: &[crate::network::notify::ItemChgLite]) {
+        self.mark_status_dirty();
         let account_id = &self.account.id;
         for chg in items {
             match chg.id {
@@ -659,6 +673,7 @@ impl WorkerLoop {
 
     /// 对齐 network.ts BasicNotify
     pub fn apply_basic_notify(&self, level: Option<i64>, gold: Option<i64>, exp: Option<i64>) {
+        self.mark_status_dirty();
         let account_id = &self.account.id;
         let st = status_svc::status_data_for(account_id);
         let old_level = st.level;
@@ -700,6 +715,30 @@ impl WorkerLoop {
                 })
             }),
         );
+
+        // 每日跨日检查
+        let this = Arc::clone(self);
+        scheduler.set_interval_task(
+            "daily_routine_interval",
+            self.config.daily_routine_interval,
+            Arc::new(move || {
+                let this = this.clone();
+                Box::pin(async move {
+                    let today = get_local_date_key();
+                    {
+                        let mut guard = this.last_daily_date.lock();
+                        if *guard == today {
+                            return;
+                        }
+                        *guard = today.clone();
+                    }
+                    tracing::info!(account_id = %this.account.id, date = %today, "daily routines due");
+                    this.run_daily_routines(false).await;
+                })
+            }),
+        );
+
+        self.start_heartbeat_task(scheduler);
 
         // 每日跨日检查
         let this = Arc::clone(self);
@@ -1047,14 +1086,21 @@ impl WorkerLoop {
                 guard.steal_at > 0 && now >= guard.steal_at,
             )
         };
+        let mut changed = false;
         if due_farm {
             self.run_farm_tick().await;
+            changed = true;
         }
         if due_help {
             self.run_help_tick().await;
+            changed = true;
         }
         if due_steal {
             self.run_steal_tick().await;
+            changed = true;
+        }
+        if changed {
+            self.mark_status_dirty();
         }
     }
 
@@ -1232,6 +1278,7 @@ impl WorkerLoop {
         changed_count: usize,
         lands: Vec<crate::proto::generated::gamepb::plantpb::LandInfo>,
     ) {
+        self.mark_status_dirty();
         let my = *self.gid.lock();
         if host_gid > 0 && my > 0 && host_gid != my {
             let friend = Arc::clone(&self.friend);
@@ -1273,74 +1320,6 @@ impl WorkerLoop {
     }
 
     /// 同步状态（对齐原 worker `syncStatus`：getStats + nextChecks + automation）
-    pub fn sync_status(&self) {
-        let st = status_svc::status_data_for(&self.account.id);
-        let user = serde_json::json!({
-            "name": st.name,
-            "avatar": st.avatar,
-            "level": st.level,
-            "gold": st.gold,
-            "exp": st.exp,
-            "platform": st.platform,
-            "coupon": *self.coupon.lock(),
-            "goldBean": *self.gold_bean.lock(),
-        });
-        let connected = self.login_ready();
-        let limits = self.friend.get_operation_limits();
-        let mut full = crate::services::stats::get_stats_for(
-            &self.account.id,
-            Some(&user),
-            Some(&user),
-            connected,
-            limits,
-        );
-        let now = now_ms();
-        let next = self.next_runs.lock().clone();
-        let farm = ((next.farm_at - now) / 1000).max(0);
-        let help = ((next.help_at - now) / 1000).max(0);
-        let steal = ((next.steal_at - now) / 1000).max(0);
-        let auto = crate::models::store::account_config::get_automation(Some(&self.account.id));
-        let preferred =
-            crate::models::store::account_config::get_preferred_seed(Some(&self.account.id));
-        let (current, needed) =
-            crate::config::game_config::global().get_level_exp_progress(st.level, st.exp);
-        if let Some(obj) = full.as_object_mut() {
-            obj.insert(
-                "nextChecks".to_string(),
-                serde_json::json!({
-                    "farmRemainSec": farm,
-                    "helpRemainSec": help,
-                    "stealRemainSec": steal,
-                    "friendRemainSec": help.max(steal),
-                }),
-            );
-            obj.insert(
-                "automation".to_string(),
-                serde_json::to_value(&auto).unwrap_or(serde_json::json!({})),
-            );
-            obj.insert("preferredSeed".to_string(), serde_json::json!(preferred));
-            obj.insert(
-                "levelProgress".to_string(),
-                serde_json::json!({ "current": current, "needed": needed }),
-            );
-            obj.insert(
-                "configRevision".to_string(),
-                serde_json::json!(self.applied_config_revision.load(Ordering::Acquire)),
-            );
-            obj.insert("accountId".to_string(), serde_json::json!(self.account.id));
-            obj.insert("accountName".to_string(), serde_json::json!(self.account.display_name));
-            obj.insert(
-                "uptime".to_string(),
-                serde_json::json!(self.started_at.elapsed().as_secs_f64()),
-            );
-        }
-        let _ = self.event_tx.send(WorkerEvent::Status {
-            account_id: self.account.id.clone(),
-            account_name: self.account.display_name.clone(),
-            status: full,
-        });
-    }
-
     /// 暴露 farm / friend 给上层调用（admin panel）
     #[must_use]
     pub fn farm(&self) -> &Arc<FarmService> {

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import InteractionItemsPanel from '../personal/InteractionItemsPanel.vue';
+import LandCountdown from '../shared/LandCountdown.vue';
+import { useManagedInterval } from '@/hooks/common/use-managed-interval';
 import {
   NAvatar,
   NButton,
@@ -68,7 +70,6 @@ const friendLandsLoading = ref<Record<number, boolean>>({});
 const avatarErrorKeys = ref<Set<number>>(new Set());
 const interactAvatarErrors = ref<Set<string>>(new Set());
 
-let tickTimer: ReturnType<typeof setInterval> | null = null;
 
 const interactFilters: { key: 'all' | 'steal' | 'help' | 'bad'; labelKey: App.I18n.I18nKey }[] = [
   { key: 'all', labelKey: 'page.farm.friends.filterAll' },
@@ -323,7 +324,11 @@ async function loadFriendLands(gid: number) {
       return;
     }
     const lands = data?.lands || [];
-    friendLands.value = { ...friendLands.value, [gid]: lands };
+    const now = Math.floor(Date.now() / 1000);
+    friendLands.value = {
+      ...friendLands.value,
+      [gid]: (lands || []).map((land: Api.Farm.LandRow) => ({ ...land, matureAt: now + Number(land.matureInSec || 0) }))
+    };
     syncFriendPlantFromLands(gid, lands);
   } finally {
     friendLandsLoading.value = { ...friendLandsLoading.value, [gid]: false };
@@ -519,25 +524,10 @@ function formatInteractTime(timestamp?: number) {
   });
 }
 
-function startTick() {
-  stopTick();
-  tickTimer = setInterval(() => {
-    const next: Record<number, Api.Farm.LandRow[]> = {};
-    for (const [gid, lands] of Object.entries(friendLands.value)) {
-      next[Number(gid)] = (lands || []).map(land => {
-        if (!land.matureInSec || land.matureInSec <= 0) return land;
-        return { ...land, matureInSec: Math.max(0, land.matureInSec - 1) };
-      });
-    }
-    friendLands.value = next;
-  }, 1000);
-}
+// 倒计时由 LandCountdown 共享时钟渲染，不再整表重建
+function startTick() {}
 
 function stopTick() {
-  if (tickTimer) {
-    clearInterval(tickTimer);
-    tickTimer = null;
-  }
 }
 
 watch(activeTab, tab => {
@@ -792,7 +782,7 @@ onUnmounted(() => {
                       <div
                         v-for="land in displayFriendLands(friend.gid)"
                         :key="land.id"
-                        :class="landCardClass(land, { compact: true })"
+                        :class="[landCardClass(land, { compact: true }), 'cv-auto']"
                         :style="landGridStyle(land)"
                       >
                         <div class="flex-y-center justify-between gap-4px">
@@ -813,19 +803,7 @@ onUnmounted(() => {
                         <div class="truncate text-center text-12px font-medium" :title="land.plantName">
                           {{ land.plantName || '-' }}
                         </div>
-                        <div class="text-center text-12px opacity-70">
-                          <span v-if="land.matureInSec && land.matureInSec > 0" class="text-orange-500">
-                            {{ formatDuration(land.matureInSec) }}
-                          </span>
-                          <span v-else>{{ land.phaseName || '-' }}</span>
-                        </div>
-                        <div
-                          v-if="land.matureInSec && land.matureInSec > 0 && land.totalGrowTime"
-                          class="farm-progress"
-                          :class="soilLevelClass(land.level)"
-                        >
-                          <div class="farm-progress-fill" :style="{ width: `${growProgress(land)}%` }" />
-                        </div>
+                        <LandCountdown :at="land.matureAt || 0" :total="land.totalGrowTime || 0" :level="land.level" :phase="land.phaseName" />
                         <div class="flex-center flex-wrap gap-4px">
                           <span
                             v-if="soilLabel(land.level)"

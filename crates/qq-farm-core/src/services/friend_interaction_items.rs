@@ -598,9 +598,9 @@ mod tests {
     fn stacks_sorted_by_expire_time() {
         let info = interaction_item(301103, "");
         let bag = vec![
-            BagItemLite { id: 301103, count: 2, uid: 1, expire_time: 0, mutant_types: vec![] },
-            BagItemLite { id: 301103, count: 1, uid: 2, expire_time: 100, mutant_types: vec![] },
-            BagItemLite { id: 301103, count: 3, uid: 3, expire_time: 50, mutant_types: vec![] },
+            BagItemLite { id: 301103, count: 2, uid: 1, expire_time: 0, mutant_types: vec![], locked: false, },
+            BagItemLite { id: 301103, count: 1, uid: 2, expire_time: 100, mutant_types: vec![], locked: false, },
+            BagItemLite { id: 301103, count: 3, uid: 3, expire_time: 50, mutant_types: vec![], locked: false, },
         ];
         let stacks = eligible_stacks(&bag, 301103, &info);
         let uids: Vec<i64> = stacks.iter().map(|s| s.uid).collect();

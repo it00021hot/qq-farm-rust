@@ -47,6 +47,7 @@ import {
   type SystemConfigPayload
 } from '@/service/api';
 import { useFarmAccountStore } from '@/store/modules/farm-account';
+import { useManagedInterval } from '@/hooks/common/use-managed-interval';
 import { $t } from '@/locales';
 
 defineOptions({
@@ -174,7 +175,7 @@ const qqBotBindSessionId = ref('');
 const qqBotBindQrDataUrl = ref('');
 const qqBotBindLoading = ref(false);
 const qqBotBindPolling = ref(false);
-let qqBotBindPollTimer: ReturnType<typeof setInterval> | null = null;
+const qqBotBindPollTimer = useManagedInterval();
 
 const qqBotCredentialsReady = computed(
   () => Boolean(offline.qqBot.appId.trim()) && Boolean(offline.qqBot.clientSecret.trim())
@@ -812,10 +813,7 @@ async function loadQqBotBindStatus() {
 }
 
 function stopQqBotBindPolling() {
-  if (qqBotBindPollTimer) {
-    clearInterval(qqBotBindPollTimer);
-    qqBotBindPollTimer = null;
-  }
+  qqBotBindPollTimer.stop();
   qqBotBindPolling.value = false;
 }
 
@@ -849,9 +847,7 @@ function startQqBotBindPolling() {
   stopQqBotBindPolling();
   qqBotBindPolling.value = true;
   void pollQqBotBindOnce();
-  qqBotBindPollTimer = setInterval(() => {
-    void pollQqBotBindOnce();
-  }, 2000);
+  qqBotBindPollTimer.start(() => void pollQqBotBindOnce(), 2000);
 }
 
 async function handleStartQqBotBind() {

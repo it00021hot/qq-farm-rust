@@ -321,6 +321,8 @@ declare namespace Api {
       currentSeason?: number;
       totalSeason?: number;
       matureInSec?: number;
+      /** 绝对成熟时间戳（秒）——前端加载时换算，倒计时组件用它 + 共享时钟渲染 */
+      matureAt?: number;
       totalGrowTime?: number;
       needWater?: boolean;
       needWeed?: boolean;

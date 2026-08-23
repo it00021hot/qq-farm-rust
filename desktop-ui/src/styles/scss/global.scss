@@ -1,1 +1,18 @@
 @forward 'scrollbar';
+@use 'scrollbar' as *;
+
+// 全局细滚动条（对齐 Soybean 视觉）：页面内部 overflow-auto 容器
+// 不再走原生粗滚动条。与 scrollbar.scss 的 mixin 保持同参数。
+[class~='overflow-auto'],
+[class~='overflow-y-auto'],
+[class~='overflow-x-auto'],
+[class~='overflow-y-scroll'],
+[class~='overflow-x-scroll'] {
+  @include scrollbar();
+}
+
+// 长列表/大网格滚动性能：离屏内容跳过渲染
+.cv-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 76px;
+}

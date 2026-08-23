@@ -11,6 +11,7 @@ import {
   ORGANIC_FERTILIZER_ID
 } from '@/constants/items';
 import { useFarmAccountStore } from '@/store/modules/farm-account';
+import { useManagedInterval } from '@/hooks/common/use-managed-interval';
 import { resolveCatalogImage } from '@/views/farm/game-config/shared';
 import { $t } from '@/locales';
 
@@ -167,10 +168,11 @@ async function handleUse(item: Api.Farm.BagItem) {
   if (!farmAccountStore.currentAccountId) return;
   usingId.value = item.id;
   try {
+    // 对齐 node：每次使用 1 个（礼包类服务端按单个结算）
     const { error } = await fetchUseFarmBag({
       accountId: farmAccountStore.currentAccountId,
       itemId: item.id,
-      count: Math.max(1, Number(item.count || 1))
+      count: 1
     });
     if (error) {
       message.error(error.message || $t('page.farm.personal.useFailed'));
@@ -235,14 +237,9 @@ watch(
   { immediate: true }
 );
 
-let refreshTimer: ReturnType<typeof setInterval> | null = null;
+const refreshTimer = useManagedInterval();
 onMounted(() => {
-  refreshTimer = setInterval(() => {
-    void loadBag();
-  }, 60000);
-});
-onUnmounted(() => {
-  if (refreshTimer) clearInterval(refreshTimer);
+  refreshTimer.start(() => void loadBag(), 60000);
 });
 
 defineExpose({ refresh: loadBag });
@@ -265,7 +262,7 @@ defineExpose({ refresh: loadBag });
         </NButton>
         <NPopconfirm v-if="batchMode" :disabled="selectedSellableCount === 0" @positive-click="handleBatchSell">
           <template #trigger>
-            <NButton size="small" type="error" ghost :loading="batchSelling" :disabled="selectedSellableCount === 0">
+            <NButton size="small" type="error" :loading="batchSelling" :disabled="selectedSellableCount === 0">
               {{ $t('page.farm.personal.batchSell') }}
               <span v-if="selectedSellableCount > 0" class="ml-4px">({{ selectedSellableCount }})</span>
             </NButton>
@@ -297,7 +294,7 @@ defineExpose({ refresh: loadBag });
         <div
           v-for="item in filteredItems"
           :key="item.id"
-          class="farm-bag-card"
+          class="farm-bag-card cv-auto"
           :class="{ 'is-selected': batchMode && selectedIds.has(Number(item.id)) }"
           @click="batchMode && canSell(item) ? toggleSelect(Number(item.id)) : undefined"
         >
@@ -339,10 +336,11 @@ defineExpose({ refresh: loadBag });
           <div class="mt-4px text-center text-14px font-medium">
             {{ item.hoursText || `x${item.count}` }}
           </div>
-          <div v-if="!batchMode" class="mt-8px flex-center gap-6px">
-            <NPopconfirm v-if="canSell(item)" @positive-click="handleSell(item)">
+          <!-- 批量模式只隐藏"出售"；"使用"保持可用，否则不可出售的道具（如同气连枝礼包）会没有任何操作 -->
+          <div v-if="!batchMode || canUse(item)" class="mt-8px flex-center gap-6px">
+            <NPopconfirm v-if="!batchMode && canSell(item)" @positive-click="handleSell(item)">
               <template #trigger>
-                <NButton size="tiny" type="error" ghost :loading="sellingId === item.id">
+                <NButton size="tiny" type="error" :loading="sellingId === item.id">
                   {{ $t('page.farm.personal.sell') }}
                 </NButton>
               </template>
@@ -350,7 +348,7 @@ defineExpose({ refresh: loadBag });
             </NPopconfirm>
             <NPopconfirm v-if="canUse(item)" @positive-click="handleUse(item)">
               <template #trigger>
-                <NButton size="tiny" type="primary" ghost :loading="usingId === item.id">
+                <NButton size="tiny" type="primary" :loading="usingId === item.id">
                   {{ $t('page.farm.personal.use') }}
                 </NButton>
               </template>

@@ -441,7 +441,8 @@ const local: App.I18n.Schema = {
           cropTab: '作物图鉴',
           mutantTab: '变异图鉴',
           level: '等级',
-          unlocked: '已解锁'
+          unlocked: '已解锁',
+          locked: '未点亮'
         },
         interaction: {
           title: '特殊互动道具',
@@ -479,7 +480,7 @@ const local: App.I18n.Schema = {
         bagCatTool: '道具',
         bagCatOther: '其他',
         use: '使用',
-        useConfirm: '确认使用该物品全部数量吗？',
+        useConfirm: '确认使用 1 个该物品吗？',
         useSuccess: '使用成功',
         useFailed: '使用失败',
         sell: '出售',

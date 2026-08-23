@@ -445,7 +445,8 @@ const local: App.I18n.Schema = {
           cropTab: 'Crops',
           mutantTab: 'Mutants',
           level: 'Lv',
-          unlocked: 'Unlocked'
+          unlocked: 'Unlocked',
+          locked: 'Not Lit'
         },
         interaction: {
           title: 'Interaction Items',
@@ -483,7 +484,7 @@ const local: App.I18n.Schema = {
         bagCatTool: 'Tool',
         bagCatOther: 'Other',
         use: 'Use',
-        useConfirm: 'Use all of this item?',
+        useConfirm: 'Use 1 of this item?',
         useSuccess: 'Used successfully',
         useFailed: 'Use failed',
         sell: 'Sell',

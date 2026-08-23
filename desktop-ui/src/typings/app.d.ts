@@ -684,6 +684,7 @@ declare namespace App {
               mutantTab: string;
               level: string;
               unlocked: string;
+              locked: string;
             };
             interaction: {
               title: string;

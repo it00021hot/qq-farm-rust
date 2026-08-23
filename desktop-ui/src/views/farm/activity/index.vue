@@ -29,6 +29,7 @@ import {
   fetchStartFarmActivityGreenPlumBrew
 } from '@/service/api';
 import { useFarmAccountStore } from '@/store/modules/farm-account';
+import { useManagedInterval } from '@/hooks/common/use-managed-interval';
 import { resolveCatalogImage } from '@/views/farm/game-config/shared';
 import ActivityRulesDialog from './activity-rules-dialog.vue';
 import { normalizeActivityRules } from './rules';
@@ -226,7 +227,7 @@ const exchangeCount = ref(1);
 const travelRulesOpen = ref(false);
 const constellationRulesOpen = ref(false);
 
-let clockTimer: ReturnType<typeof setInterval> | null = null;
+const clockTimer = useManagedInterval();
 
 const allTabs: Array<{ key: ActivityTab; labelKey: App.I18n.I18nKey }> = [
   { key: 'travel', labelKey: 'page.farm.activity.tabTravel' },
@@ -994,14 +995,11 @@ onMounted(async () => {
     await farmAccountStore.loadAccounts();
   }
   await loadActivities();
-  clockTimer = setInterval(() => {
+  clockTimer.start(() => {
     clockNow.value = Date.now();
   }, 1000);
 });
 
-onUnmounted(() => {
-  if (clockTimer) clearInterval(clockTimer);
-});
 </script>
 
 <template>

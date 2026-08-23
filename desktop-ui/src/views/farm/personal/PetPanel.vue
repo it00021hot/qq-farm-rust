@@ -168,7 +168,6 @@ void load();
                 v-if="dog.owned && !dog.active"
                 size="tiny"
                 type="primary"
-                secondary
                 @click="deploy(dog.id)"
               >
                 {{ $t('page.farm.personal.pet.deploy') }}
@@ -182,7 +181,6 @@ void load();
             v-if="info.activeDogId"
             size="small"
             type="warning"
-            secondary
             @click="withdraw"
           >
             {{ $t('page.farm.personal.pet.withdraw') }}

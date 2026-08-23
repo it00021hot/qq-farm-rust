@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { NCard, NEmpty, NProgress, NTag, NTabs, NTabPane, NTooltip } from 'naive-ui';
+import { NCard, NEmpty, NProgress, NTag, NTabs, NTabPane } from 'naive-ui';
 import { useFarmAccountStore } from '@/store/modules/farm-account';
 import { fetchGetIllustratedSnapshot } from '@/service/api';
 import { resolveCatalogImage } from '@/views/farm/game-config/shared';
@@ -34,6 +34,13 @@ function progressPercent(b: any): number {
 /** 收藏奖励档位（proto 注释：2=40 点、3=80 点、4=200 点） */
 function tier(item: any): number {
   return Number(item.rewardCategory ?? 0);
+}
+
+/** 等级用星级展示：档位 2/3/4 → 1/2/3 星 */
+function stars(item: any): string {
+  const t = tier(item);
+  if (t <= 1) return '';
+  return '★'.repeat(Math.min(t - 1, 3));
 }
 
 function imageSrc(item: any): string {
@@ -78,31 +85,39 @@ void load();
           </NTag>
         </div>
 
-        <div class="grid grid-cols-6 gap-4px sm:grid-cols-8 lg:grid-cols-10">
-          <NTooltip v-for="item in current?.items ?? []" :key="item.seedId" trigger="hover">
-            <template #trigger>
-              <div
-                class="flex flex-col items-center gap-1px rounded-4px px-2px py-4px hover:bg-gray-100 dark:hover:bg-gray-800"
-                :class="{ 'opacity-45': !item.unlocked }"
-              >
-                <img
-                  v-if="imageSrc(item)"
-                  :src="imageSrc(item)"
-                  :alt="item.name"
-                  class="h-36px w-36px object-contain"
-                  loading="lazy"
-                  referrerpolicy="no-referrer"
-                />
-                <span v-else class="text-20px opacity-30">🌱</span>
-                <span class="text-11px leading-tight text-gray-500">T{{ tier(item) || '-' }}</span>
-                <span class="text-11px leading-tight font-medium">{{ item.progress ?? 0 }}</span>
-              </div>
-            </template>
-            {{ item.name }} · {{ $t('page.farm.personal.illustrated.unlocked') }}: {{ item.unlocked ? '✓' : '✗' }}
-            <template v-if="item.reward">
-              · {{ item.reward.name }} x{{ item.reward.count }}
-            </template>
-          </NTooltip>
+        <div class="grid grid-cols-5 gap-6px sm:grid-cols-7 lg:grid-cols-9">
+          <div
+            v-for="item in current?.items ?? []"
+            :key="item.seedId"
+            class="cv-auto relative flex flex-col items-center gap-2px rounded-6px px-2px py-6px"
+            :title="`${item.name} · ${item.unlocked ? $t('page.farm.personal.illustrated.unlocked') : $t('page.farm.personal.illustrated.locked')}${item.reward ? ` · ${item.reward.name} x${item.reward.count}` : ''}`"
+          >
+            <span
+              class="absolute right-2px top-0 text-11px"
+              :class="item.unlocked ? 'text-emerald-500' : 'text-gray-400'"
+            >
+              {{ item.unlocked ? '✓' : '🔒' }}
+            </span>
+            <img
+              v-if="imageSrc(item)"
+              :src="imageSrc(item)"
+              :alt="item.name"
+              class="h-40px w-40px object-contain"
+              :class="{ 'grayscale-[0.9]': !item.unlocked }"
+              loading="lazy"
+              referrerpolicy="no-referrer"
+            />
+            <span v-else class="text-22px opacity-30">🌱</span>
+            <span v-if="stars(item)" class="text-10px leading-none text-amber-500">
+              {{ stars(item) }}
+            </span>
+            <span
+              class="text-11px leading-tight"
+              :class="item.unlocked ? 'font-semibold' : 'text-gray-400'"
+            >
+              {{ item.progress ?? 0 }}点
+            </span>
+          </div>
         </div>
       </template>
     </NCard>

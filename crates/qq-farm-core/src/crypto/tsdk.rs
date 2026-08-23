@@ -1,5 +1,19 @@
 //! 微信 TSDK (`tsdk.wasm`) 封装。
 //!
+//! # 指针所有权约定（务必遵守，违者会破坏 wasm 堆导致 64MB 内存耗尽）
+//!
+//! wasm 内存是**固定 1029 页（67,436,544 字节）**，不可增长；内部堆由 wasm 自己管理。
+//! host 侧与 wasm 交换指针时分三类：
+//!
+//! | 指针来源 | 所有权 | host 义务 |
+//! |---|---|---|
+//! | `A(len)` 返回的指针 | host 临时借用 | 用完**必须** `B(ptr)` 释放（`AllocGuard` 负责兜底） |
+//! | `N(lengthPtr)` 返回的 data_ptr | wasm 内部队列 | **绝不 free**（2026-08 曾误 free 导致堆损坏，1.5h 内 64MB 耗尽） |
+//! | `H()` 返回的字符串指针 | wasm 内部 | 只读，**不 free**（对齐 node `tsdk-runtime.ts`） |
+//!
+//! 判定原则：凡不是 `A()` 分配的指针，一律不得传给 `B()`。node 版
+//! `tsdk-runtime.ts` 是唯一行为基准，改动此处前先对照它。
+//!
 //! 用 `wasmtime` 加载 157KB 的 `tsdk.wasm`，提供与原 Node.js 版本对齐的：
 //! - 初始化（host function 注入 + merged data 解密）
 //! - `transform` 加密/解密
@@ -561,9 +575,11 @@ impl TsdkRuntime {
     ///
     /// **与 Node 行为对齐**：
     /// - `data_ptr <= 0` 或 wasm 写入的 `length <= 0` → 返回 `Ok(Vec::new())`，而不是 `Err`。
-    /// - `length` 大于 [`MAX_SANE_LEN`] 视为 wasm 异常：释放两个 ptr、记 warn 日志、
-    ///   退化为空数据，让 anti_data 调度继续走。
-    /// - 所有 wasm 分配由 [`AllocGuard`] 自动释放，永不泄漏。
+    /// - `length` 大于 [`MAX_SANE_LEN`] 视为 wasm 异常：记 warn 日志、退化为空数据。
+    /// - **N() 返回的 data_ptr 是 wasm 内部队列指针，不属于宿主堆，绝不能 free**
+    ///   （对齐 node `getDataToServer` 只 free lengthPtr；rust 曾误调 B(data_ptr)
+    ///   破坏 wasm 堆管理，是 64MB 固定内存被漏满的根因）。
+    /// - 宿主自己分配的 lengthPtr 由 [`AllocGuard`] 释放。
     pub fn get_data_to_server(&self) -> Result<Vec<u8>> {
         if self.pending_reset.load(Ordering::Acquire) {
             return Err(Error::crypto("TSDK 已请求重置，等待 worker 重建"));
@@ -606,13 +622,11 @@ impl TsdkRuntime {
             self.record_wasm_success();
             return Ok(Vec::new());
         }
-        let mut data_guard = AllocGuard::from_existing_ptr(data_ptr);
 
         // 3. 读 length (i32 little-endian)
         let len_bytes = match read_bytes(store, &exports.memory, length_ptr, 4) {
             Ok(b) => b,
             Err(e) => {
-                data_guard.free_now(store, exports);
                 length_guard.free_now(store, exports);
                 if self.record_wasm_failure() {
                     self.request_reset();
@@ -624,7 +638,6 @@ impl TsdkRuntime {
 
         // 4. 对齐 Node：`length <= 0` → 返回空 buffer
         if raw_len <= 0 {
-            data_guard.free_now(store, exports);
             length_guard.free_now(store, exports);
             self.record_wasm_success();
             return Ok(Vec::new());
@@ -641,7 +654,6 @@ impl TsdkRuntime {
             if self.record_wasm_failure() {
                 self.request_reset();
             }
-            data_guard.free_now(store, exports);
             length_guard.free_now(store, exports);
             return Ok(Vec::new());
         }
@@ -651,7 +663,6 @@ impl TsdkRuntime {
         let data = match data_result {
             Ok(d) => d,
             Err(e) => {
-                data_guard.free_now(store, exports);
                 length_guard.free_now(store, exports);
                 if self.record_wasm_failure() {
                     self.request_reset();
@@ -660,8 +671,7 @@ impl TsdkRuntime {
             }
         };
 
-        // 6. 释放（成功路径；guard free 失败仅记日志）
-        data_guard.free_now(store, exports);
+        // 6. 释放宿主分配的 lengthPtr（data_ptr 归 wasm 内部管理，不能 free）
         length_guard.free_now(store, exports);
         self.record_wasm_success();
         Ok(data)

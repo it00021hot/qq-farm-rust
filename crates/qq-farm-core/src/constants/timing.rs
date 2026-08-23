@@ -101,6 +101,8 @@ fn duration_ms_zh(duration_ms: u64) -> String {
 /// 网关心跳（对齐 Go / 原 TS）
 pub const HEARTBEAT_INTERVAL_MS: u64 = 25_000;
 pub const HEARTBEAT_SILENCE_MS: u64 = 30_000;
+/// 状态广播兜底间隔：无业务变化时也至少每 30s 全量广播一次
+pub const STATUS_FALLBACK_BROADCAST_MS: u64 = 30_000;
 
 #[cfg(test)]
 mod tests {
