@@ -473,6 +473,19 @@ impl FriendApi {
         };
         let reply = FarmingReply::decode(&*resp).map_err(Error::from)?;
         self.fire_operation_limits(reply.operation_limits);
+        // 帮忙掉落同气连枝礼包（results[].reward.id=101351）→ 自动领取
+        // 对齐 node：friend/api.helpFarming 内统计 getFarmingSkillGiftCount 后 emit。
+        let gift_count = crate::services::dog_skill_gifts::DogSkillGiftService::farming_skill_gift_count(
+            &reply.results,
+        );
+        if gift_count > 0 {
+            let gift = crate::services::dog_skill_gifts::DogSkillGiftService::new(
+                self.gateway.clone(),
+            );
+            tokio::spawn(async move {
+                let _ = gift.check_and_claim(gift_count).await;
+            });
+        }
         let confirmed: Vec<i64> = {
             let mut seen = std::collections::HashSet::new();
             reply

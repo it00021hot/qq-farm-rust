@@ -69,3 +69,68 @@ pub fn friend_blacklist_toggle(
     ensure(&state, &account_id)?;
     Ok(friend::toggle_friend_blacklist(&account_id, gid))
 }
+
+/// 好友互动道具库存。
+#[tauri::command]
+pub async fn friend_interaction_items(
+    state: State<'_, DesktopState>,
+    account_id: String,
+) -> IpcResult<Value> {
+    ensure(&state, &account_id)?;
+    friend::friend_interaction_items(&state.app, &account_id)
+        .await
+        .map_err(IpcError::from)
+}
+
+/// 对好友农场批量使用互动道具。
+#[tauri::command]
+pub async fn friend_interaction_items_use(
+    state: State<'_, DesktopState>,
+    account_id: String,
+    friend_gid: i64,
+    item_id: i64,
+    land_ids: Vec<i64>,
+) -> IpcResult<Value> {
+    ensure(&state, &account_id)?;
+    friend::friend_interaction_items_use(&state.app, &account_id, friend_gid, item_id, land_ids)
+        .await
+        .map_err(IpcError::from)
+}
+
+/// 自用互动道具库存。
+#[tauri::command]
+pub async fn farm_interaction_items(
+    state: State<'_, DesktopState>,
+    account_id: String,
+) -> IpcResult<Value> {
+    ensure(&state, &account_id)?;
+    friend::farm_interaction_items(&state.app, &account_id)
+        .await
+        .map_err(IpcError::from)
+}
+
+/// 对自己农场批量使用互动道具。
+#[tauri::command]
+pub async fn farm_interaction_items_use(
+    state: State<'_, DesktopState>,
+    account_id: String,
+    item_id: i64,
+    land_ids: Vec<i64>,
+) -> IpcResult<Value> {
+    ensure(&state, &account_id)?;
+    friend::farm_interaction_items_use(&state.app, &account_id, item_id, land_ids)
+        .await
+        .map_err(IpcError::from)
+}
+
+/// 图鉴快照。
+#[tauri::command]
+pub async fn illustrated_snapshot(
+    state: State<'_, DesktopState>,
+    account_id: String,
+) -> IpcResult<Value> {
+    ensure(&state, &account_id)?;
+    friend::illustrated_snapshot(&state.app, &account_id)
+        .await
+        .map_err(IpcError::from)
+}

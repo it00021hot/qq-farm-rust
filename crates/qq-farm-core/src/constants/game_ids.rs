@@ -18,6 +18,10 @@ pub const QIXI_GIFT_OPERATE_TYPE: i64 = 26;
 pub const QIXI_FEATHER_ITEM_ID: i64 = 1024;
 pub const QIXI_SACHET_ITEM_ID: i64 = 1025;
 pub const QIXI_RECEIVED_SACHET_ITEM_ID: i64 = 1026;
+/// 七夕灵露（好友互动道具，可对好友/自己农场使用）
+pub const QIXI_DEW_ITEM_ID: i64 = 301_103;
+/// 同气连枝礼包（狗狗技能掉落）
+pub const DOG_SKILL_GIFT_ITEM_ID: i64 = 101_351;
 
 /// 青梅酿酒
 pub const QINGMEI_DAILY_ACTIVITY_ID: i64 = 2_026_081_201;

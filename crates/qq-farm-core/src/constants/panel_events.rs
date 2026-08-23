@@ -49,6 +49,9 @@ pub enum PanelEvent {
     BadActionLimit,
     HeartbeatTimeout,
     Login,
+    PetOp,
+    DogSkillGift,
+    MysteryShopWatch,
 }
 
 impl PanelEvent {
@@ -97,6 +100,9 @@ impl PanelEvent {
             Self::BadActionLimit => "bad_action_limit",
             Self::HeartbeatTimeout => "heartbeat_timeout",
             Self::Login => "login",
+            Self::PetOp => "pet_op",
+            Self::DogSkillGift => "dog_skill_gift",
+            Self::MysteryShopWatch => "mystery_shop_watch",
         }
     }
 
@@ -143,6 +149,7 @@ impl PanelEvent {
             | Self::VisitorGidBackfill
             | Self::BadActionLimit => "friend",
             Self::HeartbeatTimeout | Self::Login => "system",
+            Self::PetOp | Self::DogSkillGift | Self::MysteryShopWatch => "warehouse",
         }
     }
 
@@ -192,6 +199,9 @@ impl PanelEvent {
             "bad_action_limit" | "放虫放草次数上限" => Some(Self::BadActionLimit),
             "heartbeat_timeout" => Some(Self::HeartbeatTimeout),
             "login" => Some(Self::Login),
+            "pet_op" => Some(Self::PetOp),
+            "dog_skill_gift" => Some(Self::DogSkillGift),
+            "mystery_shop_watch" => Some(Self::MysteryShopWatch),
             _ => None,
         }
     }

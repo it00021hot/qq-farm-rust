@@ -63,6 +63,8 @@ enum WsCommand {
 #[derive(Clone)]
 pub struct WsClient {
     tx: mpsc::Sender<WsCommand>,
+    /// 读写 task 的 JoinHandle（terminate 时 abort，对齐 node `socket.terminate()` 硬关闭）
+    tasks: std::sync::Arc<[tokio::task::JoinHandle<()>]>,
 }
 
 impl WsClient {
@@ -92,10 +94,16 @@ impl WsClient {
         // 读/写分 task：对齐 gorilla readLoop vs WriteMessage。大包组装或
         // 向上投递时不能堵住出站心跳。
         let (sink, read) = stream.split();
-        tokio::spawn(run_write_task(sink, cmd_rx));
-        tokio::spawn(run_read_task(read, frame_tx, cmd_tx.clone()));
+        let write_task = tokio::spawn(run_write_task(sink, cmd_rx));
+        let read_task = tokio::spawn(run_read_task(read, frame_tx, cmd_tx.clone()));
 
-        Ok((Self { tx: cmd_tx }, frame_rx))
+        Ok((
+            Self {
+                tx: cmd_tx,
+                tasks: std::sync::Arc::from(vec![write_task, read_task]),
+            },
+            frame_rx,
+        ))
     }
 
     /// 发送一帧
@@ -115,6 +123,14 @@ impl WsClient {
             .send(WsCommand::Close(None))
             .await
             .map_err(|_| NetworkError::WebSocket("close channel closed".into()))
+    }
+
+    /// 硬关闭：abort 底层读写 task，TCP 立即断开（对齐 node `socket.terminate()`）。
+    /// 适用于心跳超时 / 被踢等判定断开的场景——不再等待对端关闭握手。
+    pub fn terminate(&self) {
+        for task in self.tasks.iter() {
+            task.abort();
+        }
     }
 }
 

@@ -382,6 +382,34 @@ impl Worker {
                                         });
                                     }
                                 }
+                                crate::network::notify::NotifyEvent::DogSkillGiftPending {
+                                    count,
+                                } => {
+                                    // 同气连枝礼包掉落推送 → 自动领取（单飞锁在服务内）
+                                    let gift =
+                                        crate::services::dog_skill_gifts::DogSkillGiftService::new(
+                                            gw.clone(),
+                                        );
+                                    tokio::spawn(async move {
+                                        let _ = gift.check_and_claim(count).await;
+                                    });
+                                }
+                                crate::network::notify::NotifyEvent::DogProtectLogChanged => {
+                                    // 守护记录更新：面板打开时自会拉取，无需处理
+                                }
+                                crate::network::notify::NotifyEvent::ActivitiesChanged => {
+                                    crate::config::activity_windows::invalidate_activity_windows();
+                                }
+                                crate::network::notify::NotifyEvent::TaskInfoNotify {
+                                    task_info,
+                                } => {
+                                    if let Some(info) = task_info {
+                                        let task = wl.task().clone();
+                                        tokio::spawn(async move {
+                                            task.on_task_info_notify(&info).await;
+                                        });
+                                    }
+                                }
                                 crate::network::notify::NotifyEvent::Unknown { .. } => {}
                             }
                         }
@@ -522,15 +550,27 @@ impl Worker {
                                             gateway_for_reset.replace_encryptor(new_encryptor);
                                             // 4. 退出 rebuilding 状态
                                             gateway_for_reset.end_rebuild();
-                                            // 5. 重启 ACE（旧 ACE 已停止，scheduler.clear_all 由 stop 触发）
-                                            let sender = Arc::new(crate::services::ace::GatewayAceSender {
-                                                gateway: gateway_for_reset.clone(),
-                                            });
-                                            ace_for_reset.start(sender, tsdk_for_reset.clone());
-                                            tracing::info!(
-                                                account_id = %acc_id_for_reset,
-                                                "TSDK 重建完成，ACE 已重启"
-                                            );
+                                            // 5. 重启 ACE——仅当网关仍在线。
+                                            // 断线状态下拉起 ACE 会让 wasm 持续产出
+                                            // 无法上报的数据，堆增长直到 alloc failed。
+                                            if gateway_for_reset.phase()
+                                                == crate::network::gateway::ConnectionPhase::Online
+                                            {
+                                                let sender = Arc::new(crate::services::ace::GatewayAceSender {
+                                                    gateway: gateway_for_reset.clone(),
+                                                });
+                                                ace_for_reset.start(sender, tsdk_for_reset.clone());
+                                                tracing::info!(
+                                                    account_id = %acc_id_for_reset,
+                                                    "TSDK 重建完成，ACE 已重启"
+                                                );
+                                            } else {
+                                                // 离线：只重建 TSDK，等重新上线登录成功后再挂 ACE
+                                                tracing::info!(
+                                                    account_id = %acc_id_for_reset,
+                                                    "TSDK 重建完成（网关离线，跳过 ACE 重启）"
+                                                );
+                                            }
                                             let _ = log_tx.send(WorkerEvent::Log {
                                                 account_id: acc_id_for_reset.clone(),
                                                 account_name: acc_name_for_reset.clone(),
@@ -834,6 +874,7 @@ fn persist_wx_gateway_credentials(account_id: &str, code: &str, creds: &YybCrede
             wx_refresh_token: Some(creds.refresh_token.clone()),
             wx_token_expires_at: Some(creds.expires_at),
             wx_refresh_token_observed_at: Some(creds.refresh_token_observed_at),
+            wx_buffer_consumed: Some(creds.buffer_consumed),
             ..Default::default()
         },
     );

@@ -494,6 +494,30 @@ impl RuntimeEngine {
                             })),
                         );
                     }
+                    WorkerEvent::Notify { account_id, account_name, title, message } => {
+                        // 业务通知：面板日志 + 外部推送（复用离线提醒的通知链路）
+                        state.log(
+                            "商城",
+                            &format!("{title}：{message}"),
+                            Some(serde_json::json!({
+                                "accountId": account_id,
+                                "accountName": account_name,
+                                "module": "shop",
+                            })),
+                        );
+                        let engine2 = engine.clone();
+                        crate::runtime::safe_spawn::spawn_logged("mystery_notify", async move {
+                            let payload = crate::runtime::relogin_reminder::OfflineReminderPayload {
+                                account_id,
+                                account_name,
+                                username: String::new(),
+                                reason: format!("{title}：{message}"),
+                                offline_ms: 0,
+                                kind: crate::runtime::relogin_reminder::AccountNoticeKind::Offline,
+                            };
+                            engine2.relogin_reminder().clone().trigger_offline_reminder(payload).await;
+                        });
+                    }
                     WorkerEvent::Started { account_id, account_name } => {
                         let username = accounts_store::get_accounts()
                             .into_iter()
@@ -590,7 +614,13 @@ impl RuntimeEngine {
                                 match engine.plan_wx_reconnect(&account_id) {
                                     WxReconnectPlan::Spawn { attempt } => {
                                         schedule_wx_reconnect = Some(attempt);
-                                        let wait = crate::constants::wx_reconnect_delay_zh(attempt);
+                                        // 被踢固定 3 分钟后重登：服务端旧 session 释放需要时间，
+                                        // 过快重登会连续触发"已在其他终端登录"踢循环
+                                        let wait = if kicked {
+                                            crate::constants::wx_kickout_reconnect_delay_zh()
+                                        } else {
+                                            crate::constants::wx_reconnect_delay_zh(attempt)
+                                        };
                                         let max = crate::constants::WX_RECONNECT_MAX_ATTEMPTS;
                                         let msg = if kicked {
                                             format!(
@@ -628,9 +658,20 @@ impl RuntimeEngine {
                                         );
                                     }
                                     WxReconnectPlan::GiveUp => {
+                                        let giveup_msg = if kicked {
+                                            format!(
+                                                "账号 {display} 被踢下线，自动重登已达 {} 次上限，已停止（如确认无其他设备登录，可手动重新上号）",
+                                                crate::constants::WX_RECONNECT_MAX_ATTEMPTS
+                                            )
+                                        } else {
+                                            format!(
+                                                "账号 {display} 自动重连已达 {} 次上限，已停止运行",
+                                                crate::constants::WX_RECONNECT_MAX_ATTEMPTS
+                                            )
+                                        };
                                         state.log(
                                             "系统",
-                                            &format!("账号 {display} 应用宝授权失效，请重新扫码"),
+                                            &giveup_msg,
                                             Some(serde_json::json!({
                                                 "accountId": account_id,
                                                 "accountName": display,
@@ -639,7 +680,7 @@ impl RuntimeEngine {
                                         );
                                         state.add_account_log(
                                             "disconnect_stop",
-                                            &format!("账号 {display} 应用宝授权失效，请重新扫码"),
+                                            &giveup_msg,
                                             Some(&account_id),
                                             Some(&display),
                                             Some(serde_json::json!({ "reason": reason })),
@@ -650,7 +691,7 @@ impl RuntimeEngine {
                                             &display,
                                             acc.as_ref().map(|a| a.username.as_str()).unwrap_or(""),
                                             &reason,
-                                            AccountNoticeKind::YybQr,
+                                            AccountNoticeKind::Offline,
                                         );
                                     }
                                     WxReconnectPlan::Skip => {}
@@ -712,8 +753,13 @@ impl RuntimeEngine {
                         if let Some(attempt) = schedule_wx_reconnect {
                             let engine2 = engine.clone();
                             let reconnect_id = account_id.clone();
+                            let kicked_delay = kicked;
                             crate::runtime::safe_spawn::spawn_logged("wx_reconnect", async move {
-                                let delay = crate::constants::wx_reconnect_delay_ms(attempt);
+                                let delay = if kicked_delay {
+                                    crate::constants::wx_kickout_reconnect_delay_ms()
+                                } else {
+                                    crate::constants::wx_reconnect_delay_ms(attempt)
+                                };
                                 tokio::time::sleep(Duration::from_millis(delay)).await;
                                 engine2.wx_reconnect.write().inflight.remove(&reconnect_id);
                                 let Some(latest) = accounts_store::get_accounts()

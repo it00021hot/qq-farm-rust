@@ -24,6 +24,7 @@ message Item {
     int64 uid = 6;
     bool is_new = 7;
     repeated int64 mutant_types = 8;
+    bool locked = 9;
     ItemSourceInfo source_info = 10;
     ItemShow show = 100;
 }

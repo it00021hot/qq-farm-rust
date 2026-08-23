@@ -95,6 +95,13 @@ declare namespace Api {
       vip_gift?: boolean;
       month_card?: boolean;
       open_server_gift?: boolean;
+      mystery_shop_auto_buy?: boolean;
+      mystery_shop_arrival_notify?: boolean;
+      mystery_shop_purchase_notify?: boolean;
+      mystery_shop_allow_gold?: boolean;
+      mystery_shop_allow_coupon?: boolean;
+      mystery_shop_allow_gold_bean?: boolean;
+      mystery_shop_allow_diamond?: boolean;
     };
 
     type IntervalsConfig = {

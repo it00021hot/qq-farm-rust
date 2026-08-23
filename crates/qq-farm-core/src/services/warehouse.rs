@@ -218,12 +218,20 @@ impl WarehouseService {
                 }
             }
             let reply = self.batch_use_items(&batch).await?;
-            return Ok(UseReply { used_items: reply.used_items, items: reply.items });
+            return Ok(UseReply {
+                used_items: reply.used_items,
+                items: reply.items,
+                land: None,
+                land_reward: None,
+            });
         }
         let Some(item) = single else {
             return Err(crate::error::Error::Business(format!("背包中未找到物品 {item_id}")));
         };
-        let req = UseRequest { item: Some(core_item(item_id, count, item.uid)) };
+        let req = UseRequest {
+            item: Some(core_item(item_id, count, item.uid)),
+            target: None,
+        };
         let body =
             self.gateway.request("gamepb.itempb.ItemService", "Use", &req.encode_to_vec()).await?;
         Ok(UseReply::decode(&body)?)
@@ -837,6 +845,7 @@ fn core_item(id: i64, count: i64, uid: i64) -> CoreItem {
         expire_time: 0,
         uid,
         is_new: false,
+        locked: false,
         mutant_types: vec![],
         show: None,
         source_info: None,
@@ -1084,7 +1093,7 @@ mod tests {
 
     #[test]
     fn use_request_encodes_nested_item_not_scalar_ids() {
-        let req = UseRequest { item: Some(core_item(101351, 1, 42)) };
+        let req = UseRequest { item: Some(core_item(101351, 1, 42)), target: None };
         let bytes = prost::Message::encode_to_vec(&req);
         assert!(!bytes.is_empty());
         // field 1 + wire type 2 (length-delimited) = 0x0A

@@ -20,6 +20,7 @@ pub mod error;
 pub mod events;
 pub mod farm;
 pub mod friend;
+pub mod pets;
 pub mod session;
 pub mod settings;
 pub mod qq_bot_bind;

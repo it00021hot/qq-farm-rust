@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import InteractionItemsPanel from '../personal/InteractionItemsPanel.vue';
 import {
   NAvatar,
   NButton,
@@ -860,6 +861,10 @@ onUnmounted(() => {
             </div>
           </NSpin>
         </NCard>
+      </NTabPane>
+
+      <NTabPane name="interaction" :tab="$t('page.farm.personal.tabInteraction')">
+        <InteractionItemsPanel mode="friend" />
       </NTabPane>
 
       <NTabPane name="blacklist">

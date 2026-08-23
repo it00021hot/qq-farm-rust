@@ -35,6 +35,14 @@ pub enum NotifyEvent {
     Unknown { event_type: String },
     /// 好友申请
     FriendApplications { applications: Vec<(i64, String)> },
+    /// 宠物"同气连枝"礼包待拾取（PendingGiftCountNotify）
+    DogSkillGiftPending { count: i64 },
+    /// 宠物守护记录更新（NewProtectLogNotify，空事件）
+    DogProtectLogChanged,
+    /// 活动列表变化（ActivitiesChangedNotify，用于失效活动时间窗缓存）
+    ActivitiesChanged,
+    /// 任务信息推送
+    TaskInfoNotify { task_info: Option<crate::proto::generated::gamepb::taskpb::TaskInfo> },
 }
 
 /// ItemNotify 里一条物品变化（对齐 network.ts handleNotify）
@@ -123,6 +131,22 @@ pub fn parse_event(event: &EventMessage) -> NotifyEvent {
                     .collect(),
             },
             Err(_) => NotifyEvent::FriendApplications { applications: Vec::new() },
+        }
+    } else if event_type.contains("PendingGiftCountNotify") {
+        match crate::proto::generated::gamepb::dogpb::PendingGiftCountNotify::decode(body) {
+            Ok(notify) => NotifyEvent::DogSkillGiftPending { count: notify.count.max(0) },
+            Err(_) => NotifyEvent::DogSkillGiftPending { count: 0 },
+        }
+    } else if event_type.contains("NewProtectLogNotify") {
+        NotifyEvent::DogProtectLogChanged
+    } else if event_type.contains("ActivitiesChangedNotify")
+        || event_type.contains("ActivitiesNotify")
+    {
+        NotifyEvent::ActivitiesChanged
+    } else if event_type.contains("TaskInfoNotify") {
+        match crate::proto::generated::gamepb::taskpb::TaskInfoNotify::decode(body) {
+            Ok(notify) => NotifyEvent::TaskInfoNotify { task_info: notify.task_info },
+            Err(_) => NotifyEvent::TaskInfoNotify { task_info: None },
         }
     } else {
         NotifyEvent::Unknown { event_type }

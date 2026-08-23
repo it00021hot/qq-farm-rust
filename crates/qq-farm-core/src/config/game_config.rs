@@ -128,6 +128,28 @@ pub struct RoleLevel {
     pub exp: i64,
 }
 
+/// 图鉴条目（Illustrated.json）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IllustratedEntry {
+    pub id: i64,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub illustrated_type: String,
+    pub param: i64,
+    #[serde(default)]
+    pub sort: i64,
+}
+
+/// 超变升级 buff 配置（BuffCfg.json）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BuffConfigItem {
+    pub id: i64,
+    pub source_type: String,
+    pub source_param: i64,
+    pub attr_id: String,
+    pub attr_value: i64,
+}
+
 // ===== GameConfig 单例 =====
 
 /// 全局游戏配置（加载一次，到处用）
@@ -140,6 +162,10 @@ pub struct GameConfig {
     land_map: RwLock<Option<Vec<Land>>>,
     /// 等级经验表
     role_level: RwLock<Option<Vec<RoleLevel>>>,
+    /// 图鉴条目（按 param 索引）
+    illustrated: RwLock<Option<Vec<IllustratedEntry>>>,
+    /// 超变 buff 配置
+    buffs: RwLock<Option<Vec<BuffConfigItem>>>,
 }
 
 /// 默认 GameConfig（未加载）
@@ -158,6 +184,8 @@ impl GameConfig {
             item_map: RwLock::new(None),
             land_map: RwLock::new(None),
             role_level: RwLock::new(None),
+            illustrated: RwLock::new(None),
+            buffs: RwLock::new(None),
         }
     }
 
@@ -167,6 +195,8 @@ impl GameConfig {
         self.load_items();
         self.load_lands();
         self.load_role_levels();
+        self.load_illustrated();
+        self.load_buffs();
         self.apply_overlay();
     }
 
@@ -210,6 +240,28 @@ impl GameConfig {
             Err(e) => {
                 tracing::error!(error = %e, "RoleLevel.json parse failed; using empty list");
                 *self.role_level.write() = Some(Vec::new());
+            }
+        }
+    }
+
+    fn load_illustrated(&self) {
+        let json = include_str!("../../../../assets/game_config/Illustrated.json");
+        match serde_json::from_str::<Vec<IllustratedEntry>>(json) {
+            Ok(entries) => *self.illustrated.write() = Some(entries),
+            Err(e) => {
+                tracing::error!(error = %e, "Illustrated.json parse failed; using empty list");
+                *self.illustrated.write() = Some(Vec::new());
+            }
+        }
+    }
+
+    fn load_buffs(&self) {
+        let json = include_str!("../../../../assets/game_config/BuffCfg.json");
+        match serde_json::from_str::<Vec<BuffConfigItem>>(json) {
+            Ok(items) => *self.buffs.write() = Some(items),
+            Err(e) => {
+                tracing::error!(error = %e, "BuffCfg.json parse failed; using empty list");
+                *self.buffs.write() = Some(Vec::new());
             }
         }
     }
@@ -495,6 +547,63 @@ impl GameConfig {
     #[must_use]
     pub fn get_all_plants(&self) -> Vec<Plant> {
         self.plant_map.read().clone().unwrap_or_default()
+    }
+
+    /// 按 param（种子/果实参数）查图鉴条目
+    #[must_use]
+    pub fn get_illustrated_by_param(&self, param: i64) -> Option<IllustratedEntry> {
+        self.illustrated
+            .read()
+            .as_ref()?
+            .iter()
+            .find(|e| e.param == param)
+            .cloned()
+    }
+
+    /// 图鉴分组：装扮果实 decoration / 活动果实 activity / 其余 gold
+    #[must_use]
+    pub fn illustrated_mutant_group(&self, seed_id: i64) -> &'static str {
+        match self
+            .get_illustrated_by_param(seed_id)
+            .map(|e| e.kind)
+            .as_deref()
+        {
+            Some("装扮果实") => "decoration",
+            Some("活动果实") => "activity",
+            _ => "gold",
+        }
+    }
+
+    /// 超变升级 buff 全表（source_type = 超变升级）
+    #[must_use]
+    pub fn illustrated_buffs(&self) -> Vec<BuffConfigItem> {
+        self.buffs
+            .read()
+            .as_ref()
+            .map(|items| {
+                let mut list: Vec<BuffConfigItem> = items
+                    .iter()
+                    .filter(|b| b.source_type == "超变升级")
+                    .cloned()
+                    .collect();
+                list.sort_by_key(|b| b.source_param);
+                list
+            })
+            .unwrap_or_default()
+    }
+
+    /// 当前等级生效的超变 buff（按 attr 取最高等级条目）
+    #[must_use]
+    pub fn illustrated_buffs_by_level(&self, level: i64) -> Vec<BuffConfigItem> {
+        let mut latest: std::collections::HashMap<String, BuffConfigItem> = Default::default();
+        for buff in self.illustrated_buffs() {
+            if buff.source_param <= level.max(0) && !buff.attr_id.is_empty() {
+                latest.insert(buff.attr_id.clone(), buff);
+            }
+        }
+        let mut list: Vec<BuffConfigItem> = latest.into_values().collect();
+        list.sort_by_key(|b| b.source_param);
+        list
     }
 
     /// 按 item_id 查物品

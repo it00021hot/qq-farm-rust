@@ -37,6 +37,13 @@ pub enum WorkerEvent {
         /// 触发重置的错误摘要
         reason: String,
     },
+    /// 业务通知（神秘商人到货/自动购买等，面板气泡 + 外部推送链路）
+    Notify {
+        account_id: String,
+        account_name: String,
+        title: String,
+        message: String,
+    },
 }
 
 impl WorkerEvent {
@@ -49,7 +56,8 @@ impl WorkerEvent {
             | Self::Status { account_id, .. }
             | Self::Error { account_id, .. }
             | Self::Log { account_id, .. }
-            | Self::WasmReset { account_id, .. } => Some(account_id),
+            | Self::WasmReset { account_id, .. }
+            | Self::Notify { account_id, .. } => Some(account_id),
             Self::Schedulers { .. } => None,
         }
     }

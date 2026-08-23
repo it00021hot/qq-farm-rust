@@ -158,6 +158,8 @@ struct Inner {
     notify_subscribers: RwLock<Vec<mpsc::Sender<NotifyEvent>>>,
     /// WS 发送端（connect 时设置）
     ws_sender: parking_lot::Mutex<Option<mpsc::Sender<Vec<u8>>>>,
+    /// 当前连接的 client handle（connect 时设置；force_disconnect 时硬关闭）
+    ws_client: parking_lot::Mutex<Option<crate::network::client::WsClient>>,
     /// 当前会话是否已结束（dispatch 退出 / 主动断开）
     session_end: watch::Sender<bool>,
     /// 会话结束原因（心跳超时 / kickout / ws_close 等），供 worker 日志对齐 TS source
@@ -185,6 +187,7 @@ impl Gateway {
                 encryptor: parking_lot::RwLock::new(encryptor),
                 notify_subscribers: RwLock::new(Vec::new()),
                 ws_sender: parking_lot::Mutex::new(None),
+                ws_client: parking_lot::Mutex::new(None),
                 session_end,
                 disconnect_reason: parking_lot::Mutex::new(None),
                 last_rx_ms: AtomicI64::new(0),
@@ -269,6 +272,7 @@ impl Gateway {
         // 创建 frame 发送 channel（业务调用 request() 通过这里发）
         let (frame_tx, mut frame_rx) = mpsc::channel::<Vec<u8>>(64);
         *self.inner.ws_sender.lock() = Some(frame_tx);
+        *self.inner.ws_client.lock() = Some(client.clone());
 
         // 启动一个 task：从 channel 读 frame 通过 WsClient 发
         let client_for_sender = client.clone();
@@ -306,13 +310,20 @@ impl Gateway {
         self.force_disconnect_with_reason("ws_close");
     }
 
-    /// 带原因断开（对齐 TS `finalizeConnection({ source })`）
+    /// 带原因断开（对齐 TS `finalizeConnection({ source })` + `socket.terminate()`）
     pub fn force_disconnect_with_reason(&self, reason: &str) {
         {
             let mut guard = self.inner.disconnect_reason.lock();
             if guard.is_none() {
                 *guard = Some(reason.to_string());
             }
+        }
+        // 硬关闭：丢弃发送通道并 abort 底层读写 task，TCP 立即断开。
+        // 只发 watch 信号的话 socket 可能继续挂 30s+，服务端旧 session 未释放，
+        // 重连登录会被判"已在其他终端登录"踢下线。
+        *self.inner.ws_sender.lock() = None;
+        if let Some(client) = self.inner.ws_client.lock().take() {
+            client.terminate();
         }
         self.mark_session_ended();
     }
@@ -681,6 +692,8 @@ fn end_session(inner: &Inner, reason: Option<&str>) {
     }
     *inner.phase.write() = ConnectionPhase::Disconnected;
     *inner.ws_sender.lock() = None;
+    // 会话结束后不再保留 client handle（连接已由对端/force_disconnect 关闭）
+    inner.ws_client.lock().take();
     let n = inner.requests.reject_all();
     if n > 0 {
         tracing::warn!(count = n, "rejected pending requests on disconnect");

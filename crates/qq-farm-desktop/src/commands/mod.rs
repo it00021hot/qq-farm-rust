@@ -8,6 +8,7 @@ pub mod commerce;
 pub mod config;
 pub mod farm;
 pub mod friend;
+pub mod pets;
 pub mod settings;
 pub mod snapshot;
 

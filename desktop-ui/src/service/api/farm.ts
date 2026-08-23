@@ -880,6 +880,78 @@ export function fetchSaveFarmSettings(accountId: number | string, snapshot: unkn
   return invokeFlat('save_settings', { accountId: aid(accountId), snapshot });
 }
 
+
+// ============ 宠物 / 同气连枝礼包 ============
+
+export function fetchGetPetInfo(accountId: number) {
+  return invokeFlat('pet_info', { accountId: aid(accountId) });
+}
+
+export function fetchPetDeploy(accountId: number, dogId: number) {
+  return invokeFlat('pet_deploy', { accountId: aid(accountId), dogId: Number(dogId) });
+}
+
+export function fetchPetWithdraw(accountId: number) {
+  return invokeFlat('pet_withdraw', { accountId: aid(accountId) });
+}
+
+export function fetchPetFoodUse(accountId: number, itemId: number, count = 1, uid = 0) {
+  return invokeFlat('pet_food_use', {
+    accountId: aid(accountId),
+    itemId: Number(itemId),
+    count: Number(count),
+    uid: Number(uid)
+  });
+}
+
+export function fetchGetPetProtectLogs(accountId: number) {
+  return invokeFlat('pet_protect_logs', { accountId: aid(accountId) });
+}
+
+export function fetchGetDogSkillGifts(accountId: number) {
+  return invokeFlat('dog_skill_gifts_status', { accountId: aid(accountId) });
+}
+
+export function fetchClaimDogSkillGifts(accountId: number) {
+  return invokeFlat('dog_skill_gifts_claim', { accountId: aid(accountId) });
+}
+
+// ============ 好友互动道具 / 图鉴 ============
+
+export function fetchGetFriendInteractionItems(accountId: number) {
+  return invokeFlat('friend_interaction_items', { accountId: aid(accountId) });
+}
+
+export function fetchUseFriendInteractionItems(
+  accountId: number,
+  friendGid: number,
+  itemId: number,
+  landIds: number[]
+) {
+  return invokeFlat('friend_interaction_items_use', {
+    accountId: aid(accountId),
+    friendGid: Number(friendGid),
+    itemId: Number(itemId),
+    landIds: landIds.map(Number)
+  });
+}
+
+export function fetchGetFarmInteractionItems(accountId: number) {
+  return invokeFlat('farm_interaction_items', { accountId: aid(accountId) });
+}
+
+export function fetchUseFarmInteractionItems(accountId: number, itemId: number, landIds: number[]) {
+  return invokeFlat('farm_interaction_items_use', {
+    accountId: aid(accountId),
+    itemId: Number(itemId),
+    landIds: landIds.map(Number)
+  });
+}
+
+export function fetchGetIllustratedSnapshot(accountId: number) {
+  return invokeFlat('illustrated_snapshot', { accountId: aid(accountId) });
+}
+
 /** Route stubs (static mode — unused but imported by route store) */
 export async function fetchGetConstantRoutes() {
   return { data: [], error: null, response: {} as any };

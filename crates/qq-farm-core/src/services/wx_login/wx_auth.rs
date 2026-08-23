@@ -50,6 +50,9 @@ pub struct YybCredentials {
     pub expires_in: i64,
     /// 当前 refresh_token 首次观察到的 Unix 秒；0 表示尚未记时。
     pub refresh_token_observed_at: i64,
+    /// login_buffer 是否已被原生协议消费过（单个 buffer 只能用一次；
+    /// 已消费则 mint 前必须重新签发，避免每次都先撞 ManualAuth rejected）。
+    pub buffer_consumed: bool,
 }
 
 impl YybCredentials {
@@ -143,6 +146,7 @@ mod tests {
             expires_at: now_unix() + 1800,
             expires_in: 7200,
             refresh_token_observed_at: 0,
+            buffer_consumed: false,
         };
         assert!(!c.token_due_for_refresh(0), "token with 30m left should not refresh when ahead=0");
         assert!(

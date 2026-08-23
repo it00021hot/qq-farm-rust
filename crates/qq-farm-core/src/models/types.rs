@@ -324,6 +324,21 @@ pub struct AutomationConfig {
     pub fertilizer_land_types: Vec<FertilizerLandType>,
     pub fertilizer_smart_seconds: i64,
     pub skip_own_weed_bug: bool,
+    /// 神秘商人自动化（对齐 bot mystery-shop-auto）
+    #[serde(default)]
+    pub mystery_shop_auto_buy: bool,
+    #[serde(default)]
+    pub mystery_shop_arrival_notify: bool,
+    #[serde(default)]
+    pub mystery_shop_purchase_notify: bool,
+    #[serde(default)]
+    pub mystery_shop_allow_gold: bool,
+    #[serde(default)]
+    pub mystery_shop_allow_coupon: bool,
+    #[serde(default)]
+    pub mystery_shop_allow_gold_bean: bool,
+    #[serde(default)]
+    pub mystery_shop_allow_diamond: bool,
 }
 
 impl Default for AutomationConfig {

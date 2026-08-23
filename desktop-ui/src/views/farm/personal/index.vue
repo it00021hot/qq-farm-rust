@@ -6,6 +6,9 @@ import { useFarmAccountStore } from '@/store/modules/farm-account';
 import { $t } from '@/locales';
 import BagPanel from './BagPanel.vue';
 import FarmPanel from './FarmPanel.vue';
+import IllustratedPanel from './IllustratedPanel.vue';
+import InteractionItemsPanel from './InteractionItemsPanel.vue';
+import PetPanel from './PetPanel.vue';
 import TaskPanel from './TaskPanel.vue';
 
 defineOptions({ name: 'FarmPersonal' });
@@ -13,11 +16,14 @@ defineOptions({ name: 'FarmPersonal' });
 const farmAccountStore = useFarmAccountStore();
 const statusLoading = ref(false);
 const connected = ref(false);
-const activeTab = ref<'farm' | 'bag' | 'task'>('farm');
+const activeTab = ref<'farm' | 'bag' | 'task' | 'pet' | 'illustrated' | 'interaction'>('farm');
 
 const farmPanelRef = ref<{ refresh: () => Promise<void> } | null>(null);
 const bagPanelRef = ref<{ refresh: () => Promise<void> } | null>(null);
 const taskPanelRef = ref<{ refresh: () => Promise<void> } | null>(null);
+const petPanelRef = ref<{ refresh: () => Promise<void> } | null>(null);
+const illustratedPanelRef = ref<{ refresh: () => Promise<void> } | null>(null);
+const interactionPanelRef = ref<{ refresh: () => Promise<void> } | null>(null);
 
 async function loadStatus() {
   if (!farmAccountStore.currentAccountId) {
@@ -37,7 +43,14 @@ async function refreshAll() {
   await farmAccountStore.loadAccounts();
   await loadStatus();
   if (!connected.value) return;
-  await Promise.all([farmPanelRef.value?.refresh?.(), bagPanelRef.value?.refresh?.(), taskPanelRef.value?.refresh?.()]);
+  await Promise.all([
+    farmPanelRef.value?.refresh?.(),
+    bagPanelRef.value?.refresh?.(),
+    taskPanelRef.value?.refresh?.(),
+    petPanelRef.value?.refresh?.(),
+    illustratedPanelRef.value?.refresh?.(),
+    interactionPanelRef.value?.refresh?.()
+  ]);
 }
 
 watch(
@@ -74,6 +87,15 @@ onMounted(async () => {
         </NTabPane>
         <NTabPane name="task" :tab="$t('page.farm.personal.tabTask')">
           <TaskPanel ref="taskPanelRef" :connected="connected" />
+        </NTabPane>
+        <NTabPane name="pet" :tab="$t('page.farm.personal.tabPet')">
+          <PetPanel ref="petPanelRef" />
+        </NTabPane>
+        <NTabPane name="illustrated" :tab="$t('page.farm.personal.tabIllustrated')">
+          <IllustratedPanel ref="illustratedPanelRef" />
+        </NTabPane>
+        <NTabPane name="interaction" :tab="$t('page.farm.personal.tabInteraction')">
+          <InteractionItemsPanel ref="interactionPanelRef" mode="self" />
         </NTabPane>
       </NTabs>
     </template>

@@ -213,7 +213,14 @@ const automation = reactive<Api.Farm.AutomationConfig>({
   fertilizer_multi_season: true,
   fertilizer_land_types: [...farmAllFertilizerLandTypes],
   fertilizer_smart_seconds: 360,
-  skip_own_weed_bug: true
+  skip_own_weed_bug: true,
+  mystery_shop_auto_buy: false,
+  mystery_shop_arrival_notify: false,
+  mystery_shop_purchase_notify: false,
+  mystery_shop_allow_gold: false,
+  mystery_shop_allow_coupon: false,
+  mystery_shop_allow_gold_bean: false,
+  mystery_shop_allow_diamond: false
 });
 
 const showFertilizerBuyPanel = computed(
@@ -580,6 +587,13 @@ function applyDetail(data: Api.Farm.AccountAutomationDetail) {
       : [...farmAllFertilizerLandTypes];
   automation.fertilizer_smart_seconds = src.fertilizer_smart_seconds ?? 360;
   automation.skip_own_weed_bug = !!src.skip_own_weed_bug;
+  automation.mystery_shop_auto_buy = !!src.mystery_shop_auto_buy;
+  automation.mystery_shop_arrival_notify = !!src.mystery_shop_arrival_notify;
+  automation.mystery_shop_purchase_notify = !!src.mystery_shop_purchase_notify;
+  automation.mystery_shop_allow_gold = !!src.mystery_shop_allow_gold;
+  automation.mystery_shop_allow_coupon = !!src.mystery_shop_allow_coupon;
+  automation.mystery_shop_allow_gold_bean = !!src.mystery_shop_allow_gold_bean;
+  automation.mystery_shop_allow_diamond = !!src.mystery_shop_allow_diamond;
 
   if (data.intervals) Object.assign(intervals, data.intervals);
   if (data.friendQuietHours) Object.assign(quietHours, data.friendQuietHours);
@@ -676,7 +690,14 @@ async function handleSaveAutomation() {
         fertilizer_multi_season: automation.fertilizer_multi_season,
         fertilizer_land_types: [...(automation.fertilizer_land_types || [])],
         fertilizer_smart_seconds: automation.fertilizer_smart_seconds,
-        skip_own_weed_bug: automation.skip_own_weed_bug
+        skip_own_weed_bug: automation.skip_own_weed_bug,
+        mystery_shop_auto_buy: automation.mystery_shop_auto_buy,
+        mystery_shop_arrival_notify: automation.mystery_shop_arrival_notify,
+        mystery_shop_purchase_notify: automation.mystery_shop_purchase_notify,
+        mystery_shop_allow_gold: automation.mystery_shop_allow_gold,
+        mystery_shop_allow_coupon: automation.mystery_shop_allow_coupon,
+        mystery_shop_allow_gold_bean: automation.mystery_shop_allow_gold_bean,
+        mystery_shop_allow_diamond: automation.mystery_shop_allow_diamond
       },
       fertilizerBuyOrganicCount: fertilizerBuy.organicCount,
       fertilizerBuyOrganicThresholdHours: fertilizerBuy.organicThresholdHours,
@@ -1287,6 +1308,34 @@ onUnmounted(() => {
             <div class="auto-switch-item">
               <NSwitch v-model:value="automation.skip_own_weed_bug" />
               <span>{{ $t('page.farm.settings.skipOwnWeedBug') }}</span>
+            </div>
+            <div class="auto-switch-item">
+              <NSwitch v-model:value="automation.mystery_shop_auto_buy" />
+              <span>{{ $t('page.farm.settings.mysteryAutoBuy') }}</span>
+            </div>
+            <div class="auto-switch-item">
+              <NSwitch v-model:value="automation.mystery_shop_arrival_notify" />
+              <span>{{ $t('page.farm.settings.mysteryArrivalNotify') }}</span>
+            </div>
+            <div class="auto-switch-item">
+              <NSwitch v-model:value="automation.mystery_shop_purchase_notify" />
+              <span>{{ $t('page.farm.settings.mysteryPurchaseNotify') }}</span>
+            </div>
+            <div class="auto-switch-item">
+              <NSwitch v-model:value="automation.mystery_shop_allow_gold" />
+              <span>{{ $t('page.farm.settings.mysteryAllowGold') }}</span>
+            </div>
+            <div class="auto-switch-item">
+              <NSwitch v-model:value="automation.mystery_shop_allow_coupon" />
+              <span>{{ $t('page.farm.settings.mysteryAllowCoupon') }}</span>
+            </div>
+            <div class="auto-switch-item">
+              <NSwitch v-model:value="automation.mystery_shop_allow_gold_bean" />
+              <span>{{ $t('page.farm.settings.mysteryAllowGoldBean') }}</span>
+            </div>
+            <div class="auto-switch-item">
+              <NSwitch v-model:value="automation.mystery_shop_allow_diamond" />
+              <span>{{ $t('page.farm.settings.mysteryAllowDiamond') }}</span>
             </div>
           </div>
 

@@ -42,6 +42,9 @@ pub const WX_RECONNECT_MAX_ATTEMPTS: u32 = 3;
 pub const WX_RECONNECT_FIRST_DELAY_MS: u64 = 3 * 60 * 1000;
 /// 掉线后第 2～3 次用应用宝授权换码重连的等待时间
 pub const WX_RECONNECT_RETRY_DELAY_MS: u64 = 60 * 1000;
+/// 被踢下线（"已在其他终端登录"）后重登等待时间。
+/// 服务端旧 session 释放需要时间，重登过快会连环被踢，因此每次都等满 3 分钟。
+pub const WX_KICKOUT_RECONNECT_DELAY_MS: u64 = 3 * 60 * 1000;
 /// 进程启动后已授权微信账号首次自动重连的等待时间
 pub const WX_STARTUP_RECONNECT_DELAY_MS: u64 = 60 * 1000;
 
@@ -62,6 +65,12 @@ pub const fn wx_reconnect_delay_ms(attempt: u32) -> u64 {
     }
 }
 
+/// 被踢下线的重登等待（固定 3 分钟，不随次数缩短）。
+#[must_use]
+pub const fn wx_kickout_reconnect_delay_ms() -> u64 {
+    WX_KICKOUT_RECONNECT_DELAY_MS
+}
+
 /// 运行日志用的掉线重连等待文案。
 #[must_use]
 pub fn wx_reconnect_delay_zh(attempt: u32) -> String {
@@ -72,6 +81,12 @@ pub fn wx_reconnect_delay_zh(attempt: u32) -> String {
 #[must_use]
 pub fn wx_startup_reconnect_delay_zh() -> String {
     duration_ms_zh(WX_STARTUP_RECONNECT_DELAY_MS)
+}
+
+/// 被踢下线的重登等待文案。
+#[must_use]
+pub fn wx_kickout_reconnect_delay_zh() -> String {
+    duration_ms_zh(WX_KICKOUT_RECONNECT_DELAY_MS)
 }
 
 fn duration_ms_zh(duration_ms: u64) -> String {
@@ -86,3 +101,21 @@ fn duration_ms_zh(duration_ms: u64) -> String {
 /// 网关心跳（对齐 Go / 原 TS）
 pub const HEARTBEAT_INTERVAL_MS: u64 = 25_000;
 pub const HEARTBEAT_SILENCE_MS: u64 = 30_000;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kickout_reconnect_delay_is_fixed_three_minutes() {
+        assert_eq!(wx_kickout_reconnect_delay_ms(), 3 * 60 * 1000);
+        assert_eq!(wx_kickout_reconnect_delay_zh(), "3 分钟");
+    }
+
+    #[test]
+    fn normal_reconnect_delays_unchanged() {
+        assert_eq!(wx_reconnect_delay_ms(1), 3 * 60 * 1000);
+        assert_eq!(wx_reconnect_delay_ms(2), 60 * 1000);
+        assert_eq!(wx_reconnect_delay_ms(3), 60 * 1000);
+    }
+}

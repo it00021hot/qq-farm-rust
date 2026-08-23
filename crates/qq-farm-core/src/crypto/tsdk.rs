@@ -279,6 +279,7 @@ impl TsdkRuntime {
         };
         let ptr = ptr_guard.ptr();
         if let Err(e) = write_bytes(store, &exports.memory, ptr, cstr.as_bytes()) {
+            ptr_guard.free_now(store, exports);
             return Err(e);
         }
         if let Err(e) = exports
@@ -290,6 +291,7 @@ impl TsdkRuntime {
             )
             .map_err(|e| Error::crypto(format!("G(bind) failed: {e}")))
         {
+            ptr_guard.free_now(store, exports);
             return Err(e);
         }
         ptr_guard.free_now(store, exports);
@@ -410,7 +412,7 @@ impl TsdkRuntime {
 
         // 2. 写入
         if let Err(e) = write_bytes(store, &exports.memory, ptr, input) {
-            // ptr_guard Drop 时自动 free
+            ptr_guard.free_now(store, exports);
             if self.record_wasm_failure() {
                 self.request_reset();
             }
@@ -428,6 +430,7 @@ impl TsdkRuntime {
                 ))
             });
         if let Err(e) = enc_res {
+            ptr_guard.free_now(store, exports);
             if self.record_wasm_failure() {
                 self.request_reset();
             }
@@ -438,6 +441,7 @@ impl TsdkRuntime {
         let result = match read_bytes(store, &exports.memory, ptr, input.len()) {
             Ok(r) => r,
             Err(e) => {
+                ptr_guard.free_now(store, exports);
                 if self.record_wasm_failure() {
                     self.request_reset();
                 }
@@ -488,6 +492,7 @@ impl TsdkRuntime {
         };
         let ptr = ptr_guard.ptr();
         if let Err(e) = write_bytes(store, &exports.memory, ptr, cstr.as_bytes()) {
+            ptr_guard.free_now(store, exports);
             if self.record_wasm_failure() {
                 self.request_reset();
             }
@@ -500,6 +505,7 @@ impl TsdkRuntime {
             .call(&mut *store, &mut [Val::I32(TSDK_GAME_ID as i32), Val::I32(ptr)], &mut [])
             .map_err(|e| Error::crypto(format!("G(bind) failed: {e}")))
         {
+            ptr_guard.free_now(store, exports);
             if self.record_wasm_failure() {
                 self.request_reset();
             }
@@ -587,6 +593,7 @@ impl TsdkRuntime {
             .call(&mut *store, &mut [Val::I32(length_ptr)], &mut ret)
             .map_err(|e| Error::crypto(format!("N() failed: {e}")));
         if let Err(e) = n_result {
+            length_guard.free_now(store, exports);
             if self.record_wasm_failure() {
                 self.request_reset();
             }
@@ -605,6 +612,8 @@ impl TsdkRuntime {
         let len_bytes = match read_bytes(store, &exports.memory, length_ptr, 4) {
             Ok(b) => b,
             Err(e) => {
+                data_guard.free_now(store, exports);
+                length_guard.free_now(store, exports);
                 if self.record_wasm_failure() {
                     self.request_reset();
                 }
@@ -642,6 +651,8 @@ impl TsdkRuntime {
         let data = match data_result {
             Ok(d) => d,
             Err(e) => {
+                data_guard.free_now(store, exports);
+                length_guard.free_now(store, exports);
                 if self.record_wasm_failure() {
                     self.request_reset();
                 }
@@ -686,6 +697,7 @@ impl TsdkRuntime {
         };
         let ptr = ptr_guard.ptr();
         if let Err(e) = write_bytes(store, &exports.memory, ptr, data) {
+            ptr_guard.free_now(store, exports);
             if self.record_wasm_failure() {
                 self.request_reset();
             }
@@ -697,6 +709,7 @@ impl TsdkRuntime {
             .call(&mut *store, &mut [Val::I32(ptr), Val::I32(data.len() as i32)], &mut [])
             .map_err(|e| Error::crypto(format!("O() failed: {e}")))
         {
+            ptr_guard.free_now(store, exports);
             if self.record_wasm_failure() {
                 self.request_reset();
             }
@@ -1251,10 +1264,19 @@ impl AllocGuard {
     /// 通过调用 wasm `alloc(size)` 分配。失败时返回 `Err`，guard 保持 no-op 状态。
     fn alloc(store: &mut Store<HostState>, exports: &Exports, size: i32) -> Result<Self> {
         let mut alloc_res = [Val::I32(0); 1];
-        exports
+        let call_result = exports
             .alloc
-            .call(&mut *store, &mut [Val::I32(size)], &mut alloc_res)
-            .map_err(|e| Error::crypto(format!("alloc failed: {e}")))?;
+            .call(&mut *store, &mut [Val::I32(size)], &mut alloc_res);
+        if let Err(e) = &call_result {
+            // 正式日志默认无 debug 级别，这里用 WARN 留下内存增长证据
+            tracing::warn!(
+                size,
+                memory_bytes = exports.memory.data(&*store).len(),
+                error = %e,
+                "tsdk wasm alloc 失败"
+            );
+        }
+        call_result.map_err(|e| Error::crypto(format!("alloc failed: {e}")))?;
         let ptr = i32_val(&alloc_res, 0)?;
         if ptr <= 0 {
             return Err(Error::crypto(format!("alloc returned non-positive ptr: {ptr}")));

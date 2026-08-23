@@ -71,6 +71,11 @@ pub fn activity_windows_loaded() -> bool {
     WINDOWS.read().loaded
 }
 
+/// 失效缓存（ActivitiesChangedNotify 推送时调用，下次访问会重新拉取）。
+pub fn invalidate_activity_windows() {
+    WINDOWS.write().loaded_at = None;
+}
+
 /// 按活动 ID 取一条窗口。
 #[must_use]
 pub fn activity_window_by_id(id: &str) -> Option<ActivityWindow> {

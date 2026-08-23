@@ -141,12 +141,15 @@ pub struct WorkerLoop {
     coupon: Mutex<i64>,
     gold_bean: Mutex<i64>,
     ace: Mutex<Option<Arc<crate::services::ace::AceShared>>>,
+    /// 神秘商人自动化去重状态（visitKey 记忆）
+    mystery_auto_state: Mutex<crate::services::mystery_shop_auto::MysteryShopAutoState>,
     /// worker 启动时刻（对齐 TS `process.uptime()`）
     started_at: std::time::Instant,
 }
 
 /// 心跳 miss 阈值
-const MAX_HEARTBEAT_MISS: u32 = 1;
+/// 对齐 node `keepalive-policy.ts` MAX_HEARTBEAT_MISSES：连续 3 次心跳失败且入站静默超阈值才判死。
+const MAX_HEARTBEAT_MISS: u32 = 3;
 
 /// AtomicBool/AtomicU64
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
@@ -159,6 +162,7 @@ struct NextRuns {
     steal_at: i64,
 }
 
+#[cfg(test)]
 fn heartbeat_silence_exceeded(now: i64, last_hb: i64, last_rx: i64, silence_ms: i64) -> bool {
     let last = last_hb.max(last_rx);
     last > 0 && now.saturating_sub(last) > silence_ms
@@ -313,6 +317,9 @@ impl WorkerLoop {
             coupon: Mutex::new(0),
             gold_bean: Mutex::new(0),
             ace: Mutex::new(None),
+            mystery_auto_state: Mutex::new(
+                crate::services::mystery_shop_auto::MysteryShopAutoState::default(),
+            ),
             started_at: std::time::Instant::now(),
         }
     }
@@ -345,6 +352,12 @@ impl WorkerLoop {
     pub fn set_gid(&self, gid: i64) {
         *self.gid.lock() = gid;
         *self.last_heartbeat_response.lock() = crate::utils::time::now_ms();
+    }
+
+    /// 当前登录 GID（0 = 未登录）
+    #[must_use]
+    pub fn current_gid(&self) -> i64 {
+        *self.gid.lock()
     }
 
     /// 注册心跳超时回调
@@ -400,6 +413,24 @@ impl WorkerLoop {
                 self.schedule_unified_next_tick(scheduler);
             }
             self.start_fertilizer_buy_timer(scheduler);
+            self.start_mystery_shop_timer(scheduler);
+
+            // 对齐 bot：神秘商人配置变更后 2s 补查一次（不等下一个 10min tick）
+            {
+                let this = Arc::clone(self);
+                scheduler.set_timeout_task(
+                    "mystery_shop_after_save",
+                    Duration::from_millis(
+                        crate::services::mystery_shop_auto::AUTO_BUY_AFTER_SAVE_DELAY_MS,
+                    ),
+                    Arc::new(move || {
+                        let this = Arc::clone(&this);
+                        Box::pin(async move {
+                            this.check_mystery_shop_once().await;
+                        })
+                    }),
+                );
+            }
 
             // 对齐 bot：施肥模式变更且目标为 both/organic/smart 时，600ms 后立即有机补肥
             if prev_mode != next_mode
@@ -548,6 +579,7 @@ impl WorkerLoop {
             });
         }
         self.start_fertilizer_buy_timer(scheduler);
+        self.start_mystery_shop_timer(scheduler);
         {
             let this = Arc::clone(self);
             scheduler.set_timeout_task(
@@ -691,7 +723,9 @@ impl WorkerLoop {
             }),
         );
 
-        // 心跳：每 25s 发 HeartbeatRequest，30s 无响应则触发重连回调
+        // 心跳：每 25s 发 HeartbeatRequest（20s 请求超时）。
+        // 对齐 node 最新 keepalive-policy：miss 按心跳请求失败累计，
+        // 仅当 miss>=MAX_HEARTBEAT_MISS 且入站静默 >30s 双条件才判死。
         let gateway_for_hb = self.gateway.clone();
         let acc_id_hb = self.account.id.clone();
         let last_hb_resp = self.last_heartbeat_response.clone();
@@ -712,72 +746,12 @@ impl WorkerLoop {
                 let on_timeout = on_hb_timeout.clone();
                 let gid_lock = gid.clone();
                 let cv_for_req = client_version.clone();
+                let stale_ms = hb_timeout.as_millis() as i64;
                 Box::pin(async move {
                     // 对齐 network.ts：phase !== 'online' || !gid 则跳过
                     if gateway.phase() != crate::network::gateway::ConnectionPhase::Online {
                         return;
                     }
-                    let now = crate::utils::time::now_ms();
-                    let last_hb = *last_resp.lock();
-                    let last_rx = gateway.last_rx_ms();
-                    let last = last_hb.max(last_rx);
-                    let elapsed = now - last;
-                    // TSDK 重建期放宽 silence 阈值到 90s，避免重建过程（wasm 编译 + 实例化）
-                    // 被静默超时误杀（重建期间 encrypt 都会短暂返回 Err，触发静默累加）。
-                    let effective_silence_ms = if gateway.is_rebuilding() {
-                        hb_timeout.as_millis().max(90_000) as i64
-                    } else {
-                        hb_timeout.as_millis() as i64
-                    };
-                    // 杀号看入站帧 / 心跳成功，不看 pending（超时 cancel 会把 pending 打成 0）。
-                    if heartbeat_silence_exceeded(
-                        now,
-                        last_hb,
-                        last_rx,
-                        effective_silence_ms,
-                    ) {
-                        let miss_n = {
-                            let mut g = miss.lock();
-                            *g += 1;
-                            *g
-                        };
-                        tracing::warn!(
-                            account_id = %acc_id,
-                            elapsed_ms = elapsed,
-                            pending = gateway.pending_count(),
-                            "心跳超时 ({}s 无响应)",
-                            elapsed / 1000
-                        );
-                        crate::services::panel_log::log(
-                            &acc_id,
-                            "心跳",
-                            format!("连接可能已断开 ({}s 无响应)", elapsed / 1000),
-                            crate::constants::PanelEvent::HeartbeatTimeout,
-                            Some(serde_json::json!({
-                                "module": "heartbeat",
-                                "isWarn": true,
-                                "elapsedMs": elapsed,
-                            })),
-                        );
-                        if miss_n >= MAX_HEARTBEAT_MISS {
-                            tracing::error!(account_id = %acc_id, "心跳 miss 达到上限，触发重连");
-                            crate::services::panel_log::log(
-                                &acc_id,
-                                "心跳",
-                                "心跳超时，账号将停止运行...",
-                                crate::constants::PanelEvent::HeartbeatTimeout,
-                                Some(serde_json::json!({
-                                    "module": "heartbeat",
-                                    "isWarn": true
-                                })),
-                            );
-                            if let Some(cb) = on_timeout.lock().as_ref() {
-                                cb(acc_id.clone());
-                            }
-                            return;
-                        }
-                    }
-
                     let current_gid = *gid_lock.lock();
                     if current_gid == 0 {
                         return;
@@ -789,24 +763,83 @@ impl WorkerLoop {
                         );
                         return;
                     }
-                    // 对齐 network.ts：sendMsgAsync(...).then(...).catch(() => {}) —— 发完即返回，不阻塞 interval
+                    // 对齐 network.ts：preventOverlap + sendMsgAsync(20s)；发完即返回，不阻塞 interval
                     let gateway = gateway.clone();
                     let last_resp = last_resp.clone();
                     let miss = miss.clone();
                     let acc_id = acc_id.clone();
                     let cv_for_req = cv_for_req.clone();
+                    let on_timeout = on_timeout.clone();
                     tokio::spawn(async move {
+                        let now = crate::utils::time::now_ms();
+                        let (prev_hb, prev_rx, rebuilding) = {
+                            let last_hb = *last_resp.lock();
+                            let last_rx = gateway.last_rx_ms();
+                            (last_hb, last_rx, gateway.is_rebuilding())
+                        };
+                        // TSDK 重建期放宽静默阈值到 90s（重建期间 encrypt 短暂失败是正常的）
+                        let effective_stale_ms = if rebuilding {
+                            stale_ms.max(90_000)
+                        } else {
+                            stale_ms
+                        };
                         match gateway.heartbeat(current_gid, &cv_for_req).await {
                             Ok(_reply) => {
                                 *last_resp.lock() = crate::utils::time::now_ms();
                                 *miss.lock() = 0;
                             }
                             Err(e) => {
-                                tracing::debug!(
+                                let miss_n = {
+                                    let mut g = miss.lock();
+                                    *g += 1;
+                                    *g
+                                };
+                                let hb_silence = now.saturating_sub(prev_hb);
+                                let inbound_silence = now.saturating_sub(prev_rx);
+                                tracing::warn!(
                                     account_id = %acc_id,
+                                    miss = miss_n,
+                                    max = MAX_HEARTBEAT_MISS,
+                                    heartbeat_s = hb_silence / 1000,
+                                    inbound_s = inbound_silence / 1000,
+                                    pending = gateway.pending_count(),
                                     error = %e,
-                                    "Heartbeat RPC 超时（忙时常见，不等于掉线）"
+                                    "心跳未响应"
                                 );
+                                if miss_n < MAX_HEARTBEAT_MISS
+                                    || inbound_silence <= effective_stale_ms
+                                {
+                                    return;
+                                }
+                                tracing::error!(account_id = %acc_id, "连续心跳超时且连接无入站数据，触发重连");
+                                crate::services::panel_log::log(
+                                    &acc_id,
+                                    "心跳",
+                                    format!(
+                                        "连接可能已断开 ({}s 无入站数据，连续 {} 次心跳失败)",
+                                        inbound_silence / 1000, miss_n
+                                    ),
+                                    crate::constants::PanelEvent::HeartbeatTimeout,
+                                    Some(serde_json::json!({
+                                        "module": "heartbeat",
+                                        "isWarn": true,
+                                        "inboundSilenceMs": inbound_silence,
+                                        "missCount": miss_n,
+                                    })),
+                                );
+                                crate::services::panel_log::log(
+                                    &acc_id,
+                                    "心跳",
+                                    "心跳超时，账号将停止运行...",
+                                    crate::constants::PanelEvent::HeartbeatTimeout,
+                                    Some(serde_json::json!({
+                                        "module": "heartbeat",
+                                        "isWarn": true
+                                    })),
+                                );
+                                if let Some(cb) = on_timeout.lock().as_ref() {
+                                    cb(acc_id.clone());
+                                }
                             }
                         }
                     });
@@ -935,6 +968,65 @@ impl WorkerLoop {
             normal_threshold_hours: snap.fertilizer_buy_normal_threshold_hours as f64,
         };
         let _ = commerce.check_and_buy_fertilizer_both(opts).await;
+    }
+
+    /// 神秘商人监控 tick（对齐 node `checkMysteryShopTick`）
+    async fn check_mystery_shop_once(self: &Arc<Self>) {
+        if !self.login_ready() {
+            return;
+        }
+        let automation =
+            crate::models::store::account_config::get_automation(Some(&self.account.id));
+        if !crate::services::mystery_shop_auto::is_watch_enabled(&automation) {
+            return;
+        }
+        let commerce = Arc::new(crate::services::commerce::CommerceService::new(
+            self.mall.clone(),
+            self.mystery_shop.clone(),
+            self.warehouse.clone(),
+        ));
+        // 克隆去重状态，避免 guard 跨 await（Future 需要 Send）
+        let mut state = self.mystery_auto_state.lock().clone();
+        let account_id = self.account.id.clone();
+        let outcome =
+            crate::services::mystery_shop_auto::check_tick(&commerce, &automation, &mut state, &account_id)
+                .await;
+        *self.mystery_auto_state.lock() = state;
+        if let Some((title, content)) = outcome.push {
+            // 推送走 worker 事件总线（面板通知 + relogin_reminder 通知链路）
+            let _ = self.event_tx.send(WorkerEvent::Notify {
+                account_id: account_id.clone(),
+                account_name: self.account.display_name.clone(),
+                title,
+                message: content,
+            });
+        }
+    }
+
+    /// 神秘商人监控定时器：登录后 10s 首查，之后每 10min tick（对齐 node `startMysteryShopTimer`）
+    pub fn start_mystery_shop_timer(self: &Arc<Self>, scheduler: &Scheduler) {
+        let this = Arc::clone(self);
+        scheduler.set_timeout_task(
+            "mystery_shop_initial",
+            Duration::from_millis(crate::services::mystery_shop_auto::AUTO_BUY_INITIAL_DELAY_MS),
+            Arc::new(move || {
+                let this = Arc::clone(&this);
+                Box::pin(async move {
+                    this.check_mystery_shop_once().await;
+                })
+            }),
+        );
+        let this = Arc::clone(self);
+        scheduler.set_interval_task(
+            "mystery_shop_timer",
+            Duration::from_millis(crate::services::mystery_shop_auto::AUTO_BUY_CHECK_INTERVAL_MS),
+            Arc::new(move || {
+                let this = Arc::clone(&this);
+                Box::pin(async move {
+                    this.check_mystery_shop_once().await;
+                })
+            }),
+        );
     }
 
     /// 对齐 TS `runUnifiedTick`：串行执行，避免并发请求过多导致超时

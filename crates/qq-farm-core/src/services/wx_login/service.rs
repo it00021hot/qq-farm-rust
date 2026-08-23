@@ -388,9 +388,14 @@ impl WxLoginService {
         Ok(YybCredentials { login_buffer, ..refreshed })
     }
 
-    /// 用 login_buffer 换网关 code；失败则续 token / buffer 再试。
+    /// 用 login_buffer 换网关 code。
     ///
-    /// 返回 `(wx.login code, 更新后的凭据)`。
+    /// 单个 login_buffer 是一次性的（重试复用必被 ManualAuth 拒绝，正式日志已
+    /// 100% 证实），但可凭 refresh_token / access_token 无限重签。因此：
+    /// - 未消费过的 buffer（刚扫码）直接换；
+    /// - 已消费过的先 `refresh_credentials_and_buffer` 重签再换，不再先撞旧 buffer。
+    ///
+    /// 返回 `(wx.login code, 更新后的凭据)`；成功换码后 `buffer_consumed` 置位。
     pub async fn mint_gateway_code(
         &self,
         creds: &YybCredentials,
@@ -400,27 +405,28 @@ impl WxLoginService {
         if current.login_buffer.trim().is_empty() {
             return Err(WxAuthError::dead("Missing Yingyongbao authorization"));
         }
-        match native_protocol::get_native_wx_login_code(&current.login_buffer, app_id).await {
-            Ok(code) => Ok((code, current)),
+        if current.buffer_consumed {
+            current = self.refresh_credentials_and_buffer(&current).await?;
+        }
+        let code = match native_protocol::get_native_wx_login_code(&current.login_buffer, app_id).await
+        {
+            Ok(code) => code,
             Err(first) => {
-                tracing::warn!("login_buffer mint failed, refreshing via Yingyongbao: {first}");
-                if !current.refresh_token.trim().is_empty() {
-                    current = self.refresh_credentials_and_buffer(&current).await?;
-                } else if !current.openid.trim().is_empty()
-                    && !current.access_token.trim().is_empty()
-                {
-                    let buf =
-                        self.refresh_login_buffer(&current.openid, &current.access_token).await?;
-                    current.login_buffer = buf;
-                } else {
+                tracing::warn!("login code mint failed, re-issuing login buffer: {first}");
+                let can_reissue = !current.refresh_token.trim().is_empty()
+                    || (!current.openid.trim().is_empty()
+                        && !current.access_token.trim().is_empty());
+                if !can_reissue {
                     return Err(map_native_mint_err(first));
                 }
-                let code = native_protocol::get_native_wx_login_code(&current.login_buffer, app_id)
+                current = self.refresh_credentials_and_buffer(&current).await?;
+                native_protocol::get_native_wx_login_code(&current.login_buffer, app_id)
                     .await
-                    .map_err(map_native_mint_err)?;
-                Ok((code, current))
+                    .map_err(map_native_mint_err)?
             }
-        }
+        };
+        current.buffer_consumed = true;
+        Ok((code, current))
     }
 
     /// 真实协议拿 wx.login code

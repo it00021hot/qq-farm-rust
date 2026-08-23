@@ -159,6 +159,20 @@ pub fn run() {
             commands::commerce::commerce_mall_purchase,
             commands::commerce::commerce_mystery_shop,
             commands::commerce::commerce_mystery_purchase,
+            // pets
+            commands::pets::pet_info,
+            commands::pets::pet_deploy,
+            commands::pets::pet_withdraw,
+            commands::pets::pet_food_use,
+            commands::pets::pet_protect_logs,
+            commands::pets::dog_skill_gifts_status,
+            commands::pets::dog_skill_gifts_claim,
+            // interaction items + illustrated
+            commands::friend::friend_interaction_items,
+            commands::friend::friend_interaction_items_use,
+            commands::friend::farm_interaction_items,
+            commands::friend::farm_interaction_items_use,
+            commands::friend::illustrated_snapshot,
             // settings
             commands::settings::get_settings_panel,
             commands::settings::save_settings,

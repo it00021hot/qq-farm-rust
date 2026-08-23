@@ -70,6 +70,9 @@ pub struct AccountSession {
     /// 当前 refresh_token 首次观察 Unix 秒
     #[serde(default)]
     pub wx_refresh_token_observed_at: i64,
+    /// login_buffer 是否已被原生协议消费（单次有效）
+    #[serde(default)]
+    pub wx_buffer_consumed: bool,
 }
 
 impl AccountSession {
@@ -99,6 +102,7 @@ impl AccountSession {
             wx_refresh_token: String::new(),
             wx_token_expires_at: 0,
             wx_refresh_token_observed_at: 0,
+            wx_buffer_consumed: false,
         }
     }
 
@@ -127,6 +131,7 @@ impl AccountSession {
             wx_refresh_token: acc.wx_refresh_token.clone(),
             wx_token_expires_at: acc.wx_token_expires_at,
             wx_refresh_token_observed_at: acc.wx_refresh_token_observed_at,
+            wx_buffer_consumed: acc.wx_buffer_consumed,
         }
     }
 
@@ -141,6 +146,7 @@ impl AccountSession {
             expires_at: self.wx_token_expires_at,
             expires_in: 7200,
             refresh_token_observed_at: self.wx_refresh_token_observed_at,
+            buffer_consumed: self.wx_buffer_consumed,
         }
     }
 

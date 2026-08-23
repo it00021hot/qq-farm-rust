@@ -577,6 +577,23 @@ fn apply_automation_bool(a: &mut AutomationConfig, key: &str, value: bool) {
         "sell" => a.sell = value,
         "fertilizer_multi_season" | "fertilizerMultiSeason" => a.fertilizer_multi_season = value,
         "skip_own_weed_bug" | "skipOwnWeedBug" => a.skip_own_weed_bug = value,
+        "mystery_shop_auto_buy" | "mysteryShopAutoBuy" => a.mystery_shop_auto_buy = value,
+        "mystery_shop_arrival_notify" | "mysteryShopArrivalNotify" => {
+            a.mystery_shop_arrival_notify = value
+        }
+        "mystery_shop_purchase_notify" | "mysteryShopPurchaseNotify" => {
+            a.mystery_shop_purchase_notify = value
+        }
+        "mystery_shop_allow_gold" | "mysteryShopAllowGold" => a.mystery_shop_allow_gold = value,
+        "mystery_shop_allow_coupon" | "mysteryShopAllowCoupon" => {
+            a.mystery_shop_allow_coupon = value
+        }
+        "mystery_shop_allow_gold_bean" | "mysteryShopAllowGoldBean" => {
+            a.mystery_shop_allow_gold_bean = value
+        }
+        "mystery_shop_allow_diamond" | "mysteryShopAllowDiamond" => {
+            a.mystery_shop_allow_diamond = value
+        }
         _ => {}
     }
 }

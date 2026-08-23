@@ -142,17 +142,17 @@ message QixiBridgeConfig {
 }
 
 message QixiGiftExchange {
-    ActivityItem sent_item = 1;
-    ActivityItem received_item = 2;
-    bool field_3 = 3;
-    bool enabled = 4;
+    repeated ActivityItem cost_items = 1;
+    repeated ActivityItem receive_items = 2;
+    int64 gift_type = 3;
+    int64 content = 4;
 }
 
 message QixiGiftProgress {
-    int64 sent_count = 1;
-    int64 field_2 = 2;
-    int64 field_3 = 3;
-    QixiGiftExchange exchange = 4;
+    int64 total_send_count = 1;
+    int64 total_send_limit = 2;
+    int64 total_receive_limit = 3;
+    repeated QixiGiftExchange gifts = 4;
 }
 
 message QingMeiBrewStarted {
@@ -231,7 +231,7 @@ message SettleQingMeiBrewRequest {
 }
 
 message ClaimQixiBridgeRewardsRequest {
-    message Params { int64 claim_mode = 1; }
+    message Params { int64 step = 1; }
     int64 activity_id = 1;
     int64 operate_type = 2;
     Params params = 125;
@@ -239,8 +239,8 @@ message ClaimQixiBridgeRewardsRequest {
 
 message GiftQixiSachetRequest {
     message Params {
-        int64 friend_gid = 1;
-        int64 count = 2;
+        int64 target_gid = 1;
+        int64 msg_text_id = 2;
     }
     int64 activity_id = 1;
     int64 operate_type = 2;
@@ -248,12 +248,13 @@ message GiftQixiSachetRequest {
 }
 
 message QixiGiftResult {
-    bool success = 1;
+    int64 total_send_count = 1;
 }
 
 message QixiBridgeRewardResult {
-    repeated int64 claimed_stages = 1 [packed = true];
-    repeated corepb.Item rewards = 2;
+    repeated int64 unlocked_steps = 1 [packed = true];
+    repeated corepb.Item awards = 2;
+    bool completed = 3;
 }
 
 message ActivityOperateReply {

@@ -70,6 +70,9 @@ pub struct AccountRecord {
     /// 当前 refresh_token 首次观察 Unix 秒
     #[serde(default, skip_serializing_if = "is_zero_i64")]
     pub wx_refresh_token_observed_at: i64,
+    /// login_buffer 是否已被原生协议消费（单次有效；已消费则换码前需重签）
+    #[serde(default)]
+    pub wx_buffer_consumed: bool,
 }
 
 impl AccountRecord {
@@ -97,6 +100,7 @@ pub fn clear_wx_auth(id: &str) -> bool {
     acc.wx_refresh_token.clear();
     acc.wx_token_expires_at = 0;
     acc.wx_refresh_token_observed_at = 0;
+    acc.wx_buffer_consumed = false;
     acc.code.clear();
     true
 }
@@ -115,6 +119,7 @@ pub fn persist_yyb_credentials(id: &str, patch: YybCredentialPatch) -> bool {
             acc.wx_openid = v;
         }
     }
+    let has_new_buffer = patch.wx_login_buffer.as_ref().is_some_and(|b| !b.trim().is_empty());
     if let Some(v) = patch.wx_login_buffer {
         if !v.trim().is_empty() {
             acc.wx_login_buffer = v;
@@ -132,6 +137,12 @@ pub fn persist_yyb_credentials(id: &str, patch: YybCredentialPatch) -> bool {
     if let Some(v) = patch.wx_refresh_token_observed_at {
         acc.wx_refresh_token_observed_at = v;
     }
+    if let Some(v) = patch.wx_buffer_consumed {
+        acc.wx_buffer_consumed = v;
+    } else if has_new_buffer {
+        // 新签发的 buffer 尚未消费
+        acc.wx_buffer_consumed = false;
+    }
     if !acc.wx_refresh_token.trim().is_empty() && acc.wx_refresh_token_observed_at <= 0 {
         acc.wx_refresh_token_observed_at = unix_now();
     }
@@ -148,6 +159,7 @@ pub struct YybCredentialPatch {
     pub wx_refresh_token: Option<String>,
     pub wx_token_expires_at: Option<i64>,
     pub wx_refresh_token_observed_at: Option<i64>,
+    pub wx_buffer_consumed: Option<bool>,
 }
 
 fn is_zero_i64(v: &i64) -> bool {
@@ -473,5 +485,47 @@ mod tests {
         assert!(saved.wx_refresh_token.is_empty());
         assert_eq!(saved.wx_refresh_token_observed_at, 0);
         assert!(saved.code.is_empty());
+        assert!(!saved.wx_buffer_consumed);
+    }
+
+    #[test]
+    #[serial(accounts)]
+    fn buffer_consumed_flag_persists() {
+        reset();
+        add_or_update_account(make_account("1", "wx", "u1"));
+        // 新签发 buffer（未显式给 consumed）→ 默认未消费
+        assert!(persist_yyb_credentials(
+            "1",
+            YybCredentialPatch {
+                wx_login_buffer: Some("buf".into()),
+                ..Default::default()
+            }
+        ));
+        let saved = get_accounts().into_iter().find(|a| a.id == "1").unwrap();
+        assert!(!saved.wx_buffer_consumed);
+
+        // 换码成功 → consumed 置位并持久化
+        assert!(persist_yyb_credentials(
+            "1",
+            YybCredentialPatch {
+                wx_login_buffer: Some("buf2".into()),
+                wx_buffer_consumed: Some(true),
+                ..Default::default()
+            }
+        ));
+        let saved = get_accounts().into_iter().find(|a| a.id == "1").unwrap();
+        assert!(saved.wx_buffer_consumed);
+
+        // 重签新 buffer → 回到未消费
+        assert!(persist_yyb_credentials(
+            "1",
+            YybCredentialPatch {
+                wx_login_buffer: Some("buf3".into()),
+                wx_buffer_consumed: Some(false),
+                ..Default::default()
+            }
+        ));
+        let saved = get_accounts().into_iter().find(|a| a.id == "1").unwrap();
+        assert!(!saved.wx_buffer_consumed);
     }
 }

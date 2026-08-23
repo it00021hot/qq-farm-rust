@@ -23,6 +23,9 @@ pub trait AceSender: Send + Sync + 'static {
     /// 发请求给服务器；返回 body 字节（等到回包或断线，不走业务锁）
     async fn send(&self, service: &str, method: &str, body: &[u8])
         -> crate::error::Result<Vec<u8>>;
+
+    /// 网关是否在线（断线时 ACE 停止产出，避免 wasm 数据堆积导致内存涨满）
+    fn online(&self) -> bool;
 }
 
 /// ACE runtime 共享状态
@@ -83,11 +86,14 @@ impl AceShared {
             ace_anti_data_task(self.clone()),
         );
 
-        // 2. process_received_data 5s
+        // 2. process_received_data 5s（离线短路，避免 wasm 状态堆积）
         self.scheduler.set_interval_task(
             "process_received_data",
             std::time::Duration::from_secs(5),
             ace_simple_task(self.clone(), |s| {
+                if !s.sender_online() {
+                    return;
+                }
                 if let Some(tsdk) = s.tsdk.lock().as_ref() {
                     let _ = tsdk.process_received_data();
                 }
@@ -99,6 +105,9 @@ impl AceShared {
             "heartbeat_tick",
             std::time::Duration::from_secs(25),
             ace_simple_task(self.clone(), |s| {
+                if !s.sender_online() {
+                    return;
+                }
                 if let Some(tsdk) = s.tsdk.lock().as_ref() {
                     let _ = tsdk.heartbeat_tick();
                 }
@@ -110,6 +119,9 @@ impl AceShared {
             "speed_check",
             std::time::Duration::from_secs(30),
             ace_simple_task(self.clone(), |s| {
+                if !s.sender_online() {
+                    return;
+                }
                 let now = crate::utils::time::now_ms();
                 let last = s.last_speed_check_at.swap(now, Ordering::SeqCst);
                 let elapsed = if last == 0 { 30_000 } else { (now - last).max(0) as u64 };
@@ -124,11 +136,19 @@ impl AceShared {
             "status_report",
             std::time::Duration::from_secs(150),
             ace_simple_task(self.clone(), |s| {
+                if !s.sender_online() {
+                    return;
+                }
                 if let Some(tsdk) = s.tsdk.lock().as_ref() {
                     let _ = tsdk.send_status();
                 }
             }),
         );
+    }
+
+    /// 网关是否在线（sender 未注入或已离线返回 false）
+    fn sender_online(&self) -> bool {
+        self.sender.lock().as_ref().is_some_and(|s| s.online())
     }
 
     /// 停止 ACE runtime
@@ -176,6 +196,12 @@ impl AceShared {
     }
 
     async fn send_anti_data_inner(self: &Arc<Self>) -> crate::error::Result<()> {
+        // 断线短路：离线时上报必然失败，而 get_data_to_server 产出的数据
+        // 永远等不到 send_data_from_server 回灌，wasm 内部队列会持续增长，
+        // 最终 memory.grow 失败 → alloc failed（对齐 node clearNetworkRuntime 停 ACE）。
+        if !self.sender_online() {
+            return Ok(());
+        }
         let tsdk_clone = {
             let guard = self.tsdk.lock();
             guard.as_ref().cloned()
@@ -307,6 +333,10 @@ impl AceSender for GatewayAceSender {
             .request_unlocked(service, method, body)
             .await
             .map_err(crate::error::Error::Network)
+    }
+
+    fn online(&self) -> bool {
+        self.gateway.phase() == crate::network::gateway::ConnectionPhase::Online
     }
 }
 

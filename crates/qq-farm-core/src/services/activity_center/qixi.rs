@@ -1,9 +1,9 @@
 use prost::Message;
 
 use crate::constants::{
-    ACTIVITY_SERVICE, QIXI_BRIDGE_ACTIVITY_ID, QIXI_BRIDGE_OPERATE_TYPE, QIXI_FEATHER_ITEM_ID,
-    QIXI_GIFT_ACTIVITY_ID, QIXI_GIFT_OPERATE_TYPE, QIXI_GROUP_ID, QIXI_RECEIVED_SACHET_ITEM_ID,
-    QIXI_SACHET_ITEM_ID,
+    ACTIVITY_SERVICE, QIXI_BRIDGE_ACTIVITY_ID, QIXI_BRIDGE_OPERATE_TYPE, QIXI_DEW_ITEM_ID,
+    QIXI_FEATHER_ITEM_ID, QIXI_GIFT_ACTIVITY_ID, QIXI_GIFT_OPERATE_TYPE, QIXI_GROUP_ID,
+    QIXI_RECEIVED_SACHET_ITEM_ID, QIXI_SACHET_ITEM_ID,
 };
 use crate::error::Result;
 use crate::proto::generated::corepb::Item as CoreItem;
@@ -64,7 +64,12 @@ impl ActivityCenterService {
         let items = bag.item_bag.as_ref().map(|b| b.items.as_slice()).unwrap_or(&[]);
         bag_balances(
             items,
-            &[QIXI_FEATHER_ITEM_ID, QIXI_SACHET_ITEM_ID, QIXI_RECEIVED_SACHET_ITEM_ID],
+            &[
+                QIXI_FEATHER_ITEM_ID,
+                QIXI_SACHET_ITEM_ID,
+                QIXI_RECEIVED_SACHET_ITEM_ID,
+                QIXI_DEW_ITEM_ID,
+            ],
         )
     }
 
@@ -134,24 +139,21 @@ impl ActivityCenterService {
         let gift_enabled = active && (balances.is_none() || sachet_count > 0);
         let display_items: Vec<ItemDto> =
             config.display_items.iter().map(activity_item_dto).collect();
-        let mut exchange = serde_json::json!({
-            "sentItem": item_from_id(0, 0),
-            "receivedItem": item_from_id(0, 0),
-            "field3": false,
-            "enabled": false,
-        });
-        if let Some(ex) = gift.exchange.as_ref() {
-            if let Some(sent) = ex.sent_item.as_ref() {
-                exchange["sentItem"] =
-                    serde_json::to_value(activity_item_dto(sent)).unwrap_or_default();
-            }
-            if let Some(received) = ex.received_item.as_ref() {
-                exchange["receivedItem"] =
-                    serde_json::to_value(activity_item_dto(received)).unwrap_or_default();
-            }
-            exchange["field3"] = serde_json::json!(ex.field_3);
-            exchange["enabled"] = serde_json::json!(ex.enabled);
-        }
+        let dew_balance = balance_text(balances, QIXI_DEW_ITEM_ID);
+        let dew_count = dew_balance.as_deref().and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+        let dew_enabled = active && (balances.is_none() || dew_count > 0);
+        let exchanges: Vec<serde_json::Value> = gift
+            .gifts
+            .iter()
+            .map(|entry| {
+                serde_json::json!({
+                    "costItems": entry.cost_items.iter().map(activity_item_dto).collect::<Vec<_>>(),
+                    "receiveItems": entry.receive_items.iter().map(activity_item_dto).collect::<Vec<_>>(),
+                    "giftType": entry.gift_type.to_string(),
+                    "content": entry.content.to_string(),
+                })
+            })
+            .collect();
         let name = if bridge_activity.name.trim().is_empty() {
             "鹊桥寄情".to_string()
         } else {
@@ -173,10 +175,18 @@ impl ActivityCenterService {
             "feather": item_from_id(QIXI_FEATHER_ITEM_ID, feather_balance.as_deref().and_then(|v| v.parse().ok()).unwrap_or(0)),
             "sachet": item_from_id(QIXI_SACHET_ITEM_ID, sachet_count),
             "receivedSachet": item_from_id(QIXI_RECEIVED_SACHET_ITEM_ID, received_balance.as_deref().and_then(|v| v.parse().ok()).unwrap_or(0)),
+            "dew": {
+                "itemId": QIXI_DEW_ITEM_ID.to_string(),
+                "count": dew_count.to_string(),
+                "balance": dew_balance,
+                "balanceKnown": balances.is_some(),
+                "usable": dew_enabled,
+            },
             "balances": {
                 "feather": feather_balance,
                 "sachet": sachet_balance,
                 "receivedSachet": received_balance,
+                "dew": dew_balance,
                 "known": balances.is_some(),
             },
             "bridge": {
@@ -187,10 +197,11 @@ impl ActivityCenterService {
                 "displayItems": display_items,
             },
             "gift": {
-                "sentCount": gift.sent_count.to_string(),
-                "field2Code": gift.field_2.to_string(),
-                "field3Code": gift.field_3.to_string(),
-                "exchange": exchange,
+                "sentCount": gift.total_send_count.to_string(),
+                "sendLimit": gift.total_send_limit.to_string(),
+                "receiveLimit": gift.total_receive_limit.to_string(),
+                "exchanges": exchanges,
+                "messageTextId": "15",
             },
             "actions": {
                 "bridge": {
@@ -201,6 +212,11 @@ impl ActivityCenterService {
                 "gift": {
                     "enabled": gift_enabled,
                     "available": gift_enabled,
+                    "availabilityKnown": balances.is_some()
+                },
+                "dew": {
+                    "enabled": dew_enabled,
+                    "available": dew_enabled,
                     "availabilityKnown": balances.is_some()
                 },
             },
@@ -239,7 +255,7 @@ impl ActivityCenterService {
             activity_id: QIXI_BRIDGE_ACTIVITY_ID,
             operate_type: QIXI_BRIDGE_OPERATE_TYPE,
             params: Some(crate::proto::generated::gamepb::activitypb::claim_qixi_bridge_rewards_request::Params {
-                claim_mode: 0,
+                step: 0,
             }),
         };
         let body = self.gateway.request(ACTIVITY_SERVICE, "Operate", &req.encode_to_vec()).await?;
@@ -254,8 +270,8 @@ impl ActivityCenterService {
         let mut claimed = Vec::new();
         let mut rewards: Vec<ItemDto> = Vec::new();
         if let Some(result) = reply.qixi_bridge_result.as_ref() {
-            claimed = result.claimed_stages.iter().map(ToString::to_string).collect();
-            rewards.extend(result.rewards.iter().map(item_dto));
+            claimed = result.unlocked_steps.iter().map(ToString::to_string).collect();
+            rewards.extend(result.awards.iter().map(item_dto));
         }
         if rewards.is_empty() {
             rewards.extend(reply.rewards.iter().map(item_dto));
@@ -274,8 +290,8 @@ impl ActivityCenterService {
         }))
     }
 
-    /// 向好友赠送鹊羽香囊。
-    pub async fn gift_qixi_sachet(&self, friend_gid: i64, count: i64) -> Result<serde_json::Value> {
+    /// 向好友赠送 1 个鹊羽香囊（对齐 node：每次固定赠 1 个，可附赠言文案 ID）。
+    pub async fn gift_qixi_sachet(&self, friend_gid: i64, message_text_id: i64) -> Result<serde_json::Value> {
         if friend_gid <= 0 {
             return Err(qixi_err(
                 ActivityErrorCode::InvalidQixiFriendGid,
@@ -283,13 +299,8 @@ impl ActivityCenterService {
             )
             .into());
         }
-        if count <= 0 {
-            return Err(qixi_err(
-                ActivityErrorCode::InvalidQixiSachetCount,
-                "赠送数量必须是正十进制整数",
-            )
-            .into());
-        }
+        // 对齐 node QIXI_DEFAULT_GIFT_MESSAGE_TEXT_ID = 15
+        let message_text_id = if message_text_id <= 0 { 15 } else { message_text_id };
         let _guard = self.mutation_lock.lock().await;
         let activity = self.get_current_qixi_activity().await?;
         let enabled = activity
@@ -311,7 +322,7 @@ impl ActivityCenterService {
                 .and_then(|v| v.as_str())
                 .and_then(|s| s.parse::<i64>().ok())
                 .unwrap_or(0);
-            if have < count {
+            if have < 1 {
                 return Err(qixi_err(
                     ActivityErrorCode::InsufficientQixiSachet,
                     "鹊羽香囊数量不足",
@@ -324,8 +335,8 @@ impl ActivityCenterService {
             operate_type: QIXI_GIFT_OPERATE_TYPE,
             params: Some(
                 crate::proto::generated::gamepb::activitypb::gift_qixi_sachet_request::Params {
-                    friend_gid,
-                    count,
+                    target_gid: friend_gid,
+                    msg_text_id: message_text_id,
                 },
             ),
         };
@@ -338,14 +349,18 @@ impl ActivityCenterService {
                 qixi_err(ActivityErrorCode::QixiResponseInvalid, "赠送香囊回包不匹配").into()
             );
         }
-        if reply.qixi_gift_result.as_ref().is_some_and(|r| !r.success) {
-            return Err(qixi_err(ActivityErrorCode::QixiGiftFailed, "赠送鹊羽香囊失败").into());
-        }
+        let total_send_count = reply
+            .qixi_gift_result
+            .as_ref()
+            .map(|r| r.total_send_count.to_string())
+            .unwrap_or_default();
         let snapshot = self.snapshot_with_shop(None).await.ok();
         Ok(serde_json::json!({
             "friendGid": friend_gid.to_string(),
-            "count": count.to_string(),
-            "message": format!("已赠送 {count} 个鹊羽香囊"),
+            "count": "1",
+            "messageTextId": message_text_id.to_string(),
+            "totalSendCount": total_send_count,
+            "message": format!("已向好友 {friend_gid} 赠送 1 个鹊羽香囊"),
             "snapshot": snapshot,
         }))
     }
