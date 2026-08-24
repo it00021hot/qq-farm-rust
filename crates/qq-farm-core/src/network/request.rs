@@ -140,6 +140,17 @@ impl RequestManager {
         self.inner.pending.lock().get(&seq).map(|p| (p.service_name.clone(), p.method_name.clone()))
     }
 
+    /// 列出所有 pending 请求的 method 名（诊断用：掉线时看卡住了哪些请求）
+    #[must_use]
+    pub fn pending_methods(&self) -> Vec<String> {
+        self.inner
+            .pending
+            .lock()
+            .values()
+            .map(|p| p.method_name.clone())
+            .collect()
+    }
+
     /// 拒绝所有待处理请求（连接断开时调用），并唤醒等待方
     pub fn reject_all(&self) -> usize {
         let mut pending_map = self.inner.pending.lock();

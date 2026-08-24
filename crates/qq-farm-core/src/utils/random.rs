@@ -62,6 +62,63 @@ pub fn create_gateway_token() -> String {
     token
 }
 
+/// 一次性 TSDK 初始化凭据 + 随机 token 提供器（1:1 翻译 `gateway-token.ts::GatewayTokenProvider`）。
+///
+/// 登录成功后 `bindUser` 产出加密初始化凭据，stage 进来；下一条出站消息的
+/// `token` 字段携带它（恰好一次，原子消费），之后恢复随机 token。
+pub struct GatewayTokenProvider {
+    pending_init_token: parking_lot::Mutex<Option<String>>,
+}
+
+impl GatewayTokenProvider {
+    #[must_use]
+    pub fn new() -> Self {
+        Self { pending_init_token: parking_lot::Mutex::new(None) }
+    }
+
+    /// 暂存一次性初始化凭据，返回凭据长度（0 表示忽略）。
+    ///
+    /// 对齐 bot `stageInitToken`：空串忽略；超长（>64KB）或含非可打印 ASCII
+    /// 视为格式无效——这里与 bot 一致抛错由调用方降级为 warn。
+    pub fn stage_init_token(&self, value: &str) -> Result<usize, String> {
+        let token = value.trim();
+        if token.is_empty() {
+            return Ok(0);
+        }
+        if token.len() > 64 * 1024 || !token.bytes().all(|b| (0x21..=0x7E).contains(&b)) {
+            return Err("TSDK 初始化凭据格式无效".to_string());
+        }
+        let len = token.len();
+        *self.pending_init_token.lock() = Some(token.to_string());
+        Ok(len)
+    }
+
+    /// 取下一条消息的 token：有暂存凭据则原子消费返回一次，否则随机 token。
+    pub fn next(&self) -> String {
+        self.next_marked().0
+    }
+
+    /// 同 [`next`]，并返回该 token 是否为暂存的一次性凭据（诊断用）。
+    pub fn next_marked(&self) -> (String, bool) {
+        let staged = self.pending_init_token.lock().take();
+        match staged {
+            Some(token) => (token, true),
+            None => (create_gateway_token(), false),
+        }
+    }
+
+    /// 清空暂存凭据（断线时调用，对齐 bot `clearNetworkRuntime → clear()`）。
+    pub fn clear(&self) {
+        *self.pending_init_token.lock() = None;
+    }
+}
+
+impl Default for GatewayTokenProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // =====================================================================
 // 单元测试
 // =====================================================================
@@ -127,5 +184,47 @@ mod tests {
         let b = create_gateway_token();
         // 极小概率相同
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn token_provider_stages_and_consumes_once() {
+        let p = GatewayTokenProvider::new();
+        // 未 stage 时返回随机 token
+        let random_one = p.next();
+        assert!(random_one.ends_with('=') && random_one.len() >= 65);
+
+        let len = p.stage_init_token("  abc123  ").expect("valid token");
+        assert_eq!(len, 6);
+        // 恰好消费一次：第一次返回 staged，第二次恢复随机
+        assert_eq!(p.next(), "abc123");
+        let after = p.next();
+        assert_ne!(after, "abc123");
+        assert!(after.ends_with('='));
+    }
+
+    #[test]
+    fn token_provider_empty_is_ignored() {
+        let p = GatewayTokenProvider::new();
+        assert_eq!(p.stage_init_token("   ").expect("empty ok"), 0);
+        assert!(p.next().ends_with('='));
+    }
+
+    #[test]
+    fn token_provider_rejects_invalid_format() {
+        let p = GatewayTokenProvider::new();
+        assert!(p.stage_init_token("has space").is_err());
+        assert!(p.stage_init_token("中文凭据").is_err());
+        let long = "x".repeat(64 * 1024 + 1);
+        assert!(p.stage_init_token(&long).is_err());
+        // 被拒绝后不影响随机 token 流
+        assert!(p.next().ends_with('='));
+    }
+
+    #[test]
+    fn token_provider_clear_drops_staged() {
+        let p = GatewayTokenProvider::new();
+        p.stage_init_token("cred").expect("valid");
+        p.clear();
+        assert_ne!(p.next(), "cred");
     }
 }

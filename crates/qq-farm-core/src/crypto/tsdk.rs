@@ -44,7 +44,7 @@ pub const WASM_CONSECUTIVE_FAIL_THRESHOLD: u32 = 3;
 
 // ===== TSDK 元信息（与原项目保持一致） =====
 
-const TSDK_VERSION: &str = "v3.8.6.1785239995";
+const TSDK_VERSION: &str = "v3.9.0.1787056896";
 const MINI_PROGRAM_APP_ID: &str = "wx5306c5978fdb76e4";
 const TSDK_GAME_ID: u32 = 3167;
 const TSDK_APP_KEY: &str = "0";
@@ -602,6 +602,16 @@ impl TsdkRuntime {
         };
         let length_ptr = length_guard.ptr();
 
+        // 对齐 bot tsdk-runtime.ts:357-364：调 N() 前先把 length 槽清零，
+        // 避免 wasm 未写入时读到陈旧堆数据 → 发出垃圾长度的 AntiData。
+        if let Err(e) = write_bytes(store, &exports.memory, length_ptr, &[0, 0, 0, 0]) {
+            length_guard.free_now(store, exports);
+            if self.record_wasm_failure() {
+                self.request_reset();
+            }
+            return Err(e);
+        }
+
         // 2. 调 N(lengthPtr) → 返回 data_ptr（length 由 wasm 写入 lengthPtr）
         let mut ret = [Val::I32(0); 1];
         let n_result = exports
@@ -643,20 +653,8 @@ impl TsdkRuntime {
             return Ok(Vec::new());
         }
         let data_len = raw_len as usize;
-        if data_len > MAX_SANE_LEN {
-            // 异常值：不要试图读取（避免 panic），记录并退化
-            tracing::warn!(
-                data_ptr,
-                data_len,
-                max = MAX_SANE_LEN,
-                "tsdk get_data_to_server 收到异常长度，丢弃并请求 wasm 重建"
-            );
-            if self.record_wasm_failure() {
-                self.request_reset();
-            }
-            length_guard.free_now(store, exports);
-            return Ok(Vec::new());
-        }
+        // 对齐 bot：只做内存边界检查（ensureBounds），无 64KB 上限；
+        // 越界由下方 read_bytes 的 ensure_bounds 自然报错。
 
         // 5. 读 data
         let data_result = read_bytes(store, &exports.memory, data_ptr, data_len);
@@ -869,12 +867,32 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
          -> WasmResult<()> { Err(anyhow!("TSDK assertion")) },
     )?;
 
-    // b: writeStringToFile — 阶段 0 跳过（返回 0）
+    // b: writeStringToFile（对齐 bot tsdk-runtime.ts:148-158：真实写文件，utf-8）
     linker.func_wrap(
         "a",
         "b",
-        |_c: wasmtime::Caller<'_, HostState>, _f: i32, _d: i32, _e: i32| -> WasmResult<i32> {
-            Ok(0)
+        |mut c: wasmtime::Caller<'_, HostState>, f: i32, d: i32, _e: i32| -> WasmResult<i32> {
+            let data_dir = c.data().data_dir.clone();
+            let (file, content) = match (
+                read_cstring_in_caller(&mut c, f),
+                read_cstring_in_caller(&mut c, d),
+            ) {
+                (Ok(f), Ok(d)) => (f, d),
+                (Err(e), _) | (_, Err(e)) => return Err(e),
+            };
+            let Some(target) = resolve_data_path(&data_dir, &file) else {
+                tracing::warn!(file = %file, "TSDK 文件写入失败: 路径越出账号目录");
+                return Ok(0);
+            };
+            match std::fs::create_dir_all(target.parent().unwrap_or(std::path::Path::new(".")))
+                .and_then(|()| std::fs::write(&target, content.as_bytes()))
+            {
+                Ok(()) => Ok(1),
+                Err(e) => {
+                    tracing::warn!(error = %e, "TSDK 文件写入失败");
+                    Ok(0)
+                }
+            }
         },
     )?;
 
@@ -915,19 +933,37 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
     linker
         .func_wrap("a", "f", |_c: wasmtime::Caller<'_, HostState>| -> WasmResult<()> { Ok(()) })?;
 
-    // g: readFileToString — 阶段 0 跳过
+    // g: readFileToString（对齐 bot tsdk-runtime.ts:169-176：真实读文件，失败返回 0）
     linker.func_wrap(
         "a",
         "g",
-        |_c: wasmtime::Caller<'_, HostState>,
-         _f: i32,
-         _o: i32,
-         _cap: i32,
-         _e: i32|
-         -> WasmResult<i32> { Ok(0) },
+        |mut c: wasmtime::Caller<'_, HostState>, f: i32, o: i32, cap: i32, _e: i32| -> WasmResult<i32> {
+            let data_dir = c.data().data_dir.clone();
+            let file = match read_cstring_in_caller(&mut c, f) {
+                Ok(f) => f,
+                Err(e) => return Err(e),
+            };
+            let Some(target) = resolve_data_path(&data_dir, &file) else {
+                return Ok(0);
+            };
+            match std::fs::read_to_string(&target) {
+                Ok(content) => {
+                    let bytes = content.as_bytes();
+                    if (bytes.len() as i32) < cap {
+                        write_cstring_in_caller(&mut c, o, bytes)?;
+                        Ok(1)
+                    } else {
+                        Ok(0)
+                    }
+                }
+                Err(_) => Ok(0),
+            }
+        },
     )?;
 
-    // h: clock_gettime — 写当前时间（微秒）
+    // h: clock_gettime — 对齐 bot tsdk-runtime.ts:177-185：
+    // clock 0 = 墙钟 ms（用服务器同步时钟），clock 1~3 = 进程启动以来单调 ms；
+    // 值 = round(ms * 1e6)（纳秒），按 u32 low/high 写入。
     linker.func_wrap(
         "a",
         "h",
@@ -940,19 +976,17 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
             if !(0..=3).contains(&clock_id) {
                 return Ok(28);
             }
-            let micros = if clock_id == 0 {
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_micros() as i64)
-                    .unwrap_or(0)
+            let ms = if clock_id == 0 {
+                crate::utils::time::now_ms() as u64
             } else {
-                0
+                process_start().elapsed().as_millis() as u64
             };
+            let value = (ms as u128) * 1_000_000;
             let mem = c.data().memory.clone();
             if let Some(m) = mem {
                 let data = m.data_mut(&mut c);
-                let low = (micros as u64 & 0xFFFF_FFFF) as u32;
-                let high = ((micros as u64) >> 32) as u32;
+                let low = (value & 0xFFFF_FFFF) as u32;
+                let high = ((value >> 32) & 0xFFFF_FFFF) as u32;
                 write_u32_le(data, out, low);
                 write_u32_le(data, out + 4, high);
             }
@@ -960,12 +994,12 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
         },
     )?;
 
-    // i: dataDir
+    // i: dataDir（对齐 bot：目录 + 平台路径分隔符）
     linker.func_wrap(
         "a",
         "i",
         |mut c: wasmtime::Caller<'_, HostState>, ptr: i32, cap: i32| -> WasmResult<i32> {
-            let dir = format!("{}/", c.data().data_dir);
+            let dir = format!("{}{}", c.data().data_dir, std::path::MAIN_SEPARATOR);
             let bytes = dir.as_bytes();
             if bytes.len() < cap as usize {
                 write_cstring_in_caller(&mut c, ptr, bytes)?;
@@ -976,14 +1010,29 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
         },
     )?;
 
-    // j: deviceText
+    // j: deviceText（对齐 bot getDeviceText tsdk-runtime.ts:131-137：
+    // `{deviceId};{os};{sysSoftware};Node.js;`，来自运行时配置——与登录 device_info 同源）
     linker.func_wrap(
         "a",
         "j",
         |mut c: wasmtime::Caller<'_, HostState>, ptr: i32, cap: i32| -> WasmResult<i32> {
-            let text = b"rust-runtime;darwin;1.0;Rust;";
-            if text.len() < cap as usize {
-                write_cstring_in_caller(&mut c, ptr, text)?;
+            let rt = crate::config::get_runtime_config();
+            let model = if rt.device_info.device_id.is_empty() {
+                format!("{} {}", std::env::consts::OS, std::env::consts::ARCH)
+            } else {
+                rt.device_info.device_id.clone()
+            };
+            let platform =
+                if rt.os.is_empty() { std::env::consts::OS.to_string() } else { rt.os.clone() };
+            let system = if rt.device_info.sys_software.is_empty() {
+                platform.clone()
+            } else {
+                rt.device_info.sys_software.clone()
+            };
+            let text = format!("{model};{platform};{system};Node.js;");
+            let bytes = text.as_bytes();
+            if bytes.len() < cap as usize {
+                write_cstring_in_caller(&mut c, ptr, bytes)?;
                 Ok(1)
             } else {
                 Ok(0)
@@ -991,7 +1040,7 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
         },
     )?;
 
-    // k: RUNTIME_TABLE
+    // k: RUNTIME_TABLE（对齐 bot writeBytes：返回写入字节数 59）
     linker.func_wrap(
         "a",
         "k",
@@ -1003,7 +1052,7 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
                     let off = ptr as usize;
                     if off + RUNTIME_TABLE.len() <= data.len() {
                         data[off..off + RUNTIME_TABLE.len()].copy_from_slice(&RUNTIME_TABLE);
-                        return Ok(1);
+                        return Ok(RUNTIME_TABLE.len() as i32);
                     }
                 }
             }
@@ -1057,25 +1106,60 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
          -> WasmResult<()> { Ok(()) },
     )?;
 
-    // p: stat — 阶段 0 跳过
+    // p: stat（对齐 bot tsdk-runtime.ts:193-200：真实 stat 并回调 wasm 的 y(mode,size,atime,mtime)）
     linker.func_wrap(
         "a",
         "p",
-        |_c: wasmtime::Caller<'_, HostState>, _f: i32| -> WasmResult<i32> { Ok(0) },
+        |mut c: wasmtime::Caller<'_, HostState>, f: i32| -> WasmResult<i32> {
+            let data_dir = c.data().data_dir.clone();
+            let file = match read_cstring_in_caller(&mut c, f) {
+                Ok(f) => f,
+                Err(e) => return Err(e),
+            };
+            let Some(target) = resolve_data_path(&data_dir, &file) else {
+                return Ok(0);
+            };
+            let Ok(meta) = std::fs::metadata(&target) else {
+                return Ok(0);
+            };
+            let size = meta.len().min(0x7FFF_FFFF) as i32;
+            let atime = meta
+                .accessed()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            // 回调 wasm 导出 y(mode, size, atime, mtime)
+            let y = c
+                .get_export("y")
+                .and_then(wasmtime::Extern::into_func);
+            let Some(y) = y else {
+                return Ok(0);
+            };
+            let mut ret = [Val::I32(0); 1];
+            // mode 沿用 Node Windows 语义（普通文件 0o100666 = 33206）
+            y.call(&mut c, &[Val::I32(33_206), Val::I32(size), Val::I32(atime as i32), Val::I32(mtime as i32)], &mut ret)
+                .map_err(|e| anyhow!("TSDK stat 回调 y() 失败: {e}"))?;
+            Ok(i32_val(&ret, 0).unwrap_or(0))
+        },
     )?;
 
-    // q: serverTime — 写本地时间（不发 anticheatexpert 请求）
+    // q: serverTime — 写服务器同步时钟秒（bot 先写本地再异步用 HTTP Date 校正；
+    // rust 的 now_ms 已由 Login/Heartbeat 回包持续同步，等效且更准）
     linker.func_wrap(
         "a",
         "q",
         |mut c: wasmtime::Caller<'_, HostState>, out: i32| -> WasmResult<i32> {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i32)
-                .unwrap_or(0);
+            let now = (crate::utils::time::now_ms() / 1000) as u32;
             let mem = c.data().memory.clone();
             if let Some(m) = mem {
-                write_u32_le(m.data_mut(&mut c), out, now as u32);
+                write_u32_le(m.data_mut(&mut c), out, now);
             }
             Ok(1)
         },
@@ -1099,12 +1183,37 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
         Ok(now)
     })?;
 
-    // t: appendStringToFile
+    // t: appendStringToFile（对齐 bot tsdk-runtime.ts:215-224：真实追加写）
     linker.func_wrap(
         "a",
         "t",
-        |_c: wasmtime::Caller<'_, HostState>, _f: i32, _d: i32, _e: i32| -> WasmResult<i32> {
-            Ok(0)
+        |mut c: wasmtime::Caller<'_, HostState>, f: i32, d: i32, _e: i32| -> WasmResult<i32> {
+            let data_dir = c.data().data_dir.clone();
+            let (file, content) = match (
+                read_cstring_in_caller(&mut c, f),
+                read_cstring_in_caller(&mut c, d),
+            ) {
+                (Ok(f), Ok(d)) => (f, d),
+                (Err(e), _) | (_, Err(e)) => return Err(e),
+            };
+            let Some(target) = resolve_data_path(&data_dir, &file) else {
+                return Ok(0);
+            };
+            use std::io::Write as _;
+            let append = (|| -> std::io::Result<()> {
+                if let Some(parent) = target.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                let mut fh = std::fs::OpenOptions::new().create(true).append(true).open(&target)?;
+                fh.write_all(content.as_bytes())
+            })();
+            match append {
+                Ok(()) => Ok(1),
+                Err(e) => {
+                    tracing::warn!(error = %e, "TSDK 文件追加失败");
+                    Ok(0)
+                }
+            }
         },
     )?;
 
@@ -1113,11 +1222,59 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
         Err(anyhow!("TSDK aborted"))
     })?;
 
-    // v: reportEvent
+    // v: TQOS 上报（对齐 bot tsdk-runtime.ts:226-242：解析 wasm 内存 JSON
+    // `{headers, message}`，fire-and-forget POST https://api.anticheatexpert.com/tqos）
     linker.func_wrap(
         "a",
         "v",
-        |_c: wasmtime::Caller<'_, HostState>, _p: i32, _l: i32| -> WasmResult<i32> { Ok(0) },
+        |mut c: wasmtime::Caller<'_, HostState>, ptr: i32, len: i32| -> WasmResult<i32> {
+            if ptr <= 0 || len <= 0 {
+                return Ok(0);
+            }
+            let mem = c.data().memory.clone();
+            let Some(m) = mem else { return Ok(0) };
+            let mem_size = m.data(&c).len();
+            let off = ptr as usize;
+            let take = (len as usize).min(mem_size.saturating_sub(off));
+            let raw = m.data(&c)[off..off + take].to_vec();
+            let parsed: serde_json::Value = match serde_json::from_slice(&raw) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(error = %e, "TSDK TQOS 数据无效");
+                    return Ok(0);
+                }
+            };
+            // fire-and-forget：不阻塞 wasm 调用线程（bot 同样异步发出后立即返回 0）
+            let handle = tokio::runtime::Handle::try_current();
+            if let Ok(handle) = handle {
+                handle.spawn(async move {
+                    let client = match reqwest::Client::builder()
+                        .timeout(std::time::Duration::from_secs(5))
+                        .build()
+                    {
+                        Ok(cl) => cl,
+                        Err(_) => return,
+                    };
+                    let mut req = client.post("https://api.anticheatexpert.com/tqos");
+                    if let Some(headers) = parsed.get("headers").and_then(|h| h.as_object()) {
+                        for (k, v) in headers {
+                            if let Some(v) = v.as_str() {
+                                req = req.header(k.as_str(), v);
+                            }
+                        }
+                    }
+                    let body = match parsed.get("message") {
+                        Some(serde_json::Value::String(s)) => s.clone(),
+                        Some(other) => other.to_string(),
+                        None => "{}".to_string(),
+                    };
+                    if let Err(e) = req.body(body).send().await {
+                        tracing::debug!(error = %e, "TSDK TQOS 上报失败");
+                    }
+                });
+            }
+            Ok(0)
+        },
     )?;
 
     Ok(linker)
@@ -1412,6 +1569,51 @@ fn write_u32_le(data: &mut [u8], ptr: i32, value: u32) {
     if off.checked_add(4).is_some_and(|end| end <= data.len()) {
         data[off..off + 4].copy_from_slice(&value.to_le_bytes());
     }
+}
+
+/// 进程启动时刻（单调钟基准，对齐 bot `performance.now()`）
+fn process_start() -> std::time::Instant {
+    static START: OnceLock<std::time::Instant> = OnceLock::new();
+    *START.get_or_init(std::time::Instant::now)
+}
+
+/// 在 host function 闭包内读 cstring（对齐 bot readCString，默认 64KB 上限）
+fn read_cstring_in_caller(
+    caller: &mut wasmtime::Caller<'_, HostState>,
+    ptr: i32,
+) -> WasmResult<String> {
+    if ptr <= 0 {
+        return Ok(String::new());
+    }
+    let mem = caller
+        .data()
+        .memory
+        .clone()
+        .ok_or_else(|| anyhow!("memory not set"))?;
+    let mem_size = mem.data(&*caller).len();
+    let off = ptr as usize;
+    if off >= mem_size {
+        return Err(anyhow!("read_cstring_in_caller: out of bounds ptr={ptr}"));
+    }
+    let cap = (mem_size - off).min(64 * 1024);
+    let data = mem.data(&*caller);
+    let mut end = off;
+    while end - off < cap && data[end] != 0 {
+        end += 1;
+    }
+    let s = std::str::from_utf8(&data[off..end]).map_err(|e| anyhow!("invalid utf-8: {e}"))?;
+    Ok(s.to_string())
+}
+
+/// TSDK 文件路径解析（对齐 bot resolveDataPath：限制在账号数据目录内，防路径穿越）
+fn resolve_data_path(data_dir: &str, input: &str) -> Option<std::path::PathBuf> {
+    let relative = input.replace('\\', "/");
+    let relative = relative.trim_start_matches('/');
+    if relative.is_empty() || relative.contains("..") {
+        return None;
+    }
+    let root = std::path::Path::new(data_dir);
+    Some(root.join(relative))
 }
 
 /// 从 wasm 内存读 cstring（以 NUL 结尾）

@@ -171,6 +171,9 @@ struct Inner {
     /// 业务 RPC 并发槽（对齐 bot 5 in-flight / 100 排队）。Heartbeat 不占槽。
     rpc_slots: Arc<Semaphore>,
     rpc_queued: AtomicUsize,
+    /// 出站 token 提供器：登录后暂存一次性 TSDK 初始化凭据，由下一条消息携带
+    /// （对齐 bot `GatewayTokenProvider.stageInitToken/next/clear`）。
+    token_provider: crate::utils::random::GatewayTokenProvider,
 }
 
 impl Gateway {
@@ -194,6 +197,7 @@ impl Gateway {
                 rebuilding: AtomicBool::new(false),
                 rpc_slots: Arc::new(Semaphore::new(crate::constants::MAX_IN_FLIGHT_REQUESTS)),
                 rpc_queued: AtomicUsize::new(0),
+                token_provider: crate::utils::random::GatewayTokenProvider::new(),
             }),
         }
     }
@@ -286,6 +290,9 @@ impl Gateway {
 
         // 更新阶段为 Login（待登录响应）
         *self.inner.phase.write() = ConnectionPhase::Login;
+        // 对齐 bot startHeartbeat 的 lastInboundAt=now：连接建立即算活跃，
+        // 避免登录后 25s 内入站稀疏导致 inbound_silence 虚高误判。
+        self.inner.last_rx_ms.store(crate::utils::time::now_ms(), Ordering::Release);
 
         // 启动接收 dispatch loop
         let inner = self.inner.clone();
@@ -395,21 +402,22 @@ impl Gateway {
         frame.encode().map_err(|e| NetworkError::Frame(format!("encode: {e}")))
     }
 
-    /// 高阶 API：发请求 + 等响应，直到回包或会话断开。
-    ///
-    /// 对齐 Go 本田/巡查：不在业务 RPC 上套 10s/20s 硬切。登录走 [`login`]，心跳走 [`request_with_timeout`]。
+    /// 高阶 API：发请求 + 等响应。默认 20s 超时（对齐 bot `sendMsgAsync`）：
+    /// 无超时会让服务端漏回的请求永久占用并发槽，5 槽漏满后业务全堵死。
     pub async fn request(&self, service: &str, method: &str, body: &[u8]) -> Result<Vec<u8>> {
-        self.send_rpc(service, method, body, None, true).await
+        self.send_rpc(service, method, body, Some(crate::constants::DEFAULT_RPC_TIMEOUT_MS), true)
+            .await
     }
 
-    /// 不等待业务锁（ACE AntiData）。同样等到回包或断线。
+    /// 不等待业务锁（ACE AntiData）。同样 20s 默认超时。
     pub async fn request_unlocked(
         &self,
         service: &str,
         method: &str,
         body: &[u8],
     ) -> Result<Vec<u8>> {
-        self.send_rpc(service, method, body, None, true).await
+        self.send_rpc(service, method, body, Some(crate::constants::DEFAULT_RPC_TIMEOUT_MS), true)
+            .await
     }
 
     /// 仅 Login / Heartbeat：带超时。不占业务锁，避免大包把心跳堵住。
@@ -430,7 +438,10 @@ impl Gateway {
             rpc_phase_ok(phase, true)?;
         }
         let seq = self.inner.requests.next_seq();
-        let token = crate::utils::random::create_gateway_token();
+        let (token, staged) = self.inner.token_provider.next_marked();
+        if staged {
+            tracing::info!(service, method, "TSDK 初始化凭据已随本条请求发送");
+        }
         let frame_bytes = self.encode_request(service, method, body, seq, &token)?;
         let ws_tx = self
             .inner
@@ -477,28 +488,66 @@ impl Gateway {
             let phase = *self.inner.phase.read();
             rpc_phase_ok(phase, require_online)?;
         }
-        let is_heartbeat = method.eq_ignore_ascii_case("Heartbeat");
-        let _slot = if require_online && !is_heartbeat {
-            Some(self.acquire_rpc_slot().await?)
+        // Heartbeat / AntiData 不占业务并发槽：两者各自有防重入（心跳 skip-if-in-flight、
+        // ACE request_running CAS），合计最多 2 个并发，等价 bot 的高优先级通道
+        // （MAX_HIGH_IN_FLIGHT_REQUESTS=2）。业务高峰 QueueFull 时 AntiData 不能被
+        // 饿死，否则 ACE 数据流中断会被服务端踢线。
+        let bypass_rpc_slot = method.eq_ignore_ascii_case("Heartbeat")
+            || method.eq_ignore_ascii_case("AntiData");
+        let _slot = if require_online && !bypass_rpc_slot {
+            // 排队也限时（对齐 bot 超时从 sendMsgAsync 调用起算）：槽被卡死时请求
+            // 不会无限排队，超时返回而非把队列堆满。
+            match tokio::time::timeout(
+                std::time::Duration::from_millis(crate::constants::RPC_QUEUE_TIMEOUT_MS),
+                self.acquire_rpc_slot(),
+            )
+            .await
+            {
+                Ok(res) => Some(res?),
+                Err(_) => {
+                    return Err(NetworkError::Timeout {
+                        client_seq: 0,
+                        service_name: service.to_string(),
+                        method_name: method.to_string(),
+                        pending: self.inner.requests.pending_count(),
+                    });
+                }
+            }
         } else {
             None
         };
 
         let (seq, rx) = self.inner.requests.call(service, method);
-        let token = crate::utils::random::create_gateway_token();
-        let frame_bytes = self.encode_request(service, method, body, seq, &token)?;
+        let (token, staged) = self.inner.token_provider.next_marked();
+        if staged {
+            tracing::info!(service, method, "TSDK 初始化凭据已随本条请求发送");
+        }
+        let frame_bytes = match self.encode_request(service, method, body, seq, &token) {
+            Ok(f) => f,
+            Err(e) => {
+                // 发送失败路径清掉 pending 条目（对齐 bot sendMsg encode 失败即删回调）
+                let _ = self.inner.requests.cancel(seq);
+                return Err(e);
+            }
+        };
 
-        let ws_tx = self
+        let ws_tx = match self
             .inner
             .ws_sender
             .lock()
             .as_ref()
-            .ok_or_else(|| NetworkError::Phase("ws not connected".into()))?
-            .clone();
-        ws_tx
-            .send(frame_bytes)
-            .await
-            .map_err(|_| NetworkError::WebSocket("ws sender closed".into()))?;
+            .map(|tx| tx.clone())
+        {
+            Some(tx) => tx,
+            None => {
+                let _ = self.inner.requests.cancel(seq);
+                return Err(NetworkError::Phase("ws not connected".into()));
+            }
+        };
+        if ws_tx.send(frame_bytes).await.is_err() {
+            let _ = self.inner.requests.cancel(seq);
+            return Err(NetworkError::WebSocket("ws sender closed".into()));
+        }
 
         let waited = if let Some(ms) = timeout_ms {
             match tokio::time::timeout(std::time::Duration::from_millis(ms), rx).await {
@@ -533,6 +582,12 @@ impl Gateway {
     #[must_use]
     pub fn has_pending_method(&self, method: &str) -> bool {
         self.inner.requests.has_pending_method(method)
+    }
+
+    /// 所有 pending RPC 的 method 名（掉线诊断：看服务端卡住了哪些请求）
+    #[must_use]
+    pub fn pending_methods(&self) -> Vec<String> {
+        self.inner.requests.pending_methods()
     }
 
     /// 最近一次入站帧时间（ms）。0 表示本会话尚未收到帧。
@@ -611,8 +666,30 @@ impl Gateway {
 
         // 6. bindUser(open_id) —— 客户端安全数据
         if !basic.open_id.is_empty() {
-            if let Err(e) = tsdk.bind_user(&basic.open_id) {
-                tracing::warn!(error = %e, "TSDK bindUser 失败");
+            match tsdk.bind_user(&basic.open_id) {
+                Ok(()) => {
+                    // 对齐 bot network.ts:770-774：bindUser 后把加密初始化凭据
+                    // stage 进 token provider，由下一条出站消息携带（恰好一次）。
+                    // 缺这一步服务端 ACE 会话不完整，会不定时静默丢弃连接。
+                    match tsdk.get_encrypted_init_info() {
+                        Ok(info) => {
+                            match self.inner.token_provider.stage_init_token(&info) {
+                                Ok(0) => {}
+                                Ok(len) => tracing::info!(
+                                    len,
+                                    "TSDK 初始化凭据已就绪，将随下一条请求发送"
+                                ),
+                                Err(e) => {
+                                    tracing::warn!(error = %e, "TSDK 初始化凭据暂存失败");
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "TSDK get_encrypted_init_info 失败");
+                        }
+                    }
+                }
+                Err(e) => tracing::warn!(error = %e, "TSDK bindUser 失败"),
             }
         }
 
@@ -669,8 +746,15 @@ impl Gateway {
                 crate::constants::HEARTBEAT_RPC_TIMEOUT_MS,
             )
             .await?;
-        let reply = HeartbeatReply::decode(reply_bytes.as_slice())
-            .map_err(|e| NetworkError::Frame(format!("decode HeartbeatReply: {e}")))?;
+        // 对齐 bot network.ts:822-827：心跳回包到达即算成功（先记账再解码），
+        // 解码失败只 warn 不计 miss——连接活着就不该因本地解码问题判死。
+        let reply = match HeartbeatReply::decode(reply_bytes.as_slice()) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(error = %e, "decode HeartbeatReply 失败（按成功处理）");
+                HeartbeatReply::default()
+            }
+        };
         if reply.server_time > 0 {
             crate::utils::time::sync_server_time(reply.server_time);
         }
@@ -690,6 +774,8 @@ fn end_session(inner: &Inner, reason: Option<&str>) {
             *guard = Some(reason.to_string());
         }
     }
+    // 丢弃未消费的一次性初始化凭据（对齐 bot clearNetworkRuntime → gatewayTokens.clear()）
+    inner.token_provider.clear();
     *inner.phase.write() = ConnectionPhase::Disconnected;
     *inner.ws_sender.lock() = None;
     // 会话结束后不再保留 client handle（连接已由对端/force_disconnect 关闭）
@@ -707,8 +793,7 @@ async fn dispatch_loop(
     inner: Arc<Inner>,
 ) {
     while let Some(frame) = rx.recv().await {
-        inner.last_rx_ms.store(crate::utils::time::now_ms(), Ordering::Release);
-        // 1. 解析外层 GateMessage
+        // 1. 解析外层 GateMessage（对齐 bot：decode 成功才计入入站活跃时间）
         let parsed = match FrameParser::parse(&frame.bytes) {
             Ok(p) => p,
             Err(e) => {
@@ -716,6 +801,7 @@ async fn dispatch_loop(
                 continue;
             }
         };
+        inner.last_rx_ms.store(crate::utils::time::now_ms(), Ordering::Release);
 
         // 2. 更新 server_seq
         let server_seq = parsed.server_seq();
@@ -723,8 +809,10 @@ async fn dispatch_loop(
             inner.server_seq.store(server_seq, Ordering::SeqCst);
         }
 
-        // 3. 分发。部分大包（如 FriendService.GetAll）可能不带标准 Response type，
-        // 只要 client_seq 对得上 pending 就按回包完成，避免 20s 空等超时。
+        // 3. 分发（对齐 bot network.ts:396-424：严格按 type 分发）。
+        // 显式 Notify 一律走 handle_notify，绝不当回包消费（曾把推送吞成 pending 回复）。
+        // 仅当类型缺失/未知且 client_seq 命中 pending 时按回包容错完成
+        // （部分大包如 FriendService.GetAll 不带标准 Response type）。
         let client_seq = parsed.client_seq();
         let pending_method = inner.requests.peek(client_seq);
         let is_pending_reply = client_seq != 0
@@ -735,14 +823,11 @@ async fn dispatch_loop(
             Some(MessageType::Response) => {
                 handle_response(&inner, &parsed);
             }
-            Some(MessageType::Notify) if !is_pending_reply => {
+            Some(MessageType::Notify) => {
                 handle_notify(&inner, &parsed);
             }
             _ if is_pending_reply => {
                 handle_response(&inner, &parsed);
-            }
-            Some(MessageType::Notify) => {
-                handle_notify(&inner, &parsed);
             }
             _ => {
                 tracing::debug!(

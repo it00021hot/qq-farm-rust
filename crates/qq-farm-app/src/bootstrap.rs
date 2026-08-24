@@ -34,7 +34,20 @@ pub fn gateway_template_from_env(gateway_origin: &str) -> GatewayConfigTemplate 
             .unwrap_or_else(|_| DEFAULT_CLIENT_VERSION.to_string()),
         headers: HashMap::new(),
     };
-    if let Some(sys) = qq_farm_core::models::store::global_config::get_system_config() {
+    if let Some(mut sys) = qq_farm_core::models::store::global_config::get_system_config() {
+        // 存量配置迁移：升级固化的过期 client_version（随 Login/Heartbeat 上报，
+        // 旧版本可能被服务端冷落），并持久化避免每次启动重复迁移。
+        let top_changed = qq_farm_core::config::migrate_client_version(&mut sys.client_version);
+        let dev_changed = qq_farm_core::config::migrate_client_version(
+            &mut sys.device_info.client_version,
+        );
+        if top_changed || dev_changed {
+            tracing::info!(
+                version = %sys.client_version,
+                "已升级过期的 client_version 配置"
+            );
+            qq_farm_core::models::store::global_config::set_system_config(sys.clone());
+        }
         update_runtime_config(&sys);
         if !sys.server_url.is_empty() {
             gateway_template.server_url = sys.server_url;

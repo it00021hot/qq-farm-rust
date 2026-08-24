@@ -16,7 +16,7 @@ use super::blacklist::{
 };
 use super::now_ms;
 use super::panel_dto::FriendSummary;
-use super::steal::{analyze_friend_lands, steal_lands_with_reward_log, steal_side_help};
+use super::steal::{analyze_friend_lands, steal_lands_with_reward_log};
 
 /// 帮助状态
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -317,7 +317,16 @@ pub async fn run_farming_with_fallback(
     );
     match api.help_farm(host_gid, target.clone()).await {
         Ok(outcome) if outcome.effect == HelpFarmEffect::Noop => {
-            recent_help.release(host_gid, &target);
+            // 对齐 bot visit-strategy.ts:498-501：noop 也按结果缓存 30s，
+            // 同快照不再重试（此前立即 release 导致每个 help tick 都重发 Farming）
+            recent_help.mark(
+                host_gid,
+                &target,
+                HelpState::Confirmed,
+                HELP_RESULT_TTL_MS,
+                snapshot_key,
+                now_ms(),
+            );
             empty_farming_outcome(FarmingEffect::Noop)
         }
         Ok(outcome) => {
@@ -487,7 +496,7 @@ pub async fn visit_friend(
             ));
             total_actions.steal += steal_result.ok;
         }
-        steal_side_help(api, friend_gid, &status, total_actions, &mut actions).await;
+        // 对齐 bot：偷到菜后的路径不做顺手帮忙（steal_side_help 已删除）
     } else if help_enabled && allow_by_exp {
         let all_help_ids: Vec<i64> = status
             .need_weed

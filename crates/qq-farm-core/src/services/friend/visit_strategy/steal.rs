@@ -2,9 +2,7 @@
 
 use std::collections::HashSet;
 use std::sync::Mutex as StdMutex;
-use std::time::Duration;
 
-use tokio::time::sleep;
 
 use crate::proto::generated::gamepb::plantpb::LandInfo;
 use crate::services::friend::api::FriendApi;
@@ -349,7 +347,9 @@ pub async fn steal_lands_with_reward_log(
         Err(_) => {}
     }
     for land_id in land_ids {
-        match api.steal_farm(friend_gid, vec![*land_id], false).await {
+        // 对齐 bot visit-strategy.ts:883-892 + api.ts:186-196：逐地兜底也用
+        // is_all=true，且每地间 randomDelay(500,800)
+        match api.steal_farm(friend_gid, vec![*land_id], true).await {
             Ok(()) => record_stolen_land(&mut result, *land_id, stealable_info),
             Err(e) if is_unstealable_error(&e) => {}
             Err(e) if is_steal_transient(&e) => {
@@ -358,7 +358,7 @@ pub async fn steal_lands_with_reward_log(
             }
             Err(_) => {}
         }
-        sleep(Duration::from_millis(100)).await;
+        crate::utils::random::random_delay(500, 800).await;
     }
     result
 }
@@ -375,51 +375,7 @@ fn unique_help_land_ids(status: &AnalyzeResult) -> Vec<i64> {
         .collect()
 }
 
-/// 有可偷才帮忙：不受帮忙开关 / 经验上限约束；失败不挡偷菜结果。
-pub async fn steal_side_help(
-    api: &FriendApi,
-    friend_gid: i64,
-    status: &AnalyzeResult,
-    total_actions: &mut super::help::TotalActions,
-    actions: &mut Vec<String>,
-) {
-    let all_help = unique_help_land_ids(status);
-    if all_help.is_empty() {
-        return;
-    }
-    match api.help_farm(friend_gid, all_help).await {
-        Ok(outcome) if outcome.land_ids.is_empty() && outcome.operation_count <= 0 => {}
-        Ok(outcome) => {
-            let count = if outcome.land_ids.is_empty() {
-                outcome.operation_count.max(0) as usize
-            } else {
-                outcome.land_ids.len()
-            };
-            if count == 0 {
-                return;
-            }
-            let mut parts = Vec::new();
-            if !status.need_weed.is_empty() {
-                parts.push(format!("草{}", status.need_weed.len()));
-            }
-            if !status.need_bug.is_empty() {
-                parts.push(format!("虫{}", status.need_bug.len()));
-            }
-            if !status.need_water.is_empty() {
-                parts.push(format!("水{}", status.need_water.len()));
-            }
-            actions.push(if parts.is_empty() {
-                format!("一键务农{count}块")
-            } else {
-                format!("一键务农{count}块({})", parts.join("/"))
-            });
-            total_actions.farming += count;
-        }
-        Err(e) => {
-            tracing::warn!(friend_gid, error = %e, "偷菜顺手帮忙失败");
-        }
-    }
-}
+// steal_side_help（偷菜顺手帮忙）已删除：bot 的偷菜流只偷不帮。
 
 /// 拜访好友 - 仅偷菜
 pub async fn visit_friend_for_steal(
@@ -545,7 +501,8 @@ pub async fn visit_friend_for_steal(
                 crate::utils::random::random_delay(500, 800).await;
             }
         }
-        steal_side_help(api, friend_gid, &status, total_actions, &mut actions).await;
+        // 对齐 bot visitFriendForSteal：偷菜流只偷不帮（顺手帮忙是 rust 独有的
+        // 请求模式，bot 偷菜路径没有 Farming 请求）。
     }
 
     if !actions.is_empty() {

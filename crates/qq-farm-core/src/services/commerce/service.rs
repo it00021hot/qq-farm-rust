@@ -111,11 +111,14 @@ pub struct PurchaseResponseDto {
     pub catalog: MallCatalogDto,
 }
 
-/// 神秘商店 NPC DTO
+/// 神秘商店 NPC DTO（UI 读 camelCase：originalPrice / unitPrice 等）
 #[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct MysteryNpcDto {
     pub id: i64,
     pub reward: ItemDto,
+    /// 每单数量（游戏界面商品图旁的 x8）。历史版本即显示该值；
+    /// ActiveNPC.unknown_field_3 疑似真实剩余库存，未经游戏端确认，暂不上屏。
     pub stock: i64,
     pub price: ItemDto,
     pub original_price: i64,
@@ -124,8 +127,9 @@ pub struct MysteryNpcDto {
     pub discount_percent: i64,
 }
 
-/// 神秘商店状态 DTO
+/// 神秘商店状态 DTO（UI 读 camelCase：activeTime / expireTime）
 #[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct MysteryShopDto {
     pub active: bool,
     pub server_time: i64,
@@ -428,7 +432,8 @@ impl CommerceService {
             npc: Some(MysteryNpcDto {
                 id: npc.npc_id,
                 reward,
-                stock: 0,
+                // 显示每单数量（= 游戏界面商品旁的 xN），与历史版本一致
+                stock: reward_count,
                 price: price_dto,
                 original_price: unit_original_price * reward_count,
                 unit_price,

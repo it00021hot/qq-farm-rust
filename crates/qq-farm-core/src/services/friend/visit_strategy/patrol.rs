@@ -36,26 +36,22 @@ pub fn select_unvisited_patrol(
     unmarked
 }
 
-/// 气泡（steal>0）按数量降序，再拼 `ceil(n/4)` 个未访问的零气泡。
+/// 气泡（steal>0）按数量降序。对齐 bot friend/scheduler.ts:309-321：
+/// 只访问有可偷气泡的好友，不做零气泡探测——零气泡"进场即走"模式 bot 从不产生，
+/// 属于服务端行为识别的高危指纹。
 #[must_use]
-pub fn build_steal_patrol_targets(eligible: &[(i64, i64)], visited: &mut HashSet<i64>) -> Vec<i64> {
+pub fn build_steal_patrol_targets(eligible: &[(i64, i64)], _visited: &mut HashSet<i64>) -> Vec<i64> {
     let mut bubble: Vec<(i64, i64)> = Vec::new();
-    let mut probe: Vec<i64> = Vec::new();
     for &(gid, steal) in eligible {
         if gid <= 0 {
             continue;
         }
         if steal > 0 {
             bubble.push((gid, steal));
-        } else {
-            probe.push(gid);
         }
     }
     bubble.sort_by(|a, b| b.1.cmp(&a.1));
-    let selected = select_unvisited_patrol(&probe, get_patrol_batch_size(eligible.len()), visited);
-    let mut targets: Vec<i64> = bubble.into_iter().map(|(gid, _)| gid).collect();
-    targets.extend(selected);
-    targets
+    bubble.into_iter().map(|(gid, _)| gid).collect()
 }
 
 #[cfg(test)]
@@ -84,12 +80,11 @@ mod tests {
     }
 
     #[test]
-    fn steal_targets_bubble_then_probe() {
+    fn steal_targets_bubble_only() {
         let eligible = vec![(10, 2), (11, 5), (12, 0), (13, 0), (14, 0), (15, 0)];
         let mut visited = HashSet::new();
         let targets = build_steal_patrol_targets(&eligible, &mut visited);
-        assert_eq!(targets[0], 11);
-        assert_eq!(targets[1], 10);
-        assert_eq!(targets.len(), 4);
+        // 对齐 bot：只有气泡好友（按数量降序），零气泡不探测
+        assert_eq!(targets, vec![11, 10]);
     }
 }

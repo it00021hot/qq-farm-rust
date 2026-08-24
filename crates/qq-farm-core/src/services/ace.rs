@@ -40,6 +40,10 @@ pub struct AceShared {
     ready_logged: AtomicBool,
     /// 防止 AntiData 重入
     request_running: AtomicBool,
+    /// 上次打印 AntiData 往返日志的时间（限频诊断：确认回灌通道活着）
+    last_reply_log_ms: AtomicI64,
+    /// 上次发出 WasmReset 事件的时间（限频：pending_reset 短路兜底）
+    last_reset_emit_ms: AtomicI64,
     /// scheduler
     scheduler: Scheduler,
     /// worker 事件总线（用于发 WasmReset）
@@ -57,6 +61,8 @@ impl AceShared {
             last_speed_check_at: AtomicI64::new(0),
             ready_logged: AtomicBool::new(false),
             request_running: AtomicBool::new(false),
+            last_reply_log_ms: AtomicI64::new(0),
+            last_reset_emit_ms: AtomicI64::new(0),
             scheduler: Scheduler::new("ace"),
             event_tx: Mutex::new(None),
             account_name: Mutex::new(String::new()),
@@ -186,7 +192,11 @@ impl AceShared {
         match inner_result {
             Ok(Ok(())) => {}
             Ok(Err(e)) => {
-                tracing::warn!(error = %e, "ACE AntiData 上报失败");
+                tracing::warn!(
+                    account = %self.account_name.lock(),
+                    error = %e,
+                    "ACE AntiData 上报失败"
+                );
             }
             Err(panic_payload) => {
                 let msg = crate::runtime::safe_spawn::format_panic_payload(panic_payload);
@@ -209,9 +219,18 @@ impl AceShared {
         let Some(tsdk) = tsdk_clone else {
             return Ok(());
         };
-        // 若 wasm 已请求重置（pending_reset）且 worker 还没来重建，停止 anti_data
-        // 避免在坏状态 wasm 上继续消费任务；心跳也会走同样的短路。
+        // 若 wasm 已请求重置（pending_reset）：停止 anti_data 消费，但必须发
+        // WasmReset 事件让 worker 重建——否则短路路径无人触发重建，整个会话
+        // 心跳加密失败 + AntiData 停发，客户端静默到掉线（曾为死锁点）。
         if tsdk.is_reset_pending() {
+            let now = crate::utils::time::now_ms();
+            let last = self.last_reset_emit_ms.swap(now, Ordering::SeqCst);
+            if now - last > 30_000 {
+                self.emit_wasm_reset(
+                    tsdk.consecutive_fail_count(),
+                    "pending_reset 短路（等待 worker 重建）".to_string(),
+                );
+            }
             return Ok(());
         }
         let data = match tsdk.get_data_to_server() {
@@ -241,9 +260,28 @@ impl AceShared {
         let req = AntiDataRequest { data: prost::bytes::Bytes::from(data.clone()) };
         let body = req.encode_to_vec();
 
-        let reply_body = sender.send("gamepb.acepb.AceService", "AntiData", &body).await?;
+        let reply_body = match sender.send("gamepb.acepb.AceService", "AntiData", &body).await {
+            Ok(b) => b,
+            // 断线瞬间的 Phase 错误：连接已结束，无需告警（否则僵尸任务掉线后持续刷屏）
+            Err(crate::error::Error::Network(
+                crate::network::error::NetworkError::Phase(_),
+            )) => return Ok(()),
+            Err(e) => return Err(e),
+        };
 
         let reply = AntiDataReply::decode(reply_body.as_slice())?;
+        // 限频诊断日志（每 60s 一条）：确认 AntiData 往返通道活着、服务端是否回灌。
+        // 若长期 sent_ok 但 result 恒为 0，说明服务端 ACE 没有认我们（排查方向）。
+        let now = crate::utils::time::now_ms();
+        let last_log = self.last_reply_log_ms.swap(now, Ordering::SeqCst);
+        if now - last_log > 60_000 {
+            tracing::info!(
+                account = %self.account_name.lock(),
+                sent_bytes = data.len(),
+                reply_bytes = reply.result.len(),
+                "ACE AntiData 往返"
+            );
+        }
         if !reply.result.is_empty() {
             tsdk.send_data_from_server(&reply.result)?;
             if !self.ready_logged.swap(true, Ordering::SeqCst) {
@@ -321,6 +359,12 @@ pub struct GatewayAceSender {
     pub gateway: Arc<Gateway>,
 }
 
+/// AntiData 单次 RPC 超时（对齐 bot ace.ts:25 的 10000ms）。
+/// 没有超时的话，服务端偶尔漏掉一次 AntiData 回包就会让 send 永久挂起：
+/// `request_running` 标志永远不复位 → 本会话 AntiData 数据流彻底中断 →
+/// 服务端几分钟内静默丢弃连接（心跳超时掉线的直接诱因）。
+const ANTI_DATA_RPC_TIMEOUT_MS: u64 = 10_000;
+
 #[async_trait::async_trait]
 impl AceSender for GatewayAceSender {
     async fn send(
@@ -330,7 +374,7 @@ impl AceSender for GatewayAceSender {
         body: &[u8],
     ) -> crate::error::Result<Vec<u8>> {
         self.gateway
-            .request_unlocked(service, method, body)
+            .request_with_timeout(service, method, body, ANTI_DATA_RPC_TIMEOUT_MS)
             .await
             .map_err(crate::error::Error::Network)
     }

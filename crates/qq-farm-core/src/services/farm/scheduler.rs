@@ -525,7 +525,8 @@ impl FarmService {
         let mut all_dead = status.dead.clone();
         let mut post_growing: Vec<i64> = Vec::new();
         if !harvested_land_ids.is_empty() {
-            tokio::time::sleep(Duration::from_millis(1200)).await;
+            // 对齐 bot farm/scheduler.ts: randomDelay(1000,1500)
+                crate::utils::random::random_delay(1000, 1500).await;
             let first = classify_harvested_lands_by_map(
                 &harvested_land_ids,
                 &build_land_map(&harvest_lands),
@@ -666,7 +667,8 @@ impl FarmService {
                         })),
                     ),
                 }
-                tokio::time::sleep(Duration::from_millis(1200)).await;
+                // 对齐 bot farm/scheduler.ts: randomDelay(1000,1500)
+                crate::utils::random::random_delay(1000, 1500).await;
             }
             for land_id in &status.upgradable {
                 match api.upgrade_land(*land_id).await {
@@ -697,7 +699,8 @@ impl FarmService {
                         })),
                     ),
                 }
-                tokio::time::sleep(Duration::from_millis(1200)).await;
+                // 对齐 bot farm/scheduler.ts: randomDelay(1000,1500)
+                crate::utils::random::random_delay(1000, 1500).await;
             }
         }
 

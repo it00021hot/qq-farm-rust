@@ -168,13 +168,16 @@ async fn run_read_task(
                 }
             }
             Ok(WsMessage::Close(frame)) => {
-                tracing::info!(?frame, "ws closed by server");
+                // 对齐 node ws：收到服务端 Close 先回 Close 完成关闭握手再退出，
+                // 让服务端正常回收 session（直接断 TCP 会拖慢服务端旧 session 释放，
+                // 影响下次重连——曾导致重连后立即被踢）。
+                tracing::info!(?frame, "ws closed by server, replying close");
+                let _ = cmd_tx.send(WsCommand::Close(None)).await;
                 break;
             }
-            Ok(WsMessage::Ping(data)) => {
-                if cmd_tx.send(WsCommand::Pong(data.to_vec())).await.is_err() {
-                    break;
-                }
+            Ok(WsMessage::Ping(_)) => {
+                // tungstenite 读到 Ping 时会自动排队 Pong（下次写/flush 时发出），
+                // 不再手动回 Pong——之前手动 + 自动会每 Ping 双 Pong（bot 只回一个）。
             }
             Ok(WsMessage::Pong(_)) | Ok(WsMessage::Frame(_)) => {}
             Ok(WsMessage::Text(_)) => {
@@ -296,13 +299,14 @@ fn build_client_handshake(
             extras.push((k.as_str(), v.as_str()));
         }
     }
-    if let Some(v) = origin {
-        req.push_str("Origin: ");
+    // 对齐 bot 头顺序（User-Agent 在前、Origin 在后）
+    if let Some(v) = user_agent {
+        req.push_str("User-Agent: ");
         req.push_str(v);
         req.push_str("\r\n");
     }
-    if let Some(v) = user_agent {
-        req.push_str("User-Agent: ");
+    if let Some(v) = origin {
+        req.push_str("Origin: ");
         req.push_str(v);
         req.push_str("\r\n");
     }

@@ -26,6 +26,11 @@ pub const ACTIVITY_WINDOWS_RETRY_LOG_INTERVAL_MS: u64 = 60 * 1000;
 /// 仅 Login / Heartbeat 使用的短超时；其它游戏 RPC 等到回包或断线。
 pub const LOGIN_TIMEOUT_MS: u64 = 20_000;
 pub const HEARTBEAT_RPC_TIMEOUT_MS: u64 = 20_000;
+/// 业务 RPC 默认超时（对齐 bot sendMsgAsync 的 20s 默认值）。
+/// 无超时的话服务端漏回一个包就永久占用并发槽，漏 5 个后业务全堵死。
+pub const DEFAULT_RPC_TIMEOUT_MS: u64 = 20_000;
+/// 业务 RPC 排队（等并发槽）超时，与默认超时同值。
+pub const RPC_QUEUE_TIMEOUT_MS: u64 = 20_000;
 
 /// 探测本机微信 `/api/check-login` 超时（对齐 YYB scan.html）
 pub const LOCAL_WECHAT_DETECT_TIMEOUT_MS: u64 = 3_000;

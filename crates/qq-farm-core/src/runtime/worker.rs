@@ -475,11 +475,15 @@ impl Worker {
                         let ace_for_reset = ace.clone();
                         worker_loop.attach_ace(ace);
 
+                        // 对齐 bot 登录序列：GetUserSettings 最先发出（携带 TSDK
+                        // 初始化凭据，对齐 bot 登录回调里的 fetchUserSettings），
+                        // 随后刷新活动窗口；GetBag 只由 on_login_success 拉一次
+                        // （此前这里重复多拉了一次）。
                         let extras = worker_loop.clone();
                         let gw_settings = gateway.clone();
                         tokio::spawn(async move {
-                            extras.fetch_gold_bean_from_bag().await;
                             let _ = gw_settings.fetch_user_settings().await;
+                            let _ = extras.refresh_activity_windows().await;
                         });
 
                         worker_loop.mark_login_ready();
@@ -706,6 +710,13 @@ async fn run_worker_loop(
             biased;
             _ = cancel.cancelled() => {
                 scheduler.shutdown();
+                // 对齐 bot handleTerminalDisconnect：会话结束停掉所有 loop（含 ACE 调度器），
+                // 否则 ACE 每 5s 的任务变僵尸，掉线后持续刷"上报失败"日志
+                if let Some(eng) = &engine {
+                    if let Some(wl) = eng.worker_loop(&account.id) {
+                        wl.quiesce_bot("主动取消");
+                    }
+                }
                 gateway.force_disconnect();
                 return WorkerExit { reason: "主动取消".to_string() };
             }
@@ -718,6 +729,13 @@ async fn run_worker_loop(
             } => {
                 scheduler.shutdown();
                 let source = session_gw.take_disconnect_reason();
+                // 对齐 bot handleTerminalDisconnect：会话结束停掉所有 loop（含 ACE 调度器），
+                // 否则 ACE 每 5s 的任务变僵尸，掉线后持续刷"上报失败"日志
+                if let Some(eng) = &engine {
+                    if let Some(wl) = eng.worker_loop(&account.id) {
+                        wl.quiesce_bot(&source);
+                    }
+                }
                 emit_disconnect_log(
                     &event_tx,
                     &account.id,

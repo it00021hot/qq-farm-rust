@@ -674,18 +674,8 @@ impl FriendService {
                     .find(|(id, _, _)| *id == gid)
                     .map(|(_, _, live)| *live)
                     .unwrap_or(0);
-                // 空访 noop 只用于 GetAll 有气泡误报；推送 hint 空访则丢掉 hint，不打 noop。
-                if live_steal > 0
-                    && self
-                        .steal_noop_markers
-                        .lock()
-                        .get(&gid)
-                        .copied()
-                        .is_some_and(|prev| prev == live_steal)
-                {
-                    self.steal_patrol_visited.lock().insert(gid);
-                    continue;
-                }
+                // 对齐 bot：气泡有值就一直进场（无 noop 跳过机制——rust 独有的
+                // 跳过会让进场节奏与 bot 不同）
                 let visit = crate::services::friend::visit_strategy::visit_friend_for_steal(
                     &self.api, recent, friend, &mut total, my_gid, account_id,
                 )
@@ -813,6 +803,24 @@ impl FriendService {
         if self.is_bad_operation_limit_reached() {
             return Ok(0);
         }
+        // 对齐 bot friend/scheduler.ts:590-594：bad 启动流与 help/steal 统一 tick
+        // 互斥（isCheckingFriends），冲突时等 5s 重试，避免两条 Enter/Leave 流交错
+        for _ in 0..12 {
+            if !self.is_checking.load(Ordering::Acquire) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
+        if self.is_checking.swap(true, Ordering::AcqRel) {
+            return Ok(0);
+        }
+        struct BadGuard<'a>(&'a AtomicBool);
+        impl Drop for BadGuard<'_> {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::Release);
+            }
+        }
+        let _checking_guard = BadGuard(&self.is_checking);
         let my_gid = *self.host_gid.lock();
         if my_gid == 0 {
             return Ok(0);

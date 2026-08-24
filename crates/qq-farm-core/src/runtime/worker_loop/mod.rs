@@ -784,7 +784,7 @@ impl WorkerLoop {
                 let miss = hb_miss.clone();
                 let on_timeout = on_hb_timeout.clone();
                 let gid_lock = gid.clone();
-                let cv_for_req = client_version.clone();
+                let cv_snapshot = client_version.clone();
                 let stale_ms = hb_timeout.as_millis() as i64;
                 Box::pin(async move {
                     // 对齐 network.ts：phase !== 'online' || !gid 则跳过
@@ -807,14 +807,18 @@ impl WorkerLoop {
                     let last_resp = last_resp.clone();
                     let miss = miss.clone();
                     let acc_id = acc_id.clone();
-                    let cv_for_req = cv_for_req.clone();
+                    // 对齐 network.ts:811 每拍实时读 client_version（配置热更立即生效）
+                    let cv_for_req = {
+                        let rt = crate::config::get_runtime_config();
+                        if rt.client_version.is_empty() { cv_snapshot.clone() } else { rt.client_version }
+                    };
                     let on_timeout = on_timeout.clone();
                     tokio::spawn(async move {
-                        let now = crate::utils::time::now_ms();
-                        let (prev_hb, prev_rx, rebuilding) = {
+                        let (_now_start, prev_hb, prev_rx, rebuilding) = {
+                            let now = crate::utils::time::now_ms();
                             let last_hb = *last_resp.lock();
                             let last_rx = gateway.last_rx_ms();
-                            (last_hb, last_rx, gateway.is_rebuilding())
+                            (now, last_hb, last_rx, gateway.is_rebuilding())
                         };
                         // TSDK 重建期放宽静默阈值到 90s（重建期间 encrypt 短暂失败是正常的）
                         let effective_stale_ms = if rebuilding {
@@ -833,6 +837,8 @@ impl WorkerLoop {
                                     *g += 1;
                                     *g
                                 };
+                                // 对齐 network.ts:831-833：RPC 结束后取样（含 20s 等待时间）
+                                let now = crate::utils::time::now_ms();
                                 let hb_silence = now.saturating_sub(prev_hb);
                                 let inbound_silence = now.saturating_sub(prev_rx);
                                 tracing::warn!(
@@ -842,6 +848,7 @@ impl WorkerLoop {
                                     heartbeat_s = hb_silence / 1000,
                                     inbound_s = inbound_silence / 1000,
                                     pending = gateway.pending_count(),
+                                    pending_methods = ?gateway.pending_methods(),
                                     error = %e,
                                     "心跳未响应"
                                 );
@@ -1276,15 +1283,13 @@ impl WorkerLoop {
         self: &Arc<Self>,
         host_gid: i64,
         changed_count: usize,
-        lands: Vec<crate::proto::generated::gamepb::plantpb::LandInfo>,
+        _lands: Vec<crate::proto::generated::gamepb::plantpb::LandInfo>,
     ) {
         self.mark_status_dirty();
         let my = *self.gid.lock();
         if host_gid > 0 && my > 0 && host_gid != my {
-            let friend = Arc::clone(&self.friend);
-            tokio::spawn(async move {
-                friend.on_friend_lands_notify(host_gid, lands).await;
-            });
+            // 对齐 bot network.ts:452-464：好友田推送直接丢弃（不触发任何拉取）。
+            // 事件驱动的好友田 GetGameFriends 拉取是 rust 独有模式，bot 没有。
             return;
         }
         self.on_lands_changed(changed_count);
@@ -1332,6 +1337,12 @@ impl WorkerLoop {
     #[must_use]
     pub fn activity_center(&self) -> &Arc<ActivityCenterService> {
         &self.activity_center
+    }
+
+    /// 登录后刷新活动窗口（对齐 bot worker.ts:568-572 的 refreshActivityWindows，
+    /// 发 activitypb.ActivityService.List）。失败忽略。
+    pub async fn refresh_activity_windows(&self) {
+        let _ = self.activity_center.get_activity_center_snapshot().await;
     }
     #[must_use]
     pub fn email(&self) -> &Arc<EmailService> {
@@ -1406,13 +1417,9 @@ pub fn random_interval_ms(min_ms: u64, max_ms: u64) -> u64 {
     if min_sec == max_sec {
         return (min_sec as u64) * 1000;
     }
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let seed =
-        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0);
-    // 简易 LCG（确定性足够）
-    let r = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    // 对齐 bot worker.ts:182-188 Math.random() 均匀分布（手写 LCG 分布质量差）
     let range = (max_sec - min_sec + 1) as u64;
-    let sec = min_sec as u64 + (r % range);
+    let sec = min_sec as u64 + crate::utils::random::random_u64(0, range - 1);
     sec * 1000
 }
 

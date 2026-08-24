@@ -14,7 +14,26 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 /// 默认客户端版本（与原 TS DEFAULT_CLIENT_VERSION 一致）
-pub const DEFAULT_CLIENT_VERSION: &str = "1.13.2.8_20260723";
+pub const DEFAULT_CLIENT_VERSION: &str = "1.13.2.10_20260723";
+
+/// 已知的过期 client_version → 升级映射。
+///
+/// client_version 随 Login 和每条 Heartbeat 上报，旧版本可能被服务端冷落。
+/// 存量 store.json 里固化了 1.13.2.8_20260723，启动时自动升级。
+const LEGACY_CLIENT_VERSION_UPGRADES: &[(&str, &str)] =
+    &[("1.13.2.8_20260723", DEFAULT_CLIENT_VERSION)];
+
+/// 就地升级过期的 client_version，返回是否发生变化。
+#[must_use]
+pub fn migrate_client_version(version: &mut String) -> bool {
+    for (old, new) in LEGACY_CLIENT_VERSION_UPGRADES {
+        if version == old {
+            *version = (*new).to_string();
+            return true;
+        }
+    }
+    false
+}
 
 /// 默认游戏网关（与原 TS `CONFIG.serverUrl` 一致）
 pub const DEFAULT_GATEWAY_URL: &str = "wss://gate-obt.nqf.qq.com/prod/ws";

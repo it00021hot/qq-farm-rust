@@ -230,7 +230,12 @@ impl FriendApi {
     async fn fetch_game_friends_by_gids(&self, known: &[i64]) -> Vec<GameFriend> {
         let account_id = self.account_id.lock().clone();
         let mut all = Vec::new();
-        for chunk in known.chunks(QQ_FRIEND_LIST_BATCH_SIZE) {
+        for (i, chunk) in known.chunks(QQ_FRIEND_LIST_BATCH_SIZE).enumerate() {
+            // 对齐 bot gid-manager.ts:277-278：批次间 randomDelay(500,1000)，
+            // 避免 GID 多时零间隔连发多个 35-GID 批次
+            if i > 0 {
+                crate::utils::random::random_delay(500, 1000).await;
+            }
             let body = GetGameFriendsRequest { gids: chunk.to_vec() }.encode_to_vec();
             match self
                 .gateway
@@ -639,8 +644,8 @@ impl FriendApi {
             }
 
             if index + 1 < ids.len() && !self.bad_limit_reached() {
-                let ms = 80 + (index as u64 % 80);
-                tokio::time::sleep(Duration::from_millis(ms)).await;
+                // 对齐 bot friend/api.ts:259-261：放虫放草逐地 randomDelay(80,160)
+                crate::utils::random::random_delay(80, 160).await;
             }
         }
 
