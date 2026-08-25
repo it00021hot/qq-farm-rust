@@ -54,7 +54,6 @@ enum WsCommand {
     /// 发送二进制
     Send(Vec<u8>),
     /// 回复 Ping
-    Pong(Vec<u8>),
     /// 主动关闭
     Close(Option<CloseFrame<'static>>),
 }
@@ -141,7 +140,6 @@ async fn run_write_task(mut sink: WsSink, mut cmd_rx: mpsc::Receiver<WsCommand>)
     while let Some(cmd) = cmd_rx.recv().await {
         let ok = match cmd {
             WsCommand::Send(bytes) => sink.send(WsMessage::Binary(bytes)).await.is_ok(),
-            WsCommand::Pong(data) => sink.send(WsMessage::Pong(data.into())).await.is_ok(),
             WsCommand::Close(frame) => {
                 let _ = sink.send(WsMessage::Close(frame)).await;
                 let _ = sink.close().await;

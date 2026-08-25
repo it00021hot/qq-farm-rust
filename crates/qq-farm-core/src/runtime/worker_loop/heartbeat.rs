@@ -1,10 +1,1 @@
-//! 网关心跳任务注册（判死策略对齐 node `keepalive-policy.ts`）。
-
-use super::*;
-
-impl WorkerLoop {
-    /// 注册心跳 interval 任务
-    pub(super) fn start_heartbeat_task(self: &Arc<Self>, scheduler: &Scheduler) {
-
-    }
-}
+//! 心跳任务实际注册在 `worker_loop/mod.rs` 的 `start()` 内（历史壳文件，保留模块占位）。

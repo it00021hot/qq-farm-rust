@@ -1227,7 +1227,7 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
     linker.func_wrap(
         "a",
         "v",
-        |mut c: wasmtime::Caller<'_, HostState>, ptr: i32, len: i32| -> WasmResult<i32> {
+        |c: wasmtime::Caller<'_, HostState>, ptr: i32, len: i32| -> WasmResult<i32> {
             if ptr <= 0 || len <= 0 {
                 return Ok(0);
             }
@@ -1424,6 +1424,7 @@ struct AllocGuard {
 impl AllocGuard {
     /// 创建空 guard（不持有任何 wasm 分配）
     #[must_use]
+    #[cfg(test)]
     fn empty() -> Self {
         Self { ptr: 0, defused: true }
     }
@@ -1454,6 +1455,7 @@ impl AllocGuard {
     /// 用一个外部获得的 i32 ptr 构造 guard（典型来源：`N()` 返回值）。
     /// 因为没有匹配 alloc，guard 不会在 Drop 时自动 free——必须调 `free_now`。
     #[must_use]
+    #[cfg(test)]
     fn from_existing_ptr(ptr: i32) -> Self {
         if ptr <= 0 {
             return Self::empty();

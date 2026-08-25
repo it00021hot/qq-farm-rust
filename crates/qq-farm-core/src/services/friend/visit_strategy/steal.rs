@@ -363,18 +363,6 @@ pub async fn steal_lands_with_reward_log(
     result
 }
 
-fn unique_help_land_ids(status: &AnalyzeResult) -> Vec<i64> {
-    let mut seen = HashSet::new();
-    status
-        .need_weed
-        .iter()
-        .chain(status.need_bug.iter())
-        .chain(status.need_water.iter())
-        .copied()
-        .filter(|id| *id > 0 && seen.insert(*id))
-        .collect()
-}
-
 // steal_side_help（偷菜顺手帮忙）已删除：bot 的偷菜流只偷不帮。
 
 /// 拜访好友 - 仅偷菜

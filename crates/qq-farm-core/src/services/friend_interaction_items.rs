@@ -237,13 +237,6 @@ async fn send_targeted_use(
     Ok(UseReply::decode(&body[..])?)
 }
 
-fn normalize_reply_items(items: &[CoreItem]) -> Vec<serde_json::Value> {
-    items
-        .iter()
-        .map(|i| serde_json::json!({ "id": i.id.to_string(), "count": i.count.to_string() }))
-        .collect()
-}
-
 /// 单次尝试结果
 struct Attempt {
     land_id: i64,

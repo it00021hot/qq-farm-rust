@@ -738,7 +738,6 @@ impl WorkerLoop {
             }),
         );
 
-        self.start_heartbeat_task(scheduler);
 
         // 每日跨日检查
         let this = Arc::clone(self);
