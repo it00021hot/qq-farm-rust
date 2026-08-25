@@ -142,8 +142,9 @@ fn main() -> io::Result<()> {
 
     drop(f);
 
-    println!(
-        "cargo:warning=prost-build: compiled {} proto files, generated {} Rust modules (nested)",
+    // 信息性输出：cargo:warning 会渲染成编译警告，这里改为普通 stderr（仅 -vv 可见）
+    eprintln!(
+        "prost-build: compiled {} proto files, generated {} Rust modules (nested)",
         proto_files.len(),
         modules.len()
     );

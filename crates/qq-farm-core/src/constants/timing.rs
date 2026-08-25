@@ -55,6 +55,9 @@ pub const WX_RECONNECT_RETRY_DELAY_MS: u64 = 10 * 60 * 1000;
 pub const WX_KICKOUT_RECONNECT_DELAY_MS: u64 = 3 * 60 * 1000;
 /// 进程启动后已授权微信账号首次自动重连的等待时间
 pub const WX_STARTUP_RECONNECT_DELAY_MS: u64 = 60 * 1000;
+/// 启动重连时相邻账号之间的随机间隔范围：所有账号同一时刻集中登录本身是风控信号。
+pub const WX_STARTUP_RECONNECT_STAGGER_MIN_MS: u64 = 15 * 1000;
+pub const WX_STARTUP_RECONNECT_STAGGER_MAX_MS: u64 = 45 * 1000;
 
 /// 应用宝 accesstoken 后台保活检查间隔
 pub const WX_KEEPALIVE_INTERVAL_MS: u64 = 30 * 60 * 1000;
@@ -89,6 +92,14 @@ pub fn wx_reconnect_delay_zh(attempt: u32) -> String {
 #[must_use]
 pub fn wx_startup_reconnect_delay_zh() -> String {
     duration_ms_zh(WX_STARTUP_RECONNECT_DELAY_MS)
+}
+
+/// 启动重连相邻账号之间的随机间隔。
+#[must_use]
+pub fn wx_startup_reconnect_stagger_ms() -> u64 {
+    use rand::Rng;
+    rand::thread_rng()
+        .gen_range(WX_STARTUP_RECONNECT_STAGGER_MIN_MS..=WX_STARTUP_RECONNECT_STAGGER_MAX_MS)
 }
 
 /// 被踢下线的重登等待文案。
@@ -127,5 +138,14 @@ mod tests {
         assert_eq!(wx_reconnect_delay_ms(1), 15 * 60 * 1000);
         assert_eq!(wx_reconnect_delay_ms(2), 10 * 60 * 1000);
         assert_eq!(wx_reconnect_delay_ms(3), 10 * 60 * 1000);
+    }
+
+    #[test]
+    fn startup_reconnect_stagger_within_bounds() {
+        for _ in 0..100 {
+            let ms = wx_startup_reconnect_stagger_ms();
+            assert!(ms >= WX_STARTUP_RECONNECT_STAGGER_MIN_MS);
+            assert!(ms <= WX_STARTUP_RECONNECT_STAGGER_MAX_MS);
+        }
     }
 }

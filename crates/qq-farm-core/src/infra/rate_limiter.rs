@@ -526,12 +526,6 @@ mod tests {
 
     #[tokio::test]
     async fn request_queue_preserves_priority() {
-        let q = RequestQueue::new(RateLimiterConfig {
-            max_concurrent: 1,
-            min_interval_ms: 10,
-            max_retries: 0,
-            ..Default::default()
-        });
         // 单并发，先到先得；这里测试 priority 排序在 dequeue 层
         let mut pq = PriorityQueue::new();
         let (tx1, _) = tokio::sync::oneshot::channel();

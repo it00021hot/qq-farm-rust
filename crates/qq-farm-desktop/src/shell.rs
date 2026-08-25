@@ -1,8 +1,6 @@
 //! 数据目录、关于框、关窗进托盘、显示主窗口。
 
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use tauri::menu::MenuId;
 use tauri::{AppHandle, Manager};
@@ -91,16 +89,6 @@ fn open_path(path: &Path) -> std::io::Result<()> {
 }
 
 pub fn show_about(app: &AppHandle) {
-    // 避免某些 macOS 菜单事件触发同一动作两次（导致 About 连弹）
-    static LAST_ABOUT_MS: AtomicU64 = AtomicU64::new(0);
-    let now_ms =
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
-    let last = LAST_ABOUT_MS.load(Ordering::Relaxed);
-    if now_ms.saturating_sub(last) < 1500 {
-        return;
-    }
-    LAST_ABOUT_MS.store(now_ms, Ordering::Relaxed);
-
     let version = app.package_info().version.to_string();
     let github = "https://github.com/it00021hot/qq-farm-rust";
     app.dialog()

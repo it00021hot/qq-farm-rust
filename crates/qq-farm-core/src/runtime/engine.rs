@@ -983,7 +983,7 @@ impl RuntimeEngine {
         }
     }
 
-    /// 进程启动后：已授权微信账号延迟再连，结果写入运行日志。
+    /// 进程启动后：已授权微信账号延迟再连，多账号间随机错峰，结果写入运行日志。
     pub fn schedule_wx_authorized_start(self: &Arc<Self>) {
         let delay = crate::constants::WX_STARTUP_RECONNECT_DELAY_MS;
         let wait = crate::constants::wx_startup_reconnect_delay_zh();
@@ -995,12 +995,16 @@ impl RuntimeEngine {
         let n = accounts.len();
         self.runtime_state.log(
             "系统",
-            &format!("发现 {n} 个已授权微信账号，将在 {wait}后自动重连"),
+            &format!(
+                "发现 {n} 个已授权微信账号，将在 {wait}后自动重连{}",
+                if n > 1 { "（各账号间随机错峰启动）" } else { "" }
+            ),
             None,
         );
         let engine = self.clone();
         crate::runtime::safe_spawn::spawn_logged("wx_authorized_start", async move {
             tokio::time::sleep(Duration::from_millis(delay)).await;
+            let mut first = true;
             for acc in accounts {
                 let Some(latest) =
                     accounts_store::get_accounts().into_iter().find(|a| a.id == acc.id)
@@ -1010,6 +1014,21 @@ impl RuntimeEngine {
                 if !latest.has_wx_auth() {
                     continue;
                 }
+                if !first {
+                    let stagger = crate::constants::wx_startup_reconnect_stagger_ms();
+                    let name = if latest.name.trim().is_empty() {
+                        latest.id.clone()
+                    } else {
+                        latest.name.clone()
+                    };
+                    engine.runtime_state.log(
+                        "系统",
+                        &format!("账号 {name} 将在 {} 秒后自动重连（错峰）", stagger / 1000),
+                        None,
+                    );
+                    tokio::time::sleep(Duration::from_millis(stagger)).await;
+                }
+                first = false;
                 engine.start_wx_authorized_account(&latest, 0);
             }
         });

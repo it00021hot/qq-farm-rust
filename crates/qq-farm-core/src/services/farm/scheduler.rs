@@ -924,7 +924,7 @@ mod tests {
     #[test]
     fn service_has_op_methods() {
         // 编译期保证：FarmService 必须有这些 op 方法
-        let svc = make_service();
+        let _svc = make_service();
         let _: fn(&FarmService) -> _ = |s| s.subscribe(); // 占位
     }
 }

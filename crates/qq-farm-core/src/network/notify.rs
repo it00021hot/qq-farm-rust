@@ -319,11 +319,6 @@ mod tests {
 
     #[test]
     fn basic_notify_gold_on_wire_is_applied_even_if_zero() {
-        let basic = crate::proto::generated::gamepb::userpb::BasicInfo {
-            gold: 0,
-            exp: 42,
-            ..Default::default()
-        };
         // prost 会省略默认 0，所以手工编一个带 gold=0 / exp=42 的 BasicInfo。
         // BasicInfo: field 4 exp=42 (0x20, 42), field 5 gold=0 (0x28, 0)
         // BasicNotify: field 1 length-delimited
