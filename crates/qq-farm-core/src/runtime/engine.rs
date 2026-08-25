@@ -1537,11 +1537,11 @@ mod tests {
 
     #[test]
     fn wx_reconnect_waits_match_attempt_and_startup() {
-        assert_eq!(crate::constants::wx_reconnect_delay_ms(1), 3 * 60 * 1000);
-        assert_eq!(crate::constants::wx_reconnect_delay_zh(1), "3 分钟");
-        assert_eq!(crate::constants::wx_reconnect_delay_ms(2), 60 * 1000);
-        assert_eq!(crate::constants::wx_reconnect_delay_ms(3), 60 * 1000);
-        assert_eq!(crate::constants::wx_reconnect_delay_zh(2), "1 分钟");
+        assert_eq!(crate::constants::wx_reconnect_delay_ms(1), 15 * 60 * 1000);
+        assert_eq!(crate::constants::wx_reconnect_delay_zh(1), "15 分钟");
+        assert_eq!(crate::constants::wx_reconnect_delay_ms(2), 10 * 60 * 1000);
+        assert_eq!(crate::constants::wx_reconnect_delay_ms(3), 10 * 60 * 1000);
+        assert_eq!(crate::constants::wx_reconnect_delay_zh(2), "10 分钟");
         assert_eq!(crate::constants::WX_STARTUP_RECONNECT_DELAY_MS, 60 * 1000);
         assert_eq!(crate::constants::wx_startup_reconnect_delay_zh(), "1 分钟");
     }

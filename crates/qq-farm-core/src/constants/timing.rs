@@ -43,10 +43,13 @@ pub const WX_LOGIN_TASK_TTL_MS: u64 = 110_000;
 pub const WX_LOGIN_PENDING_AUTH_TTL_MS: u64 = 10 * 60 * 1000;
 /// 掉线后用应用宝授权换码重连的最大次数
 pub const WX_RECONNECT_MAX_ATTEMPTS: u32 = 3;
-/// 掉线后首次用应用宝授权换码重连的等待时间
-pub const WX_RECONNECT_FIRST_DELAY_MS: u64 = 3 * 60 * 1000;
+/// 掉线后首次用应用宝授权换码重连的等待时间。
+/// 心跳超时类的"半死"会话（推送还在、RPC 不应答）服务端释放很慢，且高频重登
+/// 本身就是风控信号（历史上 60~103 次/天的登录churn 与持续掉线强相关），
+/// 因此拉长到 15 分钟，降低单位时间登录频率。
+pub const WX_RECONNECT_FIRST_DELAY_MS: u64 = 15 * 60 * 1000;
 /// 掉线后第 2～3 次用应用宝授权换码重连的等待时间
-pub const WX_RECONNECT_RETRY_DELAY_MS: u64 = 60 * 1000;
+pub const WX_RECONNECT_RETRY_DELAY_MS: u64 = 10 * 60 * 1000;
 /// 被踢下线（"已在其他终端登录"）后重登等待时间。
 /// 服务端旧 session 释放需要时间，重登过快会连环被踢，因此每次都等满 3 分钟。
 pub const WX_KICKOUT_RECONNECT_DELAY_MS: u64 = 3 * 60 * 1000;
@@ -121,8 +124,8 @@ mod tests {
 
     #[test]
     fn normal_reconnect_delays_unchanged() {
-        assert_eq!(wx_reconnect_delay_ms(1), 3 * 60 * 1000);
-        assert_eq!(wx_reconnect_delay_ms(2), 60 * 1000);
-        assert_eq!(wx_reconnect_delay_ms(3), 60 * 1000);
+        assert_eq!(wx_reconnect_delay_ms(1), 15 * 60 * 1000);
+        assert_eq!(wx_reconnect_delay_ms(2), 10 * 60 * 1000);
+        assert_eq!(wx_reconnect_delay_ms(3), 10 * 60 * 1000);
     }
 }

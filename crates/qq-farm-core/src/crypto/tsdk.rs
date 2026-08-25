@@ -491,9 +491,9 @@ impl TsdkRuntime {
         let store = &mut inner.store;
         let exports = &inner.exports;
 
-        // alloc cstring → 写 openid → g(game_id, app_key_ptr)
+        // alloc cstring → 写 openid → G(game_id, ptr)（对齐 bot allocCString：精确 len+1）
         let cstr = format!("{value}\0");
-        let cap = (cstr.len() as i32).max(64);
+        let cap = cstr.len() as i32;
         let alloc_result = AllocGuard::alloc(store, exports, cap);
         let mut ptr_guard = match alloc_result {
             Ok(g) => g,

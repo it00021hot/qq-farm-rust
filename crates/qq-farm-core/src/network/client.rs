@@ -238,7 +238,9 @@ async fn dial_gateway_ws_inner(
         return Err(format!("no address for {host}"));
     }
     let tcp = TcpStream::connect(&*addrs).await.map_err(|e| format!("tcp: {e}"))?;
-    let _ = tcp.set_nodelay(true);
+    // 对齐 bot（Node 默认 Nagle 开启）：禁用 nodelay，让小帧按内核节奏合并发送，
+    // 避免与 bot 不同的逐帧立发 TCP 分段模式
+    let _ = tcp.set_nodelay(false);
 
     let mut stream = if tls {
         let connector = native_tls::TlsConnector::new().map_err(|e| format!("tls: {e}"))?;
