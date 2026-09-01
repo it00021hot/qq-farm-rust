@@ -377,10 +377,10 @@ fn pass_dto_basic() {
     assert_eq!(dto.claimed_through_level, 3);
     assert_eq!(dto.nodes.len(), 1);
     assert!(dto.nodes[0].claimable);
-    assert_eq!(dto.nodes[0].rewards[0].image, "/game-config/seed_images_named/1.png");
+    assert_eq!(dto.nodes[0].rewards[0].image, "/game-config/seed_images_named/seed_images/1.png");
     let v = serde_json::to_value(&dto).unwrap();
     assert!(v.get("nodes").and_then(|n| n.as_array()).is_some());
-    assert_eq!(v["nodes"][0]["rewards"][0]["image"], "/game-config/seed_images_named/1.png");
+    assert_eq!(v["nodes"][0]["rewards"][0]["image"], "/game-config/seed_images_named/seed_images/1.png");
 }
 
 #[test]

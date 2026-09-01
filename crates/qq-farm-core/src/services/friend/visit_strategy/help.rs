@@ -8,6 +8,7 @@ use tokio::time::sleep;
 
 use crate::constants::{HELP_CACHE_MAX, HELP_IN_FLIGHT_TTL_MS, HELP_RESULT_TTL_MS};
 use crate::proto::generated::gamepb::plantpb::LandInfo;
+use crate::proto::generated::gamepb::visitpb::EnterReply;
 use crate::services::friend::api::FriendApi;
 
 use super::blacklist::{
@@ -16,7 +17,8 @@ use super::blacklist::{
 };
 use super::now_ms;
 use super::panel_dto::FriendSummary;
-use super::steal::{analyze_friend_lands, steal_lands_with_reward_log};
+use super::steal::{analyze_friend_lands, AnalyzeResult};
+use crate::services::friend::pet_cache::{get_friend_dog_state, FriendDogState, PROTECT_DOG_ID};
 
 /// 帮助状态
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -407,6 +409,142 @@ pub async fn run_farming_with_fallback(
     }
 }
 
+/// 对齐 bot visit-strategy.ts:58-65 `canBypassHelpExpLimitForProtectDog`：
+/// 「护主犬无视经验上限」开关切开，且 Enter 回包 `brief_dog_info.dog_id`
+/// 是护主犬 → 本好友的帮忙无视经验上限（为「同气连枝」礼包继续帮）。
+fn protect_dog_bypass_from_reply(account_id: &str, enter_reply: &EnterReply) -> bool {
+    crate::services::automation::is_automation_on_for(account_id, "friend_help_protect_dog_ignore_exp_limit")
+        && enter_reply.brief_dog_info.as_ref().map(|d| d.dog_id) == Some(PROTECT_DOG_ID)
+}
+
+/// 已进场后的帮忙动作：need_weed/bug/water 合并 Farming（批量失败逐地回退）、
+/// 帮忙经验探测（`stop_when_exp_limit` 时对比操作前后经验，未涨即判上限；
+/// `help_auto_disabled` 传 [`Some`] 才做探测，捣乱启动流保持无探测的旧行为）。
+/// 从 `visit_friend_for_help` 与统一巡查 `visit_friend_combined` 共用，避免复制逻辑。
+///
+/// 返回是否真正帮到了地块；产生的动作文案 push 进 `actions`。
+pub async fn perform_help_actions(
+    api: &FriendApi,
+    recent_help: &RecentHelpCache,
+    account_id: &str,
+    friend_gid: i64,
+    status: &AnalyzeResult,
+    snapshot_key: &str,
+    stop_when_exp_limit: bool,
+    help_auto_disabled: Option<&std::sync::atomic::AtomicBool>,
+    can_get_exp_by_candidates: bool,
+    total_actions: &mut TotalActions,
+    actions: &mut Vec<String>,
+) -> bool {
+    let all_help_ids: Vec<i64> = status
+        .need_weed
+        .iter()
+        .chain(status.need_bug.iter())
+        .chain(status.need_water.iter())
+        .copied()
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let allow_by_exp = !stop_when_exp_limit || can_get_exp_by_candidates;
+    if all_help_ids.is_empty() || !allow_by_exp {
+        return false;
+    }
+    let before_exp = crate::services::status::status_data_for(account_id).exp;
+    let outcome = run_farming_with_fallback(
+        api,
+        recent_help,
+        friend_gid,
+        &all_help_ids,
+        stop_when_exp_limit,
+        snapshot_key,
+    )
+    .await;
+    if outcome.land_count == 0 {
+        return false;
+    }
+    let mut parts = Vec::new();
+    if !status.need_weed.is_empty() {
+        parts.push(format!("草{}", status.need_weed.len()));
+    }
+    if !status.need_bug.is_empty() {
+        parts.push(format!("虫{}", status.need_bug.len()));
+    }
+    if !status.need_water.is_empty() {
+        parts.push(format!("水{}", status.need_water.len()));
+    }
+    actions.push(format!(
+        "一键务农{}块/{}项({})",
+        outcome.land_count,
+        outcome.operation_count,
+        parts.join("/")
+    ));
+    total_actions.farming += outcome.land_count;
+    crate::services::stats::record_operation_for(account_id, "helpFarming", outcome.land_count as i64);
+    if stop_when_exp_limit {
+        if let Some(flag) = help_auto_disabled {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let after_exp = crate::services::status::status_data_for(account_id).exp;
+            if after_exp <= before_exp {
+                flag.store(true, std::sync::atomic::Ordering::Release);
+                crate::services::panel_log::log(
+                    account_id,
+                    "好友",
+                    "今日帮助经验已达上限，自动停止帮忙",
+                    crate::constants::PanelEvent::FriendCycle,
+                    Some(serde_json::json!({
+                        "module": "friend",
+                        "result": "ok",
+                    })),
+                );
+            }
+        }
+    }
+    true
+}
+
+/// 已进场后的捣乱动作（放草/放虫，逐地随机间隔在 api 层）。
+/// 从 `visit_friend` 与统一巡查 `visit_friend_combined` 共用。
+///
+/// 返回放草+放虫成功总数；动作文案 push 进 `actions`。
+pub async fn perform_bad_actions(
+    api: &FriendApi,
+    friend_gid: i64,
+    status: &AnalyzeResult,
+    total_actions: &mut TotalActions,
+    actions: &mut Vec<String>,
+) -> usize {
+    if api.remaining_bad_times() <= 0
+        || (status.can_put_weed.is_empty() && status.can_put_bug.is_empty())
+    {
+        return 0;
+    }
+    let mut count = 0usize;
+    if !status.can_put_weed.is_empty() {
+        let remaining = api.remaining_bad_times() as usize;
+        let to_process: Vec<i64> = status.can_put_weed.iter().copied().take(remaining).collect();
+        let n = api.put_weeds(friend_gid, to_process).await.unwrap_or(0);
+        if n > 0 {
+            actions.push(format!("放草{n}"));
+            total_actions.put_weed += n;
+            count += n;
+        }
+        if api.remaining_bad_times() > 0 {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    }
+    if api.remaining_bad_times() > 0 && !status.can_put_bug.is_empty() {
+        let remaining = api.remaining_bad_times() as usize;
+        let to_process: Vec<i64> = status.can_put_bug.iter().copied().take(remaining).collect();
+        let n = api.put_insects(friend_gid, to_process).await.unwrap_or(0);
+        if n > 0 {
+            actions.push(format!("放虫{n}"));
+            total_actions.put_bug += n;
+            count += n;
+        }
+    }
+    count
+}
+
 /// 拜访好友（帮 + 偷 + 捣乱，按账号 automation 分派）
 pub async fn visit_friend(
     api: &FriendApi,
@@ -447,7 +585,7 @@ pub async fn visit_friend(
         let _ = api.leave_farm(friend_gid).await;
         return VisitResult { acted: false, entered: true, stolen: 0 };
     }
-    let status = analyze_friend_lands(&lands, my_gid, &plant_blacklist, false, account_id);
+    let mut status = analyze_friend_lands(&lands, my_gid, &plant_blacklist, false, account_id);
     let snapshot_key = RecentHelpCache::make_snapshot_key(
         &lands.iter().map(LandSnapshot::from_land).collect::<Vec<_>>(),
     );
@@ -457,114 +595,42 @@ pub async fn visit_friend(
 
     let help_enabled = is_automation_on_for(account_id, "friend_help");
     let stop_when_exp_limit = is_automation_on_for(account_id, "friend_help_exp_limit");
-    let allow_by_exp = !stop_when_exp_limit || can_get_exp_by_candidates;
     let steal_enabled =
         is_automation_on_for(account_id, "friend_steal") && !status.stealable.is_empty();
     if steal_enabled {
-        let steal_result = steal_lands_with_reward_log(
+        stolen = super::steal::perform_steal_actions(
             api,
             recent_help,
+            account_id,
             friend_gid,
-            &status.stealable,
-            &status.stealable_info,
-            None,
+            &mut status,
+            total_actions,
+            &mut actions,
         )
         .await;
-        stolen = steal_result.ok;
-        if steal_result.ok > 0 {
-            let plant_names: Vec<String> = steal_result
-                .stolen_infos
-                .iter()
-                .filter_map(|i| if i.name.is_empty() { None } else { Some(i.name.clone()) })
-                .collect::<HashSet<_>>()
-                .into_iter()
-                .collect();
-            let score_hint = if steal_result.score_gained > 0 {
-                format!("+积分x{}", steal_result.score_gained)
-            } else {
-                String::new()
-            };
-            actions.push(format!(
-                "偷{}{}{}",
-                steal_result.ok,
-                if plant_names.is_empty() {
-                    String::new()
-                } else {
-                    format!("({})", plant_names.join("/"))
-                },
-                score_hint
-            ));
-            total_actions.steal += steal_result.ok;
-        }
         // 对齐 bot：偷到菜后的路径不做顺手帮忙（steal_side_help 已删除）
-    } else if help_enabled && allow_by_exp {
-        let all_help_ids: Vec<i64> = status
-            .need_weed
-            .iter()
-            .chain(status.need_bug.iter())
-            .chain(status.need_water.iter())
-            .copied()
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect();
-        if !all_help_ids.is_empty() {
-            let outcome = run_farming_with_fallback(
-                api,
-                recent_help,
-                friend_gid,
-                &all_help_ids,
-                stop_when_exp_limit,
-                &snapshot_key,
-            )
-            .await;
-            if outcome.land_count > 0 {
-                let mut parts = Vec::new();
-                if !status.need_weed.is_empty() {
-                    parts.push(format!("草{}", status.need_weed.len()));
-                }
-                if !status.need_bug.is_empty() {
-                    parts.push(format!("虫{}", status.need_bug.len()));
-                }
-                if !status.need_water.is_empty() {
-                    parts.push(format!("水{}", status.need_water.len()));
-                }
-                actions.push(format!(
-                    "一键务农{}块/{}项({})",
-                    outcome.land_count,
-                    outcome.operation_count,
-                    parts.join("/")
-                ));
-                total_actions.farming += outcome.land_count;
-            }
-        }
+    } else if help_enabled {
+        // 对齐 bot visit-strategy.ts:809-810：Enter 回包确认护主犬 → 无视经验上限
+        let effective_stop = stop_when_exp_limit
+            && !protect_dog_bypass_from_reply(account_id, &enter_reply);
+        perform_help_actions(
+            api,
+            recent_help,
+            account_id,
+            friend_gid,
+            &status,
+            &snapshot_key,
+            effective_stop,
+            None,
+            !stop_when_exp_limit || can_get_exp_by_candidates,
+            total_actions,
+            &mut actions,
+        )
+        .await;
     }
 
-    if is_automation_on_for(account_id, "friend_bad")
-        && api.remaining_bad_times() > 0
-        && (!status.can_put_weed.is_empty() || !status.can_put_bug.is_empty())
-    {
-        if api.remaining_bad_times() > 0 && !status.can_put_weed.is_empty() {
-            let remaining = api.remaining_bad_times() as usize;
-            let to_process: Vec<i64> =
-                status.can_put_weed.iter().copied().take(remaining).collect();
-            let n = api.put_weeds(friend_gid, to_process).await.unwrap_or(0);
-            if n > 0 {
-                actions.push(format!("放草{n}"));
-                total_actions.put_weed += n;
-            }
-            if api.remaining_bad_times() > 0 {
-                tokio::time::sleep(Duration::from_millis(500)).await;
-            }
-        }
-        if api.remaining_bad_times() > 0 && !status.can_put_bug.is_empty() {
-            let remaining = api.remaining_bad_times() as usize;
-            let to_process: Vec<i64> = status.can_put_bug.iter().copied().take(remaining).collect();
-            let n = api.put_insects(friend_gid, to_process).await.unwrap_or(0);
-            if n > 0 {
-                actions.push(format!("放虫{n}"));
-                total_actions.put_bug += n;
-            }
-        }
+    if is_automation_on_for(account_id, "friend_bad") {
+        perform_bad_actions(api, friend_gid, &status, total_actions, &mut actions).await;
     }
 
     if !actions.is_empty() {
@@ -612,7 +678,16 @@ pub async fn visit_friend_for_help(
     if !stop_when_exp_limit {
         help_auto_disabled.store(false, std::sync::atomic::Ordering::Release);
     } else if help_auto_disabled.load(std::sync::atomic::Ordering::Acquire) {
-        return Some(VisitResult { acted: false, entered: false, stolen: 0 });
+        // 经验已满：对齐 bot visitFriend（visit-strategy.ts:760-768），只有
+        // 「护主犬无视经验上限」开着且当天缓存已确认护主犬才继续进农场试探，
+        // 其余好友一个请求都不发（缓存过滤在调用方完成）。
+        let bypass = crate::services::automation::is_automation_on_for(
+            account_id,
+            "friend_help_protect_dog_ignore_exp_limit",
+        ) && get_friend_dog_state(account_id, friend_gid) == FriendDogState::Protect;
+        if !bypass {
+            return Some(VisitResult { acted: false, entered: false, stolen: 0 });
+        }
     }
 
     let enter_reply = match api.enter_farm(friend_gid).await {
@@ -638,55 +713,27 @@ pub async fn visit_friend_for_help(
         &lands.iter().map(LandSnapshot::from_land).collect::<Vec<_>>(),
     );
 
+    // 对齐 bot visit-strategy.ts:809-810 `canBypassHelpExpLimitForProtectDog`：
+    // Enter 回包确认护主犬且「护主犬无视经验上限」开着 → 本好友 stop_when_exp_limit 失效，
+    // 经验满也继续帮（同气连枝礼包）。
+    let effective_stop =
+        stop_when_exp_limit && !protect_dog_bypass_from_reply(account_id, &enter_reply);
+
     let mut actions: Vec<String> = Vec::new();
-    let all_help_ids: Vec<i64> = status
-        .need_weed
-        .iter()
-        .chain(status.need_bug.iter())
-        .chain(status.need_water.iter())
-        .copied()
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect();
-    let allow_by_exp = !stop_when_exp_limit || can_get_exp_by_candidates;
-    if !all_help_ids.is_empty() && allow_by_exp {
-        let before_exp = crate::services::status::status_data_for(account_id).exp;
-        let outcome = run_farming_with_fallback(
-            api,
-            recent_help,
-            friend_gid,
-            &all_help_ids,
-            stop_when_exp_limit,
-            &snapshot_key,
-        )
-        .await;
-        if outcome.land_count > 0 {
-            actions.push(format!("帮{}块", outcome.land_count));
-            total_actions.farming += outcome.land_count;
-            crate::services::stats::record_operation_for(
-                account_id,
-                "helpFarming",
-                outcome.land_count as i64,
-            );
-            if stop_when_exp_limit {
-                tokio::time::sleep(Duration::from_millis(200)).await;
-                let after_exp = crate::services::status::status_data_for(account_id).exp;
-                if after_exp <= before_exp {
-                    help_auto_disabled.store(true, std::sync::atomic::Ordering::Release);
-                    crate::services::panel_log::log(
-                        account_id,
-                        "好友",
-                        "今日帮助经验已达上限，自动停止帮忙",
-                        crate::constants::PanelEvent::FriendCycle,
-                        Some(serde_json::json!({
-                            "module": "friend",
-                            "result": "ok",
-                        })),
-                    );
-                }
-            }
-        }
-    }
+    perform_help_actions(
+        api,
+        recent_help,
+        account_id,
+        friend_gid,
+        &status,
+        &snapshot_key,
+        effective_stop,
+        Some(help_auto_disabled),
+        can_get_exp_by_candidates,
+        total_actions,
+        &mut actions,
+    )
+    .await;
 
     if !actions.is_empty() {
         crate::services::panel_log::log(

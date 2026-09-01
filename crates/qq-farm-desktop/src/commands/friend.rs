@@ -4,6 +4,7 @@ use serde_json::Value;
 use tauri::State;
 
 use qq_farm_app::accounts;
+use qq_farm_app::error::AppError;
 use qq_farm_app::friend;
 
 use crate::error::{IpcError, IpcResult};
@@ -133,4 +134,21 @@ pub async fn illustrated_snapshot(
     friend::illustrated_snapshot(&state.app, &account_id)
         .await
         .map_err(IpcError::from)
+}
+
+/// 游戏内删除好友（成功后加入本地黑名单）。
+#[tauri::command]
+pub async fn friend_delete(
+    state: State<'_, DesktopState>,
+    account_id: String,
+    gid: String,
+) -> IpcResult<Value> {
+    ensure(&state, &account_id)?;
+    let gid_num: i64 = gid.trim().parse().map_err(|_| {
+        IpcError::from(AppError::BadRequest("无效的好友 GID".to_string()))
+    })?;
+    qq_farm_app::friend::delete_friend(&state.app, &account_id, gid_num)
+        .await
+        .map_err(IpcError::from)?;
+    Ok(serde_json::json!({ "ok": true, "gid": gid }))
 }

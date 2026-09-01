@@ -48,7 +48,7 @@ fn main() -> io::Result<()> {
 
     let mut config = prost_build::Config::new();
     config.bytes(["."]);
-    config.disable_comments(&["."]);
+    config.disable_comments(["."]);
 
     config.compile_protos(&proto_files, &[&proto_dir])?;
 

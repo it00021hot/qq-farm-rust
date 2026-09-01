@@ -231,6 +231,7 @@ impl WarehouseService {
                 items: reply.items,
                 land: None,
                 land_reward: None,
+                social_reward: None,
             });
         }
         let Some(item) = single else {
@@ -588,6 +589,9 @@ pub struct BagItemView {
     pub uid: i64,
     #[serde(default)]
     pub mutant_types: Vec<i64>,
+    /// 变异效果展示（name 列表，对齐 bot `mutantEffects`）
+    #[serde(default)]
+    pub mutant_effects: Vec<String>,
     pub name: String,
     pub image: Option<String>,
     pub category: String,
@@ -760,6 +764,7 @@ pub fn build_bag_detail_from_items(raw_items: &[BagItemLite]) -> BagDetail {
             count: 0,
             uid,
             mutant_types: mutant_types.clone(),
+            mutant_effects: gc.get_mutant_type_names(&mutant_types),
             name: name.clone(),
             image: gc.get_item_image_by_id(id),
             category: category.clone(),
@@ -791,6 +796,7 @@ pub fn build_bag_detail_from_items(raw_items: &[BagItemLite]) -> BagDetail {
             count: sys.count,
             uid: 0,
             mutant_types: Vec::new(),
+            mutant_effects: Vec::new(),
             name: sys.name.clone(),
             image: gc.get_item_image_by_id(sys.id),
             category: "item".to_string(),

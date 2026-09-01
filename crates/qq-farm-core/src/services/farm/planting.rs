@@ -55,6 +55,26 @@ pub struct FertilizeOptions {
     pub multi_season: bool,
 }
 
+/// 解析单颗种子的地块限制：缺 key / 空数组 / 勾满全部类型 → None（不限制）
+fn resolve_seed_land_types(
+    restrictions: &std::collections::HashMap<i64, Vec<crate::models::types::FertilizerLandType>>,
+    seed_id: i64,
+) -> Option<Vec<crate::models::types::FertilizerLandType>> {
+    use crate::models::types::FertilizerLandType;
+    const ALL: &[FertilizerLandType] = &[
+        FertilizerLandType::PurpleGold,
+        FertilizerLandType::Gold,
+        FertilizerLandType::Black,
+        FertilizerLandType::Red,
+        FertilizerLandType::Normal,
+    ];
+    let types = restrictions.get(&seed_id)?;
+    if types.is_empty() || types.len() >= ALL.len() {
+        return None;
+    }
+    Some(types.clone())
+}
+
 fn fertilizer_types_to_analysis(
     types: &[crate::models::types::FertilizerLandType],
 ) -> Vec<crate::services::farm::land_analysis::LandType> {
@@ -698,12 +718,77 @@ impl PlantingEngine {
         Ok(AutoPlantResult { planted_lands: shop.planted_lands })
     }
 
-    /// 用背包种子种植
+    /// 用背包种子种植（对齐 bot `plantFromBagSeeds`：bagSeedLandTypes 非空时
+    /// 先拉最新土地构建 landId → 类型映射，受限种子先种且只在命中类型的空地装箱）。
     pub async fn plant_from_bag_seeds(
         &self,
         lands_to_plant: &[i64],
         host_gid: i64,
         account_id: &str,
+    ) -> Result<BagPlantResult> {
+        // 解析失败按不限制处理并 logWarn，避免整轮种不下去
+        let (restrictions, land_type_by_id) = match self
+            .resolve_land_type_map_for_bag_seeds(host_gid, account_id)
+            .await
+        {
+            Some(pair) => pair,
+            None => Default::default(),
+        };
+        self.plant_from_bag_seeds_ex(
+            lands_to_plant,
+            host_gid,
+            account_id,
+            restrictions,
+            land_type_by_id,
+        )
+        .await
+    }
+
+    /// bagSeedLandTypes 为空则不解析（零额外请求）；否则返回 (限制表, landId→类型)
+    async fn resolve_land_type_map_for_bag_seeds(
+        &self,
+        host_gid: i64,
+        account_id: &str,
+    ) -> Option<(
+        std::collections::HashMap<i64, Vec<crate::models::types::FertilizerLandType>>,
+        std::collections::HashMap<i64, crate::services::farm::land_analysis::LandType>,
+    )> {
+        use crate::services::farm::land_analysis::{land_type_by_level, LandType};
+        let restrictions =
+            crate::models::store::account_config::get_bag_seed_land_types(Some(account_id));
+        if restrictions.is_empty() {
+            return None;
+        }
+        match self.api.get_all_lands(host_gid).await {
+            Ok(reply) => Some((
+                restrictions,
+                reply
+                    .lands
+                    .into_iter()
+                    .map(|l| (l.id, land_type_by_level(l.level)))
+                    .collect::<std::collections::HashMap<i64, LandType>>(),
+            )),
+            Err(e) => {
+                tracing::warn!(error = %e, "解析土地类型失败，本轮背包种子按不限制处理");
+                None
+            }
+        }
+    }
+
+    /// 用背包种子种植（显式传入限制上下文；`land_type_by_id` 为空表示不限制）
+    pub async fn plant_from_bag_seeds_ex(
+        &self,
+        lands_to_plant: &[i64],
+        host_gid: i64,
+        account_id: &str,
+        restrictions: std::collections::HashMap<
+            i64,
+            Vec<crate::models::types::FertilizerLandType>,
+        >,
+        land_type_by_id: std::collections::HashMap<
+            i64,
+            crate::services::farm::land_analysis::LandType,
+        >,
     ) -> Result<BagPlantResult> {
         let mut target: Vec<i64> = {
             let mut seen = std::collections::HashSet::new();
@@ -712,6 +797,7 @@ impl PlantingEngine {
         if target.is_empty() {
             return Ok(BagPlantResult::default());
         }
+        let land_type_available = !land_type_by_id.is_empty();
         let warehouse =
             crate::services::warehouse::WarehouseService::new(self.api.gateway().clone());
         let bag_seeds = warehouse.get_bag_seeds().await?;
@@ -733,6 +819,22 @@ impl PlantingEngine {
         let priority =
             crate::models::store::account_config::get_bag_seed_priority(Some(account_id));
         let ordered = plan_bag_planting_order(&usable, &priority);
+        // 有土地限制的种子先种，否则不限种子会把受限种子唯一可用的地块占光
+        let ordered: Vec<&BagSeedWithLevel> = {
+            let mut restricted = Vec::new();
+            let mut unrestricted = Vec::new();
+            for seed in &ordered {
+                let is_restricted = land_type_available
+                    && resolve_seed_land_types(&restrictions, seed.seed_id).is_some();
+                if is_restricted {
+                    restricted.push(seed);
+                } else {
+                    unrestricted.push(seed);
+                }
+            }
+            restricted.extend(unrestricted);
+            restricted
+        };
         if ordered.is_empty() {
             return Ok(BagPlantResult {
                 remaining_land_ids: target,
@@ -751,9 +853,40 @@ impl PlantingEngine {
                 break;
             }
             let plant_size = seed.plant_size.max(1);
-            let all_layouts = build_planting_layouts(&target, plant_size);
+            // 受限种子只在命中类型的空地上装箱；未命中的空地留给后续种子
+            let seed_land_types =
+                if land_type_available { resolve_seed_land_types(&restrictions, seed.seed_id) } else { None };
+            let allowed_target: Vec<i64> = match &seed_land_types {
+                Some(types) => {
+                    let analysis_types = fertilizer_types_to_analysis(types);
+                    target
+                        .iter()
+                        .copied()
+                        .filter(|id| {
+                            land_type_by_id.get(id).is_some_and(|t| analysis_types.contains(t))
+                        })
+                        .collect()
+                }
+                None => target.clone(),
+            };
+            let all_layouts = build_planting_layouts(&allowed_target, plant_size);
             let layouts = select_non_overlapping_layouts(&all_layouts, seed.count.max(0) as usize);
             if layouts.is_empty() {
+                if let Some(types) = &seed_land_types {
+                    if allowed_target.is_empty() {
+                        let names: Vec<&str> = types.iter().map(|t| t.as_str()).collect();
+                        crate::services::panel_log::log(
+                            account_id,
+                            "种植",
+                            format!("背包种子 {} 无{}空地，已跳过", seed.name, names.join("/")),
+                            crate::constants::PanelEvent::PlantSeed,
+                            Some(serde_json::json!({
+                                "module": "farm", "event": "种植种子",
+                                "result": "skip_no_layout", "seedId": seed.seed_id,
+                            })),
+                        );
+                    }
+                }
                 continue;
             }
             let result =

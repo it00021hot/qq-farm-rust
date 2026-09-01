@@ -16,7 +16,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const CONFIG_FILES = ['ItemInfo.json', 'Plant.json', 'RoleLevel.json', 'Land.json'];
+const CONFIG_FILES = ['ItemInfo.json', 'Plant.json', 'RoleLevel.json', 'Land.json', 'MutantEffect.json', 'BuffCfg.json'];
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const VALID_ONLY = new Set(['config', 'images', 'proto']);
 

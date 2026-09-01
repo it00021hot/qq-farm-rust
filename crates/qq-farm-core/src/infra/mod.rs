@@ -3,6 +3,7 @@
 //! 自 `services/` 迁出，供业务服务与 runtime 共用。
 
 pub mod automation;
+pub mod friend_task_flag;
 pub mod fs_async;
 pub mod json_db;
 pub mod panel_log;

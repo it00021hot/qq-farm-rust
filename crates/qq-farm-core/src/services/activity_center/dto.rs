@@ -1135,14 +1135,9 @@ pub fn constellation_day_from_beijing_midnight(
     i32::try_from(day_diff).ok()
 }
 
+/// 活动跨日键:服务器时间 + 系统配置时区(默认上海,对齐 bot getSystemDateKey)。
 pub(crate) fn beijing_date_key() -> String {
-    use chrono::{Datelike, TimeZone};
-    let dt = chrono::Utc
-        .timestamp_opt(crate::utils::time::now_ms() / 1000, 0)
-        .single()
-        .unwrap_or_else(chrono::Utc::now)
-        + chrono::Duration::hours(8);
-    format!("{:04}-{:02}-{:02}", dt.year(), dt.month(), dt.day())
+    crate::utils::time::today_system_date_key()
 }
 
 pub(crate) fn is_qingmei_already_claimed_message(msg: &str) -> bool {

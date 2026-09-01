@@ -333,6 +333,9 @@ defineExpose({ refresh: loadBag });
               {{ canSell(item) ? '可出售' : item.sellStatus === 'conditional' ? '条件出售' : '不可出售' }}
             </span>
           </div>
+          <div v-if="(item.mutantEffects || []).length" class="mt-2px text-center text-11px text-amber-600 dark:text-amber-400">
+            变异: {{ (item.mutantEffects || []).join('+') }}
+          </div>
           <div class="mt-4px text-center text-14px font-medium">
             {{ item.hoursText || `x${item.count}` }}
           </div>

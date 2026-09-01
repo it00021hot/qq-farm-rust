@@ -6,6 +6,7 @@ import LandCountdown from '@/views/farm/shared/LandCountdown.vue';
 import { useFarmAccountStore } from '@/store/modules/farm-account';
 import { useManagedInterval } from '@/hooks/common/use-managed-interval';
 import { resolveCatalogImage } from '@/views/farm/game-config/shared';
+import { formatCareerCount, formatCareerStealRatio } from '@/views/farm/shared/career';
 import {
   landCardClass,
   landGridStyle,
@@ -33,6 +34,7 @@ const landsLoading = ref(false);
 const operating = ref(false);
 const lands = ref<Api.Farm.LandRow[]>([]);
 const summary = ref<Api.Farm.LandSummary | null>(null);
+const career = ref<Api.Farm.Career | null>(null);
 
 const operateOptions: { op: OperateOp; type: NaiveUI.ThemeColor }[] = [
   { op: 'harvest', type: 'success' },
@@ -84,6 +86,30 @@ function landImageSrc(land: Api.Farm.LandRow) {
   return resolveCatalogImage(land.seedImage);
 }
 
+/** 变异名称（有 mutantEffects 用名称，退回 mutantConfigIds 数字）。 */
+function mutantNames(land: Api.Farm.LandRow) {
+  const effects = (land.mutantEffects || []).map(effect => String(effect.name || '').trim()).filter(Boolean);
+  if (effects.length) return effects;
+  return (land.mutantConfigIds || []).map(String);
+}
+
+function mutantIconSrc(effect: Api.Farm.LandMutantEffect) {
+  return resolveCatalogImage(effect.iconUrl);
+}
+
+/** 紫晶共鸣经验加成（万分值 → 百分比）。 */
+function purpleCrystalPercent(land: Api.Farm.LandRow) {
+  const bonus = Number(land.purpleCrystalResonanceExpBonus || 0);
+  return bonus > 0 ? Math.round(bonus / 100) : 0;
+}
+
+/** 互动道具效果行（itemName 列表）。 */
+function interactionNames(land: Api.Farm.LandRow) {
+  return (land.interactionEffects || [])
+    .map(effect => String(effect.itemName || '').trim())
+    .filter(Boolean);
+}
+
 function growProgress(land: Api.Farm.LandRow) {
   const mature = Number(land.matureInSec || 0);
   const total = Number(land.totalGrowTime || 0);
@@ -104,6 +130,7 @@ async function loadLands() {
   if (!farmAccountStore.currentAccountId || !props.connected) {
     lands.value = [];
     summary.value = null;
+    career.value = null;
     return;
   }
   landsLoading.value = true;
@@ -117,6 +144,7 @@ async function loadLands() {
         matureAt: now + Number(land.matureInSec || 0)
       }));
       summary.value = data.summary || null;
+      career.value = data.career || null;
     }
   } finally {
     landsLoading.value = false;
@@ -185,6 +213,26 @@ defineExpose({ refresh: loadLands });
     </template>
 
     <NSpin :show="landsLoading">
+      <!-- 生涯统计 -->
+      <div
+        v-if="career"
+        class="mb-12px flex flex-wrap items-center gap-16px rounded-8px bg-violet-50 px-16px py-10px text-13px dark:bg-violet-900/20"
+      >
+        <span class="text-gray-500">{{ $t('page.farm.personal.careerTitle') }}</span>
+        <span>
+          {{ $t('page.farm.personal.careerHarvest') }}
+          <strong class="text-15px font-semibold">{{ formatCareerCount(career.harvest) }}</strong>
+        </span>
+        <span>
+          {{ $t('page.farm.personal.careerSteal') }}
+          <strong class="text-15px font-semibold">{{ formatCareerCount(career.steal) }}</strong>
+        </span>
+        <span>
+          {{ $t('page.farm.personal.careerRatio') }}
+          <strong class="text-15px font-semibold">{{ formatCareerStealRatio(career) }}</strong>
+        </span>
+      </div>
+
       <NSpace v-if="summaryTags.length" class="mb-12px" size="small">
         <NTag v-for="tag in summaryTags" :key="tag.key" :type="tag.type" size="small">
           {{ tag.label }}: {{ tag.value }}
@@ -223,6 +271,42 @@ defineExpose({ refresh: loadLands });
             {{ land.plantName || '-' }}
           </div>
           <LandCountdown :at="land.matureAt || 0" :total="land.totalGrowTime || 0" :level="land.level" :phase="land.phaseName" />
+          <div v-if="mutantNames(land).length || purpleCrystalPercent(land) > 0" class="flex-center flex-wrap gap-4px">
+            <span
+              class="flex-y-center gap-2px rounded-4px bg-amber-50 px-5px py-1px text-11px text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+              :title="(land.mutantEffects || []).map(effect => effect.description || effect.name).filter(Boolean).join('\n')"
+            >
+              <template v-for="(effect, idx) in land.mutantEffects || []" :key="`${effect.id}-${idx}`">
+                <img
+                  v-if="mutantIconSrc(effect)"
+                  :src="mutantIconSrc(effect)"
+                  class="h-14px w-14px object-contain"
+                  loading="lazy"
+                />
+              </template>
+              {{ $t('page.farm.personal.mutantBadge', { names: mutantNames(land).join('+') }) }}
+            </span>
+            <NTag v-if="purpleCrystalPercent(land) > 0" size="tiny" type="error" :bordered="false">
+              {{ $t('page.farm.personal.purpleCrystalBadge', { percent: purpleCrystalPercent(land) }) }}
+            </NTag>
+          </div>
+          <div v-if="interactionNames(land).length || land.needInteractionCleanup" class="flex-center flex-wrap gap-4px">
+            <span
+              class="rounded-4px bg-gray-100 px-5px py-1px text-11px text-gray-600 dark:bg-gray-800 dark:text-gray-300"
+              :title="(land.interactionEffects || []).map(effect => `${effect.itemName || effect.itemId}`).join('、')"
+            >
+              {{ $t('page.farm.personal.interactionTitle') }}: {{ interactionNames(land).join('+') || '--' }}
+            </span>
+            <NTag
+              v-if="land.needInteractionCleanup"
+              size="tiny"
+              type="warning"
+              :bordered="false"
+              :title="$t('page.farm.personal.interactionCleanupHint')"
+            >
+              {{ $t('page.farm.personal.interactionCleanup') }}
+            </NTag>
+          </div>
           <div class="flex-center flex-wrap gap-4px">
             <span v-if="soilLabel(land.level)" class="farm-soil-badge" :class="soilLevelClass(land.level)">
               {{ soilLabel(land.level) }}

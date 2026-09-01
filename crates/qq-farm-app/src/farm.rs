@@ -93,11 +93,18 @@ pub fn set_automation(
     Ok(json!(qq_farm_core::models::store::account_config::get_automation(Some(account_id))))
 }
 
-/// 地块详情。
+/// 地块详情（含农场主生涯统计，对齐 bot `getLandsDetail` 的 career 字段）。
 pub async fn lands(ctx: &AppContext, account_id: &str) -> AppResult<LandsPayload> {
     let loop_ = require_worker_loop(ctx, account_id)?;
     let (lands, summary) = loop_.farm().get_lands_detail().await.map_err(AppError::from_core)?;
-    Ok(LandsPayload::from_values(lands, summary))
+    let mut payload = LandsPayload::from_values(lands, summary);
+    let own_gid = loop_.own_gid();
+    if own_gid > 0 {
+        payload.career =
+            qq_farm_core::services::career::get_career_info_or_null(&loop_.gateway(), own_gid)
+                .await;
+    }
+    Ok(payload)
 }
 
 /// 背包详情。

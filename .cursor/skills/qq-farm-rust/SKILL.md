@@ -2,9 +2,9 @@
 name: qq-farm-rust
 description: >-
   Develop and refactor the qq-farm-rust workspace (QQ farm multi-account bot in Rust):
-  crate boundaries (core/app/server/desktop), constants/infra/domain packaging,
-  panel API parity with qq-farm-bot, ACL, AppEvent, and Tauri v2 desktop + SoybeanAdmin.
-  Use when editing qq-farm-rust, qq-farm-core, qq-farm-app, qq-farm-server,
+  crate boundaries (core/app/desktop), constants/infra/domain packaging,
+  feature parity with qq-farm-bot, ACL, AppEvent, and Tauri v2 desktop + SoybeanAdmin.
+  Use when editing qq-farm-rust, qq-farm-core, qq-farm-app,
   qq-farm-desktop, desktop-ui, farm/friend/activity automation, or SYNC/ARCHITECTURE/CODING_STANDARDS.
 ---
 
@@ -26,7 +26,6 @@ QQ 农场多账号挂机 Rust 重写。改代码前先对齐分层与契约，�
 ## Crate topology (hard rules)
 
 ```text
-Vue (bot/web) ──HTTP/Socket──► qq-farm-server ──► qq-farm-app ──► qq-farm-core
 desktop-ui ──────Tauri IPC──► qq-farm-desktop ──► qq-farm-app ──► qq-farm-core
 ```
 
@@ -34,11 +33,10 @@ desktop-ui ──────Tauri IPC──► qq-farm-desktop ──► qq-far
 |-------|----|-------|
 | `qq-farm-core` | 领域、协议、runtime、store、`constants`、`infra` | `axum` / `tauri` / UI |
 | `qq-farm-app` | Command/Query/Event；ACL；start/stop；聚合 | HTTP Status、Tauri、路由 |
-| `qq-farm-server` | 协议适配 → 调 app → `ApiError` | 领域算法、复制编排 |
-| `qq-farm-desktop` | Tauri IPC → **同一套** app；默认内嵌 `RuntimeEngine` | 依赖 server；把 Tauri 放进 app |
+| `qq-farm-desktop` | Tauri IPC → **同一套** app；默认内嵌 `RuntimeEngine` | 把 Tauri 放进 app |
 | `desktop-ui/` | SoybeanAdmin 风格；IPC service/store/views 分层 | 私自主题；单文件堆业务；复制 bot web 组件 |
 
-**server ↔ desktop 禁止互相依赖。`qq-farm-app` 禁止依赖 `tauri`。**
+只维护桌面版（`qq-farm-server` 已删除）。`qq-farm-app` 禁止依赖 `tauri`。
 
 ## Where to put code
 
@@ -47,7 +45,7 @@ desktop-ui ──────Tauri IPC──► qq-farm-desktop ──► qq-far
 3. **基础设施** → `core::infra`（`json_db`、`rate_limiter`、`automation`、`stats`、`status`、`panel_log`）。
 4. **业务域** → `core::services::{farm,friend,activity,commerce,daily,auth,tasks,warehouse}`。
 5. **多前端共用编排**（ACL、start/stop、礼包聚合、事件）→ `qq-farm-app`，不要堆在 Axum handler 或 Tauri command。
-6. **类型**：store 用 `AccountRecord`，runtime 用 `AccountSession`；错误 `core::Error` → `AppError` → `ApiError` / desktop `IpcError`。
+6. **类型**：store 用 `AccountRecord`，runtime 用 `AccountSession`；错误 `core::Error` → `AppError` → desktop `IpcError`。
 7. **新公共 API** 禁止以 `serde_json::Value` 为主返回类型；JSON 只在 HTTP / IPC 边界。
 
 ## Statics policy
@@ -58,21 +56,20 @@ desktop-ui ──────Tauri IPC──► qq-farm-desktop ──► qq-far
 
 ## Parity / SYNC
 
-- 对齐对象：自动化行为 + 面板 HTTP/Socket **语义**（不是文件 1:1）。
+- 对齐对象：自动化行为 + 面板/桌面 IPC **语义**（不是文件 1:1）。
 - 行为或契约变更：在 `docs/SYNC.md` 文末「更新记录」追加一条。
 - 验收只认「齐」，不接受「基本齐」留下已知差。
-- Vue 面板在原 `qq-farm-bot/web`；本仓默认 `ADMIN_PORT=3007`，鉴权头 `x-admin-token`。
-- 桌面前端在本仓 `desktop-ui/`，经 Tauri IPC，不用面板 token。
+- 桌面前端在本仓 `desktop-ui/`，经 Tauri IPC，无登录门闸（LocalOwner）。
 
 ## Implementation checklist
 
 ```
-- [ ] 变更落在正确 crate（core / app / server / desktop）或 desktop-ui 分层
+- [ ] 变更落在正确 crate（core / app / desktop）或 desktop-ui 分层
 - [ ] 无新增 L3 全局；无 handler/command 内领域算法
 - [ ] 常量进 constants；配置进 *Config
 - [ ] 账号操作走 ACL（app::accounts + PanelUser / LocalOwner）
-- [ ] 错误经 AppError/ApiError/IpcError，不解析 Display 字符串
-- [ ] cargo check / 相关 test；server E2E 用 --test-threads=1
+- [ ] 错误经 AppError/IpcError，不解析 Display 字符串
+- [ ] cargo check / 相关 test
 - [ ] desktop-ui：Soybean/Naive 组件优先；无私自主题；typings/service/store/views 分层
 - [ ] 业务/契约变更已写 SYNC.md
 ```
@@ -82,8 +79,6 @@ desktop-ui ──────Tauri IPC──► qq-farm-desktop ──► qq-far
 ```bash
 cargo check --workspace
 cargo test --workspace
-cargo test -p qq-farm-server --test e2e_integration -- --test-threads=1
-RUST_LOG=info ADMIN_PORT=3007 cargo run -p qq-farm-server
 pnpm -C desktop-ui i && pnpm -C desktop-ui build
 cd crates/qq-farm-desktop && cargo tauri dev
 ```

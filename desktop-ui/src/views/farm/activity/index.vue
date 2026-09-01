@@ -35,13 +35,14 @@ import ActivityRulesDialog from './activity-rules-dialog.vue';
 import { normalizeActivityRules } from './rules';
 import { $t } from '@/locales';
 import QixiView from './qixi-view.vue';
+import WeatherView from './weather-view.vue';
 
 defineOptions({
   name: 'FarmActivity'
 });
 
 type ActivityTab = 'travel' | 'constellation' | 'shop' | 'solar';
-type GameplayKey = 'stellar' | 'qixi' | 'greenPlum';
+type GameplayKey = 'stellar' | 'qixi' | 'greenPlum' | 'weather';
 type ActivityStatus = 'active' | 'upcoming' | 'ended';
 type ActivityDirectoryItem = {
   id?: string;
@@ -384,10 +385,12 @@ function resolveGameplay(activity: ActivityDirectoryItem): GameplayKey | null {
       ? 'qixi'
       : activity.detailTarget === 'greenPlum'
         ? 'greenPlum'
-        : activity.detailTarget
-          ? 'stellar'
-          : null);
-  if (key === 'qixi' || key === 'stellar' || key === 'greenPlum') return key;
+        : activity.detailTarget === 'weather'
+          ? 'weather'
+          : activity.detailTarget
+            ? 'stellar'
+            : null);
+  if (key === 'qixi' || key === 'stellar' || key === 'greenPlum' || key === 'weather') return key;
   return null;
 }
 
@@ -427,6 +430,17 @@ const displayActivities = computed(() => {
       detailTarget: 'qixi'
     });
   }
+  // 雨落成诗（天气活动，固定入口；进行状态由 weather_snapshot 决定）
+  if (!entries.some(item => resolveGameplay(item) === 'weather')) {
+    entries.push({
+      id: '2026070300',
+      name: $t('page.farm.activity.tabWeather'),
+      startTime: 0,
+      endTime: 0,
+      gameplayKey: 'weather',
+      detailTarget: 'weather'
+    });
+  }
   const rank: Record<ActivityStatus, number> = { active: 0, upcoming: 1, ended: 2 };
   return entries.sort((left, right) => {
     const leftStatus = activityStatus(left);
@@ -442,6 +456,9 @@ const pageTitle = computed(() => {
   }
   if (selectedGameplay.value === 'greenPlum') {
     return String(greenPlum.value.name || $t('page.farm.activity.tabGreenPlum'));
+  }
+  if (selectedGameplay.value === 'weather') {
+    return $t('page.farm.activity.tabWeather');
   }
   if (activeTab.value === 'shop') {
     return String(shop.value.title || shop.value.name || $t('page.farm.activity.tabShop'));
@@ -466,6 +483,7 @@ const remainingText = computed(() => {
   let endTime: number | undefined;
   if (selectedGameplay.value === 'qixi') endTime = qixiEnd.value;
   else if (selectedGameplay.value === 'greenPlum') endTime = greenPlumEnd.value;
+  else if (selectedGameplay.value === 'weather') endTime = undefined;
   else if (activeTab.value === 'shop') endTime = Number(shop.value.endTime || 0) || undefined;
   else if (activeTab.value === 'constellation') {
     endTime = Number(constellation.value.endTime || season.value.endTime || 0) || undefined;
@@ -1402,6 +1420,8 @@ onMounted(async () => {
           @gift="giftQixiSachet"
           @refresh-friends="loadQixiFriends(true)"
         />
+        <!-- 雨落成诗（天气活动） -->
+        <WeatherView v-else-if="selectedGameplay === 'weather'" />
         <!-- 青梅 -->
         <NCard v-else-if="selectedGameplay === 'greenPlum'" :bordered="false" size="small" class="card-wrapper">
           <div class="mb-12px rounded-8px bg-emerald-50 px-14px py-12px dark:bg-emerald-900/20">

@@ -365,6 +365,78 @@ pub async fn steal_lands_with_reward_log(
 
 // steal_side_help（偷菜顺手帮忙）已删除：bot 的偷菜流只偷不帮。
 
+/// 已进场后的偷菜动作：QQ 日配额截断 + 一键 `is_all=true`、失败按地主回退 +
+/// 日志/统计。从 `visit_friend_for_steal` 与统一巡查 `visit_friend_combined`
+/// 共用，避免复制逻辑。
+///
+/// 返回偷到的地块数；产生的动作文案 push 进 `actions`。
+pub async fn perform_steal_actions(
+    api: &FriendApi,
+    recent_help: &RecentHelpCache,
+    account_id: &str,
+    friend_gid: i64,
+    status: &mut AnalyzeResult,
+    total_actions: &mut super::help::TotalActions,
+    actions: &mut Vec<String>,
+) -> usize {
+    if status.stealable.is_empty() {
+        return 0;
+    }
+    let mut skip_steal = false;
+    // 微信 10008 无限：不调 CheckCanOperate，也不用 can_steal_num 截断。
+    if crate::constants::steal_daily_quota_applies(&api.platform()) {
+        match api.check_can_operate(friend_gid, crate::constants::OP_STEAL).await {
+            Ok((false, _)) => skip_steal = true,
+            Ok((true, can_steal)) if can_steal > 0 => {
+                let cap = can_steal as usize;
+                if status.stealable.len() > cap {
+                    status.stealable.truncate(cap);
+                    status.stealable_info.truncate(cap);
+                }
+            }
+            _ => {}
+        }
+    }
+    if skip_steal {
+        return 0;
+    }
+    let steal_result = steal_lands_with_reward_log(
+        api,
+        recent_help,
+        friend_gid,
+        &status.stealable,
+        &status.stealable_info,
+        None,
+    )
+    .await;
+    let stolen = steal_result.ok;
+    if stolen > 0 {
+        let plant_names: Vec<String> = steal_result
+            .stolen_infos
+            .iter()
+            .map(|i| i.name.clone())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        let names = plant_names.join("/");
+        // 与 `do_steal_op()` 保持一致：当 `score_gained > 0` 时追加价值提示
+        let score_hint = if steal_result.score_gained > 0 {
+            format!("，获得积分x{}", steal_result.score_gained)
+        } else {
+            String::new()
+        };
+        actions.push(if names.is_empty() {
+            format!("偷{stolen}{score_hint}")
+        } else {
+            format!("偷{stolen}({names}){score_hint}")
+        });
+        total_actions.steal += stolen;
+        crate::services::stats::record_operation_for(account_id, "steal", stolen as i64);
+        crate::utils::random::random_delay(500, 800).await;
+    }
+    stolen
+}
+
 /// 拜访好友 - 仅偷菜
 pub async fn visit_friend_for_steal(
     api: &FriendApi,
@@ -431,67 +503,17 @@ pub async fn visit_friend_for_steal(
     }
 
     let mut actions: Vec<String> = Vec::new();
-    let mut stolen = 0usize;
-    let had_stealable = !status.stealable.is_empty();
-    if had_stealable {
-        let mut skip_steal = false;
-        // 微信 10008 无限：不调 CheckCanOperate，也不用 can_steal_num 截断。
-        if crate::constants::steal_daily_quota_applies(&api.platform()) {
-            match api.check_can_operate(friend_gid, crate::constants::OP_STEAL).await {
-                Ok((false, _)) => skip_steal = true,
-                Ok((true, can_steal)) if can_steal > 0 => {
-                    let cap = can_steal as usize;
-                    if status.stealable.len() > cap {
-                        status.stealable.truncate(cap);
-                        status.stealable_info.truncate(cap);
-                    }
-                }
-                _ => {}
-            }
-        }
-        if !skip_steal {
-            let steal_result = steal_lands_with_reward_log(
-                api,
-                _recent_help,
-                friend_gid,
-                &status.stealable,
-                &status.stealable_info,
-                None,
-            )
-            .await;
-            stolen = steal_result.ok;
-            if steal_result.ok > 0 {
-                let plant_names: Vec<String> = steal_result
-                    .stolen_infos
-                    .iter()
-                    .map(|i| i.name.clone())
-                    .collect::<HashSet<_>>()
-                    .into_iter()
-                    .collect();
-                let names = plant_names.join("/");
-                // 与 `do_steal_op()` 保持一致：当 `score_gained > 0` 时追加价值提示
-                let score_hint = if steal_result.score_gained > 0 {
-                    format!("，获得积分x{}", steal_result.score_gained)
-                } else {
-                    String::new()
-                };
-                actions.push(if names.is_empty() {
-                    format!("偷{}{}", steal_result.ok, score_hint)
-                } else {
-                    format!("偷{}({names}){}", steal_result.ok, score_hint)
-                });
-                total_actions.steal += steal_result.ok;
-                crate::services::stats::record_operation_for(
-                    account_id,
-                    "steal",
-                    steal_result.ok as i64,
-                );
-                crate::utils::random::random_delay(500, 800).await;
-            }
-        }
-        // 对齐 bot visitFriendForSteal：偷菜流只偷不帮（顺手帮忙是 rust 独有的
-        // 请求模式，bot 偷菜路径没有 Farming 请求）。
-    }
+    // 偷菜流只偷不帮（对齐 bot visitFriendForSteal，顺手帮忙已删除）
+    let stolen = perform_steal_actions(
+        api,
+        _recent_help,
+        account_id,
+        friend_gid,
+        &mut status,
+        total_actions,
+        &mut actions,
+    )
+    .await;
 
     if !actions.is_empty() {
         crate::services::panel_log::log(

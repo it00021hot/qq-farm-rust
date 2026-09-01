@@ -17,8 +17,8 @@
 
 | 仓库 | Commit | 日期 | 说明 |
 |------|--------|------|------|
-| **qq-farm-rust** | `main`（本提交：parity 总检修复） | 2026-08-15 | 默认值/门控/SEED 生命周期/封禁落盘/帮助经验/捣乱启动 + 既有心跳/统一 tick/青梅/偷菜空转 |
-| **qq-farm-bot** | `6f696bf` | 2026-08-18 | 鹊桥寄情 + 网关 5 并发/100 排队 + 出售条件 |
+| **qq-farm-rust** | `main`（本提交：bot 8-28 大版本同步 + 删除 server crate） | 2026-08-28 | 天气活动/宠物体系/生涯/申请过滤/变异/互动清理/版本 1.13.3.14 + 只维护桌面版 |
+| **qq-farm-bot** | `8dae528` | 2026-08-28 | 雨落成诗 + 好友宠物按天缓存/自适应同步 + 统一好友任务 |
 
 文档范围：**业务行为 + 面板 HTTP/Socket 契约**（不含改 Vue 面板本身）。
 
@@ -71,7 +71,7 @@
 | 日常领取 | 齐 | 任务（成长 claim 后刷新 TaskInfo + `currentTask`）、邮件、分享等 | `task`, `email`, `share`, … |
 | 活动中心 | 齐 | 千星游记、观星、星砂、节令、青梅（含已领幂等）、鹊桥寄情（筑桥领取 + 赠香囊） | `activity_center*` |
 | 面板鉴权与账号 | 齐 | 登录注册（无卡密）、账号 CRUD、设置 | `routes/auth`, `account`, `admin` |
-| 面板农场/好友/活动/商业 API | 齐 | 与 Vue 面板契约兼容，可挂 3007 | `qq-farm-server/src/routes/*` |
+| 面板农场/好友/活动/商业 API | 已随 server 删除 | **只维护桌面版**（Tauri IPC 语义对齐原 HTTP 契约） | `qq-farm-desktop/src/commands/*` |
 | Socket 状态/日志推送 | 齐 | `status:update` / `log:new` 等 | `socket.rs` |
 | 离线重登提醒 | Rust 增强 | QQ 官方机器人主动单聊提醒；应用宝失败附重登录二维码 | `runtime/relogin_reminder.rs` |
 | 推送通知 | Rust 增强 | Rust 原生 QQ Bot AccessToken + Gateway + C2C；微信 Bot 预留 | `services/qq_bot` |
@@ -605,4 +605,55 @@
 - `cargo tauri dev` 与安装包共用 OS 数据目录 `QQFarmRust`（不再默认写仓库 `data/`）；设置落在该目录下的 `store.json`
 - 会写 `store.json` 的单测改为临时 `FARM_DATA_DIR`，避免覆盖真实配置；保存离线提醒时若 payload 解失败或 binding 为空则保留已有绑定
 
+### 2026-08-28 — 同步 bot 大版本（`8dae528`）+ 删除 API 服务 crate（只维护桌面版）
 
+- 基准：rust 本提交 / bot `8dae528`（区间 `6f696bf..8dae528`，71 个提交）
+- **结构**：删除 `qq-farm-server` crate（HTTP/Socket.IO 面板服务）及其 workspace/脚本/文档引用；
+  `qq-farm-app` 门面仅由 `qq-farm-desktop`（Tauri IPC）消费；E2E 随 crate 删除
+- **协议/版本**：
+  - proto 全量同步（weatherpb 全新；plantpb 社交事件/互动记录/变异扩展、careerpb 生涯、
+    friendpb DelFriend、visitpb brief_dog_info+weather、itempb UseTarget、activitypb 天气消息）
+  - `client_version` → `1.13.3.14_20260826`；新增 `clientVersionUpdatedAt` 时间戳语义
+    （保存版本只在比默认新时沿用，对齐 bot `resolveClientVersion`）；TSDK 升级
+    `v3.9.0.1787640848`（wasm 同步覆盖）；游戏配置镜像同步
+    （ItemInfo/Plant/RoleLevel/Land + MutantEffect/BuffCfg + seed_images_named 重排为
+    `seed_images/`+`mutant/` 子目录，918+13 张；`tools/sync-from-bot.mjs` 配置清单
+    扩展至 6 份）
+- **天气活动「雨落成诗」**（全新）：活动组 2026070300；采雨走 Activity Operate(type=9,field107)
+  不走 ItemService.Use、1034040 幂等；好友现场天气以 Enter.weather 为准、field_9==4 已采标记；
+  召唤/青蛙/乌云瓶走 ItemService.Use（乌云地块合格判定：生长中+无 5006 记录）；气象研究/兑换/
+  任务快照严格串行构建；好友扫描批 5/间隔 300ms/TTL 600s/让位好友巡查（等不到回 deferredGids）；
+  WeatherChangeNotify 清缓存；桌面 IPC `weather_*` 9 条 + 活动页雨落成诗视图
+- **好友宠物体系**（全新）：`friend-pet-<sha256>.json` 按天缓存（Enter.brief_dog_info 写透，
+  dog_id=0 也是结论）；经验满时仅护主犬（90021）好友继续帮（`friend_help_protect_dog_ignore_exp_limit`，
+  默认开）；pet-sync 每日同步自适应节奏（批 5/配额 10→25/3min 快通道/60s 让路重试/30min 忙冷却/
+  90s 启动延迟；区分抢窗口失败与服务端静默）
+- **统一好友任务**：help/steal 双 tick 合并为 friend tick（friendMin/Max=20-25s，旧账号取两组
+  min 迁移）；一次 GetAll 构建 visit plan（wantSteal/wantHelp/wantBad），每好友一次 Enter 完成
+  帮→偷→坏（偷菜必帮忙语义随 bot 终态回归）；坏对象=无可偷无可帮按等级 top20
+- **生涯收获偷菜**（全新）：CareerService.CareerInfoGet；本田 /api/lands 与好友土地回包带 career；
+  面板「万」格式化与收偷比
+- **好友申请过滤**（全新）：`friend_auto_accept`（默认开）+ 等级过滤（手动最低/不低于自己取严）+
+  收偷比过滤（harvest×stealPart ≥ steal×harvestPart，默认 8:1）；先拒后收，生涯查询失败者搁置
+- **删除好友**（全新）：FriendService.DelFriend + 成功落黑名单；桌面 `friend_delete`
+- **变异体系**：MutantEffect.json 全量（含闪电 12/晶辉 14）；土地/背包展示具体变异类型（名称+图标，
+  effect_name 优先）；变异展示植株映射链（多效果组合优先）；紫晶共鸣以服务端 LandInfo.buff 为准
+  （level5+有变异才显示）
+- **互动道具清理**：黄金虫/足球/乌云（uses+targets 实时记录）并入一键务农地块；青蛙（农场级
+  AllLands.social_events）经 Farming field5 发送、无地块时回退首个有效作物地；FarmSocialEventsNotify
+  触发巡查；field_40 仅作七夕灵露兜底（变异 13+历史码）
+- **其它**：bagSeedLandTypes 地块限制（受限种子先种）；静默 `continueFarm`（默认 true 巡田继续，
+  nextChecks 带三 quiet 标记）；`show_manual_fertilizer`；系统时区白名单（跨日键统一走
+  服务器时间+配置时区）；钉钉推送渠道+加签（HMAC-SHA256，endpoint/secret）
+- **网络对齐说明**：bot 请求分级并发/健康度退避在 rust 的映射——前台保护已有（5 槽/100 队列/
+  心跳插队/skip 叠发）；后台让位由 pet-sync（配额节奏+网关 pending 空闲等待+好友巡查互斥）与
+  天气扫描（批间隔+让位标记）行为性覆盖；重连退避沿用 v0.2.7-8 阶梯
+- **桌面 UI**：活动页新增「雨落成诗」视图（天气卡/兑换/任务/研究链/背包/说明/好友扫描详情卡，
+  写操作用回包 snapshot 就地刷新）；好友页删除好友+好友土地生涯卡+宠物徽标（petState/pet 经
+  FriendSummary 透传）；个人农场生涯卡+土地变异徽标/紫晶共鸣/互动道具效果；背包变异名称；
+  设置页申请过滤/静默继续巡查/手动施肥显示/时区/钉钉渠道；看板静默中标签
+- 验证：`RUSTFLAGS=-D warnings cargo check --workspace --all-targets` 0 错 0 警；
+  `cargo test -p qq-farm-core --lib` **926/926**、`-p qq-farm-app` 15/15（单线程；
+  并行下 `zero_interval` 为存量 30ms 时序 flake）；`pnpm -C desktop-ui typecheck` 0 错、
+  `pnpm -C desktop-ui build` 成功
+- 能力状态：矩阵保持齐；实机 L 清单仍待勾选（天气活动链路、宠物同步节奏、统一巡查为新增待验项）

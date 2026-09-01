@@ -45,6 +45,7 @@ toml = { workspace = true }
 
 # 时间
 chrono = { workspace = true }
+chrono-tz = { workspace = true }
 
 # Protobuf
 prost = { workspace = true }

@@ -141,11 +141,20 @@ pub fn apply_login_client_hints_to_system_config(
     let next_device =
         DeviceInfo { os: resolved_os, client_version: resolved_client_version, ..current_device };
 
+    let next_version_updated_at = crate::config::resolve_client_version_updated_at(
+        &resolved_top_version,
+        &current.client_version,
+        current.client_version_updated_at,
+        0,
+        crate::utils::time::now_ms(),
+    );
     let next = SystemConfig {
         server_url: current.server_url.clone(),
         client_version: resolved_top_version,
+        client_version_updated_at: next_version_updated_at,
         platform: resolved_platform,
         os: next_device.os.clone(),
+        time_zone: current.time_zone.clone(),
         device_info: next_device,
     };
 

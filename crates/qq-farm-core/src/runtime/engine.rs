@@ -12,7 +12,7 @@
 //!
 //! - 原 TS 通过 fork 进程 + IPC 跑 worker；本实现是 in-process tokio task
 //! - 原 TS 的 `worker-manager.ts` 在本实现里被简化（无 fork / 无 IPC）
-//! - 原 TS 的 `data-provider.ts`（HTTP API 数据源）放到 `qq-farm-server` crate 实现
+//! - 原 TS 的 `data-provider.ts`（HTTP API 数据源）随 `qq-farm-server` 一并移除（只维护桌面版）
 //!
 //! 1:1 翻译自原 `core/src/runtime/runtime-engine.ts`（210 行）。
 

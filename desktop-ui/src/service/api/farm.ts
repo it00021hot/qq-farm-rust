@@ -81,6 +81,8 @@ interface FriendSummaryDto {
   avatar_url?: string;
   level?: number;
   gold?: number;
+  petState?: string;
+  pet?: { id?: number; name?: string; image?: string } | null;
   plant?: {
     stealNum?: number;
     dryNum?: number;
@@ -133,9 +135,20 @@ function toAutomationDetail(raw: any, accountId: number): Api.Farm.AccountAutoma
     plantOrderRandom: !!raw?.plantOrderRandom,
     plantDelaySeconds: Number(raw?.plantDelaySeconds ?? 0),
     stealDelaySeconds: Number(raw?.stealDelaySeconds ?? 1),
-    friendQuietHours: raw?.friendQuietHours,
+    friendQuietHours: normalizeQuietHours(raw?.friendQuietHours),
     friendBlacklist: Array.isArray(raw?.friendBlacklist) ? raw.friendBlacklist.map(Number) : [],
     plantBlacklist: Array.isArray(raw?.plantBlacklist) ? raw.plantBlacklist.map(Number) : [],
+    friendAutoAccept: Boolean(
+      raw?.automation?.friend_auto_accept ?? raw?.automation?.friendAutoAccept ?? true
+    ),
+    showManualFertilizer: Boolean(
+      raw?.automation?.show_manual_fertilizer ?? raw?.automation?.showManualFertilizer ?? true
+    ),
+    autoAcceptFriendMinLevel: Number(raw?.autoAcceptFriendMinLevel ?? 0),
+    autoAcceptRequireOwnLevel: !!raw?.autoAcceptRequireOwnLevel,
+    autoAcceptHarvestStealEnabled: !!raw?.autoAcceptHarvestStealEnabled,
+    autoAcceptHarvestStealHarvest: Number(raw?.autoAcceptHarvestStealHarvest ?? 8),
+    autoAcceptHarvestStealSteal: Number(raw?.autoAcceptHarvestStealSteal ?? 1),
     fertilizerBuyOrganicCount: Number(raw?.fertilizerBuyOrganicCount ?? 1),
     fertilizerBuyOrganicThresholdHours: Number(raw?.fertilizerBuyOrganicThresholdHours ?? 10),
     fertilizerBuyNormalCount: Number(raw?.fertilizerBuyNormalCount ?? 1),
@@ -145,8 +158,25 @@ function toAutomationDetail(raw: any, accountId: number): Api.Farm.AccountAutoma
   };
 }
 
+/** 好友静默时段（面板返回 continue_farm，保存用 continueFarm）。 */
+function normalizeQuietHours(raw: unknown): Api.Farm.QuietHoursConfig {
+  const row = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return {
+    enabled: !!row.enabled,
+    start: String(row.start ?? '01:00'),
+    end: String(row.end ?? '07:30'),
+    continueFarm: Boolean(row.continueFarm ?? row.continue_farm ?? true)
+  };
+}
+
 function toFriendRecord(raw: FriendSummaryDto, accountId: number): Api.Farm.Friend {
   const gid = Number(raw.gid ?? 0);
+  const petState = String(raw.petState ?? '') || undefined;
+  const pet = (raw.pet && typeof raw.pet === 'object' ? raw.pet : null) as {
+    id?: number;
+    name?: string;
+    image?: string;
+  } | null;
   return {
     accountId,
     gid,
@@ -154,6 +184,8 @@ function toFriendRecord(raw: FriendSummaryDto, accountId: number): Api.Farm.Frie
     level: Number(raw.level ?? 0) || undefined,
     gold: Number(raw.gold ?? 0) || undefined,
     avatar: String(raw.avatar ?? raw.avatarUrl ?? raw.avatar_url ?? ''),
+    petState: petState as Api.Farm.Friend['petState'],
+    pet: pet && (pet.name || pet.id) ? { id: Number(pet.id || 0), name: String(pet.name || ''), image: String(pet.image || '') } : null,
     plant: raw.plant
       ? {
           stealNum: Number(raw.plant.stealNum ?? 0),
@@ -384,6 +416,7 @@ export interface SystemConfigPayload {
   clientVersion: string;
   platform: string;
   os: string;
+  timeZone?: string;
   deviceInfo: DeviceInfoPayload;
 }
 
@@ -404,6 +437,7 @@ function normalizeSystemConfig(source: unknown, fallback: SystemConfigPayload): 
     clientVersion: String(row.clientVersion ?? row.client_version ?? fallback.clientVersion ?? ''),
     platform: String(row.platform ?? fallback.platform ?? 'qq'),
     os: String(row.os ?? fallback.os ?? 'Windows'),
+    timeZone: String(row.timeZone ?? row.time_zone ?? fallback.timeZone ?? 'Asia/Shanghai'),
     deviceInfo: {
       os: String(deviceRow.os ?? fallback.deviceInfo.os ?? 'Windows'),
       clientVersion: String(
@@ -435,6 +469,7 @@ const DEFAULT_SYSTEM_CONFIG: SystemConfigPayload = {
   clientVersion: '',
   platform: 'qq',
   os: 'Windows',
+  timeZone: 'Asia/Shanghai',
   deviceInfo: { ...DEFAULT_DEVICE_INFO }
 };
 
@@ -489,8 +524,9 @@ function toQqBotBinding(raw: any): Api.Farm.QqBotBinding {
 }
 
 function toOfflineReminder(raw: any): Api.Farm.OfflineReminder {
+  const provider = String(raw?.provider ?? 'none');
   return {
-    provider: ['qq_bot', 'wechat_bot'].includes(String(raw?.provider)) ? raw.provider : 'none',
+    provider: (['qq_bot', 'wechat_bot', 'ding_talk'].includes(provider) ? provider : 'none') as Api.Farm.OfflineReminder['provider'],
     qqBot: {
       appId: String(raw?.qqBot?.appId ?? ''),
       clientSecret: String(raw?.qqBot?.clientSecret ?? '')
@@ -499,7 +535,10 @@ function toOfflineReminder(raw: any): Api.Farm.OfflineReminder {
     wechatBot: {},
     title: String(raw?.title ?? ''),
     msg: String(raw?.msg ?? ''),
-    offlineDeleteSec: Number(raw?.offlineDeleteSec ?? raw?.offline_delete_sec ?? 0)
+    offlineDeleteSec: Number(raw?.offlineDeleteSec ?? raw?.offline_delete_sec ?? 0),
+    endpoint: String(raw?.endpoint ?? ''),
+    token: String(raw?.token ?? ''),
+    secret: String(raw?.secret ?? '')
   };
 }
 
@@ -950,6 +989,73 @@ export function fetchUseFarmInteractionItems(accountId: number, itemId: number, 
 
 export function fetchGetIllustratedSnapshot(accountId: number) {
   return invokeFlat('illustrated_snapshot', { accountId: aid(accountId) });
+}
+
+// ============ 天气活动「雨落成诗」 ============
+
+export function fetchGetWeatherSnapshot(accountId: number) {
+  return invokeFlat('weather_snapshot', { accountId: aid(accountId) });
+}
+
+export function fetchGetWeatherFriends(accountId: number) {
+  return invokeFlat('weather_friends', { accountId: aid(accountId) });
+}
+
+export function fetchScanWeatherFriends(accountId: number, friendGids: string[]) {
+  return invokeFlat(
+    'weather_friends_scan',
+    { accountId: aid(accountId), friendGids: friendGids.map(g => String(g)) },
+    { silent: true }
+  );
+}
+
+export function fetchExchangeWeatherCollector(accountId: number) {
+  return invokeFlat('weather_exchange_collector', { accountId: aid(accountId) }, { silent: true });
+}
+
+export function fetchCollectWeather(accountId: number, friendGid: string) {
+  return invokeFlat(
+    'weather_collect',
+    { accountId: aid(accountId), friendGid: String(friendGid) },
+    { silent: true }
+  );
+}
+
+export function fetchSummonWeather(accountId: number) {
+  return invokeFlat('weather_summon', { accountId: aid(accountId) }, { silent: true });
+}
+
+export function fetchWeatherMischiefFrog(accountId: number, friendGid: string) {
+  return invokeFlat(
+    'weather_mischief_frog',
+    { accountId: aid(accountId), friendGid: String(friendGid) },
+    { silent: true }
+  );
+}
+
+export function fetchWeatherMischiefCloud(accountId: number, friendGid: string, landId?: string) {
+  return invokeFlat(
+    'weather_mischief_cloud',
+    {
+      accountId: aid(accountId),
+      friendGid: String(friendGid),
+      landId: landId != null && String(landId) !== '' ? String(landId) : null
+    },
+    { silent: true }
+  );
+}
+
+export function fetchAdvanceWeatherResearch(accountId: number, nodeId: string) {
+  return invokeFlat(
+    'weather_advance_research',
+    { accountId: aid(accountId), nodeId: String(nodeId) },
+    { silent: true }
+  );
+}
+
+/** 游戏内删除好友（后端会同时加入黑名单）。 */
+export function fetchDeleteFarmFriend(accountId: number, gid: number | string) {
+  return invokeFlat('friend_delete', { accountId: aid(accountId), gid: String(gid) });
 }
 
 /** Route stubs (static mode — unused but imported by route store) */

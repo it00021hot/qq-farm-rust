@@ -1,19 +1,16 @@
 # Architecture — qq-farm-rust
 
-多前端共享业务语义：Vue 面板走 HTTP；Tauri 桌面端进程内嵌引擎，经 IPC 调同一套 app。
+只维护桌面版：Tauri 桌面端进程内嵌引擎，经 IPC 调用同一套 app（原 HTTP API 服务 crate `qq-farm-server` 已删除）。
 
 ## Crate 拓扑
 
 ```text
-Vue 面板 (qq-farm-bot/web) ──HTTP/Socket.IO──► qq-farm-server ──► qq-farm-app ──► qq-farm-core
 desktop-ui (SoybeanAdmin) ──Tauri IPC──► qq-farm-desktop ──► qq-farm-app ──► qq-farm-core
 ```
 
 - `qq-farm-core`：零 UI、零进程入口的库。
-- `qq-farm-app`：UI 无关门面（Account / Farm / Friend / Auth / Activity / Commerce / Settings / Config / Admin + `AppEvent` + `bootstrap`）。**禁止**依赖 `tauri` / `axum`。
-- `qq-farm-server`：仅协议适配；不堆领域算法。
+- `qq-farm-app`：UI 无关门面（Account / Farm / Friend / Activity / Commerce / Settings / Config / Admin + `AppEvent` + `bootstrap`）。**禁止**依赖 `tauri`。
 - `qq-farm-desktop`：Tauri v2 适配层；进程内嵌引擎；前端为仓库根 `desktop-ui/`。
-- server ↔ desktop **互不依赖**。
 
 ## 桌面嵌入模式（默认）
 
@@ -50,10 +47,8 @@ core runtime / panel_log
         ▼
    AppEvent 总线 (qq-farm-app)
         │
-   ┌────┴────┐
-   ▼         ▼
-Socket.IO   Tauri emit("app-event")
-适配器      （desktop-ui listen）
+        ▼
+Tauri emit("app-event")（desktop-ui listen）
 ```
 
 ## 分层（core）
@@ -62,6 +57,3 @@ Socket.IO   Tauri emit("app-event")
 constants → config → models → proto → network / crypto → runtime → infra → services(domain)
 ```
 
-## Vue 路径（浏览器面板）
-
-`浏览器 → server → app → core`；面板 HTTP/Socket 契约见 [SYNC.md](./SYNC.md)。面板代码仍在 `qq-farm-bot/web`。

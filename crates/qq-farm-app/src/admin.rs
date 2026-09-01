@@ -13,8 +13,22 @@ pub fn get_system_config() -> Value {
 }
 
 pub fn set_system_config(cfg: Value) -> AppResult<Value> {
-    let sys: SystemConfig =
+    let mut sys: SystemConfig =
         serde_json::from_value(cfg).map_err(|e| AppError::BadRequest(e.to_string()))?;
+    // 版本时间戳对齐 bot `resolveClientVersionUpdatedAt`：版本变化记 now；
+    // 归一化时区，避免存进白名单外的值。
+    let current = qq_farm_core::config::get_runtime_config();
+    sys.client_version_updated_at = qq_farm_core::config::resolve_client_version_updated_at(
+        &sys.client_version,
+        &current.client_version,
+        current.client_version_updated_at,
+        sys.client_version_updated_at,
+        qq_farm_core::utils::time::now_ms(),
+    );
+    if sys.device_info.client_version.trim().is_empty() {
+        sys.device_info.client_version = sys.client_version.clone();
+    }
+    sys.time_zone = qq_farm_core::config::normalize_time_zone(&sys.time_zone);
     qq_farm_core::models::store::global_config::set_system_config(sys.clone());
     update_runtime_config(&sys);
     Ok(json!(sys))

@@ -14,25 +14,76 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 /// 默认客户端版本（与原 TS DEFAULT_CLIENT_VERSION 一致）
-pub const DEFAULT_CLIENT_VERSION: &str = "1.13.2.10_20260723";
+pub const DEFAULT_CLIENT_VERSION: &str = "1.13.3.14_20260826";
 
-/// 已知的过期 client_version → 升级映射。
-///
-/// client_version 随 Login 和每条 Heartbeat 上报，旧版本可能被服务端冷落。
-/// 存量 store.json 里固化了 1.13.2.8_20260723，启动时自动升级。
-const LEGACY_CLIENT_VERSION_UPGRADES: &[(&str, &str)] =
-    &[("1.13.2.8_20260723", DEFAULT_CLIENT_VERSION)];
+/// 默认客户端版本的发布时间（毫秒）。保存的版本只有在其时间戳**更新**时才沿用，
+/// 防止旧存档把升级链锁死在过期版本上（对齐 bot `resolveClientVersion`）。
+pub const DEFAULT_CLIENT_VERSION_UPDATED_AT: i64 = 1_787_760_000_000;
 
-/// 就地升级过期的 client_version，返回是否发生变化。
+/// 解析生效的 client_version：保存值比默认值新才沿用，否则回默认。
 #[must_use]
-pub fn migrate_client_version(version: &mut String) -> bool {
-    for (old, new) in LEGACY_CLIENT_VERSION_UPGRADES {
-        if version == old {
-            *version = (*new).to_string();
-            return true;
-        }
+pub fn resolve_client_version(saved_version: &str, saved_updated_at: i64) -> (String, i64) {
+    let version = saved_version.trim();
+    if !version.is_empty() && saved_updated_at > DEFAULT_CLIENT_VERSION_UPDATED_AT {
+        return (version.to_string(), saved_updated_at);
     }
-    false
+    (DEFAULT_CLIENT_VERSION.to_string(), DEFAULT_CLIENT_VERSION_UPDATED_AT)
+}
+
+/// 保存 client_version 时计算落库的时间戳：
+/// 显式传入的 `requested_updated_at` 优先；版本发生变化记 `now`；否则保留当前值。
+#[must_use]
+pub fn resolve_client_version_updated_at(
+    client_version: &str,
+    current_version: &str,
+    current_updated_at: i64,
+    requested_updated_at: i64,
+    now_ms: i64,
+) -> i64 {
+    if requested_updated_at > 0 {
+        return requested_updated_at;
+    }
+    if client_version.trim() != current_version.trim() {
+        return now_ms;
+    }
+    if current_updated_at > 0 {
+        current_updated_at
+    } else {
+        DEFAULT_CLIENT_VERSION_UPDATED_AT
+    }
+}
+
+/// 默认系统时区
+pub const DEFAULT_TIME_ZONE: &str = "Asia/Shanghai";
+
+/// 可选时区（白名单，对齐 bot `TIME_ZONE_OPTIONS`）
+pub struct TimeZoneOption {
+    pub value: &'static str,
+    pub label: &'static str,
+}
+
+pub const TIME_ZONE_OPTIONS: &[TimeZoneOption] = &[
+    TimeZoneOption { value: "Asia/Shanghai", label: "北京时间 / 上海（UTC+8）" },
+    TimeZoneOption { value: "UTC", label: "协调世界时（UTC）" },
+    TimeZoneOption { value: "Asia/Hong_Kong", label: "香港" },
+    TimeZoneOption { value: "Asia/Taipei", label: "台北" },
+    TimeZoneOption { value: "Asia/Singapore", label: "新加坡" },
+    TimeZoneOption { value: "Asia/Tokyo", label: "东京" },
+    TimeZoneOption { value: "Asia/Seoul", label: "首尔" },
+    TimeZoneOption { value: "Europe/London", label: "伦敦" },
+    TimeZoneOption { value: "America/New_York", label: "纽约" },
+    TimeZoneOption { value: "America/Los_Angeles", label: "洛杉矶" },
+];
+
+/// 归一化时区：非白名单值回默认。
+#[must_use]
+pub fn normalize_time_zone(input: &str) -> String {
+    let value = input.trim();
+    if TIME_ZONE_OPTIONS.iter().any(|o| o.value == value) {
+        value.to_string()
+    } else {
+        DEFAULT_TIME_ZONE.to_string()
+    }
 }
 
 /// 默认游戏网关（与原 TS `CONFIG.serverUrl` 一致）
@@ -267,10 +318,20 @@ pub struct SystemConfig {
     pub server_url: String,
     #[serde(alias = "client_version")]
     pub client_version: String,
+    /// 客户端版本的保存时间（毫秒）；决定保存版本能否覆盖更新的默认值
+    #[serde(alias = "client_version_updated_at", default)]
+    pub client_version_updated_at: i64,
     pub platform: String,
     pub os: String,
+    /// 系统时区（跨日重置 / 静默时段等日期计算的基准）
+    #[serde(alias = "time_zone", default = "default_time_zone")]
+    pub time_zone: String,
     #[serde(alias = "device_info")]
     pub device_info: DeviceInfo,
+}
+
+fn default_time_zone() -> String {
+    DEFAULT_TIME_ZONE.to_string()
 }
 
 impl SystemConfig {
@@ -286,8 +347,10 @@ impl SystemConfig {
         Self {
             server_url: DEFAULT_GATEWAY_URL.to_string(),
             client_version,
+            client_version_updated_at: DEFAULT_CLIENT_VERSION_UPDATED_AT,
             platform: "qq".to_string(),
             os,
+            time_zone: DEFAULT_TIME_ZONE.to_string(),
             device_info: d,
         }
     }
@@ -307,8 +370,12 @@ pub struct RuntimeConfig {
     pub server_url: String,
     #[serde(alias = "client_version")]
     pub client_version: String,
+    #[serde(alias = "client_version_updated_at", default)]
+    pub client_version_updated_at: i64,
     pub platform: String,
     pub os: String,
+    #[serde(alias = "time_zone", default = "default_time_zone")]
+    pub time_zone: String,
     #[serde(alias = "device_info")]
     pub device_info: DeviceInfo,
     /// 心跳间隔（毫秒）
@@ -349,8 +416,10 @@ impl RuntimeConfig {
         Self {
             server_url: sys.server_url,
             client_version: sys.client_version,
+            client_version_updated_at: sys.client_version_updated_at,
             platform: sys.platform,
             os: sys.os,
+            time_zone: sys.time_zone,
             device_info: sys.device_info,
             heartbeat_interval_ms: 25_000,
             farm_check_interval_ms: 3_000,
@@ -389,8 +458,10 @@ pub fn update_runtime_config(new: &SystemConfig) {
     let mut guard = GLOBAL_CONFIG.write();
     guard.server_url = new.server_url.clone();
     guard.client_version = new.client_version.clone();
+    guard.client_version_updated_at = new.client_version_updated_at;
     guard.platform = new.platform.clone();
     guard.os = new.os.clone();
+    guard.time_zone = normalize_time_zone(&new.time_zone);
     let mut dev = new.device_info.clone();
     if dev.client_version.is_empty() {
         dev.client_version = guard.client_version.clone();
@@ -405,6 +476,12 @@ pub fn update_runtime_config(new: &SystemConfig) {
 #[must_use]
 pub fn get_runtime_config() -> RuntimeConfig {
     GLOBAL_CONFIG.read().clone()
+}
+
+/// 获取生效的系统时区（已归一化）
+#[must_use]
+pub fn get_time_zone() -> String {
+    normalize_time_zone(&GLOBAL_CONFIG.read().time_zone)
 }
 
 /// 获取默认系统配置
@@ -480,11 +557,62 @@ mod tests {
     }
 
     #[test]
+    fn resolve_client_version_prefers_newer_saved() {
+        // 保存时间不比默认新 → 回默认
+        let (v, t) = resolve_client_version("9.9.9.9_20991231", 0);
+        assert_eq!(v, DEFAULT_CLIENT_VERSION);
+        assert_eq!(t, DEFAULT_CLIENT_VERSION_UPDATED_AT);
+        // 旧存档无时间戳 → 回默认
+        let (v, _) = resolve_client_version("1.13.2.10_20260723", 0);
+        assert_eq!(v, DEFAULT_CLIENT_VERSION);
+        // 比默认新 → 沿用
+        let (v, t) = resolve_client_version("1.13.4.0_20260901", DEFAULT_CLIENT_VERSION_UPDATED_AT + 1);
+        assert_eq!(v, "1.13.4.0_20260901");
+        assert_eq!(t, DEFAULT_CLIENT_VERSION_UPDATED_AT + 1);
+    }
+
+    #[test]
+    fn resolve_client_version_updated_at_rules() {
+        let now = 1_800_000_000_000_i64;
+        // 显式请求优先
+        assert_eq!(
+            resolve_client_version_updated_at("a", "b", 5, 42, now),
+            42
+        );
+        // 版本变化 → now
+        assert_eq!(
+            resolve_client_version_updated_at("a", "b", 5, 0, now),
+            now
+        );
+        // 版本不变 → 保留当前值
+        assert_eq!(
+            resolve_client_version_updated_at("a", "a", 5, 0, now),
+            5
+        );
+        // 无当前值 → 默认
+        assert_eq!(
+            resolve_client_version_updated_at("a", "a", 0, 0, now),
+            DEFAULT_CLIENT_VERSION_UPDATED_AT
+        );
+    }
+
+    #[test]
+    fn normalize_time_zone_whitelist() {
+        assert_eq!(normalize_time_zone("Asia/Shanghai"), "Asia/Shanghai");
+        assert_eq!(normalize_time_zone(" UTC "), "UTC");
+        assert_eq!(normalize_time_zone("Mars/Olympus"), DEFAULT_TIME_ZONE);
+        assert_eq!(normalize_time_zone(""), DEFAULT_TIME_ZONE);
+        assert_eq!(TIME_ZONE_OPTIONS.len(), 10);
+    }
+
+    #[test]
     fn system_config_default_has_client_version() {
         let sys = SystemConfig::default_system();
         assert_eq!(sys.client_version, DEFAULT_CLIENT_VERSION);
+        assert_eq!(sys.client_version_updated_at, DEFAULT_CLIENT_VERSION_UPDATED_AT);
         assert_eq!(sys.server_url, DEFAULT_GATEWAY_URL);
         assert_eq!(sys.platform, "qq");
+        assert_eq!(sys.time_zone, DEFAULT_TIME_ZONE);
     }
 
     #[test]
@@ -504,8 +632,10 @@ mod tests {
         let new_sys = SystemConfig {
             server_url: "wss://test.example.com/ws".to_string(),
             client_version: "v1".to_string(),
+            client_version_updated_at: 0,
             platform: "wx".to_string(),
             os: "Android".to_string(),
+            time_zone: DEFAULT_TIME_ZONE.to_string(),
             device_info: DeviceInfo::android_xiaomi(),
         };
         update_runtime_config(&new_sys);

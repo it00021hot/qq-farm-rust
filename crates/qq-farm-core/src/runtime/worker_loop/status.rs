@@ -42,8 +42,11 @@ impl WorkerLoop {
         // 量化到 5s 桶：否则倒计时字段每 3s 必变，门控永远不命中
         let quantize = |ms: i64| (((ms / 1000).max(0) / 5) * 5) as i64;
         let farm = quantize(next.farm_at - now);
-        let help = quantize(next.help_at - now);
-        let steal = quantize(next.steal_at - now);
+        let friend = quantize(next.friend_at - now);
+        // help/steal 已合并为统一好友 tick（friend_at）；
+        // 面板字段的旧键保留并镜像 friend 值，避免前端空值
+        let help = friend;
+        let steal = friend;
         let auto = crate::models::store::account_config::get_automation(Some(&self.account.id));
         let preferred =
             crate::models::store::account_config::get_preferred_seed(Some(&self.account.id));
@@ -57,6 +60,13 @@ impl WorkerLoop {
                     "helpRemainSec": help,
                     "stealRemainSec": steal,
                     "friendRemainSec": help.max(steal),
+                    // 静默中不再显示巡查倒计时（对齐 bot syncStatus nextChecks）
+                    "farmQuiet": crate::services::friend::visit_strategy::in_farm_quiet_hours_for(
+                        Some(&self.account.id), None),
+                    "helpQuiet": crate::services::friend::visit_strategy::in_friend_quiet_hours_for(
+                        Some(&self.account.id), None),
+                    "stealQuiet": crate::services::friend::visit_strategy::in_friend_quiet_hours_for(
+                        Some(&self.account.id), None),
                 }),
             );
             obj.insert(

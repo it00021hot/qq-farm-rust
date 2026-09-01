@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "crates/qq-farm-core",
     "crates/qq-farm-app",
-    "crates/qq-farm-server",
     "crates/qq-farm-desktop",
 ]
 
@@ -65,6 +64,7 @@ toml = "0.8"
 
 # 时间
 chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
 
 # 配置
 config = { version = "0.14", default-features = false, features = ["toml"] }

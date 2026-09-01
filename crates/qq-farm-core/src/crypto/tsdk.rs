@@ -44,7 +44,7 @@ pub const WASM_CONSECUTIVE_FAIL_THRESHOLD: u32 = 3;
 
 // ===== TSDK 元信息（与原项目保持一致） =====
 
-const TSDK_VERSION: &str = "v3.9.0.1787056896";
+const TSDK_VERSION: &str = "v3.9.0.1787640848";
 const MINI_PROGRAM_APP_ID: &str = "wx5306c5978fdb76e4";
 const TSDK_GAME_ID: u32 = 3167;
 const TSDK_APP_KEY: &str = "0";

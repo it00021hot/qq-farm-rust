@@ -1,6 +1,6 @@
 //! QQ Farm Tauri v2 桌面适配层。
 //!
-//! 仅依赖 `qq-farm-app` / `qq-farm-core`；不依赖 `qq-farm-server`，不把 Tauri 泄漏进 app。
+//! 仅依赖 `qq-farm-app` / `qq-farm-core`；不把 Tauri 泄漏进 app。
 
 mod assets;
 mod commands;
@@ -142,6 +142,7 @@ pub fn run() {
             commands::friend::friend_op,
             commands::friend::friend_interact_records,
             commands::friend::friend_blacklist_toggle,
+            commands::friend::friend_delete,
             // activity
             commands::activity::activity_snapshot,
             commands::activity::activity_claim_battle_pass,
@@ -154,6 +155,16 @@ pub fn run() {
             commands::activity::activity_qingmei_brew_settle,
             commands::activity::activity_claim_qixi_bridge,
             commands::activity::activity_gift_qixi_sachet,
+            // weather
+            commands::weather::weather_snapshot,
+            commands::weather::weather_friends,
+            commands::weather::weather_friends_scan,
+            commands::weather::weather_exchange_collector,
+            commands::weather::weather_collect,
+            commands::weather::weather_summon,
+            commands::weather::weather_mischief_frog,
+            commands::weather::weather_mischief_cloud,
+            commands::weather::weather_advance_research,
             // commerce
             commands::commerce::commerce_mall_catalog,
             commands::commerce::commerce_mall_purchase,

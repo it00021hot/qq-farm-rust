@@ -372,13 +372,17 @@ impl Worker {
                                     applications,
                                 } => {
                                     if !applications.is_empty() {
-                                        let gids: Vec<i64> =
-                                            applications.iter().map(|(g, _)| *g).collect();
-                                        let names: Vec<String> =
-                                            applications.iter().map(|(_, n)| n.clone()).collect();
+                                        let own_level = wl.own_level();
                                         let friend = wl.friend().clone();
+                                        let account_id = wl.account_id().to_string();
                                         tokio::spawn(async move {
-                                            friend.accept_friend_applications(gids, &names).await;
+                                            friend
+                                                .accept_friend_applications(
+                                                    &applications,
+                                                    own_level,
+                                                    &account_id,
+                                                )
+                                                .await;
                                         });
                                     }
                                 }
@@ -399,6 +403,16 @@ impl Worker {
                                 }
                                 crate::network::notify::NotifyEvent::ActivitiesChanged => {
                                     crate::config::activity_windows::invalidate_activity_windows();
+                                    // 活动列表变化：天气快照与好友天气缓存一并失效
+                                    wl.weather().clear_caches();
+                                }
+                                crate::network::notify::NotifyEvent::WeatherChanged {
+                                    host_gid,
+                                    ..
+                                } => {
+                                    // 天气变化：清空快照与好友天气缓存（对齐 bot weatherChanged）
+                                    tracing::debug!(host_gid, "天气变化推送");
+                                    wl.weather().clear_caches();
                                 }
                                 crate::network::notify::NotifyEvent::TaskInfoNotify {
                                     task_info,
@@ -409,6 +423,13 @@ impl Worker {
                                             task.on_task_info_notify(&info).await;
                                         });
                                     }
+                                }
+                                crate::network::notify::NotifyEvent::FarmSocialEventsChanged {
+                                    events,
+                                    ..
+                                } => {
+                                    // 青蛙等农场级事件推送 → farm_push 触发巡查清理
+                                    wl.on_farm_social_events_push(events.len());
                                 }
                                 crate::network::notify::NotifyEvent::Unknown { .. } => {}
                             }

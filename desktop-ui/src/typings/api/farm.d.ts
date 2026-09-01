@@ -102,6 +102,10 @@ declare namespace Api {
       mystery_shop_allow_coupon?: boolean;
       mystery_shop_allow_gold_bean?: boolean;
       mystery_shop_allow_diamond?: boolean;
+      /** 自动通过好友申请（默认开） */
+      friend_auto_accept?: boolean;
+      /** 土地卡展示「手动施肥」按钮（默认开，仅影响显示） */
+      show_manual_fertilizer?: boolean;
     };
 
     type IntervalsConfig = {
@@ -118,6 +122,8 @@ declare namespace Api {
       enabled?: boolean;
       start?: string;
       end?: string;
+      /** 静默期默认只停帮助/偷菜；false 时农场巡查也停（默认 true） */
+      continueFarm?: boolean;
     };
 
     type QqBotBinding = {
@@ -127,7 +133,7 @@ declare namespace Api {
     };
 
     type OfflineReminder = {
-      provider: 'none' | 'qq_bot' | 'wechat_bot';
+      provider: 'none' | 'qq_bot' | 'wechat_bot' | 'ding_talk';
       qqBot: {
         appId: string;
         clientSecret: string;
@@ -137,6 +143,12 @@ declare namespace Api {
       title: string;
       msg: string;
       offlineDeleteSec: number;
+      /** 钉钉 Webhook 地址（完整 URL，与 token 二选一） */
+      endpoint?: string;
+      /** 钉钉机器人 Access Token（与 endpoint 二选一） */
+      token?: string;
+      /** 钉钉加签密钥（可选） */
+      secret?: string;
     };
 
     type QqBotBindStatus = {
@@ -172,6 +184,13 @@ declare namespace Api {
       friendQuietHours?: QuietHoursConfig;
       friendBlacklist?: number[];
       plantBlacklist?: number[];
+      friendAutoAccept?: boolean;
+      showManualFertilizer?: boolean;
+      autoAcceptFriendMinLevel?: number;
+      autoAcceptRequireOwnLevel?: boolean;
+      autoAcceptHarvestStealEnabled?: boolean;
+      autoAcceptHarvestStealHarvest?: number;
+      autoAcceptHarvestStealSteal?: number;
       fertilizerBuyOrganicCount?: number;
       fertilizerBuyOrganicThresholdHours?: number;
       fertilizerBuyNormalCount?: number;
@@ -194,6 +213,13 @@ declare namespace Api {
       friendQuietHours?: QuietHoursConfig;
       friendBlacklist?: number[];
       plantBlacklist?: number[];
+      friendAutoAccept?: boolean;
+      showManualFertilizer?: boolean;
+      autoAcceptFriendMinLevel?: number;
+      autoAcceptRequireOwnLevel?: boolean;
+      autoAcceptHarvestStealEnabled?: boolean;
+      autoAcceptHarvestStealHarvest?: number;
+      autoAcceptHarvestStealSteal?: number;
       fertilizerBuyOrganicCount?: number;
       fertilizerBuyOrganicThresholdHours?: number;
       fertilizerBuyNormalCount?: number;
@@ -230,6 +256,9 @@ declare namespace Api {
         friendRemainSec?: number;
         helpRemainSec?: number;
         stealRemainSec?: number;
+        farmQuiet?: boolean;
+        helpQuiet?: boolean;
+        stealQuiet?: boolean;
       };
       [key: string]: unknown;
     };
@@ -244,6 +273,10 @@ declare namespace Api {
       gold?: number;
       avatar?: string;
       syncedAt?: number;
+      /** 好友宠物状态：protect=护主犬 / other=其他宠物 / unknown=待确认 */
+      petState?: 'protect' | 'other' | 'unknown' | string;
+      /** 好友宠物信息（petState=other 时展示名称） */
+      pet?: { id?: number; name?: string; image?: string } | null;
       plant?: {
         stealNum?: number;
         dryNum?: number;
@@ -310,6 +343,30 @@ declare namespace Api {
       [key: string]: unknown;
     };
 
+    /** 变异效果（土地卡展示） */
+    type LandMutantEffect = {
+      id?: number;
+      name?: string;
+      icon?: string;
+      iconUrl?: string;
+      description?: string;
+      tag?: string;
+      activityId?: number;
+    };
+
+    /** 好友互动道具效果（施放在地块上的记录） */
+    type LandInteractionEffect = {
+      itemId?: number;
+      itemName?: string;
+      activityId?: number;
+      effectType?: string;
+      landId?: number;
+      hostGid?: string;
+      usedAt?: number;
+      confirmed?: boolean;
+      source?: string;
+    };
+
     type LandRow = {
       id: number;
       unlocked: boolean;
@@ -338,6 +395,29 @@ declare namespace Api {
       plantSize?: number;
       occupiedByMaster?: boolean;
       occupiedLandIds?: number[];
+      plantId?: number;
+      displayPlantId?: number;
+      mutantConfigIds?: number[];
+      mutantEffects?: LandMutantEffect[];
+      isMutated?: boolean;
+      /** 紫晶共鸣经验加成（万分值，>0 时显示徽标） */
+      purpleCrystalResonanceExpBonus?: number;
+      landBuff?: {
+        plantYieldBonus?: number;
+        plantingTimeReduction?: number;
+        plantExpBonus?: number;
+      };
+      interactionEffects?: LandInteractionEffect[];
+      needInteractionCleanup?: boolean;
+    };
+
+    /** 生涯统计（收获 / 偷菜） */
+    type Career = {
+      gid: number;
+      harvest: number;
+      steal: number;
+      level: number;
+      name: string;
     };
 
     type LandSummary = {
@@ -353,6 +433,7 @@ declare namespace Api {
     type LandsResponse = {
       lands: LandRow[];
       summary: LandSummary;
+      career?: Career | null;
     };
 
     type OperateParams = {
@@ -374,6 +455,9 @@ declare namespace Api {
       image?: string;
       category?: string;
       itemType?: number;
+      mutantTypes?: number[];
+      /** 变异效果名称（优先于 mutantTypes 展示） */
+      mutantEffects?: string[];
       sellable?: boolean;
       sellStatus?: string;
       sellCondition?: string;

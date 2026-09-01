@@ -324,6 +324,15 @@ pub struct AutomationConfig {
     pub fertilizer_land_types: Vec<FertilizerLandType>,
     pub fertilizer_smart_seconds: i64,
     pub skip_own_weed_bug: bool,
+    /// 自动通过好友申请（bot `friend_auto_accept`，默认开）
+    #[serde(default = "default_true")]
+    pub friend_auto_accept: bool,
+    /// 护主犬好友经验满仍继续帮（刷「同气连枝」礼包；bot 默认开）
+    #[serde(default = "default_true")]
+    pub friend_help_protect_dog_ignore_exp_limit: bool,
+    /// 土地卡展示「手动施肥」按钮（只影响显示，不影响自动施肥；bot 默认开）
+    #[serde(default = "default_true")]
+    pub show_manual_fertilizer: bool,
     /// 神秘商人自动化（对齐 bot mystery-shop-auto）
     #[serde(default)]
     pub mystery_shop_auto_buy: bool,
@@ -376,6 +385,14 @@ pub struct QuietHoursConfig {
     pub start: String,
     /// HH:MM
     pub end: String,
+    /// 静默期默认只停帮助/偷菜，自家巡田继续；置 false 时农场巡查也停
+    /// （对齐 bot `friendQuietHours.continueFarm`，默认 true）
+    #[serde(default = "default_true")]
+    pub continue_farm: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// 单账号完整配置
@@ -402,6 +419,33 @@ pub struct AccountConfig {
     pub fertilizer_buy_check_interval_minutes: i64,
     pub bag_seed_priority: Vec<i64>,
     pub bag_seed_fallback_strategy: BagSeedFallbackStrategy,
+    /// 背包种子优先项的土块类型限制（种子 ID → 允许地块类型；空 = 不限制）。
+    /// 对齐 bot `bagSeedLandTypes`（缺 key / 空数组 / 勾满全部等价不限制）。
+    #[serde(default)]
+    pub bag_seed_land_types: std::collections::HashMap<i64, Vec<FertilizerLandType>>,
+    /// 好友申请自动通过：最低等级（0 = 不限）
+    #[serde(default)]
+    pub auto_accept_friend_min_level: i64,
+    /// 好友申请自动通过：要求不低于自己等级
+    #[serde(default)]
+    pub auto_accept_require_own_level: bool,
+    /// 好友申请自动通过：启用收偷比过滤
+    #[serde(default = "default_true")]
+    pub auto_accept_harvest_steal_enabled: bool,
+    /// 收偷比分子（收获份数，bot 默认 8）
+    #[serde(default = "default_auto_accept_harvest")]
+    pub auto_accept_harvest_steal_harvest: i64,
+    /// 收偷比分母（偷菜份数，bot 默认 1）
+    #[serde(default = "default_auto_accept_steal")]
+    pub auto_accept_harvest_steal_steal: i64,
+}
+
+fn default_auto_accept_harvest() -> i64 {
+    8
+}
+
+fn default_auto_accept_steal() -> i64 {
+    1
 }
 
 impl Default for AccountConfig {

@@ -41,6 +41,9 @@ pub struct Plant {
     pub harvest_animation: Option<String>,
     pub mature_effect: Option<String>,
     pub special_fruit: Option<String>,
+    /// 变异展示植株映射链（格式 `5:1120112:1;5_6:1129001:1`）
+    #[serde(default)]
+    pub mutant_effect_plant: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -100,6 +103,8 @@ pub struct Item {
     pub rarity: Option<i64>,
     #[serde(rename = "trait_id ")]
     pub trait_id: Option<i64>,
+    #[serde(default)]
+    pub activity_id: Option<i64>,
 }
 
 // ===== Land =====
@@ -150,6 +155,109 @@ pub struct BuffConfigItem {
     pub attr_value: i64,
 }
 
+/// 官方配置里大量字段会显式写 `null`（serde `default` 只兜缺失键，不兜 null）
+fn null_to_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de> + Default,
+{
+    let value: Option<T> = Option::deserialize(deserializer)?;
+    Ok(value.unwrap_or_default())
+}
+
+/// 变异效果原始配置（MutantEffect.json；可空字段一律 null 容错）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MutantEffectEntry {
+    pub id: i64,
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub name: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub effect_name: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub icon: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub description: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub tips: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub tag: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub activity_id: i64,
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub effect_type: i64,
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub hide_ui: bool,
+}
+
+/// 变异效果展示 DTO（对齐 bot `toMutantEffectDto`，camelCase 序列化）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MutantEffectDto {
+    pub id: i64,
+    pub name: String,
+    pub icon: String,
+    pub description: String,
+    pub tag: String,
+    pub activity_id: i64,
+}
+
+/// 运行时 MutantEffect 未下发 tips/description 的补充说明（对齐 bot）
+const MUTANT_EFFECT_DESCRIPTION_FALLBACKS: &[(i64, &str)] =
+    &[(13, "特殊活动变异，收获时可额外获得鹊羽。")];
+
+/// 图标取路径末段（`gui/.../crystal/spriteFrame` → `crystal`）
+fn normalize_mutant_icon_name(value: &str) -> String {
+    let raw = value.trim().trim_end_matches("/spriteFrame");
+    raw.split('/').filter(|s| !s.is_empty()).next_back().unwrap_or("").to_string()
+}
+
+fn to_mutant_effect_dto(effect: Option<&MutantEffectEntry>, id: i64) -> MutantEffectDto {
+    let numeric_id = if id != 0 { id } else { effect.map(|e| e.id).unwrap_or(0) };
+    let Some(effect) = effect else {
+        return MutantEffectDto {
+            id: numeric_id,
+            name: if numeric_id > 0 {
+                format!("变异 #{numeric_id}")
+            } else {
+                "变异".to_string()
+            },
+            icon: String::new(),
+            description: String::new(),
+            tag: String::new(),
+            activity_id: 0,
+        };
+    };
+    // 名称以官方运行时配置的 effect_name 为准；name 可能是“喜鹊事件”等内部事件名
+    let name = if !effect.effect_name.is_empty() {
+        effect.effect_name.clone()
+    } else if !effect.name.is_empty() {
+        effect.name.clone()
+    } else if numeric_id > 0 {
+        format!("变异 #{numeric_id}")
+    } else {
+        "变异".to_string()
+    };
+    let description = if !effect.description.is_empty() {
+        effect.description.clone()
+    } else if !effect.tips.is_empty() {
+        effect.tips.clone()
+    } else {
+        MUTANT_EFFECT_DESCRIPTION_FALLBACKS
+            .iter()
+            .find(|(fid, _)| *fid == numeric_id)
+            .map(|(_, text)| (*text).to_string())
+            .unwrap_or_default()
+    };
+    MutantEffectDto {
+        id: numeric_id,
+        name,
+        icon: normalize_mutant_icon_name(&effect.icon),
+        description,
+        tag: effect.tag.clone(),
+        activity_id: effect.activity_id,
+    }
+}
+
 // ===== GameConfig 单例 =====
 
 /// 全局游戏配置（加载一次，到处用）
@@ -166,6 +274,8 @@ pub struct GameConfig {
     illustrated: RwLock<Option<Vec<IllustratedEntry>>>,
     /// 超变 buff 配置
     buffs: RwLock<Option<Vec<BuffConfigItem>>>,
+    /// 变异效果配置（MutantEffect.json）
+    mutant_effects: RwLock<Option<Vec<MutantEffectEntry>>>,
 }
 
 /// 默认 GameConfig（未加载）
@@ -186,6 +296,7 @@ impl GameConfig {
             role_level: RwLock::new(None),
             illustrated: RwLock::new(None),
             buffs: RwLock::new(None),
+            mutant_effects: RwLock::new(None),
         }
     }
 
@@ -197,6 +308,7 @@ impl GameConfig {
         self.load_role_levels();
         self.load_illustrated();
         self.load_buffs();
+        self.load_mutant_effects();
         self.apply_overlay();
     }
 
@@ -262,6 +374,20 @@ impl GameConfig {
             Err(e) => {
                 tracing::error!(error = %e, "BuffCfg.json parse failed; using empty list");
                 *self.buffs.write() = Some(Vec::new());
+            }
+        }
+    }
+
+    fn load_mutant_effects(&self) {
+        let json = include_str!("../../../../assets/game_config/MutantEffect.json");
+        match serde_json::from_str::<Vec<MutantEffectEntry>>(json) {
+            Ok(items) => {
+                tracing::info!(count = items.len(), "已加载变异效果配置");
+                *self.mutant_effects.write() = Some(items);
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "MutantEffect.json parse failed; using empty list");
+                *self.mutant_effects.write() = Some(Vec::new());
             }
         }
     }
@@ -549,6 +675,107 @@ impl GameConfig {
         self.plant_map.read().clone().unwrap_or_default()
     }
 
+    /// 按变异 ID 查效果 DTO
+    #[must_use]
+    pub fn get_mutant_effect_by_id(&self, mutant_id: i64) -> Option<MutantEffectDto> {
+        if mutant_id <= 0 {
+            return None;
+        }
+        let entry = self
+            .mutant_effects
+            .read()
+            .as_ref()?
+            .iter()
+            .find(|e| e.id == mutant_id)
+            .cloned();
+        Some(to_mutant_effect_dto(entry.as_ref(), mutant_id))
+    }
+
+    /// 批量查变异效果（去重、保序）
+    #[must_use]
+    pub fn get_mutant_effects_by_ids(&self, ids: &[i64]) -> Vec<MutantEffectDto> {
+        let mut seen = std::collections::HashSet::new();
+        let mut result = Vec::new();
+        for id in ids {
+            if *id <= 0 || !seen.insert(*id) {
+                continue;
+            }
+            if let Some(dto) = self.get_mutant_effect_by_id(*id) {
+                result.push(dto);
+            }
+        }
+        result
+    }
+
+    /// 变异类型名称列表（背包等展示用）
+    #[must_use]
+    pub fn get_mutant_type_names(&self, ids: &[i64]) -> Vec<String> {
+        self.get_mutant_effects_by_ids(ids).into_iter().map(|e| e.name).collect()
+    }
+
+    /// 变异图标 URL（`seed_images_named/mutant/{id}.png`）
+    #[must_use]
+    pub fn get_mutant_image_by_id(&self, mutant_id: i64) -> String {
+        if mutant_id <= 0 {
+            String::new()
+        } else {
+            format!("/game-config/seed_images_named/mutant/{mutant_id}.png")
+        }
+    }
+
+    /// 根据当前变异组合解析应展示的植物 ID（对齐 bot `getMutantDisplayPlantId`）。
+    ///
+    /// `mutant_effect_plant` 形如 `5:1120112:1;5_6:1129001:1`；多效果组合优先于
+    /// 单效果，避免黄金+活动变异退化成普通黄金作物；最多 4 层映射。
+    #[must_use]
+    pub fn get_mutant_display_plant_id(&self, plant_id: i64, mutant_ids: &[i64]) -> i64 {
+        if mutant_ids.is_empty() {
+            return plant_id;
+        }
+        let active: std::collections::HashSet<i64> =
+            mutant_ids.iter().copied().filter(|id| *id > 0).collect();
+        if active.is_empty() {
+            return plant_id;
+        }
+        let mut current = plant_id;
+        let mut visited = std::collections::HashSet::from([current]);
+        for _ in 0..4 {
+            let Some(plant) = self.get_plant_by_id(current) else { break };
+            let Some(mapping) = plant.mutant_effect_plant.as_deref().map(str::trim) else {
+                break
+            };
+            if mapping.is_empty() {
+                break;
+            }
+            let mut best: Option<(usize, i64)> = None;
+            for entry in mapping.split(';') {
+                let Some((effect_key, target_text)) = entry.split_once(':') else { continue };
+                let effect_ids: Vec<i64> = effect_key
+                    .split('_')
+                    .filter_map(|s| s.trim().parse::<i64>().ok())
+                    .filter(|id| *id > 0)
+                    .collect();
+                let Ok(target) = target_text.trim().parse::<i64>() else { continue };
+                if target <= 0 || effect_ids.is_empty() {
+                    continue;
+                }
+                if !effect_ids.iter().all(|id| active.contains(id)) {
+                    continue;
+                }
+                if best.as_ref().is_none_or(|(count, _)| effect_ids.len() > *count) {
+                    best = Some((effect_ids.len(), target));
+                }
+            }
+            let Some((_, target)) = best else { break };
+            if visited.contains(&target) {
+                break;
+            }
+            current = target;
+            visited.insert(current);
+        }
+        current
+    }
+
     /// 按 param（种子/果实参数）查图鉴条目
     #[must_use]
     pub fn get_illustrated_by_param(&self, param: i64) -> Option<IllustratedEntry> {
@@ -717,7 +944,7 @@ impl GameConfig {
         obj.get("count").and_then(|v| v.as_i64())
     }
 
-    /// 物品图标 URL（对齐 TS `/game-config/seed_images_named/{id}.png`）
+    /// 物品图标 URL（对齐 TS `/game-config/seed_images_named/seed_images/{id}.png`）
     #[must_use]
     pub fn get_item_image_by_id(&self, item_id: i64) -> Option<String> {
         let url = mapped_item_image(item_id);
@@ -892,12 +1119,14 @@ fn json_trimmed_string(value: Option<&serde_json::Value>) -> Option<String> {
 // ===== 全局单例 =====
 
 /// 面板图标 URL，对齐 `gameConfig.ts` 的 `getItemImageById`。
+///
+/// 490cddf 起普通种子/物品图迁入 `seed_images/` 子目录；`mutant/` 仍按变异 ID 命名。
 #[must_use]
 pub fn mapped_item_image(item_id: i64) -> String {
     if item_id <= 0 {
         String::new()
     } else {
-        format!("/game-config/seed_images_named/{item_id}.png")
+        format!("/game-config/seed_images_named/seed_images/{item_id}.png")
     }
 }
 
@@ -1006,9 +1235,9 @@ mod tests {
     #[test]
     fn get_plant_grow_time_parses_phases() {
         let gc = reload_for_test();
-        // 白萝卜 grow_phases: "种子:30;发芽:30;成熟:0;"
+        // 白萝卜 grow_phases 随官方配置更新为 "种子:1;发芽:1;成熟:0;"
         let secs = gc.get_plant_grow_time(2020002);
-        assert_eq!(secs, 60); // 30+30，最后非零
+        assert_eq!(secs, 2); // 1+1
     }
 
     #[test]
@@ -1018,7 +1247,7 @@ mod tests {
         assert!(!seeds.is_empty());
         assert!(seeds.iter().any(|s| s.seed_id == 29999));
         let one = seeds.iter().find(|s| s.seed_id == 29999).unwrap();
-        assert_eq!(one.image, "/game-config/seed_images_named/29999.png");
+        assert_eq!(one.image, "/game-config/seed_images_named/seed_images/29999.png");
         assert_eq!(one.required_level, 1);
         let pumpkin = seeds.iter().find(|s| s.seed_id == 29998).expect("哈哈南瓜种子");
         assert_eq!(pumpkin.required_level, 31);
@@ -1027,11 +1256,11 @@ mod tests {
     #[test]
     fn item_image_url_matches_panel_path() {
         assert_eq!(mapped_item_image(0), "");
-        assert_eq!(mapped_item_image(1), "/game-config/seed_images_named/1.png");
+        assert_eq!(mapped_item_image(1), "/game-config/seed_images_named/seed_images/1.png");
         let gc = reload_for_test();
         assert_eq!(
             gc.get_item_image_by_id(10000).as_deref(),
-            Some("/game-config/seed_images_named/10000.png")
+            Some("/game-config/seed_images_named/seed_images/10000.png")
         );
     }
 
@@ -1040,6 +1269,28 @@ mod tests {
         let gc = reload_for_test();
         let item = gc.get_item_by_id(10000).expect("item 10000");
         assert!(!item.name.is_empty());
+    }
+
+    #[test]
+    fn mutant_effects_load_all_entries_with_null_fields() {
+        let gc = reload_for_test();
+        // 官方配置含大量 null(effect_type/param/activity_id/icon/tips...),必须全部加载成功
+        for id in 1..=14i64 {
+            let dto = gc.get_mutant_effect_by_id(id)
+                .unwrap_or_else(|| panic!("mutant effect {id} missing"));
+            assert_eq!(dto.id, id);
+            assert!(!dto.name.is_empty(), "mutant {id} name empty");
+        }
+        // 名称以 effect_name 为准(bot 终态:喜鹊/闪电/晶辉)
+        assert_eq!(gc.get_mutant_effect_by_id(13).unwrap().name, "喜鹊");
+        assert_eq!(gc.get_mutant_effect_by_id(12).unwrap().name, "闪电");
+        assert_eq!(gc.get_mutant_effect_by_id(14).unwrap().name, "晶辉");
+        // id 13 icon 为 null → 空字符串;id 14 icon 路径末段 crystal
+        assert_eq!(gc.get_mutant_effect_by_id(13).unwrap().icon, "");
+        assert_eq!(gc.get_mutant_effect_by_id(14).unwrap().icon, "crystal");
+        // id 14 activity_id 为 null → 0;id 12 属天气活动
+        assert_eq!(gc.get_mutant_effect_by_id(14).unwrap().activity_id, 0);
+        assert_eq!(gc.get_mutant_effect_by_id(12).unwrap().activity_id, 2_026_070_302);
     }
 
     #[test]

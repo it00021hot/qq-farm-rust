@@ -99,6 +99,19 @@ const osOptions = [
   { label: 'iOS', value: 'iOS' },
   { label: 'Android', value: 'Android' }
 ];
+/** 时区白名单（后端 normalize_time_zone 同款，value 即 key） */
+const timeZoneOptions = [
+  { label: '北京时间 / 上海（UTC+8）', value: 'Asia/Shanghai' },
+  { label: '协调世界时（UTC）', value: 'UTC' },
+  { label: '香港', value: 'Asia/Hong_Kong' },
+  { label: '台北', value: 'Asia/Taipei' },
+  { label: '新加坡', value: 'Asia/Singapore' },
+  { label: '东京', value: 'Asia/Tokyo' },
+  { label: '首尔', value: 'Asia/Seoul' },
+  { label: '伦敦', value: 'Europe/London' },
+  { label: '纽约', value: 'America/New_York' },
+  { label: '洛杉矶', value: 'America/Los_Angeles' }
+];
 
 function createDefaultSystemConfig(): SystemConfigPayload {
   return {
@@ -106,6 +119,7 @@ function createDefaultSystemConfig(): SystemConfigPayload {
     clientVersion: '',
     platform: 'qq',
     os: 'Windows',
+    timeZone: 'Asia/Shanghai',
     deviceInfo: {
       os: 'Windows',
       clientVersion: '',
@@ -137,7 +151,18 @@ const intervals = reactive<Api.Farm.IntervalsConfig>({
 const quietHours = reactive<Api.Farm.QuietHoursConfig>({
   enabled: false,
   start: '01:00',
-  end: '07:30'
+  end: '07:30',
+  continueFarm: true
+});
+
+/** 好友申请自动通过（好友区表单） */
+const friendAutoAccept = reactive({
+  enabled: true,
+  minLevel: 0,
+  requireOwnLevel: false,
+  harvestStealEnabled: false,
+  harvest: 8,
+  steal: 1
 });
 
 const fertilizerBuy = reactive({
@@ -162,7 +187,10 @@ const offline = reactive<Api.Farm.OfflineReminder>({
   wechatBot: {},
   title: '账号下线提醒',
   msg: '账号下线',
-  offlineDeleteSec: 0
+  offlineDeleteSec: 0,
+  endpoint: '',
+  token: '',
+  secret: ''
 });
 
 const qqBotBindStatus = reactive<Api.Farm.QqBotBindStatus>({
@@ -190,6 +218,7 @@ const qqBotBindStateLabel = computed(() => {
 const providerOptions = computed(() => [
   { label: $t('page.farm.settings.providerNone'), value: 'none' },
   { label: $t('page.farm.settings.providerQqBot'), value: 'qq_bot' },
+  { label: $t('page.farm.settings.providerDingTalk'), value: 'ding_talk' },
   { label: $t('page.farm.settings.providerWechatBot'), value: 'wechat_bot', disabled: true }
 ]);
 
@@ -221,7 +250,9 @@ const automation = reactive<Api.Farm.AutomationConfig>({
   mystery_shop_allow_gold: false,
   mystery_shop_allow_coupon: false,
   mystery_shop_allow_gold_bean: false,
-  mystery_shop_allow_diamond: false
+  mystery_shop_allow_diamond: false,
+  friend_auto_accept: true,
+  show_manual_fertilizer: true
 });
 
 const showFertilizerBuyPanel = computed(
@@ -595,9 +626,17 @@ function applyDetail(data: Api.Farm.AccountAutomationDetail) {
   automation.mystery_shop_allow_coupon = !!src.mystery_shop_allow_coupon;
   automation.mystery_shop_allow_gold_bean = !!src.mystery_shop_allow_gold_bean;
   automation.mystery_shop_allow_diamond = !!src.mystery_shop_allow_diamond;
+  automation.friend_auto_accept = src.friend_auto_accept !== false;
+  automation.show_manual_fertilizer = src.show_manual_fertilizer !== false;
 
   if (data.intervals) Object.assign(intervals, data.intervals);
   if (data.friendQuietHours) Object.assign(quietHours, data.friendQuietHours);
+  friendAutoAccept.enabled = data.friendAutoAccept !== false;
+  friendAutoAccept.minLevel = Number(data.autoAcceptFriendMinLevel ?? 0);
+  friendAutoAccept.requireOwnLevel = !!data.autoAcceptRequireOwnLevel;
+  friendAutoAccept.harvestStealEnabled = !!data.autoAcceptHarvestStealEnabled;
+  friendAutoAccept.harvest = Number(data.autoAcceptHarvestStealHarvest ?? 8);
+  friendAutoAccept.steal = Number(data.autoAcceptHarvestStealSteal ?? 1);
   plantingStrategy.value = data.plantingStrategy || 'preferred';
   preferredSeedId.value = data.preferredSeedId ?? 0;
   bagSeedPriority.value = [...(data.bagSeedPriority || [])];
@@ -657,7 +696,12 @@ async function handleSaveStrategy() {
       plantDelaySeconds: plantDelaySeconds.value,
       stealDelaySeconds: stealDelaySeconds.value,
       plantBlacklist: [...plantBlacklist.value],
-      friendQuietHours: { ...quietHours }
+      friendQuietHours: {
+        enabled: quietHours.enabled,
+        start: quietHours.start,
+        end: quietHours.end,
+        continueFarm: quietHours.continueFarm !== false
+      }
     });
     if (!error) {
       window.$message?.success($t('page.farm.settings.saveStrategySuccess'));
@@ -698,8 +742,17 @@ async function handleSaveAutomation() {
         mystery_shop_allow_gold: automation.mystery_shop_allow_gold,
         mystery_shop_allow_coupon: automation.mystery_shop_allow_coupon,
         mystery_shop_allow_gold_bean: automation.mystery_shop_allow_gold_bean,
-        mystery_shop_allow_diamond: automation.mystery_shop_allow_diamond
+        mystery_shop_allow_diamond: automation.mystery_shop_allow_diamond,
+        friend_auto_accept: automation.friend_auto_accept,
+        show_manual_fertilizer: automation.show_manual_fertilizer
       },
+      friendAutoAccept: friendAutoAccept.enabled,
+      showManualFertilizer: automation.show_manual_fertilizer,
+      autoAcceptFriendMinLevel: friendAutoAccept.minLevel,
+      autoAcceptRequireOwnLevel: friendAutoAccept.requireOwnLevel,
+      autoAcceptHarvestStealEnabled: friendAutoAccept.harvestStealEnabled,
+      autoAcceptHarvestStealHarvest: friendAutoAccept.harvest,
+      autoAcceptHarvestStealSteal: friendAutoAccept.steal,
       fertilizerBuyOrganicCount: fertilizerBuy.organicCount,
       fertilizerBuyOrganicThresholdHours: fertilizerBuy.organicThresholdHours,
       fertilizerBuyNormalCount: fertilizerBuy.normalCount,
@@ -797,6 +850,9 @@ function applyOffline(data: Api.Farm.OfflineReminder) {
   offline.title = data.title || '';
   offline.msg = data.msg || '';
   offline.offlineDeleteSec = Number(data.offlineDeleteSec || 0);
+  offline.endpoint = data.endpoint || '';
+  offline.token = data.token || '';
+  offline.secret = data.secret || '';
 }
 
 async function loadQqBotBindStatus() {
@@ -921,9 +977,23 @@ function offlinePayload(): Api.Farm.OfflineReminder {
     wechatBot: {},
     title: offline.title || '',
     msg: offline.msg || '',
-    offlineDeleteSec: Number(offline.offlineDeleteSec || 0)
+    offlineDeleteSec: Number(offline.offlineDeleteSec || 0),
+    endpoint: offline.endpoint || '',
+    token: offline.token || '',
+    secret: offline.secret || ''
   };
 }
+
+/** 钉钉：endpoint 与 token 二选一即可测试。 */
+const dingTalkReady = computed(
+  () => offline.provider === 'ding_talk' && Boolean(offline.endpoint?.trim() || offline.token?.trim())
+);
+const offlineTestDisabled = computed(() => {
+  if (offline.provider === 'ding_talk') return !dingTalkReady.value;
+  return (
+    offline.provider !== 'qq_bot' || (!qqBotBindStatus.bound && !offline.qqBotBinding.userOpenid)
+  );
+});
 
 async function handleSaveOffline() {
   offlineSaving.value = true;
@@ -1228,6 +1298,9 @@ onUnmounted(() => {
                   :disabled="!quietHours.enabled"
                 />
               </NFormItem>
+              <NFormItem :label="$t('page.farm.settings.quietContinueFarm')">
+                <NSwitch v-model:value="quietHours.continueFarm" :disabled="!quietHours.enabled" />
+              </NFormItem>
             </div>
 
             <NDivider title-placement="left">{{ $t('page.farm.settings.plantDelaySection') }}</NDivider>
@@ -1304,6 +1377,10 @@ onUnmounted(() => {
             <div class="auto-switch-item">
               <NSwitch v-model:value="automation.skip_own_weed_bug" />
               <span>{{ $t('page.farm.settings.skipOwnWeedBug') }}</span>
+            </div>
+            <div class="auto-switch-item">
+              <NSwitch v-model:value="automation.show_manual_fertilizer" />
+              <span>{{ $t('page.farm.settings.showManualFertilizer') }}</span>
             </div>
             <div class="auto-switch-item">
               <NSwitch v-model:value="automation.mystery_shop_auto_buy" />
@@ -1399,6 +1476,65 @@ onUnmounted(() => {
                 <span>{{ $t('page.farm.settings.friendHelpExpLimit') }}</span>
               </div>
             </div>
+
+            <NForm class="mt-12px" label-placement="left" :label-width="140">
+              <div class="grid gap-12px sm:grid-cols-2 md:grid-cols-3">
+                <NFormItem :label="$t('page.farm.settings.friendAutoAccept')">
+                  <NSwitch v-model:value="automation.friend_auto_accept" />
+                </NFormItem>
+                <NFormItem :label="$t('page.farm.settings.autoAcceptFriendMinLevel')">
+                  <div class="flex w-full items-center gap-8px">
+                    <NInputNumber
+                      v-model:value="friendAutoAccept.minLevel"
+                      class="w-full"
+                      :min="0"
+                      :max="200"
+                      :disabled="!automation.friend_auto_accept"
+                    />
+                    <NText depth="3" class="shrink-0 text-12px">
+                      {{ $t('page.farm.settings.autoAcceptMinLevelHint') }}
+                    </NText>
+                  </div>
+                </NFormItem>
+                <NFormItem :label="$t('page.farm.settings.autoAcceptRequireOwnLevel')">
+                  <NSwitch
+                    v-model:value="friendAutoAccept.requireOwnLevel"
+                    :disabled="!automation.friend_auto_accept"
+                  />
+                </NFormItem>
+                <NFormItem :label="$t('page.farm.settings.autoAcceptHarvestStealEnabled')">
+                  <NSwitch
+                    v-model:value="friendAutoAccept.harvestStealEnabled"
+                    :disabled="!automation.friend_auto_accept"
+                  />
+                </NFormItem>
+                <NFormItem
+                  v-if="friendAutoAccept.harvestStealEnabled"
+                  :label="$t('page.farm.settings.autoAcceptHarvestStealHarvest')"
+                >
+                  <NInputNumber
+                    v-model:value="friendAutoAccept.harvest"
+                    class="w-full"
+                    :min="0"
+                    :max="9999"
+                    :disabled="!automation.friend_auto_accept"
+                  />
+                </NFormItem>
+                <NFormItem
+                  v-if="friendAutoAccept.harvestStealEnabled"
+                  :label="$t('page.farm.settings.autoAcceptHarvestStealSteal')"
+                >
+                  <NInputNumber
+                    v-model:value="friendAutoAccept.steal"
+                    class="w-full"
+                    :min="1"
+                    :max="9999"
+                    :disabled="!automation.friend_auto_accept"
+                  />
+                </NFormItem>
+              </div>
+              <NText depth="3" class="text-12px">{{ $t('page.farm.settings.autoAcceptHint') }}</NText>
+            </NForm>
           </template>
 
           <NDivider title-placement="left">{{ $t('page.farm.settings.fertilizer') }}</NDivider>
@@ -1519,13 +1655,38 @@ onUnmounted(() => {
                   </div>
                 </NFormItem>
               </template>
+              <template v-else-if="offline.provider === 'ding_talk'">
+                <NFormItem :label="$t('page.farm.settings.dingtalkEndpoint')">
+                  <NInput
+                    v-model:value="offline.endpoint"
+                    :placeholder="$t('page.farm.settings.dingtalkEndpointPlaceholder')"
+                  />
+                </NFormItem>
+                <NFormItem :label="$t('page.farm.settings.dingtalkToken')">
+                  <NInput
+                    v-model:value="offline.token"
+                    type="password"
+                    show-password-on="click"
+                    :placeholder="$t('page.farm.settings.dingtalkTokenPlaceholder')"
+                  />
+                </NFormItem>
+                <NFormItem :label="$t('page.farm.settings.dingtalkSecret')">
+                  <NInput
+                    v-model:value="offline.secret"
+                    type="password"
+                    show-password-on="click"
+                    :placeholder="$t('page.farm.settings.dingtalkSecretPlaceholder')"
+                  />
+                </NFormItem>
+                <NText depth="3" class="text-12px">{{ $t('page.farm.settings.dingtalkHint') }}</NText>
+              </template>
             </div>
           </NForm>
           <div class="mt-16px flex justify-end gap-8px border-t border-[var(--n-border-color)] pt-16px">
             <NButton
               size="small"
               :loading="offlineTesting"
-              :disabled="offlineSaving || offline.provider !== 'qq_bot' || (!qqBotBindStatus.bound && !offline.qqBotBinding.userOpenid)"
+              :disabled="offlineSaving || offlineTestDisabled"
               @click="handleTestOffline"
             >
               {{ $t('page.farm.settings.testOffline') }}
@@ -1573,6 +1734,14 @@ onUnmounted(() => {
                 </NFormItem>
 
                 <div class="grid gap-16px md:grid-cols-2">
+                  <NFormItem :label="$t('page.farm.settings.timeZone')">
+                    <NSelect
+                      v-model:value="localSystemConfig.timeZone"
+                      class="w-full"
+                      :options="timeZoneOptions"
+                    />
+                  </NFormItem>
+
                   <NFormItem :label="$t('page.farm.settings.platform')">
                     <NSpace wrap>
                       <NButton

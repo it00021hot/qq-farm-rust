@@ -33,6 +33,22 @@ pub fn in_friend_quiet_hours(now_hhmm: Option<(u32, u32)>) -> bool {
     in_friend_quiet_hours_for(None, now_hhmm)
 }
 
+/// 本田巡查的静默门（对齐 bot `inFarmQuietHours`）：
+/// 静默期默认只停帮助/偷菜，自家巡田继续；`continueFarm=false` 时农场巡查也停。
+#[must_use]
+pub fn in_farm_quiet_hours_for(account_id: Option<&str>, now_hhmm: Option<(u32, u32)>) -> bool {
+    if !in_friend_quiet_hours_for(account_id, now_hhmm) {
+        return false;
+    }
+    let continue_farm = match account_id.filter(|s| !s.is_empty()) {
+        Some(id) => {
+            crate::models::store::account_config::get_friend_quiet_hours(Some(id)).continue_farm
+        }
+        None => true,
+    };
+    !continue_farm
+}
+
 /// 按账号配置判断安静时段（对齐 TS `getFriendQuietHours(accountId)`）
 #[must_use]
 pub fn in_friend_quiet_hours_for(account_id: Option<&str>, now_hhmm: Option<(u32, u32)>) -> bool {

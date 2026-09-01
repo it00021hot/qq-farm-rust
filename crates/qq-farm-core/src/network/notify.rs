@@ -33,8 +33,8 @@ pub enum NotifyEvent {
     BasicChanged { event_type: String, level: Option<i64>, gold: Option<i64>, exp: Option<i64> },
     /// 未知 / 未处理的事件类型
     Unknown { event_type: String },
-    /// 好友申请
-    FriendApplications { applications: Vec<(i64, String)> },
+    /// 好友申请（gid / 名称 / 等级）
+    FriendApplications { applications: Vec<(i64, String, i64)> },
     /// 宠物"同气连枝"礼包待拾取（PendingGiftCountNotify）
     DogSkillGiftPending { count: i64 },
     /// 宠物守护记录更新（NewProtectLogNotify，空事件）
@@ -43,6 +43,16 @@ pub enum NotifyEvent {
     ActivitiesChanged,
     /// 任务信息推送
     TaskInfoNotify { task_info: Option<crate::proto::generated::gamepb::taskpb::TaskInfo> },
+    /// 农场级社交事件变化（青蛙 5005 等；清空事件时 social_events 为空）
+    FarmSocialEventsChanged {
+        event_type: String,
+        events: Vec<crate::proto::generated::gamepb::plantpb::FarmSocialEvent>,
+    },
+    /// 天气变化（自己或好友农场；WeatherChangeNotify）
+    WeatherChanged {
+        event_type: String,
+        host_gid: i64,
+    },
 }
 
 /// ItemNotify 里一条物品变化（对齐 network.ts handleNotify）
@@ -126,7 +136,7 @@ pub fn parse_event(event: &EventMessage) -> NotifyEvent {
                     .map(|a| {
                         let name =
                             if a.name.is_empty() { format!("GID:{}", a.gid) } else { a.name };
-                        (a.gid, name)
+                        (a.gid, name, a.level)
                     })
                     .collect(),
             },
@@ -147,6 +157,21 @@ pub fn parse_event(event: &EventMessage) -> NotifyEvent {
         match crate::proto::generated::gamepb::taskpb::TaskInfoNotify::decode(body) {
             Ok(notify) => NotifyEvent::TaskInfoNotify { task_info: notify.task_info },
             Err(_) => NotifyEvent::TaskInfoNotify { task_info: None },
+        }
+    } else if event_type.contains("WeatherChangeNotify") {
+        match crate::proto::generated::gamepb::weatherpb::WeatherChangeNotify::decode(body) {
+            Ok(notify) => NotifyEvent::WeatherChanged {
+                event_type,
+                host_gid: notify.host_gid,
+            },
+            Err(_) => NotifyEvent::WeatherChanged { event_type, host_gid: 0 },
+        }
+    } else if event_type.contains("FarmSocialEventsNotify") {
+        match crate::proto::generated::gamepb::plantpb::FarmSocialEventsNotify::decode(body) {
+            Ok(notify) => {
+                NotifyEvent::FarmSocialEventsChanged { event_type, events: notify.social_events }
+            }
+            Err(_) => NotifyEvent::FarmSocialEventsChanged { event_type, events: Vec::new() },
         }
     } else {
         NotifyEvent::Unknown { event_type }

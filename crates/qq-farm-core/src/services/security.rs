@@ -13,8 +13,8 @@
 //! ## 与原 TS 的差异
 //!
 //! - 原 TS 的 `passwordHashMiddleware` / `rateLimitMiddleware` 是 HTTP 中间件，
-//!   本模块只提供底层函数（`get_client_ip_from_headers` 等），由 `qq-farm-server` crate
-//!   的 axum 层负责装配
+//!   本模块只提供底层函数（`get_client_ip_from_headers` 等）；HTTP 装配层已随
+//!   `qq-farm-server` 删除（只维护桌面版），保留底层函数供复用
 //! - `SECURITY_CONFIG` 字段值与原 TS 完全一致（`saltRounds=12` 在 Rust 里没有用，
 //!   因为我们用 PBKDF2 不是 bcrypt；保留 12 仅为字段兼容）
 

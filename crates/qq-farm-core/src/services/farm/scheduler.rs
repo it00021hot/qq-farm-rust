@@ -311,23 +311,44 @@ impl FarmService {
         self.op_weed().await
     }
 
-    /// 一键务农（`op=clear`）—— 除草/除虫/浇水，对齐 Go `RunFarmOperation("clear")`
+    /// 一键务农（`op=clear`）—— 除草/除虫/浇水 + 清理互动道具（黄金虫/足球/乌云）
+    /// 与农场级社交事件（青蛙），对齐 bot `runFarmOperation('clear')`（手动不受
+    /// `skip_own_weed_bug` 限制）。
     pub async fn op_farming(&self) -> Result<usize> {
         let gid = *self.host_gid.lock();
         let reply = self.api.get_all_lands(gid).await?;
         let status = analyze_lands(&reply.lands, gid);
+        let social_event_item_ids =
+            crate::services::farm::land_analysis::get_cleanable_farm_social_event_item_ids(
+                &reply.social_events,
+            );
         let mut ids: Vec<i64> = status
             .need_weed
             .iter()
             .chain(status.need_bug.iter())
             .chain(status.need_water.iter())
+            .chain(status.need_interaction_cleanup.iter())
             .copied()
             .collect();
         ids.sort_unstable();
         ids.dedup();
+        if ids.is_empty() && !social_event_item_ids.is_empty() {
+            let fallback = status
+                .growing
+                .first()
+                .or(status.harvestable.first())
+                .or(status.dead.first())
+                .copied()
+                .unwrap_or(0);
+            if fallback > 0 {
+                ids.push(fallback);
+            }
+        }
         let n = ids.len();
-        if !ids.is_empty() {
-            self.api.farming(ids, gid).await?;
+        if !ids.is_empty() || !social_event_item_ids.is_empty() {
+            self.api
+                .farming_with_social_events(ids, gid, social_event_item_ids)
+                .await?;
         }
         Ok(n)
     }
@@ -442,17 +463,43 @@ impl FarmService {
 
         let skip_own =
             crate::services::automation::is_automation_on_for(account_id, "skip_own_weed_bug");
+        // 青蛙(5005)等农场级社交事件：经 FarmingRequest field 5 随一键务农发送
+        let social_event_item_ids =
+            crate::services::farm::land_analysis::get_cleanable_farm_social_event_item_ids(
+                &reply.social_events,
+            );
         let mut farming_ids: Vec<i64> = status
             .need_weed
             .iter()
             .chain(status.need_bug.iter())
             .chain(status.need_water.iter())
+            .chain(status.need_interaction_cleanup.iter())
             .copied()
             .collect();
         farming_ids.sort_unstable();
         farming_ids.dedup();
-        if !skip_own && !farming_ids.is_empty() {
-            match api.farming(farming_ids.clone(), host_gid).await {
+        // 只有青蛙无其他待务农地块时，Farming 仍需携带一块有效作物地（对齐官方单点抓包）
+        if farming_ids.is_empty() && !social_event_item_ids.is_empty() {
+            let fallback = status
+                .growing
+                .first()
+                .or(status.harvestable.first())
+                .or(status.dead.first())
+                .copied()
+                .unwrap_or(0);
+            if fallback > 0 {
+                farming_ids.push(fallback);
+            }
+        }
+        if !skip_own && (!farming_ids.is_empty() || !social_event_item_ids.is_empty()) {
+            match api
+                .farming_with_social_events(
+                    farming_ids.clone(),
+                    host_gid,
+                    social_event_item_ids.clone(),
+                )
+                .await
+            {
                 Err(e) => {
                     tracing::warn!(error = %e, "farming failed");
                     crate::services::panel_log::log_warn(
@@ -473,7 +520,7 @@ impl FarmService {
                         "farming",
                         farming_ids.len() as i64,
                     );
-                    actions.push(farm_cycle_farming_action(&status));
+                    actions.push(farm_cycle_farming_action(&status, &social_event_item_ids));
                 }
             }
         }
@@ -778,6 +825,7 @@ fn farm_cycle_status_parts(status: &LandAnalysis) -> Vec<String> {
         let mut ids = HashSet::new();
         ids.extend(status.need_weed.iter().copied());
         ids.extend(status.need_bug.iter().copied());
+        ids.extend(status.need_interaction_cleanup.iter().copied());
         ids.len()
     };
     if farming_count > 0 {
@@ -802,8 +850,8 @@ fn farm_cycle_status_parts(status: &LandAnalysis) -> Vec<String> {
     parts
 }
 
-/// 对齐 TS `一键务农草N/虫N/水N`
-fn farm_cycle_farming_action(status: &LandAnalysis) -> String {
+/// 对齐 TS `一键务农草N/虫N/水N/道具N/青蛙N`
+fn farm_cycle_farming_action(status: &LandAnalysis, social_event_item_ids: &[i64]) -> String {
     let mut parts = Vec::new();
     if !status.need_weed.is_empty() {
         parts.push(format!("草{}", status.need_weed.len()));
@@ -813,6 +861,12 @@ fn farm_cycle_farming_action(status: &LandAnalysis) -> String {
     }
     if !status.need_water.is_empty() {
         parts.push(format!("水{}", status.need_water.len()));
+    }
+    if !status.need_interaction_cleanup.is_empty() {
+        parts.push(format!("道具{}", status.need_interaction_cleanup.len()));
+    }
+    if !social_event_item_ids.is_empty() {
+        parts.push(format!("青蛙{}", social_event_item_ids.len()));
     }
     format!("一键务农{}", parts.join("/"))
 }
@@ -918,7 +972,7 @@ mod tests {
         };
         let parts = farm_cycle_status_parts(&status);
         assert_eq!(parts, vec!["农:2", "水:1", "长:3"]);
-        assert_eq!(farm_cycle_farming_action(&status), "一键务农草2/虫1/水1");
+        assert_eq!(farm_cycle_farming_action(&status, &[]), "一键务农草2/虫1/水1");
     }
 
     #[test]

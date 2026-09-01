@@ -185,6 +185,26 @@ pub struct LandRow {
     pub could_unlock: Option<bool>,
     #[serde(default)]
     pub could_upgrade: Option<bool>,
+    #[serde(default)]
+    pub plant_id: Option<i64>,
+    #[serde(default)]
+    pub display_plant_id: Option<i64>,
+    #[serde(default)]
+    pub mutant_config_ids: Vec<i64>,
+    #[serde(default)]
+    pub mutant_effects: Vec<Value>,
+    #[serde(default)]
+    pub is_mutated: bool,
+    #[serde(default)]
+    pub purple_crystal_resonance_exp_bonus: i64,
+    #[serde(default)]
+    pub land_buff: Option<Value>,
+    #[serde(default)]
+    pub interaction_effects: Vec<Value>,
+    #[serde(default)]
+    pub need_interaction_cleanup: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol_field_40: Option<Value>,
 }
 
 /// 地块列表 + 汇总。
@@ -193,13 +213,16 @@ pub struct LandRow {
 pub struct LandsPayload {
     pub lands: Vec<LandRow>,
     pub summary: LandDetailSummary,
+    /// 农场主生涯统计（查询失败时缺省）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub career: Option<qq_farm_core::services::career::CareerInfo>,
 }
 
 impl LandsPayload {
     #[must_use]
     pub fn from_values(lands: Vec<Value>, summary: LandDetailSummary) -> Self {
         let rows = lands.into_iter().filter_map(|v| serde_json::from_value(v).ok()).collect();
-        Self { lands: rows, summary }
+        Self { lands: rows, summary, career: None }
     }
 }
 

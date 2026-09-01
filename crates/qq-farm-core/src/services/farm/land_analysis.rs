@@ -27,10 +27,250 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::proto::generated::gamepb::plantpb::{LandInfo, PlantPhaseInfo};
+use crate::proto::generated::gamepb::plantpb::{
+    LandInfo, PlantExtendedStatus, PlantInfo, PlantInteractionTargetInfo, PlantInteractionUseInfo,
+    PlantPhaseInfo,
+};
 
 /// 土地 map：land_id -> LandInfo
 pub type LandMap = HashMap<i64, LandInfo>;
+
+// ===== 互动道具（黄金虫 / 足球 / 乌云 / 青蛙）=====
+//
+// 抓包确认：黄金虫、足球和乌云由农场主通过自家 Farming 清理，好友帮助务农不能代为清理。
+// 乌云必须以 interaction_uses / interaction_targets 的实时记录为准；field_40={8,1}
+// 只是清理后仍保留的历史。
+
+/// 农场主可清理的地块级互动道具 ID 集合
+pub const OWNER_CLEANABLE_INTERACTION_ITEM_IDS: &[i64] = &[301_101, 301_102, 5006];
+
+/// 农场级社交事件道具（青蛙 5005）：不绑定地块，清理时经 FarmingRequest field 5 发送
+pub const OWNER_CLEANABLE_FARM_SOCIAL_EVENT_ITEM_IDS: &[i64] = &[5005];
+
+const QIXI_DEW_ITEM_ID: i64 = 301_103;
+const QIXI_MUTANT_CONFIG_ID: i64 = 13;
+const QIXI_DEW_HISTORY_CODES: &[i64] = &[9, 10];
+
+/// 汇总植株的变异配置 ID（对齐 bot `getPlantMutantConfigIds`）。
+///
+/// 来源：`mutant_config_ids` + 当前阶段 `phase.mutants`（当前阶段缺省则扫全部
+/// 阶段，变异可能记录在任意阶段）+ `extended_mutations`；去重正值。
+#[must_use]
+pub fn get_plant_mutant_config_ids(
+    plant: &PlantInfo,
+    current_phase: Option<&PlantPhaseInfo>,
+) -> Vec<i64> {
+    let mut values: Vec<i64> = plant.mutant_config_ids.clone();
+    if let Some(phase) = current_phase {
+        values.extend(phase.mutants.iter().map(|m| m.mutant_config_id));
+    } else {
+        for phase in &plant.phases {
+            values.extend(phase.mutants.iter().map(|m| m.mutant_config_id));
+        }
+    }
+    values.extend(plant.extended_mutations.iter().map(|r| r.mutant_config_id));
+    let mut seen = HashSet::new();
+    values.into_iter().filter(|id| *id > 0 && seen.insert(*id)).collect()
+}
+
+/// 土地扩展记录（field 40）
+fn plant_extended_statuses(plant: &PlantInfo) -> &[PlantExtendedStatus] {
+    &plant.field_40
+}
+
+/// 七夕灵露的保守兜底：变异含 13 且 field_40 存在 `{9|10, 1}` 记录才算生效
+fn qixi_dew_extended_status<'a>(
+    plant: &'a PlantInfo,
+    mutant_ids: &[i64],
+) -> Option<&'a PlantExtendedStatus> {
+    if !mutant_ids.contains(&QIXI_MUTANT_CONFIG_ID) {
+        return None;
+    }
+    plant_extended_statuses(plant).iter().find(|status| {
+        QIXI_DEW_HISTORY_CODES.contains(&status.value_1) && status.value_2 == 1
+    })
+}
+
+/// 农场主是否有待清理的地块级互动道具（uses + targets 实时记录）
+#[must_use]
+pub fn has_owner_cleanable_interaction(plant: &PlantInfo) -> bool {
+    let uses: &[PlantInteractionUseInfo] = &plant.interaction_uses;
+    let targets: &[PlantInteractionTargetInfo] = &plant.interaction_targets;
+    uses.iter().any(|e| OWNER_CLEANABLE_INTERACTION_ITEM_IDS.contains(&e.item_id))
+        || targets.iter().any(|e| OWNER_CLEANABLE_INTERACTION_ITEM_IDS.contains(&e.item_id))
+}
+
+/// 互动道具元信息（名称 / 活动 ID）
+fn interaction_item_metadata(item_id: i64) -> (String, i64) {
+    let gc = crate::config::game_config::global();
+    match gc.get_item_by_id(item_id) {
+        Some(item) => (item.name, item.activity_id.unwrap_or(0)),
+        None => (format!("道具{item_id}"), 0),
+    }
+}
+
+/// 合并 uses + targets + 七夕灵露兜底的互动效果展示列表（对齐 bot
+/// `getPlantInteractionEffects`；target 按 `itemId:hostGid:usedAt:landId` 去重）。
+#[must_use]
+pub fn get_plant_interaction_effects(plant: &PlantInfo, mutant_ids: &[i64]) -> Vec<serde_json::Value> {
+    let uses: &[PlantInteractionUseInfo] = &plant.interaction_uses;
+    let targets: &[PlantInteractionTargetInfo] = &plant.interaction_targets;
+    let mut effects: Vec<serde_json::Value> = Vec::new();
+    let mut used_target_keys: HashSet<String> = HashSet::new();
+
+    let find_targets = |use_entry: &PlantInteractionUseInfo| -> Vec<PlantInteractionTargetInfo> {
+        let item_id = use_entry.item_id;
+        let host_gid = use_entry.host_gid;
+        let timestamp = use_entry.timestamp;
+        let exact: Vec<PlantInteractionTargetInfo> = targets
+            .iter()
+            .filter(|t| {
+                t.item_id == item_id
+                    && (host_gid == 0 || t.host_gid == host_gid)
+                    && (timestamp == 0 || t.timestamp == timestamp)
+            })
+            .cloned()
+            .collect();
+        if !exact.is_empty() {
+            return exact;
+        }
+        targets.iter().filter(|t| t.item_id == item_id).cloned().collect()
+    };
+
+    for use_entry in uses {
+        let item_id = use_entry.item_id;
+        if item_id <= 0 {
+            continue;
+        }
+        let (item_name, activity_id) = interaction_item_metadata(item_id);
+        let matching = find_targets(use_entry);
+        if matching.is_empty() {
+            let host_gid = use_entry.host_gid;
+            let used_at = use_entry.timestamp;
+            let key = format!("{item_id}:{host_gid}:{used_at}:");
+            if used_target_keys.insert(key) {
+                effects.push(serde_json::json!({
+                    "itemId": item_id,
+                    "itemName": item_name,
+                    "activityId": activity_id,
+                    "effectType": use_entry.effect_type,
+                    "landId": 0,
+                    "hostGid": host_gid,
+                    "usedAt": used_at,
+                    "confirmed": true,
+                    "source": "protocol-land",
+                }));
+            }
+        } else {
+            for target in matching {
+                let land_id = target.land_id;
+                let host_gid = if target.host_gid != 0 { target.host_gid } else { use_entry.host_gid };
+                let used_at = if target.timestamp != 0 { target.timestamp } else { use_entry.timestamp };
+                let key = format!("{item_id}:{host_gid}:{used_at}:{land_id}");
+                if !used_target_keys.insert(key) {
+                    continue;
+                }
+                effects.push(serde_json::json!({
+                    "itemId": item_id,
+                    "itemName": item_name,
+                    "activityId": activity_id,
+                    "effectType": use_entry.effect_type,
+                    "landId": land_id,
+                    "hostGid": host_gid,
+                    "usedAt": used_at,
+                    "confirmed": true,
+                    "source": "protocol-land",
+                }));
+            }
+        }
+    }
+
+    // 通常 use/target 成对出现；若服务端只返回 target，仍保留该实时当前态
+    for target in targets {
+        let item_id = target.item_id;
+        if item_id <= 0 {
+            continue;
+        }
+        let host_gid = target.host_gid;
+        let used_at = target.timestamp;
+        let land_id = target.land_id;
+        let key = format!("{item_id}:{host_gid}:{used_at}:{land_id}");
+        if !used_target_keys.insert(key) {
+            continue;
+        }
+        let (item_name, activity_id) = interaction_item_metadata(item_id);
+        effects.push(serde_json::json!({
+            "itemId": item_id,
+            "itemName": item_name,
+            "activityId": activity_id,
+            "effectType": 0,
+            "landId": land_id,
+            "hostGid": host_gid,
+            "usedAt": used_at,
+            "confirmed": true,
+            "source": "protocol-land-target",
+        }));
+    }
+
+    // 七夕灵露：field_40 兜底（变异 13 且历史码 {9,10}×1）
+    if let Some(status) = qixi_dew_extended_status(plant, mutant_ids) {
+        let already = effects
+            .iter()
+            .any(|e| e.get("itemId").and_then(|v| v.as_i64()) == Some(QIXI_DEW_ITEM_ID));
+        if !already {
+            let (item_name, activity_id) = interaction_item_metadata(QIXI_DEW_ITEM_ID);
+            effects.push(serde_json::json!({
+                "itemId": QIXI_DEW_ITEM_ID,
+                "itemName": item_name,
+                "activityId": activity_id,
+                "effectType": status.value_1,
+                "landId": 0,
+                "hostGid": 0,
+                "usedAt": 0,
+                "confirmed": true,
+                "source": "protocol-land-field-40",
+            }));
+        }
+    }
+    effects
+}
+
+/// 农场级社交事件里可清理的道具 ID（青蛙 5005；去重正值）
+#[must_use]
+pub fn get_cleanable_farm_social_event_item_ids(
+    events: &[crate::proto::generated::gamepb::plantpb::FarmSocialEvent],
+) -> Vec<i64> {
+    let mut seen = HashSet::new();
+    events
+        .iter()
+        .map(|e| e.item_id)
+        .filter(|id| *id > 0 && OWNER_CLEANABLE_FARM_SOCIAL_EVENT_ITEM_IDS.contains(id))
+        .filter(|id| seen.insert(*id))
+        .collect()
+}
+
+/// 农场级社交事件展示明细
+#[must_use]
+pub fn build_farm_social_event_details(
+    events: &[crate::proto::generated::gamepb::plantpb::FarmSocialEvent],
+) -> Vec<serde_json::Value> {
+    events
+        .iter()
+        .filter(|e| e.item_id > 0)
+        .map(|event| {
+            let item_id = event.item_id;
+            let (item_name, activity_id) = interaction_item_metadata(item_id);
+            serde_json::json!({
+                "itemId": item_id,
+                "itemName": item_name,
+                "activityId": activity_id,
+                "visitorGid": if event.visitor_gid > 0 { event.visitor_gid } else { 0 },
+                "occurredAt": event.timestamp,
+                "cleanable": OWNER_CLEANABLE_FARM_SOCIAL_EVENT_ITEM_IDS.contains(&item_id),
+            })
+        })
+        .collect()
+}
 
 /// 构造 land_id -> LandInfo 映射
 #[must_use]
@@ -397,6 +637,8 @@ pub struct LandAnalysis {
     pub need_water: Vec<i64>,
     pub need_weed: Vec<i64>,
     pub need_bug: Vec<i64>,
+    /// 农场主可清理的互动道具地块（黄金虫/足球/乌云）
+    pub need_interaction_cleanup: Vec<i64>,
     pub growing: Vec<i64>,
     pub empty: Vec<i64>,
     pub dead: Vec<i64>,
@@ -442,6 +684,10 @@ pub fn analyze_lands(lands: &[LandInfo], own_gid: i64) -> LandAnalysis {
         if plant.phases.is_empty() {
             result.empty.push(id);
             continue;
+        }
+
+        if has_owner_cleanable_interaction(plant) {
+            result.need_interaction_cleanup.push(id);
         }
 
         let Some(phase) = PlantPhase::from_phases(&plant.phases) else {
@@ -928,14 +1174,62 @@ pub fn build_lands_panel_dto(lands: &[LandInfo], kind: LandDetailKind) -> Vec<se
         };
         let phase_val = current_phase.phase;
         let plant_id = plant.id;
-        let mut plant_name = gc.get_plant_name(plant_id);
+        // 变异配置：mutant_config_ids + 当前阶段(缺省扫全部) + extended_mutations
+        let mutant_config_ids = get_plant_mutant_config_ids(plant, Some(current_phase));
+        let mutant_effects: Vec<serde_json::Value> = gc
+            .get_mutant_effects_by_ids(&mutant_config_ids)
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "id": e.id,
+                    "name": e.name,
+                    "icon": e.icon,
+                    "iconUrl": gc.get_mutant_image_by_id(e.id),
+                    "description": e.description,
+                    "tag": e.tag,
+                    "activityId": e.activity_id,
+                })
+            })
+            .collect();
+        // 协议没有独立的“紫晶共鸣”布尔值：紫金土地由 level 标识，
+        // 是否有加成及比例以服务端 LandInfo.buff.plant_exp_bonus 为准。
+        let land_buff = land.buff.as_ref();
+        let purple_crystal_resonance_exp_bonus = if land.level == 5 && !mutant_config_ids.is_empty()
+        {
+            land_buff.map(|b| b.plant_exp_bonus.max(0)).unwrap_or(0)
+        } else {
+            0
+        };
+        let display_plant_id = gc.get_mutant_display_plant_id(plant_id, &mutant_config_ids);
+        let mut plant_name = gc.get_plant_name(display_plant_id);
+        if plant_name.is_empty() {
+            plant_name = gc.get_plant_name(plant_id);
+        }
         if plant_name.is_empty() {
             plant_name =
                 if plant.name.is_empty() { "未知".to_string() } else { plant.name.clone() };
         }
+        let display_seed_image = (|| -> String {
+            let seed = gc.get_plant_by_id(display_plant_id).and_then(|p| p.seed_id).unwrap_or(0);
+            let sid = if seed > 0 { seed } else { 0 };
+            if sid > 0 {
+                gc.get_seed_image_by_seed_id(sid).unwrap_or_default()
+            } else {
+                String::new()
+            }
+        })();
+        let interaction_effects = get_plant_interaction_effects(plant, &mutant_config_ids);
+        let protocol_field_40: Vec<serde_json::Value> = plant
+            .field_40
+            .iter()
+            .map(|s| serde_json::json!({ "value1": s.value_1, "value2": s.value_2 }))
+            .collect();
+        let need_interaction_cleanup = has_owner_cleanable_interaction(plant);
         let plant_cfg = gc.get_plant_by_id(plant_id);
         let seed_id = plant_cfg.as_ref().and_then(|p| p.seed_id).unwrap_or(0);
-        let seed_image = if seed_id > 0 {
+        let seed_image = if !display_seed_image.is_empty() {
+            display_seed_image
+        } else if seed_id > 0 {
             gc.get_seed_image_by_seed_id(seed_id).unwrap_or_default()
         } else {
             String::new()
@@ -1014,6 +1308,24 @@ pub fn build_lands_panel_dto(lands: &[LandInfo], kind: LandDetailKind) -> Vec<se
             "occupiedLandIds": occupied_land_ids,
             "plantSize": plant_size,
             "harvestable": land_status == "harvestable",
+            "plantId": plant_id,
+            "displayPlantId": display_plant_id,
+            "mutantConfigIds": mutant_config_ids,
+            "mutantEffects": mutant_effects,
+            "isMutated": !mutant_config_ids.is_empty(),
+            "purpleCrystalResonanceExpBonus": purple_crystal_resonance_exp_bonus,
+            "landBuff": {
+                "plantYieldBonus": land_buff.map(|b| b.plant_yield_bonus).unwrap_or(0),
+                "plantingTimeReduction": land_buff.map(|b| b.planting_time_reduction).unwrap_or(0),
+                "plantExpBonus": land_buff.map(|b| b.plant_exp_bonus).unwrap_or(0),
+            },
+            "interactionEffects": interaction_effects,
+            "needInteractionCleanup": need_interaction_cleanup,
+            "protocolField40": if protocol_field_40.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::Value::Array(protocol_field_40)
+            },
         });
         if matches!(kind, LandDetailKind::Own) {
             if let Some(o) = obj.as_object_mut() {

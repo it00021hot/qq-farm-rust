@@ -188,6 +188,12 @@ pub fn get_bag_seed_priority(account_id: Option<&str>) -> Vec<i64> {
 
 /// bag seed fallback strategy
 #[must_use]
+pub fn get_bag_seed_land_types(
+    account_id: Option<&str>,
+) -> std::collections::HashMap<i64, Vec<crate::models::types::FertilizerLandType>> {
+    get_account_config_snapshot(account_id).bag_seed_land_types
+}
+
 pub fn get_bag_seed_fallback_strategy(account_id: Option<&str>) -> BagSeedFallbackStrategy {
     let s = get_account_config_snapshot(account_id).bag_seed_fallback_strategy;
     normalize_bag_seed_fallback_strategy(Some(s), s)
@@ -499,6 +505,10 @@ pub fn apply_config_snapshot(
                 .and_then(|v| v.as_str())
                 .unwrap_or(&next.friend_quiet_hours.end)
                 .to_string(),
+            continue_farm: qh
+                .get("continueFarm")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(next.friend_quiet_hours.continue_farm),
         };
         next.friend_quiet_hours = normalize_quiet_hours(&input, &next.friend_quiet_hours);
     }
@@ -541,6 +551,47 @@ pub fn apply_config_snapshot(
         next.bag_seed_priority = normalize_bag_seed_priority(Some(ids));
     }
 
+    if let Some(map) = snapshot.get("bagSeedLandTypes") {
+        // Record<seedId, FertilizerLandType[]>；空数组 / 勾满全部类型等价不限制（省略该 key）
+        if let Some(obj) = map.as_object() {
+            let mut parsed = std::collections::HashMap::new();
+            for (k, v) in obj {
+                let Ok(seed_id) = k.parse::<i64>() else { continue };
+                let Some(arr) = v.as_array() else { continue };
+                let mut types: Vec<crate::models::types::FertilizerLandType> = arr
+                    .iter()
+                    .filter_map(|t| serde_json::from_value(t.clone()).ok())
+                    .collect();
+                types.dedup();
+                // 空 / 勾满全部类型（5 类）等价不限制，省略该 key
+                if types.is_empty()
+                    || types.len()
+                        >= crate::models::store::normalize::DEFAULT_FERTILIZER_LAND_TYPES.len()
+                {
+                    continue;
+                }
+                parsed.insert(seed_id, types);
+            }
+            next.bag_seed_land_types = parsed;
+        }
+    }
+
+    if let Some(n) = snapshot.get("autoAcceptFriendMinLevel").and_then(|v| v.as_i64()) {
+        next.auto_accept_friend_min_level = n.clamp(0, 200);
+    }
+    if let Some(b) = snapshot.get("autoAcceptRequireOwnLevel").and_then(|v| v.as_bool()) {
+        next.auto_accept_require_own_level = b;
+    }
+    if let Some(b) = snapshot.get("autoAcceptHarvestStealEnabled").and_then(|v| v.as_bool()) {
+        next.auto_accept_harvest_steal_enabled = b;
+    }
+    if let Some(n) = snapshot.get("autoAcceptHarvestStealHarvest").and_then(|v| v.as_i64()) {
+        next.auto_accept_harvest_steal_harvest = n.clamp(0, 9999);
+    }
+    if let Some(n) = snapshot.get("autoAcceptHarvestStealSteal").and_then(|v| v.as_i64()) {
+        next.auto_accept_harvest_steal_steal = n.clamp(1, 9999);
+    }
+
     if let Some(s) = snapshot.get("bagSeedFallbackStrategy").and_then(|v| v.as_str()) {
         if let Ok(p) = serde_json::from_value::<BagSeedFallbackStrategy>(serde_json::Value::String(
             s.to_string(),
@@ -563,6 +614,11 @@ fn apply_automation_bool(a: &mut AutomationConfig, key: &str, value: bool) {
         "farm_push" | "farmPush" => a.farm_push = value,
         "land_upgrade" | "landUpgrade" => a.land_upgrade = value,
         "friend" => a.friend = value,
+        "friend_auto_accept" | "friendAutoAccept" => a.friend_auto_accept = value,
+        "friend_help_protect_dog_ignore_exp_limit" | "friendHelpProtectDogIgnoreExpLimit" => {
+            a.friend_help_protect_dog_ignore_exp_limit = value
+        }
+        "show_manual_fertilizer" | "showManualFertilizer" => a.show_manual_fertilizer = value,
         "friend_help_exp_limit" | "friendHelpExpLimit" => a.friend_help_exp_limit = value,
         "friend_steal" | "friendSteal" => a.friend_steal = value,
         "friend_steal_activity_only" | "friendStealActivityOnly" => {

@@ -34,6 +34,8 @@ pub enum NotificationProvider {
     None,
     QqBot,
     WechatBot,
+    /// 钉钉群机器人 webhook（支持加签 secret）
+    DingTalk,
 }
 
 /// 全局 QQ 官方机器人凭据（部署者配置一次，用户不可见）。
@@ -136,15 +138,29 @@ pub struct OfflineReminder {
     pub title: String,
     pub msg: String,
     pub offline_delete_sec: i64,
+    /// 钉钉 webhook：endpoint 支持完整 URL 或裸 access_token，与 token 二选一
+    #[serde(default)]
+    pub endpoint: String,
+    #[serde(default)]
+    pub token: String,
+    /// 钉钉加签 secret（可选；非空时按官方 HMAC-SHA256 规则加签）
+    #[serde(default)]
+    pub secret: String,
 }
 
 impl OfflineReminder {
     /// 是否已配置为可发送的机器人。
     #[must_use]
     pub fn is_configured(&self) -> bool {
-        self.provider == NotificationProvider::QqBot
-            && self.qq_bot_binding.is_bound()
-            && effective_qq_bot_credentials().is_complete()
+        match self.provider {
+            NotificationProvider::QqBot => {
+                self.qq_bot_binding.is_bound() && effective_qq_bot_credentials().is_complete()
+            }
+            NotificationProvider::DingTalk => {
+                !self.endpoint.trim().is_empty() || !self.token.trim().is_empty()
+            }
+            _ => false,
+        }
     }
 
     #[must_use]
@@ -169,6 +185,9 @@ pub fn default_offline_reminder() -> OfflineReminder {
         title: "账号下线提醒".to_string(),
         msg: "账号下线".to_string(),
         offline_delete_sec: 0,
+        endpoint: String::new(),
+        token: String::new(),
+        secret: String::new(),
     }
 }
 

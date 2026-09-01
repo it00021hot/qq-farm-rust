@@ -5,8 +5,8 @@
 //! 编排各 service 的执行节奏：
 //! - 每日任务（email / share / monthcard / 商城免费 / qqvip）跨日调度
 //! - 农场巡查（随机间隔 + 防重入）
-//! - 帮助巡查（独立调度 + 经验满不帮忙）
-//! - 偷菜巡查（独立调度）
+//! - 好友巡查（统一 tick：帮助 + 偷菜 + 捣乱一次做完，对齐 bot checkFriends）
+//! - 好友宠物每日同步（登录后 spawn，自适应节奏轮次链）
 //! - 状态上报（3s 间隔）
 //! - 赛季进度刷新（5min）
 //! - 网络事件（kickout / disconnect）→ quiesce + save
@@ -105,6 +105,7 @@ pub struct WorkerLoop {
     warehouse: Arc<WarehouseService>,
     mystery_shop: Arc<MysteryShopService>,
     activity_center: Arc<ActivityCenterService>,
+    weather: Arc<crate::services::weather_activity::WeatherActivityService>,
 
     // —— 内部状态 ——
     /// 登录完成
@@ -128,8 +129,8 @@ pub struct WorkerLoop {
     /// 心跳超时回调
     on_heartbeat_timeout: Arc<Mutex<Option<Box<dyn Fn(String) + Send + Sync>>>>,
     farm_tick_running: AtomicBool,
-    help_tick_running: AtomicBool,
-    steal_tick_running: AtomicBool,
+    /// 统一好友 tick（帮助 + 偷菜 + 捣乱）防重入
+    friend_tick_running: AtomicBool,
     /// 对齐 TS `runUnifiedTick`：farm/help/steal 串行，避免并发打满网关
     unified_tick_running: AtomicBool,
     /// 对齐 TS `unifiedSchedulerRunning`
@@ -168,8 +169,8 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 #[derive(Debug, Clone, Default)]
 struct NextRuns {
     farm_at: i64,
-    help_at: i64,
-    steal_at: i64,
+    /// 统一好友巡查（帮助 + 偷菜 + 捣乱一次做完，对齐 bot checkFriends）
+    friend_at: i64,
 }
 
 #[cfg(test)]
@@ -201,8 +202,7 @@ impl Drop for NextSlotGuard<'_> {
             let mut g = self.next.lock();
             match self.kind {
                 "farm" => g.farm_at = at,
-                "help" => g.help_at = at,
-                "steal" => g.steal_at = at,
+                "friend" => g.friend_at = at,
                 _ => {}
             }
         }
@@ -265,6 +265,9 @@ impl WorkerLoop {
         mystery_shop: Arc<MysteryShopService>,
         activity_center: Arc<ActivityCenterService>,
     ) -> Self {
+        let weather = Arc::new(crate::services::weather_activity::WeatherActivityService::new(
+            std::sync::Arc::clone(&gateway),
+        ));
         farm.api().set_operation_limits_callback(Arc::new({
             let friend = friend.clone();
             move |limits| friend.update_operation_limits(&limits)
@@ -305,6 +308,7 @@ impl WorkerLoop {
             warehouse,
             mystery_shop,
             activity_center,
+            weather,
             login_ready: AtomicBool::new(false),
             shutdown_started: AtomicBool::new(false),
             is_running: AtomicBool::new(false),
@@ -316,8 +320,7 @@ impl WorkerLoop {
             heartbeat_miss_count: Arc::new(Mutex::new(0)),
             on_heartbeat_timeout: Arc::new(Mutex::new(None)),
             farm_tick_running: AtomicBool::new(false),
-            help_tick_running: AtomicBool::new(false),
-            steal_tick_running: AtomicBool::new(false),
+            friend_tick_running: AtomicBool::new(false),
             unified_tick_running: AtomicBool::new(false),
             unified_scheduler_running: AtomicBool::new(false),
             last_lands_push_at: AtomicI64::new(0),
@@ -393,9 +396,13 @@ impl WorkerLoop {
 
     fn interval_range_ms(&self, kind: &str) -> (u64, u64) {
         let i = crate::models::store::account_config::get_intervals(Some(&self.account.id));
+        // 统一好友 tick 的间隔 = help/steal 两组中较快一组（旧账号迁移对齐 bot，
+        // 不改存储格式，读取处直接取 min）
         let (min_sec, max_sec) = match kind {
-            "help" => (i.help_min, i.help_max),
-            "steal" => (i.steal_min, i.steal_max),
+            "friend" => (
+                i.help_min.min(i.steal_min),
+                i.help_max.min(i.steal_max),
+            ),
             _ => (i.farm_min, i.farm_max),
         };
         let min_ms = (min_sec.max(1) as u64).saturating_mul(1000);
@@ -493,6 +500,8 @@ impl WorkerLoop {
         let gid = *self.gid.lock();
         self.farm.set_host_gid(gid);
         self.friend.set_host_gid(gid);
+        self.weather.set_account_id(&self.account.id);
+        self.weather.set_own_gid(gid);
         self.farm.set_account_id(&self.account.id);
         self.task.set_account_id(&self.account.id);
         self.warehouse.set_account_id(&self.account.id);
@@ -601,9 +610,24 @@ impl WorkerLoop {
                 Arc::new(move || {
                     let this = this.clone();
                     Box::pin(async move {
-                        this.friend.check_and_accept_applications().await;
+                        let own_level = this.own_level();
+                        this.friend.check_and_accept_applications(own_level).await;
                     })
                 }),
+            );
+        }
+        // 好友宠物每日同步（对齐 bot startFriendCheckLoop 里的
+        // startFriendPetSyncTimer，scheduler.ts:473）：启动错峰 90s 后首跑，
+        // 轮次链自带节奏自适应；worker 停止（quiesce → stop_check_loop）时中止。
+        {
+            let friend = Arc::clone(&self.friend);
+            let account_id = self.account.id.clone();
+            let wl = Arc::clone(self);
+            let is_running = Arc::new(move || wl.login_ready() && !wl.shutdown_started());
+            crate::services::friend::pet_sync::spawn_friend_pet_sync(
+                &friend,
+                account_id,
+                is_running,
             );
         }
         self.sync_status();
@@ -897,12 +921,10 @@ impl WorkerLoop {
     fn reset_unified_schedule(&self) {
         let now = now_ms();
         let (farm_min, farm_max) = self.interval_range_ms("farm");
-        let (help_min, help_max) = self.interval_range_ms("help");
-        let (steal_min, steal_max) = self.interval_range_ms("steal");
+        let (friend_min, friend_max) = self.interval_range_ms("friend");
         let mut next = self.next_runs.lock();
         next.farm_at = now + random_interval_ms(farm_min, farm_max) as i64;
-        next.help_at = now + random_interval_ms(help_min, help_max) as i64;
-        next.steal_at = now + random_interval_ms(steal_min, steal_max) as i64;
+        next.friend_at = now + random_interval_ms(friend_min, friend_max) as i64;
     }
 
     /// 启动统一 farm / help / steal（对齐 TS `startUnifiedScheduler` + `scheduleUnifiedNextTick`）
@@ -918,8 +940,7 @@ impl WorkerLoop {
     pub fn stop_farm_ticks(&self, scheduler: &Scheduler) {
         self.unified_scheduler_running.store(false, Ordering::Release);
         self.farm_tick_running.store(false, Ordering::Release);
-        self.help_tick_running.store(false, Ordering::Release);
-        self.steal_tick_running.store(false, Ordering::Release);
+        self.friend_tick_running.store(false, Ordering::Release);
         self.unified_tick_running.store(false, Ordering::Release);
         scheduler.clear("unified_next_tick");
     }
@@ -937,9 +958,8 @@ impl WorkerLoop {
         let next_at = {
             let g = self.next_runs.lock();
             let farm = if g.farm_at > 0 { g.farm_at } else { now + 1000 };
-            let help = if g.help_at > 0 { g.help_at } else { now + 1000 };
-            let steal = if g.steal_at > 0 { g.steal_at } else { now + 1000 };
-            farm.min(help).min(steal)
+            let friend = if g.friend_at > 0 { g.friend_at } else { now + 1000 };
+            farm.min(friend)
         };
         let delay_ms = (next_at - now).max(1000) as u64;
         let this = Arc::clone(self);
@@ -1084,12 +1104,11 @@ impl WorkerLoop {
         }
         let _guard = FlagGuard(&self.unified_tick_running);
         let now = now_ms();
-        let (due_farm, due_help, due_steal) = {
+        let (due_farm, due_friend) = {
             let guard = self.next_runs.lock();
             (
                 guard.farm_at > 0 && now >= guard.farm_at,
-                guard.help_at > 0 && now >= guard.help_at,
-                guard.steal_at > 0 && now >= guard.steal_at,
+                guard.friend_at > 0 && now >= guard.friend_at,
             )
         };
         let mut changed = false;
@@ -1097,12 +1116,8 @@ impl WorkerLoop {
             self.run_farm_tick().await;
             changed = true;
         }
-        if due_help {
-            self.run_help_tick().await;
-            changed = true;
-        }
-        if due_steal {
-            self.run_steal_tick().await;
+        if due_friend {
+            self.run_friend_tick().await;
             changed = true;
         }
         if changed {
@@ -1124,8 +1139,13 @@ impl WorkerLoop {
             max_ms,
         };
         if self.login_ready() {
-            // 静默时段仅作用于好友帮助/偷菜；本田 tick 仍跑（对齐 bot worker.ts）
-            if self.auto_on("farm") {
+            // 静默时段默认只停帮助/偷菜；好友静默开启 continueFarm=false 时本田巡查也停
+            // （对齐 bot checkFarm → inFarmQuietHours）
+            let farm_quiet = crate::services::friend::visit_strategy::in_farm_quiet_hours_for(
+                Some(&self.account.id),
+                None,
+            );
+            if self.auto_on("farm") && !farm_quiet {
                 let _ = self.farm.check_farm().await;
             }
             if self.auto_on("task") {
@@ -1139,24 +1159,30 @@ impl WorkerLoop {
         }
     }
 
-    /// 触发 help tick
-    pub async fn run_help_tick(&self) {
+    /// 触发统一好友 tick（帮助 + 偷菜 + 捣乱一次做完，对齐 bot `checkFriends` +
+    /// visit-plan：每位好友只进一次农场）。
+    ///
+    /// - 门控：好友自动化总开关（friend）——偷/帮/捣乱的细分开关在
+    ///   `check_friends_unified` 的计划阶段逐位判定；
+    /// - 静默时段跳过；偷到 > 0 时沿用「sleep 800ms → sell_all_fruits」。
+    pub async fn run_friend_tick(&self) {
         if !self.login_ready() {
             return;
         }
-        if !self.auto_on("friend_help") {
-            let (min_ms, max_ms) = self.interval_range_ms("help");
-            self.next_runs.lock().help_at = now_ms() + random_interval_ms(min_ms, max_ms) as i64;
+        if !self.auto_on("friend") {
+            let (min_ms, max_ms) = self.interval_range_ms("friend");
+            self.next_runs.lock().friend_at =
+                now_ms() + random_interval_ms(min_ms, max_ms) as i64;
             return;
         }
-        if self.help_tick_running.swap(true, Ordering::AcqRel) {
+        if self.friend_tick_running.swap(true, Ordering::AcqRel) {
             return;
         }
-        let (min_ms, max_ms) = self.interval_range_ms("help");
+        let (min_ms, max_ms) = self.interval_range_ms("friend");
         let _guard = NextSlotGuard {
-            flag: &self.help_tick_running,
+            flag: &self.friend_tick_running,
             next: &self.next_runs,
-            kind: "help",
+            kind: "friend",
             min_ms,
             max_ms,
         };
@@ -1166,41 +1192,7 @@ impl WorkerLoop {
         ) {
             return;
         }
-        if self.auto_on("friend_help_exp_limit") && self.friend.is_help_exp_limit_reached() {
-            return;
-        }
-        let _ = self.friend.check_friends_help(&self.account.id).await;
-        self.sync_status();
-    }
-
-    /// 触发 steal tick
-    pub async fn run_steal_tick(&self) {
-        if !self.login_ready() {
-            return;
-        }
-        if !self.auto_on("friend_steal") {
-            let (min_ms, max_ms) = self.interval_range_ms("steal");
-            self.next_runs.lock().steal_at = now_ms() + random_interval_ms(min_ms, max_ms) as i64;
-            return;
-        }
-        if self.steal_tick_running.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        let (min_ms, max_ms) = self.interval_range_ms("steal");
-        let _guard = NextSlotGuard {
-            flag: &self.steal_tick_running,
-            next: &self.next_runs,
-            kind: "steal",
-            min_ms,
-            max_ms,
-        };
-        if crate::services::friend::visit_strategy::in_friend_quiet_hours_for(
-            Some(&self.account.id),
-            None,
-        ) {
-            return;
-        }
-        let stolen = self.friend.check_friends_steal(&self.account.id).await.unwrap_or(0);
+        let stolen = self.friend.check_friends_unified(&self.account.id).await.unwrap_or(0);
         if stolen > 0 {
             tokio::time::sleep(Duration::from_millis(800)).await;
             let _ = self.warehouse.sell_all_fruits().await;
@@ -1323,6 +1315,36 @@ impl WorkerLoop {
         });
     }
 
+    /// 对齐 bot `onFarmSocialEventsChangedPush`：青蛙等农场级社交事件推送，
+    /// 与土地推送同路径（farm_push 门控 + 500ms 节流）触发巡查清理。
+    pub fn on_farm_social_events_push(self: &Arc<Self>, changed_count: usize) {
+        if !self.login_ready() || !self.auto_on("farm_push") {
+            return;
+        }
+        let now = now_ms();
+        let last = self.last_lands_push_at.load(Ordering::Acquire);
+        if now - last < 500 {
+            return;
+        }
+        self.last_lands_push_at.store(now, Ordering::Release);
+        crate::services::panel_log::log(
+            &self.account.id,
+            "农场",
+            format!("收到推送: {changed_count}个农场社交事件，检查中..."),
+            crate::constants::PanelEvent::LandsNotify,
+            Some(serde_json::json!({
+                "module": "farm",
+                "result": "trigger_check",
+                "count": changed_count,
+            })),
+        );
+        let this = Arc::clone(self);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let _ = this.farm.check_farm().await;
+        });
+    }
+
     /// 同步状态（对齐原 worker `syncStatus`：getStats + nextChecks + automation）
     /// 暴露 farm / friend 给上层调用（admin panel）
     #[must_use]
@@ -1336,6 +1358,10 @@ impl WorkerLoop {
     #[must_use]
     pub fn activity_center(&self) -> &Arc<ActivityCenterService> {
         &self.activity_center
+    }
+    #[must_use]
+    pub fn weather(&self) -> &Arc<crate::services::weather_activity::WeatherActivityService> {
+        &self.weather
     }
 
     /// 登录后刷新活动窗口（对齐 bot worker.ts:568-572 的 refreshActivityWindows，
@@ -1378,6 +1404,16 @@ impl WorkerLoop {
     #[must_use]
     pub fn gateway(&self) -> &Arc<Gateway> {
         &self.gateway
+    }
+    /// 自己的角色 GID（登录成功后写入；未登录为 0）
+    #[must_use]
+    pub fn own_gid(&self) -> i64 {
+        *self.gid.lock()
+    }
+    /// 自己的等级（来自登录 BasicInfo / BasicNotify 更新的状态）
+    #[must_use]
+    pub fn own_level(&self) -> i64 {
+        crate::infra::status::status_data_for(&self.account.id).level
     }
 }
 
@@ -1701,8 +1737,7 @@ mod tests {
                 next.farm_at > now,
                 "first farm tick must be delayed like TS resetUnifiedSchedule"
             );
-            assert!(next.help_at > now);
-            assert!(next.steal_at > now);
+            assert!(next.friend_at > now);
             scheduler.shutdown();
         });
     }

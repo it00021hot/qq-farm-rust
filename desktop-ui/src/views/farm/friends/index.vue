@@ -19,6 +19,7 @@ import {
   useMessage
 } from 'naive-ui';
 import {
+  fetchDeleteFarmFriend,
   fetchFarmFriendOp,
   fetchGetFarmAutomationDetail,
   fetchGetFarmFriendInteractRecords,
@@ -29,6 +30,7 @@ import {
 import { useFarmAccountStore } from '@/store/modules/farm-account';
 import { useFarmWs } from '@/hooks/business/farm-ws';
 import { resolveCatalogImage } from '@/views/farm/game-config/shared';
+import { formatCareerCount, formatCareerStealRatio } from '@/views/farm/shared/career';
 import {
   landCardClass,
   landGridStyle,
@@ -58,7 +60,9 @@ const interactError = ref('');
 const opLoadingKey = ref<string | null>(null);
 const stealAllLoading = ref(false);
 const blacklistLoading = ref(false);
+const deletingGid = ref<number | null>(null);
 const friends = ref<Api.Farm.Friend[]>([]);
+const friendCareers = ref<Record<number, Api.Farm.Career | null>>({});
 const friendBlacklist = ref<number[]>([]);
 const interactRecords = ref<Api.Farm.FriendInteractRecord[]>([]);
 const interactFilter = ref<'all' | 'steal' | 'help' | 'bad'>('all');
@@ -321,6 +325,7 @@ async function loadFriendLands(gid: number) {
     if (error) {
       message.error(error.message || $t('page.farm.friends.opFailed'));
       friendLands.value = { ...friendLands.value, [gid]: [] };
+      friendCareers.value = { ...friendCareers.value, [gid]: null };
       return;
     }
     const lands = data?.lands || [];
@@ -329,6 +334,7 @@ async function loadFriendLands(gid: number) {
       ...friendLands.value,
       [gid]: (lands || []).map((land: Api.Farm.LandRow) => ({ ...land, matureAt: now + Number(land.matureInSec || 0) }))
     };
+    friendCareers.value = { ...friendCareers.value, [gid]: data?.career || null };
     syncFriendPlantFromLands(gid, lands);
   } finally {
     friendLandsLoading.value = { ...friendLandsLoading.value, [gid]: false };
@@ -436,6 +442,38 @@ async function toggleBlacklist(friend: Api.Farm.Friend, event?: MouseEvent) {
   } finally {
     blacklistLoading.value = false;
   }
+}
+
+/** 游戏内删除好友（后端会同时加入黑名单，不再自动互动）。 */
+async function deleteFriend(friend: Api.Farm.Friend) {
+  if (!farmAccountStore.currentAccountId) return;
+  deletingGid.value = Number(friend.gid);
+  try {
+    const { error } = await fetchDeleteFarmFriend(farmAccountStore.currentAccountId, friend.gid);
+    if (error) {
+      message.error(error.message || $t('page.farm.friends.deleteFailed'));
+      return;
+    }
+    friends.value = friends.value.filter(item => Number(item.gid) !== Number(friend.gid));
+    if (expandedGid.value === Number(friend.gid)) expandedGid.value = null;
+    message.success($t('page.farm.friends.deleteSuccess', { name: friend.nickname || friend.gid }));
+    await loadBlacklist();
+  } finally {
+    deletingGid.value = null;
+  }
+}
+
+/** 好友宠物徽标（后端 petState / pet 字段缺失时不展示）。 */
+function petBadge(friend: Api.Farm.Friend): { kind: 'protect' | 'name' | 'unknown'; label: string } | null {
+  const petName = String(friend.pet?.name || '').trim();
+  if (friend.petState === 'protect') return { kind: 'protect', label: '护主犬' };
+  if (friend.petState === 'other') {
+    if (petName) return { kind: 'name', label: petName };
+    if (friend.pet) return { kind: 'name', label: '宠物' };
+    return null;
+  }
+  if (friend.petState === 'unknown') return { kind: 'unknown', label: '宠物待确认' };
+  return null;
 }
 
 function landImageSrc(land: Api.Farm.LandRow) {
@@ -708,6 +746,24 @@ onUnmounted(() => {
                       </div>
                       <div class="mt-4px flex flex-wrap items-center gap-8px text-12px">
                         <NTag v-if="friend.level" size="tiny" :bordered="false">Lv{{ friend.level }}</NTag>
+                        <NTag v-if="petBadge(friend)?.kind === 'protect'" size="tiny" type="success" :bordered="false">
+                          🐕 {{ petBadge(friend)?.label }}
+                        </NTag>
+                        <span
+                          v-else-if="petBadge(friend)?.kind === 'name'"
+                          class="flex-y-center gap-4px rounded-4px bg-gray-100 px-6px py-2px text-gray-600 dark:bg-gray-800 dark:text-gray-300"
+                        >
+                          <img
+                            v-if="resolveCatalogImage(friend.pet?.image)"
+                            :src="resolveCatalogImage(friend.pet?.image)"
+                            class="h-14px w-14px object-contain"
+                            loading="lazy"
+                          />
+                          {{ petBadge(friend)?.label }}
+                        </span>
+                        <span v-else-if="petBadge(friend)?.kind === 'unknown'" class="text-gray-400">
+                          {{ petBadge(friend)?.label }}
+                        </span>
                         <span
                           class="rounded-4px bg-amber-50 px-6px py-2px text-amber-700 dark:bg-amber-900/20 dark:text-amber-300"
                         >
@@ -765,6 +821,14 @@ onUnmounted(() => {
                       </template>
                       {{ $t('page.farm.friends.blacklistConfirm', { name: friend.nickname || friend.gid }) }}
                     </NPopconfirm>
+                    <NPopconfirm @positive-click="deleteFriend(friend)">
+                      <template #trigger>
+                        <NButton size="small" type="error" quaternary :loading="deletingGid === Number(friend.gid)">
+                          {{ $t('page.farm.friends.deleteFriend') }}
+                        </NButton>
+                      </template>
+                      {{ $t('page.farm.friends.deleteConfirm') }}
+                    </NPopconfirm>
                   </div>
                 </div>
 
@@ -772,6 +836,24 @@ onUnmounted(() => {
                   v-if="expandedGid === friend.gid"
                   class="border-t border-gray-200 bg-gray-50 p-12px dark:border-gray-700 dark:bg-gray-900/40"
                 >
+                  <div
+                    v-if="friendCareers[friend.gid]"
+                    class="mb-10px flex flex-wrap items-center gap-12px rounded-8px bg-white px-12px py-8px text-13px dark:bg-gray-800/60"
+                  >
+                    <span class="text-gray-500">{{ $t('page.farm.personal.careerTitle') }}</span>
+                    <span>
+                      {{ $t('page.farm.personal.careerHarvest') }}
+                      <strong class="font-semibold">{{ formatCareerCount(friendCareers[friend.gid]?.harvest) }}</strong>
+                    </span>
+                    <span>
+                      {{ $t('page.farm.personal.careerSteal') }}
+                      <strong class="font-semibold">{{ formatCareerCount(friendCareers[friend.gid]?.steal) }}</strong>
+                    </span>
+                    <span>
+                      {{ $t('page.farm.personal.careerRatio') }}
+                      <strong class="font-semibold">{{ formatCareerStealRatio(friendCareers[friend.gid]) }}</strong>
+                    </span>
+                  </div>
                   <NSpin :show="friendLandsLoading[friend.gid]">
                     <NEmpty
                       v-if="!friendLandsLoading[friend.gid] && !displayFriendLands(friend.gid).length"

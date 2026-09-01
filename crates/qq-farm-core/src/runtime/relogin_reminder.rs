@@ -182,6 +182,36 @@ impl ReloginReminderService {
         global_config::get_offline_reminder()
     }
 
+    /// 通知文案（标题, 正文）：按通知类型区分（对齐 bot 上线/下线/授权失效文案）
+    fn notice_text(
+        &self,
+        cfg: &OfflineReminder,
+        payload: &OfflineReminderPayload,
+        account_name: &str,
+        account_id: &str,
+    ) -> (String, String) {
+        let acc_label = if !account_name.is_empty() {
+            account_name.to_string()
+        } else if !account_id.is_empty() {
+            account_id.to_string()
+        } else {
+            "未知账号".to_string()
+        };
+        let content = match payload.kind {
+            AccountNoticeKind::Offline => format!("账号 {acc_label} 已下线"),
+            AccountNoticeKind::Online => format!("账号 {acc_label} 已上线"),
+            AccountNoticeKind::YybQr => {
+                format!("账号 {acc_label} 应用宝授权失效，请扫描二维码重新登录")
+            }
+        };
+        let title = if cfg.title.trim().is_empty() {
+            "账号下线提醒".to_string()
+        } else {
+            cfg.title.trim().to_string()
+        };
+        (title, content)
+    }
+
     #[must_use]
     pub fn qq_bot(&self) -> Arc<QqBotService> {
         self.qq_bot.clone()
@@ -418,25 +448,33 @@ impl ReloginReminderService {
             self.logger.log("错误", "微信机器人暂未实现", None);
             return;
         }
+        // 钉钉渠道：webhook 文本推送（二维码图片钉钉文本消息不带，仅文案提醒）
+        if cfg.provider == NotificationProvider::DingTalk {
+            let (title_text, content_text) = self.notice_text(&cfg, &payload, &account_name, &account_id);
+            match crate::services::push::send_dingtalk(
+                &cfg.endpoint,
+                &cfg.token,
+                &cfg.secret,
+                &title_text,
+                &content_text,
+            )
+            .await
+            {
+                Ok(()) => {
+                    self.logger.log("系统", &format!("钉钉通知发送成功: {content_text}"), None);
+                }
+                Err(e) => {
+                    self.logger.log("错误", &format!("钉钉通知发送失败: {e}"), None);
+                }
+            }
+            return;
+        }
         let Some(send_config) = cfg.send_config() else {
             self.logger.log("错误", "QQ 通知未绑定", None);
             return;
         };
 
-        let acc_label = if !account_name.is_empty() {
-            account_name.clone()
-        } else if !account_id.is_empty() {
-            account_id.clone()
-        } else {
-            "未知账号".to_string()
-        };
-        let content = match payload.kind {
-            AccountNoticeKind::Offline => format!("账号 {acc_label} 已下线"),
-            AccountNoticeKind::Online => format!("账号 {acc_label} 已上线"),
-            AccountNoticeKind::YybQr => {
-                format!("账号 {acc_label} 应用宝授权失效，请扫描二维码重新登录")
-            }
-        };
+        let (title, content) = self.notice_text(&cfg, &payload, &account_name, &account_id);
 
         let mut qr_image_url = None;
         if payload.kind == AccountNoticeKind::YybQr {
@@ -458,13 +496,14 @@ impl ReloginReminderService {
             }
         }
 
+        let _ = &title;
         let ret = self.qq_bot.send_text(&send_config, "", &content).await;
         if ret.ok {
             self.logger.log("系统", &format!("账号通知发送成功: {content}"), None);
             if let Some(image_url) = qr_image_url {
                 let qr_result = self.qq_bot.send_qr_image(&send_config, &image_url).await;
                 if qr_result.ok {
-                    self.logger.log("系统", &format!("应用宝授权二维码发送成功: {acc_label}"), None);
+                    self.logger.log("系统", "应用宝授权二维码发送成功", None);
                 } else {
                     self.logger.log(
                         "错误",

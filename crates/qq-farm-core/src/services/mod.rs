@@ -41,6 +41,7 @@ pub mod activity_center_state;
 pub mod activity_windows;
 pub mod analytics;
 pub mod auth;
+pub mod career;
 pub mod commerce;
 pub mod daily;
 pub mod email;
@@ -59,6 +60,7 @@ pub mod mystery_shop;
 pub mod mystery_shop_auto;
 pub mod pay;
 pub mod pets;
+pub mod push;
 pub mod qq_bot;
 pub mod qqvip;
 pub mod qrlogin;
@@ -68,6 +70,7 @@ pub mod share;
 pub mod task;
 pub mod tasks;
 pub mod warehouse;
+pub mod weather_activity;
 pub mod wx_login;
 
 // --- infra 向后兼容 re-export（已迁至 [`crate::infra`]) ---

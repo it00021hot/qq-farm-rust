@@ -23,6 +23,7 @@ pub mod friend;
 pub mod pets;
 pub mod session;
 pub mod settings;
+pub mod weather;
 pub mod qq_bot_bind;
 pub mod wx_login;
 

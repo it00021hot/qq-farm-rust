@@ -67,6 +67,15 @@ pub fn is_server_time_synced() -> bool {
     SYNCED.load(Ordering::Acquire) != 0
 }
 
+/// 测试专用：清除服务器时间同步标记。
+#[cfg(test)]
+pub(crate) fn reset_server_time_for_tests() {
+    let _guard = SYNC_MUTEX.lock();
+    SYNCED.store(0, Ordering::Release);
+    SERVER_TIME_MS.store(0, Ordering::Release);
+    LOCAL_TIME_AT_SYNC.store(0, Ordering::Release);
+}
+
 /// 时间戳归一化（毫秒/秒自动判断）。
 ///
 /// - 0 / 负数 → 0
@@ -108,6 +117,50 @@ pub fn is_in_time_window(now_secs: i64, start_hhmm: &str, end_hhmm: &str) -> boo
         // 跨午夜（如 22:00 - 06:00）
         cur >= start_sec || cur < end_sec
     }
+}
+
+// =====================================================================
+// 系统时区日期工具（对齐 bot getSystemDateKey / getSystemClockMinutes）
+// =====================================================================
+
+fn system_date_key_at(now: chrono::DateTime<chrono::Utc>, tz_name: &str) -> String {
+    use chrono::Datelike;
+    let tz: chrono_tz::Tz = tz_name.parse().unwrap_or(chrono_tz::Asia::Shanghai);
+    let local = now.with_timezone(&tz);
+    format!("{}-{:02}-{:02}", local.year(), local.month(), local.day())
+}
+
+fn system_clock_minutes_at(now: chrono::DateTime<chrono::Utc>, tz_name: &str) -> u32 {
+    use chrono::Timelike;
+    let tz: chrono_tz::Tz = tz_name.parse().unwrap_or(chrono_tz::Asia::Shanghai);
+    let local = now.with_timezone(&tz);
+    local.hour() * 60 + local.minute()
+}
+
+/// 按系统配置时区生成日期键（YYYY-MM-DD），基于服务器时间，不依赖本机时区。
+#[must_use]
+pub fn system_date_key(now_ms: i64) -> String {
+    let now = chrono::DateTime::from_timestamp_millis(now_ms).unwrap_or_else(chrono::Utc::now);
+    system_date_key_at(now, &crate::config::get_time_zone())
+}
+
+/// 当前日期键（服务器时间）。
+#[must_use]
+pub fn today_system_date_key() -> String {
+    system_date_key(get_server_time_ms())
+}
+
+/// 按系统配置时区计算当天的分钟数（0-1439），基于服务器时间。
+#[must_use]
+pub fn system_clock_minutes(now_ms: i64) -> u32 {
+    let now = chrono::DateTime::from_timestamp_millis(now_ms).unwrap_or_else(chrono::Utc::now);
+    system_clock_minutes_at(now, &crate::config::get_time_zone())
+}
+
+/// 当前分钟数（服务器时间）。
+#[must_use]
+pub fn now_system_clock_minutes() -> u32 {
+    system_clock_minutes(get_server_time_ms())
 }
 
 fn parse_window(start: &str, end: &str) -> Option<(i64, i64)> {
@@ -154,7 +207,8 @@ mod tests {
 
     #[test]
     fn server_time_default_to_local_when_not_synced() {
-        // 确保未同步时返回本地
+        // 并行测试下其它用例可能已同步服务器时间，先复位保证前置条件
+        reset_server_time_for_tests();
         let n = get_server_time_ms();
         let local = now_ms();
         // 误差应该 < 100ms
@@ -201,5 +255,31 @@ mod tests {
     fn is_in_time_window_invalid_returns_false() {
         assert!(!is_in_time_window(0, "bad", "06:00"));
         assert!(!is_in_time_window(0, "25:00", "26:00"));
+    }
+
+    #[test]
+    fn system_date_key_uses_configured_zone() {
+        // 固定 UTC 时刻：上海/香港同日，洛杉矶在前一天
+        let t = chrono::DateTime::parse_from_rfc3339("2026-08-28T16:30:00Z")
+            .expect("ts")
+            .with_timezone(&chrono::Utc);
+        let sh = system_date_key_at(t, "Asia/Shanghai");
+        let hk = system_date_key_at(t, "Asia/Hong_Kong");
+        let la = system_date_key_at(t, "America/Los_Angeles");
+        assert_eq!(sh, "2026-08-29");
+        assert_eq!(sh, hk);
+        assert_eq!(la, "2026-08-28");
+        assert_ne!(sh, la);
+    }
+
+    #[test]
+    fn system_clock_minutes_matches_zone() {
+        let t = chrono::DateTime::parse_from_rfc3339("2026-08-28T16:30:00Z")
+            .expect("ts")
+            .with_timezone(&chrono::Utc);
+        // 上海 = UTC+8 → 00:30 次日
+        assert_eq!(system_clock_minutes_at(t, "Asia/Shanghai"), 30);
+        // UTC → 16:30
+        assert_eq!(system_clock_minutes_at(t, "UTC"), 16 * 60 + 30);
     }
 }

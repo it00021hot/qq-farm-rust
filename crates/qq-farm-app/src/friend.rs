@@ -57,6 +57,12 @@ pub async fn friend_op(ctx: &AppContext, account_id: &str, gid: i64, op: &str) -
     Ok(ret)
 }
 
+/// 游戏内删除好友（成功后加入本地黑名单，自动互动/自动通过申请都跳过）。
+pub async fn delete_friend(ctx: &AppContext, account_id: &str, gid: i64) -> AppResult<()> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    loop_.friend().delete_friend(gid).await.map_err(AppError::from_core)
+}
+
 /// 好友黑名单。
 #[must_use]
 pub fn friend_blacklist(account_id: &str) -> Value {

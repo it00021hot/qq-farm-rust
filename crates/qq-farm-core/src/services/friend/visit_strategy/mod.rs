@@ -6,19 +6,23 @@
 
 mod blacklist;
 mod cache;
+mod combined;
 mod help;
 mod panel_dto;
 mod patrol;
 mod quiet_hours;
 mod steal;
+mod visit_plan;
 
 pub use blacklist::*;
 pub use cache::*;
+pub use combined::*;
 pub use help::*;
 pub use panel_dto::*;
 pub use patrol::*;
 pub use quiet_hours::*;
 pub use steal::*;
+pub use visit_plan::*;
 
 pub use crate::constants::{HELP_CACHE_MAX, HELP_IN_FLIGHT_TTL_MS, HELP_RESULT_TTL_MS};
 

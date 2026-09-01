@@ -1,6 +1,6 @@
 # qq-farm-rust
 
-QQ 农场多账号挂机的 Rust 重写。协议、调度和 HTTP/Socket.IO 合约对齐原 [qq-farm-bot](https://github.com/it00021hot/qq-farm-bot)（TypeScript + Vue），管理面板继续用原项目的 Vue，不改前端去迁就后端。
+QQ 农场多账号挂机的 Rust 重写。协议与调度对齐原 [qq-farm-bot](https://github.com/it00021hot/qq-farm-bot)（TypeScript + Vue），前端为内置 SoybeanAdmin 桌面 UI，**只维护桌面版**（原 HTTP API 服务 crate `qq-farm-server` 已删除）。
 
 与原 `core` 的**业务同步状态、缺口与更新记录**见 [docs/SYNC.md](docs/SYNC.md)（对齐以业务目标一致为准；每次业务对齐请追加更新记录）。
 
@@ -10,59 +10,27 @@ QQ 农场多账号挂机的 Rust 重写。协议、调度和 HTTP/Socket.IO 合�
 qq-farm-rust/
 ├── crates/
 │   ├── qq-farm-core/      # 网关、登录、农场/好友调度、活动中心、统计
-│   ├── qq-farm-app/       # UI 无关应用门面（server / desktop 共用）
-│   ├── qq-farm-server/    # HTTP API + Socket.IO（默认 3007）
+│   ├── qq-farm-app/       # UI 无关应用门面（desktop 经 IPC 调用）
 │   └── qq-farm-desktop/   # Tauri v2 桌面宿主（IPC → app）
 ├── desktop-ui/            # SoybeanAdmin 桌面前端（与客户端共存）
 ├── proto/                 # 游戏 protobuf
 ├── assets/activity-data/  # 活动静态数据
 ├── scripts/               # 辅助脚本
-├── docs/ARCHITECTURE.md   # 多前端拓扑
+├── docs/ARCHITECTURE.md   # 分层拓扑
 ├── docs/CODING_STANDARDS.md
 └── .env.example
 ```
 
-数据目录可用 `FARM_DATA_DIR` 覆盖（server 默认 `<app_root>/data`），不要提交进去。
+数据目录可用 `FARM_DATA_DIR` 覆盖，不要提交进去。
 
 ## 环境
 
 - Rust 1.75+（建议用当前 stable）
 - `protoc`（protobuf compiler，生成协议代码；Windows 可装到 `%USERPROFILE%\tools\protoc\bin` 并加入 PATH / 设置 `PROTOC`）
-- macOS / Linux
-- 管理面板：原项目 `qq-farm-bot/web`（Vite 5173，把 `/api` 和 `/socket.io` 代理到 3007）
+- Node.js + pnpm（desktop-ui 前端）
+- Windows / macOS
 
-## 编译与启动
-
-```bash
-cp .env.example .env
-cargo build --release
-RUST_LOG=info ADMIN_PORT=3007 ./target/release/qq-farm-server
-```
-
-健康检查：
-
-```bash
-curl http://127.0.0.1:3007/health
-```
-
-开发时也可以直接：
-
-```bash
-cargo run -p qq-farm-server
-```
-
-### 管理面板
-
-在 `qq-farm-bot/web`：
-
-```bash
-pnpm install
-pnpm dev
-```
-
-浏览器打开 `http://127.0.0.1:5173`。面板登录、加号、农场操作都打到本仓库的 3007。
-
-### 桌面端（Tauri v2 + SoybeanAdmin）
+## 编译与启动（桌面端，Tauri v2 + SoybeanAdmin）
 
 ```bash
 # 前端依赖
@@ -72,7 +40,7 @@ pnpm -C desktop-ui i
 cd crates/qq-farm-desktop && cargo tauri dev
 ```
 
-桌面端经 IPC 调 `qq-farm-app`（LocalOwner），**不**走 3007 HTTP。浏览器面板与桌面前端并存。
+桌面端经 IPC 调 `qq-farm-app`（LocalOwner），**不**走 HTTP。
 
 - macOS 有原生菜单（应用：打开数据目录 / 检查更新）；Windows 动作在托盘
 - 关闭窗口隐藏到托盘；退出只走托盘「退出」或 macOS Cmd+Q
@@ -89,7 +57,7 @@ git push origin v0.2.0
 
 ### 微信扫码登录
 
-1. 面板里给账号选微信平台，走扫码登录。
+1. 桌面端给账号选微信平台，走扫码登录（或「本机微信」快速授权）。
 2. 网关登录码仍是一次性的；应用宝 `login_buffer` 会随账号落盘。掉线或进程重启后会自动换新码重连，无需再扫。授权失效时才需要重新扫码。
 
 ## 环境变量
@@ -100,10 +68,9 @@ git push origin v0.2.0
 |------|------|------|
 | `FARM_SERVER_URL` | `wss://gate-obt.nqf.qq.com/prod/ws` | 游戏网关 |
 | `FARM_OS` | `Windows` | 客户端 OS |
-| `FARM_CLIENT_VERSION` | `1.13.2.8_20260723` | 客户端版本 |
-| `ADMIN_PORT` | `3007` | HTTP / Socket.IO 端口 |
+| `FARM_CLIENT_VERSION` | `1.13.3.14_20260826` | 客户端版本 |
 | `RUST_LOG` | `info` | 日志级别 |
-| `FARM_DATA_DIR` | server：`<app_root>/data`；桌面（dev/安装包）：OS 应用数据目录 `QQFarmRust` | 账号、用户、配置 |
+| `FARM_DATA_DIR` | dev：仓库 `data/`；安装包：OS 应用数据目录 `QQFarmRust` | 账号、用户、配置 |
 
 ## 运行时行为
 
@@ -121,12 +88,7 @@ git push origin v0.2.0
 ```bash
 # 需本机已安装 protoc（protobuf 编译器），并在 PATH / PROTOC 中可见
 cargo test --workspace
-
-# 面板 API 冒烟（独立进程，默认会起临时端口）
-cargo test -p qq-farm-server --test e2e_integration -- --test-threads=1
 ```
-
-鉴权请求头为 `x-admin-token: <token>`（登录接口返回的 `data.token`），不是 `Authorization: Bearer`。
 
 ## 许可
 

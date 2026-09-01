@@ -16,6 +16,21 @@ pub struct FriendSummary {
     pub level: i64,
     pub gold: i64,
     pub plant: Option<FriendPlantSummary>,
+    /// 宠物状态徽标：protect / other / unknown（pet-cache 按天缓存结论）
+    #[serde(default)]
+    pub pet_state: String,
+    /// 宠物信息（id/名称/图标；unknown 或无宠物为 None）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pet: Option<FriendPetBadge>,
+}
+
+/// 好友行宠物徽标（对齐 bot 好友列表 `pet` 字段）
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FriendPetBadge {
+    pub id: i64,
+    pub name: String,
+    pub image: String,
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -45,6 +60,8 @@ pub fn game_friend_to_summary(
         format!("GID:{gid}")
     };
     FriendSummary {
+        pet_state: String::new(),
+        pet: None,
         gid,
         name,
         avatar_url: f.avatar_url.trim().to_string(),

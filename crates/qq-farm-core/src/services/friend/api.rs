@@ -67,8 +67,12 @@ pub struct FriendApi {
 }
 
 impl FriendApi {
-    /// 创建
+    /// 底层网关（生涯等跨服务查询复用同一连接）
     #[must_use]
+    pub fn gateway(&self) -> &Arc<Gateway> {
+        &self.gateway
+    }
+
     pub fn new(gateway: Arc<Gateway>) -> Self {
         Self {
             gateway,
@@ -389,8 +393,8 @@ impl FriendApi {
         Ok(())
     }
 
-    /// 拉取待处理好友申请（对齐 TS `getApplications`）
-    pub async fn get_applications(&self) -> Result<Vec<(i64, String)>> {
+    /// 拉取待处理好友申请（对齐 TS `getApplications`；含等级用于申请过滤）
+    pub async fn get_applications(&self) -> Result<Vec<(i64, String, i64)>> {
         use crate::proto::generated::gamepb::friendpb::{
             GetApplicationsReply, GetApplicationsRequest,
         };
@@ -399,7 +403,24 @@ impl FriendApi {
         let resp =
             self.gateway.request("gamepb.friendpb.FriendService", "GetApplications", &body).await?;
         let reply = GetApplicationsReply::decode(&*resp)?;
-        Ok(reply.applications.into_iter().filter(|a| a.gid > 0).map(|a| (a.gid, a.name)).collect())
+        Ok(reply
+            .applications
+            .into_iter()
+            .filter(|a| a.gid > 0)
+            .map(|a| (a.gid, a.name, a.level))
+            .collect())
+    }
+
+    /// 拒绝好友申请（RPC 方法 `RejectFriends`）
+    pub async fn reject_applications(&self, gids: Vec<i64>) -> Result<()> {
+        use crate::proto::generated::gamepb::friendpb::RejectFriendsRequest;
+        if gids.is_empty() {
+            return Ok(());
+        }
+        let _gate = self.rpc_gate.lock().await;
+        let body = RejectFriendsRequest { friend_gids: gids }.encode_to_vec();
+        self.gateway.request("gamepb.friendpb.FriendService", "RejectFriends", &body).await?;
+        Ok(())
     }
 
     /// 接受好友申请（1:1 对齐原 `acceptFriends`，RPC 方法 `AcceptFriends`）
@@ -408,6 +429,20 @@ impl FriendApi {
         let _gate = self.rpc_gate.lock().await;
         let body = AcceptFriendsRequest { friend_gids: gids }.encode_to_vec();
         self.gateway.request("gamepb.friendpb.FriendService", "AcceptFriends", &body).await?;
+        Ok(())
+    }
+
+    /// 游戏内删除好友（对齐 bot `delFriend`，RPC 方法 `DelFriend`）。
+    ///
+    /// 成功后由调用方把该 GID 加入本地黑名单，自动互动与自动通过申请都会跳过。
+    pub async fn del_friend(&self, gid: i64) -> Result<()> {
+        use crate::proto::generated::gamepb::friendpb::DelFriendRequest;
+        if gid <= 0 {
+            return Err(crate::error::Error::Business("缺少有效的好友 GID".to_string()));
+        }
+        let _gate = self.rpc_gate.lock().await;
+        let body = DelFriendRequest { friend_gid: gid }.encode_to_vec();
+        self.gateway.request("gamepb.friendpb.FriendService", "DelFriend", &body).await?;
         Ok(())
     }
 
@@ -421,6 +456,12 @@ impl FriendApi {
     ///
     /// 返回 EnterReply（包含 `lands: Vec<LandInfo>` + `basic: BasicInfo`）
     ///
+    /// 成功后顺手把回包 `brief_dog_info.dog_id` 写进好友宠物缓存
+    /// （对齐 bot friend/api.ts `enterFriendFarm` 里的
+    /// `recordFriendDogFromEnterReply`，见 docs/friend-pet-cache.md）：
+    /// 全仓库唯一的 write-through 入口，任何进好友农场的动作都零额外 RPC
+    /// 地刷新当天宠物结论。天气字段（field 13）不在此处理。
+    ///
     /// # Errors
     /// - 网关错误
     /// - 1002003（被封）→ `is_enter_farm_banned_error` 可检测
@@ -431,7 +472,19 @@ impl FriendApi {
         }
         .encode_to_vec();
         let resp = self.gateway.request("gamepb.visitpb.VisitService", "Enter", &body).await?;
-        EnterReply::decode(&*resp).map_err(Error::from)
+        let reply = EnterReply::decode(&*resp).map_err(Error::from)?;
+        let account_id = self.account_id.lock().clone();
+        let account_id = if account_id.is_empty() {
+            String::from("default")
+        } else {
+            account_id
+        };
+        crate::services::friend::pet_cache::record_friend_dog_from_enter_reply(
+            &account_id,
+            host_gid,
+            &reply,
+        );
+        Ok(reply)
     }
 
     /// 离开好友农场（对应原 `leaveFriendFarm`）
@@ -459,7 +512,8 @@ impl FriendApi {
             return Ok(HelpFarmOutcome::noop());
         }
         let body =
-            FarmingRequest { land_ids: target, host_gid, field_3: 0, field_4: 2 }.encode_to_vec();
+            FarmingRequest { land_ids: target, host_gid, field_3: 0, field_4: 2, social_event_item_ids: Vec::new() }
+                .encode_to_vec();
         let resp = match self.gateway.request("gamepb.plantpb.PlantService", "Farming", &body).await
         {
             Ok(r) => r,

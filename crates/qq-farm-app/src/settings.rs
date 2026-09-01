@@ -46,7 +46,13 @@ pub fn settings_panel(account_id: &str, username: &str) -> Value {
         "fertilizerBuyNormalThresholdHours": snap.fertilizer_buy_normal_threshold_hours,
         "fertilizerBuyCheckIntervalMinutes": snap.fertilizer_buy_check_interval_minutes,
         "bagSeedPriority": cfg::get_bag_seed_priority(id),
+        "bagSeedLandTypes": cfg::get_bag_seed_land_types(id),
         "bagSeedFallbackStrategy": cfg::get_bag_seed_fallback_strategy(id),
+        "autoAcceptFriendMinLevel": snap.auto_accept_friend_min_level,
+        "autoAcceptRequireOwnLevel": snap.auto_accept_require_own_level,
+        "autoAcceptHarvestStealEnabled": snap.auto_accept_harvest_steal_enabled,
+        "autoAcceptHarvestStealHarvest": snap.auto_accept_harvest_steal_harvest,
+        "autoAcceptHarvestStealSteal": snap.auto_accept_harvest_steal_steal,
         "friendBlacklist": cfg::get_friend_blacklist(id),
         "plantBlacklist": cfg::get_plant_blacklist(id),
         "ui": ui,
@@ -162,6 +168,27 @@ pub async fn test_offline_reminder(
     let merged: OfflineReminder = serde_json::from_value(cfg).unwrap_or(base);
     if merged.provider == NotificationProvider::WechatBot {
         return Ok(json!({ "ok": false, "code": "not_implemented", "msg": "微信机器人暂未实现" }));
+    }
+    if merged.provider == NotificationProvider::DingTalk {
+        // 钉钉：endpoint 与 token 二选一；endpoint 非法直接 400 提示
+        if merged.endpoint.trim().is_empty() && merged.token.trim().is_empty() {
+            return Ok(json!({
+                "ok": false, "code": "missing_endpoint",
+                "msg": "请填写钉钉 Webhook 地址或 Access Token"
+            }));
+        }
+        let result = qq_farm_core::services::push::send_dingtalk(
+            &merged.endpoint,
+            &merged.token,
+            &merged.secret,
+            "测试通知",
+            "这是一条来自 QQ Farm 桌面端的钉钉测试消息",
+        )
+        .await;
+        return match result {
+            Ok(()) => Ok(json!({ "ok": true, "msg": "钉钉测试消息已发送" })),
+            Err(e) => Ok(json!({ "ok": false, "code": "send_failed", "msg": e })),
+        };
     }
     if merged.provider != NotificationProvider::QqBot {
         return Ok(json!({ "ok": false, "code": "not_configured", "msg": "未启用 QQ 官方机器人通知" }));

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import dayjs from 'dayjs';
 import { NAvatar, NButton, NCard, NEmpty, NGi, NGrid, NInput, NProgress, NSelect, NSpace, NSpin, NTag } from 'naive-ui';
 import {
@@ -90,6 +90,7 @@ const localFarmRemain = ref(0);
 const localHelpRemain = ref(0);
 const localStealRemain = ref(0);
 const localUptime = ref(0);
+const quietFlags = reactive({ farmQuiet: false, helpQuiet: false, stealQuiet: false });
 const countdownTimer = useManagedInterval();
 const bagTimer = useManagedInterval();
 
@@ -249,6 +250,9 @@ function syncNextChecks(next?: Api.Farm.Status['nextChecks']) {
   syncRemain(localFarmRemain, next?.farmRemainSec);
   syncRemain(localHelpRemain, next?.helpRemainSec);
   syncRemain(localStealRemain, next?.stealRemainSec);
+  quietFlags.farmQuiet = next?.farmQuiet === true;
+  quietFlags.helpQuiet = next?.helpQuiet === true;
+  quietFlags.stealQuiet = next?.stealQuiet === true;
 }
 
 function syncUptime(next?: number) {
@@ -832,15 +836,24 @@ onMounted(async () => {
           <div class="flex-col gap-12px">
             <div class="flex-y-center justify-between">
               <span>🌱 {{ $t('page.farm.dashboard.nextCheckFarm') }}</span>
-              <span class="font-mono font-semibold">{{ nextFarmCheck }}</span>
+              <NTag v-if="quietFlags.farmQuiet" size="small" type="warning" :bordered="false">
+                {{ $t('page.farm.dashboard.quietLabel') }}
+              </NTag>
+              <span v-else class="font-mono font-semibold">{{ nextFarmCheck }}</span>
             </div>
             <div class="flex-y-center justify-between">
               <span>🤝 {{ $t('page.farm.dashboard.nextCheckHelp') }}</span>
-              <span class="font-mono font-semibold">{{ nextHelpCheck }}</span>
+              <NTag v-if="quietFlags.helpQuiet" size="small" type="warning" :bordered="false">
+                {{ $t('page.farm.dashboard.quietLabel') }}
+              </NTag>
+              <span v-else class="font-mono font-semibold">{{ nextHelpCheck }}</span>
             </div>
             <div class="flex-y-center justify-between">
               <span>🏃 {{ $t('page.farm.dashboard.nextCheckSteal') }}</span>
-              <span class="font-mono font-semibold">{{ nextStealCheck }}</span>
+              <NTag v-if="quietFlags.stealQuiet" size="small" type="warning" :bordered="false">
+                {{ $t('page.farm.dashboard.quietLabel') }}
+              </NTag>
+              <span v-else class="font-mono font-semibold">{{ nextStealCheck }}</span>
             </div>
           </div>
         </NCard>

@@ -207,6 +207,9 @@ pub fn default_account_config() -> AccountConfig {
             fertilizer_land_types: DEFAULT_FERTILIZER_LAND_TYPES.to_vec(),
             fertilizer_smart_seconds: DEFAULT_FERTILIZER_SMART_SECONDS,
             skip_own_weed_bug: true,
+            friend_auto_accept: true,
+            friend_help_protect_dog_ignore_exp_limit: true,
+            show_manual_fertilizer: true,
             mystery_shop_auto_buy: false,
             mystery_shop_arrival_notify: false,
             mystery_shop_purchase_notify: false,
@@ -231,6 +234,7 @@ pub fn default_account_config() -> AccountConfig {
             enabled: false,
             start: "01:00".to_string(),
             end: "07:30".to_string(),
+            continue_farm: true,
         },
         known_friend_gids: vec![],
         known_friend_gid_sync_cooldown_sec: DEFAULT_KNOWN_FRIEND_GID_SYNC_COOLDOWN_SEC,
@@ -247,15 +251,22 @@ pub fn default_account_config() -> AccountConfig {
         fertilizer_buy_check_interval_minutes: 60,
         bag_seed_priority: DEFAULT_BAG_SEED_PRIORITY.to_vec(),
         bag_seed_fallback_strategy: BagSeedFallbackStrategy::Level,
+        bag_seed_land_types: Default::default(),
+        auto_accept_friend_min_level: 0,
+        auto_accept_require_own_level: false,
+        auto_accept_harvest_steal_enabled: true,
+        auto_accept_harvest_steal_harvest: 8,
+        auto_accept_harvest_steal_steal: 1,
     }
 }
 
-/// 规范化 QuietHours
+/// 规范化 QuietHours（`continue_farm` 缺省回退 true——旧存档自动获得新行为）
 pub fn normalize_quiet_hours(input: &QuietHoursConfig, old: &QuietHoursConfig) -> QuietHoursConfig {
     QuietHoursConfig {
         enabled: input.enabled,
         start: normalize_time_string(input.start.clone(), &old.start),
         end: normalize_time_string(input.end.clone(), &old.end),
+        continue_farm: input.continue_farm,
     }
 }
 

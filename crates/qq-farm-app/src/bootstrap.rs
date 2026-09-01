@@ -35,13 +35,27 @@ pub fn gateway_template_from_env(gateway_origin: &str) -> GatewayConfigTemplate 
         headers: HashMap::new(),
     };
     if let Some(mut sys) = qq_farm_core::models::store::global_config::get_system_config() {
-        // 存量配置迁移：升级固化的过期 client_version（随 Login/Heartbeat 上报，
-        // 旧版本可能被服务端冷落），并持久化避免每次启动重复迁移。
-        let top_changed = qq_farm_core::config::migrate_client_version(&mut sys.client_version);
-        let dev_changed = qq_farm_core::config::migrate_client_version(
-            &mut sys.device_info.client_version,
+        // 版本解析对齐 bot `resolveClientVersion`：保存的版本只有在其时间戳
+        // 比默认值更新时才沿用，否则回默认（随 Login/Heartbeat 上报，旧版本
+        // 可能被服务端冷落）；发生回退时持久化避免每次启动重复迁移。
+        let (resolved_version, resolved_at) = qq_farm_core::config::resolve_client_version(
+            &sys.client_version,
+            sys.client_version_updated_at,
         );
-        if top_changed || dev_changed {
+        let mut changed = resolved_version != sys.client_version;
+        sys.client_version = resolved_version;
+        sys.client_version_updated_at = resolved_at;
+        if sys.device_info.client_version.trim().is_empty()
+            || sys.device_info.client_version == sys.client_version
+        {
+            sys.device_info.client_version = sys.client_version.clone();
+        }
+        let tz = qq_farm_core::config::normalize_time_zone(&sys.time_zone);
+        if tz != sys.time_zone {
+            sys.time_zone = tz;
+            changed = true;
+        }
+        if changed {
             tracing::info!(
                 version = %sys.client_version,
                 "已升级过期的 client_version 配置"

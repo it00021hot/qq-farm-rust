@@ -5,7 +5,7 @@ Tauri v2 桌面端：进程内嵌 `RuntimeEngine`，经 `qq-farm-app` 暴露 IPC
 ## 依赖
 
 - Tauri 2（托盘 / 菜单 / updater）
-- `qq-farm-app` / `qq-farm-core`（**禁止**依赖 `qq-farm-server`；**禁止**把 Tauri 泄漏进 app）
+- `qq-farm-app` / `qq-farm-core`（**禁止**把 Tauri 泄漏进 app）
 
 ## 开发
 
