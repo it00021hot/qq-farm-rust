@@ -712,3 +712,14 @@
 - 验证：`RUSTFLAGS=-D warnings cargo check --workspace --all-targets` 0 错 0 警；
   item_capture 4 用例（聚合/命名/退订）通过；`pnpm -C desktop-ui typecheck`/`build` 通过
 - 能力状态：面板操作反馈增强；与 bot 面板契约兼容（新增字段，旧字段不变）
+
+### 2026-09-01 — 好友列表去掉逐行「宠物待确认」（用户反馈）
+
+- 现象：好友列表几乎每行都挂「宠物待确认」灰标
+- 原因：宠物状态按天缓存，只有巡查访问过该好友或每日 pet-sync 补齐后才有结论，
+  其余全是 `unknown`；bot web 对 unknown 同样显示「宠物待确认」（rust 对齐了这一行为）
+- 优化（纯 UI，后端不变）：`unknown` 不再显示徽标（护主犬 / 宠物名徽标保留，
+  「无宠物」本就不显示）；工具栏改为一条聚合提示
+  「宠物状态 N/M 已确认，其余由每日同步自动补齐」（全部确认后隐藏）
+- 验证：`pnpm -C desktop-ui typecheck` / `build` 通过
+- 能力状态：面板交互优化；`petState` 契约不变

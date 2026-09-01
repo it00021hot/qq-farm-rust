@@ -178,6 +178,11 @@ watch(friendTotalPages, total => {
 
 const stealableFriends = computed(() => normalFriends.value.filter(friend => canStealFriend(friend)));
 
+/** 宠物状态今日已确认数（other 含「没有上场狗」这一结论） */
+const petKnownCount = computed(
+  () => friends.value.filter(friend => friend.petState === 'protect' || friend.petState === 'other').length
+);
+
 const blacklistFriends = computed(() => {
   const byGid = new Map(friends.value.map(f => [Number(f.gid), f]));
   return friendBlacklist.value.map(gid => {
@@ -477,16 +482,18 @@ async function deleteFriend(friend: Api.Farm.Friend) {
   }
 }
 
-/** 好友宠物徽标（后端 petState / pet 字段缺失时不展示）。 */
-function petBadge(friend: Api.Farm.Friend): { kind: 'protect' | 'name' | 'unknown'; label: string } | null {
+/**
+ * 好友宠物徽标（后端 petState / pet 字段缺失时不展示）。
+ * `unknown`（今天还没同步到）不展示徽标：每日宠物同步在后台按节奏补齐，
+ * 逐行显示「待确认」只是噪音；整体进度见工具栏的同步提示。
+ */
+function petBadge(friend: Api.Farm.Friend): { kind: 'protect' | 'name'; label: string } | null {
   const petName = String(friend.pet?.name || '').trim();
   if (friend.petState === 'protect') return { kind: 'protect', label: '护主犬' };
   if (friend.petState === 'other') {
     if (petName) return { kind: 'name', label: petName };
     if (friend.pet) return { kind: 'name', label: '宠物' };
-    return null;
   }
-  if (friend.petState === 'unknown') return { kind: 'unknown', label: '宠物待确认' };
   return null;
 }
 
@@ -732,6 +739,15 @@ onUnmounted(() => {
             </NSpace>
           </div>
 
+          <div v-if="friends.length && petKnownCount < friends.length" class="mb-8px text-12px text-gray-400">
+            {{
+              $t('page.farm.friends.petSyncProgress', {
+                known: petKnownCount,
+                total: friends.length
+              })
+            }}
+          </div>
+
           <NSpin :show="loading">
             <NEmpty v-if="!normalFriends.length" class="py-32px" :description="$t('common.noData')" />
             <div v-else class="flex-col gap-12px">
@@ -773,9 +789,6 @@ onUnmounted(() => {
                             class="h-14px w-14px object-contain"
                             loading="lazy"
                           />
-                          {{ petBadge(friend)?.label }}
-                        </span>
-                        <span v-else-if="petBadge(friend)?.kind === 'unknown'" class="text-gray-400">
                           {{ petBadge(friend)?.label }}
                         </span>
                         <span

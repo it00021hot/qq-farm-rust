@@ -848,6 +848,7 @@ declare namespace App {
             opNothing: string;
             opNoStealable: string;
             stealAllDone: string;
+            petSyncProgress: string;
             stealAllEmpty: string;
             opFailed: string;
             blacklistSuccess: string;

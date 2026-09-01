@@ -606,6 +606,7 @@ const local: App.I18n.Schema = {
         opNothing: '无可操作',
         opNoStealable: '无可偷作物',
         stealAllDone: '全部偷取完成：成功 {ok}，跳过 {skip}',
+        petSyncProgress: '宠物状态 {known}/{total} 已确认，其余由每日同步自动补齐',
         stealAllEmpty: '当前没有可偷好友',
         opFailed: '操作失败',
         blacklistSuccess: '黑名单已更新',

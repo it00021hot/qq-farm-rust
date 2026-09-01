@@ -610,6 +610,7 @@ const local: App.I18n.Schema = {
         opNothing: 'Nothing to do',
         opNoStealable: 'No stealable crops',
         stealAllDone: 'Steal all done: {ok} ok, {skip} skipped',
+        petSyncProgress: 'Pet status {known}/{total} confirmed; the rest fills in via daily sync',
         stealAllEmpty: 'No friends with stealable crops',
         opFailed: 'Operation failed',
         blacklistSuccess: 'Blacklist updated',
