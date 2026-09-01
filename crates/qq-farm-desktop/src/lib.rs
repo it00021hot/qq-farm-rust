@@ -155,6 +155,10 @@ pub fn run() {
             commands::activity::activity_qingmei_brew_settle,
             commands::activity::activity_claim_qixi_bridge,
             commands::activity::activity_gift_qixi_sachet,
+            commands::activity::activity_get_charity,
+            commands::activity::activity_claim_charity_seeds,
+            commands::activity::activity_donate_charity_love,
+            commands::activity::activity_claim_charity_daily_gift,
             // weather
             commands::weather::weather_snapshot,
             commands::weather::weather_friends,

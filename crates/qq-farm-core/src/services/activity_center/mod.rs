@@ -7,6 +7,7 @@
 //! - 256 行 `activity-center-state.ts` JSON 状态合并（见 `activity_center_state` 模块）
 //! - `serializeMutation` 复杂并发（defer，rate limiter 已在 1F-6 覆盖）
 
+mod charity;
 mod constellation;
 mod directory;
 mod dto;
@@ -40,15 +41,16 @@ pub use dto::{
 
 // 兼容旧 `services::activity_center::*` 导入路径
 pub use crate::constants::{
-    CLAIM_QINGMEI_SEED_OPERATE_TYPE, CONSTELLATION_ACTIVITY_TYPE,
-    CONTINUE_QINGMEI_BREW_OPERATE_TYPE, EXCHANGE_SHOP_OPERATE_TYPE,
-    LIGHT_CONSTELLATION_OPERATE_TYPE, QINGMEI_BREW_ACTIVITY_ID, QINGMEI_DAILY_ACTIVITY_ID,
-    QINGMEI_DAILY_ALREADY_CLAIMED_CODE, QINGMEI_DAILY_GRANT_ID, QINGMEI_ITEM_ID,
-    QINGMEI_SHARED_SETTLEMENT_MODE, QINGMEI_SHARE_SCENE, QINGMEI_SHARE_SOURCE,
-    QIXI_BRIDGE_ACTIVITY_ID, QIXI_BRIDGE_OPERATE_TYPE, QIXI_FEATHER_ITEM_ID, QIXI_GIFT_ACTIVITY_ID,
-    QIXI_GIFT_OPERATE_TYPE, QIXI_GROUP_ID, QIXI_RECEIVED_SACHET_ITEM_ID, QIXI_SACHET_ITEM_ID,
-    QUERY_QINGMEI_OPERATE_TYPE, QUERY_SHOP_OPERATE_TYPE, SELL_QINGMEI_BREW_OPERATE_TYPE,
-    SHOP_ACTIVITY_TYPE, START_QINGMEI_BREW_OPERATE_TYPE,
+    CHARITY_RED_FLOWER_ACTIVITY_ID, CHARITY_RED_FLOWER_GROUP_ID,
+    CLAIM_CHARITY_DAILY_GIFT_OPERATE_TYPE, CLAIM_CHARITY_SEED_OPERATE_TYPE,
+    CLAIM_QINGMEI_SEED_OPERATE_TYPE, CONSTELLATION_ACTIVITY_TYPE, CONTINUE_QINGMEI_BREW_OPERATE_TYPE,
+    DONATE_CHARITY_LOVE_OPERATE_TYPE, EXCHANGE_SHOP_OPERATE_TYPE, LIGHT_CONSTELLATION_OPERATE_TYPE,
+    QINGMEI_BREW_ACTIVITY_ID, QINGMEI_DAILY_ACTIVITY_ID, QINGMEI_DAILY_ALREADY_CLAIMED_CODE,
+    QINGMEI_DAILY_GRANT_ID, QINGMEI_ITEM_ID, QINGMEI_SHARED_SETTLEMENT_MODE, QINGMEI_SHARE_SCENE,
+    QINGMEI_SHARE_SOURCE, QIXI_BRIDGE_ACTIVITY_ID, QIXI_BRIDGE_OPERATE_TYPE, QIXI_FEATHER_ITEM_ID,
+    QIXI_GIFT_ACTIVITY_ID, QIXI_GIFT_OPERATE_TYPE, QIXI_GROUP_ID, QIXI_RECEIVED_SACHET_ITEM_ID,
+    QIXI_SACHET_ITEM_ID, QUERY_QINGMEI_OPERATE_TYPE, QUERY_SHOP_OPERATE_TYPE,
+    SELL_QINGMEI_BREW_OPERATE_TYPE, SHOP_ACTIVITY_TYPE, START_QINGMEI_BREW_OPERATE_TYPE,
 };
 
 use std::collections::HashMap;
@@ -151,6 +153,7 @@ impl ActivityCenterService {
         let _ = crate::services::activity_windows::ensure_activity_windows(&self.gateway).await;
         let qingmei_result = self.get_current_qingmei_activity().await;
         let qixi_result = self.get_current_qixi_activity().await;
+        let charity_result = self.get_current_charity_red_flower_activity().await;
         let season = season_result.as_ref().ok().cloned();
         let warehouse = self.warehouse.lock().clone();
         let shop_result = if let Some(shop) = shop_override {
@@ -164,6 +167,7 @@ impl ActivityCenterService {
         let solar_terms = solar_result.as_ref().ok().cloned();
         let qingmei = qingmei_result.as_ref().ok().cloned();
         let qixi = qixi_result.as_ref().ok().cloned().unwrap_or_else(|| serde_json::json!({}));
+        let charity = charity_result.as_ref().ok().cloned().flatten();
         let constellation = season.as_ref().and_then(|s| self.build_constellation_dto(s, None));
         let mut actions =
             build_actions(&season, &solar_terms, constellation.as_ref(), shop.as_ref());
@@ -175,6 +179,21 @@ impl ActivityCenterService {
                 if let Some(gift) = qixi_actions.get("gift") {
                     obj.insert("qixiGift".into(), gift.clone());
                 }
+            }
+            let charity_actions =
+                charity.as_ref().and_then(|c| c.get("actions")).and_then(|v| v.as_object());
+            for (key, source) in [
+                ("charityClaimSeeds", "claimSeeds"),
+                ("charityDonateLove", "donateLove"),
+                ("charityClaimDailyGift", "claimDailyGift"),
+            ] {
+                let value = charity_actions
+                    .and_then(|a| a.get(source))
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        serde_json::json!({ "enabled": false, "available": false, "availabilityKnown": false })
+                    });
+                obj.insert(key.into(), value);
             }
         }
         let qixi_bridge_enabled = actions
@@ -194,6 +213,7 @@ impl ActivityCenterService {
             solar_terms.as_ref(),
             constellation.as_ref(),
             &qixi,
+            charity.as_ref(),
         );
         Ok(serde_json::json!({
             "season": season,
@@ -203,6 +223,7 @@ impl ActivityCenterService {
             "qingMei": qingmei,
             "greenPlum": qingmei,
             "qixi": qixi,
+            "charity": charity,
             "activities": activities,
             "capabilities": {
                 "claimPass": true,
@@ -211,6 +232,10 @@ impl ActivityCenterService {
                 "exchange": true,
                 "claimQixiBridge": qixi_bridge_enabled,
                 "giftQixiSachet": qixi_gift_enabled,
+                "charity": charity.is_some(),
+                "charityClaimSeeds": charity.is_some(),
+                "charityDonateLove": charity.is_some(),
+                "charityClaimDailyGift": charity.is_some(),
             },
             "actions": actions,
             "errors": {
@@ -219,6 +244,7 @@ impl ActivityCenterService {
                 "solarTerms": settled_error(&solar_result),
                 "qingMei": settled_error(&qingmei_result),
                 "qixi": settled_error(&qixi_result),
+                "charity": settled_error(&charity_result),
             },
         }))
     }

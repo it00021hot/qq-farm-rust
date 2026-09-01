@@ -148,6 +148,46 @@ pub async fn activity_gift_qixi_sachet(
     activity::gift_qixi_sachet(&state.app, &account_id, gid, n).await.map_err(IpcError::from)
 }
 
+/// 当前公益小红花。
+#[tauri::command]
+pub async fn activity_get_charity(
+    state: State<'_, DesktopState>,
+    account_id: String,
+) -> IpcResult<Value> {
+    ensure(&state, &account_id)?;
+    activity::charity(&state.app, &account_id).await.map_err(IpcError::from)
+}
+
+/// 领取小红花种子。
+#[tauri::command]
+pub async fn activity_claim_charity_seeds(
+    state: State<'_, DesktopState>,
+    account_id: String,
+) -> IpcResult<Value> {
+    ensure(&state, &account_id)?;
+    activity::claim_charity_seeds(&state.app, &account_id).await.map_err(IpcError::from)
+}
+
+/// 捐赠全部爱心。
+#[tauri::command]
+pub async fn activity_donate_charity_love(
+    state: State<'_, DesktopState>,
+    account_id: String,
+) -> IpcResult<Value> {
+    ensure(&state, &account_id)?;
+    activity::donate_charity_love(&state.app, &account_id).await.map_err(IpcError::from)
+}
+
+/// 领取今日公益礼包。
+#[tauri::command]
+pub async fn activity_claim_charity_daily_gift(
+    state: State<'_, DesktopState>,
+    account_id: String,
+) -> IpcResult<Value> {
+    ensure(&state, &account_id)?;
+    activity::claim_charity_daily_gift(&state.app, &account_id).await.map_err(IpcError::from)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

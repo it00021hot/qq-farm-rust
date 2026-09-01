@@ -15,11 +15,14 @@ import {
   useMessage
 } from 'naive-ui';
 import {
+  fetchClaimFarmActivityCharityDailyGift,
+  fetchClaimFarmActivityCharitySeeds,
   fetchClaimFarmActivityGreenPlum,
   fetchClaimFarmActivityPass,
   fetchClaimFarmActivityQixiBridge,
   fetchClaimFarmActivitySolarTerm,
   fetchContinueFarmActivityGreenPlumBrew,
+  fetchDonateFarmActivityCharityLove,
   fetchExchangeFarmActivityShop,
   fetchGetFarmActivitySnapshot,
   fetchGetFarmFriendList,
@@ -34,6 +37,7 @@ import { resolveCatalogImage } from '@/views/farm/game-config/shared';
 import ActivityRulesDialog from './activity-rules-dialog.vue';
 import { normalizeActivityRules } from './rules';
 import { $t } from '@/locales';
+import CharityView, { type CharityActivity } from './charity-view.vue';
 import QixiView from './qixi-view.vue';
 import WeatherView from './weather-view.vue';
 
@@ -42,7 +46,7 @@ defineOptions({
 });
 
 type ActivityTab = 'travel' | 'constellation' | 'shop' | 'solar';
-type GameplayKey = 'stellar' | 'qixi' | 'greenPlum' | 'weather';
+type GameplayKey = 'stellar' | 'qixi' | 'greenPlum' | 'weather' | 'charity';
 type ActivityStatus = 'active' | 'upcoming' | 'ended';
 type ActivityDirectoryItem = {
   id?: string;
@@ -213,6 +217,7 @@ const shop = ref<Record<string, unknown>>({});
 const solarTerms = ref<Record<string, unknown>>({});
 const greenPlum = ref<GreenPlum>({});
 const qixi = ref<Qixi>({});
+const charity = ref<CharityActivity>({});
 const directory = ref<ActivityDirectoryItem[]>([]);
 const qixiFriends = ref<Api.Farm.Friend[]>([]);
 const qixiFriendsLoading = ref(false);
@@ -307,6 +312,8 @@ const greenPlumActive = computed(() => greenPlum.value.known === true && greenPl
 const greenPlumEnd = computed(() => Number(greenPlum.value.endTime || 0) || undefined);
 const qixiKnown = computed(() => Boolean(qixi.value.name || qixi.value.groupId));
 const qixiEnd = computed(() => Number(qixi.value.endTime || 0) || undefined);
+const charityKnown = computed(() => Boolean(charity.value.name || charity.value.activityId));
+const charityEnd = computed(() => Number(charity.value.endTime || 0) || undefined);
 const greenPlumBalance = computed(() => {
   if (greenPlum.value.balanceKnown === false) return '--';
   return greenPlum.value.balance ?? '0';
@@ -387,10 +394,14 @@ function resolveGameplay(activity: ActivityDirectoryItem): GameplayKey | null {
         ? 'greenPlum'
         : activity.detailTarget === 'weather'
           ? 'weather'
-          : activity.detailTarget
-            ? 'stellar'
-            : null);
-  if (key === 'qixi' || key === 'stellar' || key === 'greenPlum' || key === 'weather') return key;
+          : activity.detailTarget === 'charity'
+            ? 'charity'
+            : activity.detailTarget
+              ? 'stellar'
+              : null);
+  if (key === 'qixi' || key === 'stellar' || key === 'greenPlum' || key === 'weather' || key === 'charity') {
+    return key;
+  }
   return null;
 }
 
@@ -441,6 +452,17 @@ const displayActivities = computed(() => {
       detailTarget: 'weather'
     });
   }
+  // 公益小红花（快照里有状态但目录未命中时兜底展示）
+  if (charityKnown.value && !entries.some(item => resolveGameplay(item) === 'charity')) {
+    entries.push({
+      id: String(charity.value.groupId || charity.value.activityId || 'charity'),
+      name: String(charity.value.name || charity.value.title || $t('page.farm.activity.tabCharity')),
+      startTime: Number(charity.value.startTime || 0),
+      endTime: Number(charity.value.endTime || 0),
+      gameplayKey: 'charity',
+      detailTarget: 'charity'
+    });
+  }
   const rank: Record<ActivityStatus, number> = { active: 0, upcoming: 1, ended: 2 };
   return entries.sort((left, right) => {
     const leftStatus = activityStatus(left);
@@ -453,6 +475,9 @@ const displayActivities = computed(() => {
 const pageTitle = computed(() => {
   if (selectedGameplay.value === 'qixi') {
     return String(qixi.value.name || qixi.value.title || $t('page.farm.activity.tabQixi'));
+  }
+  if (selectedGameplay.value === 'charity') {
+    return String(charity.value.name || charity.value.title || $t('page.farm.activity.tabCharity'));
   }
   if (selectedGameplay.value === 'greenPlum') {
     return String(greenPlum.value.name || $t('page.farm.activity.tabGreenPlum'));
@@ -482,6 +507,7 @@ const pageTitle = computed(() => {
 const remainingText = computed(() => {
   let endTime: number | undefined;
   if (selectedGameplay.value === 'qixi') endTime = qixiEnd.value;
+  else if (selectedGameplay.value === 'charity') endTime = charityEnd.value;
   else if (selectedGameplay.value === 'greenPlum') endTime = greenPlumEnd.value;
   else if (selectedGameplay.value === 'weather') endTime = undefined;
   else if (activeTab.value === 'shop') endTime = Number(shop.value.endTime || 0) || undefined;
@@ -654,6 +680,7 @@ function applySnapshot(data: Api.Farm.ActivitySnapshot) {
   solarTerms.value = (snap.solarTerms as Record<string, unknown>) || {};
   greenPlum.value = (snap.greenPlum as GreenPlum) || (snap.qingMei as GreenPlum) || {};
   qixi.value = (snap.qixi as Qixi) || {};
+  charity.value = (snap.charity as CharityActivity) || {};
   directory.value = Array.isArray(snap.activities) ? (snap.activities as ActivityDirectoryItem[]) : [];
   capabilities.value = snap.capabilities || data.capabilities || {};
   actions.value = snap.actions || data.actions || {};
@@ -676,6 +703,7 @@ async function loadActivities() {
     solarTerms.value = {};
     greenPlum.value = {};
     qixi.value = {};
+    charity.value = {};
     directory.value = [];
     return;
   }
@@ -966,6 +994,63 @@ async function giftQixiSachet(payload: { friendGid: string; count: number }) {
       ...(data as Record<string, unknown>),
       message: $t('page.farm.activity.qixiGiftSuccess', { name: friendName, count })
     });
+    if (data) applySnapshot(data as Api.Farm.ActivitySnapshot);
+    else await loadActivities();
+  } finally {
+    pendingKey.value = null;
+  }
+}
+
+async function claimCharitySeeds() {
+  if (!farmAccountStore.currentAccountId) return;
+  pendingKey.value = 'charitySeeds';
+  try {
+    const { error, data } = await fetchClaimFarmActivityCharitySeeds({
+      accountId: farmAccountStore.currentAccountId
+    });
+    if (error) {
+      message.error(error.message || $t('page.farm.activity.claimFailed'));
+      return;
+    }
+    notifyClaimResult(data as Record<string, unknown>);
+    if (data) applySnapshot(data as Api.Farm.ActivitySnapshot);
+    else await loadActivities();
+  } finally {
+    pendingKey.value = null;
+  }
+}
+
+async function donateCharityLove() {
+  if (!farmAccountStore.currentAccountId) return;
+  pendingKey.value = 'charityDonate';
+  try {
+    const { error, data } = await fetchDonateFarmActivityCharityLove({
+      accountId: farmAccountStore.currentAccountId
+    });
+    if (error) {
+      message.error(error.message || $t('page.farm.activity.claimFailed'));
+      return;
+    }
+    notifyClaimResult(data as Record<string, unknown>);
+    if (data) applySnapshot(data as Api.Farm.ActivitySnapshot);
+    else await loadActivities();
+  } finally {
+    pendingKey.value = null;
+  }
+}
+
+async function claimCharityDailyGift() {
+  if (!farmAccountStore.currentAccountId) return;
+  pendingKey.value = 'charityGift';
+  try {
+    const { error, data } = await fetchClaimFarmActivityCharityDailyGift({
+      accountId: farmAccountStore.currentAccountId
+    });
+    if (error) {
+      message.error(error.message || $t('page.farm.activity.claimFailed'));
+      return;
+    }
+    notifyClaimResult(data as Record<string, unknown>);
     if (data) applySnapshot(data as Api.Farm.ActivitySnapshot);
     else await loadActivities();
   } finally {
@@ -1419,6 +1504,17 @@ onMounted(async () => {
           @claim-bridge="claimQixiBridge"
           @gift="giftQixiSachet"
           @refresh-friends="loadQixiFriends(true)"
+        />
+        <!-- 公益小红花 -->
+        <CharityView
+          v-else-if="selectedGameplay === 'charity'"
+          :activity="charity"
+          :pending-seeds="pendingKey === 'charitySeeds'"
+          :pending-donate="pendingKey === 'charityDonate'"
+          :pending-gift="pendingKey === 'charityGift'"
+          @claim-seeds="claimCharitySeeds"
+          @donate-love="donateCharityLove"
+          @claim-daily-gift="claimCharityDailyGift"
         />
         <!-- 雨落成诗（天气活动） -->
         <WeatherView v-else-if="selectedGameplay === 'weather'" />

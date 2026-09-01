@@ -129,8 +129,52 @@ message ActivityData {
     QixiGiftProgress qixi_gift = 113;
     QingMeiQuote qingmei_quote = 114;
     WeatherBottleConfig weather_bottle = 105;
+    CharityRedFlowerData charity_red_flower = 116;
     WeatherActivityTasks weather_tasks = 117;
     WeatherResearchData weather_research = 118;
+}
+
+message CharityRedFlowerProgressReward {
+    int64 target = 1;
+    ActivityItem reward = 2;
+    int64 status = 3;
+}
+
+message CharityRedFlowerGlobalReward {
+    int64 target = 1;
+    ActivityItem reward = 2;
+}
+
+message CharityRedFlowerPublicFund {
+    int64 date = 1;
+    string order_id = 2;
+    string token = 3;
+    int64 status = 4;
+}
+
+message CharityRedFlowerData {
+    int64 love_item_id = 1;
+    int64 love_balance = 2;
+    int64 donated_love = 3;
+    int64 global_donated_love = 4;
+    int64 global_target_love = 5;
+    int64 seed_reward_status = 6;
+    ActivityItem seed_reward = 7;
+    int64 field_8 = 8;
+    repeated CharityRedFlowerProgressReward progress_rewards = 9;
+    CharityRedFlowerGlobalReward global_reward = 10;
+    int64 settlement_required_love = 11;
+    ActivityItem settlement_reward = 12;
+    int64 end_time = 13;
+    int64 field_14 = 14;
+    int64 field_15 = 15;
+    int64 field_16 = 16;
+    int64 flow_status = 17;
+    CharityRedFlowerPublicFund public_fund = 18;
+    int64 agreement_status = 19;
+    int64 field_20 = 20;
+    ActivityItem daily_reward = 21;
+    int64 daily_reward_status = 22;
 }
 
 message ActivityWindow {
@@ -346,6 +390,40 @@ message GiftQixiSachetRequest {
     Params params = 124;
 }
 
+message CharityRedFlowerOperateRequest {
+    message Empty {}
+    message QueryParams { bool accepted = 1; }
+
+    int64 activity_id = 1;
+    int64 operate_type = 2;
+    Empty claim_seed = 134;
+    Empty donate_love = 135;
+    Empty send_public_fund = 137;
+    QueryParams query = 138;
+}
+
+message CharityRedFlowerSeedResult {
+    corepb.Item reward = 1;
+}
+
+message CharityRedFlowerDonateResult {
+    int64 donated = 1;
+    int64 count = 2;
+    int64 status = 3;
+    int64 global_donated = 4;
+}
+
+message CharityRedFlowerPublicFundResult {
+    int64 status = 1;
+    string order_id = 2;
+    corepb.Item reward = 3;
+    string token = 4;
+}
+
+message CharityRedFlowerQueryResult {
+    bool accepted = 1;
+}
+
 message QixiGiftResult {
     int64 total_send_count = 1;
 }
@@ -369,6 +447,10 @@ message ActivityOperateReply {
     ExchangeShopResult weather_exchange_result = 101;
     WeatherTaskOperateResult weather_task_result = 108;
     WeatherResearchOperateResult weather_research_result = 140;
+    CharityRedFlowerSeedResult charity_seed_result = 135;
+    CharityRedFlowerDonateResult charity_donate_result = 136;
+    CharityRedFlowerPublicFundResult charity_public_fund_result = 138;
+    CharityRedFlowerQueryResult charity_query_result = 139;
 }
 
 message ExchangeShopResult {

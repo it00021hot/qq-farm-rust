@@ -27,6 +27,11 @@ pub enum ActivityErrorCode {
     QixiGiftFailed,
     InvalidQixiFriendGid,
     InvalidQixiSachetCount,
+    CharityRedFlowerUnavailable,
+    CharitySeedsUnavailable,
+    InsufficientCharityLove,
+    CharityDailyGiftUnavailable,
+    CharityResponseInvalid,
 }
 
 impl ActivityErrorCode {
@@ -57,6 +62,11 @@ impl ActivityErrorCode {
             Self::QixiGiftFailed => "QIXI_GIFT_FAILED",
             Self::InvalidQixiFriendGid => "INVALID_QIXI_FRIEND_GID",
             Self::InvalidQixiSachetCount => "INVALID_QIXI_SACHET_COUNT",
+            Self::CharityRedFlowerUnavailable => "CHARITY_RED_FLOWER_UNAVAILABLE",
+            Self::CharitySeedsUnavailable => "CHARITY_SEEDS_UNAVAILABLE",
+            Self::InsufficientCharityLove => "INSUFFICIENT_CHARITY_LOVE",
+            Self::CharityDailyGiftUnavailable => "CHARITY_DAILY_GIFT_UNAVAILABLE",
+            Self::CharityResponseInvalid => "CHARITY_RED_FLOWER_RESPONSE_INVALID",
         }
     }
 }

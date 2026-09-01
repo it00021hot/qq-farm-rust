@@ -161,6 +161,13 @@ impl QQVipService {
                     tracing::info!("[会员] 今日会员礼包已领取");
                     return false;
                 }
+                // 非 QQ 会员（1021001）：当天不再重试（对齐 bot `not_qq_vip`）
+                if is_not_qq_vip_error(&e.to_string()) {
+                    self.mark_done_today();
+                    *self.last_result.lock() = "none";
+                    tracing::info!("[会员] 当前账号非 QQ 会员，今日跳过会员礼包");
+                    return false;
+                }
                 *self.last_result.lock() = "error";
                 tracing::warn!("[会员] 领取会员礼包失败: {}", e);
                 false
@@ -221,6 +228,11 @@ pub fn is_already_claimed_error(msg: &str) -> bool {
     msg.contains("code=1021002") || msg.contains("今日已领取") || msg.contains("已领取")
 }
 
+/// 判断错误信息是否表示"非 QQ 会员"（bot `NOT_QQ_VIP_ERROR_CODE`）
+pub fn is_not_qq_vip_error(msg: &str) -> bool {
+    msg.contains("code=1021001")
+}
+
 fn get_date_key() -> String {
     use chrono::Datelike;
     use chrono::Local;
@@ -279,6 +291,13 @@ mod tests {
         assert!(is_already_claimed_error("今日已领取"));
         assert!(is_already_claimed_error("已领取该奖励"));
         assert!(!is_already_claimed_error("其他错误"));
+    }
+
+    #[test]
+    fn not_qq_vip_detection() {
+        assert!(is_not_qq_vip_error("业务错误: code=1021001 非 QQ 会员"));
+        assert!(!is_not_qq_vip_error("code=1021002"));
+        assert!(!is_not_qq_vip_error("网络超时"));
     }
 
     #[test]

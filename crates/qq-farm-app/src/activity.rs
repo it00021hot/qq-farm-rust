@@ -135,3 +135,28 @@ pub async fn gift_qixi_sachet(
     let loop_ = require_worker_loop(ctx, account_id)?;
     loop_.activity_center().gift_qixi_sachet(friend_gid, count).await.map_err(AppError::from_core)
 }
+
+pub async fn charity(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    let dto = loop_
+        .activity_center()
+        .get_current_charity_red_flower_activity()
+        .await
+        .map_err(AppError::from_core)?;
+    serde_json::to_value(dto).map_err(|e| AppError::Internal(e.to_string()))
+}
+
+pub async fn claim_charity_seeds(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    loop_.activity_center().claim_charity_red_flower_seeds().await.map_err(AppError::from_core)
+}
+
+pub async fn donate_charity_love(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    loop_.activity_center().donate_charity_red_flower_love().await.map_err(AppError::from_core)
+}
+
+pub async fn claim_charity_daily_gift(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    loop_.activity_center().claim_charity_red_flower_daily_gift().await.map_err(AppError::from_core)
+}

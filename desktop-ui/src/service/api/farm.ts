@@ -775,6 +775,22 @@ export function fetchGiftFarmActivityQixiSachet(data: Api.Farm.ActivityClaimPara
   });
 }
 
+export function fetchGetFarmActivityCharity(data: Api.Farm.ActivityClaimParams) {
+  return invokeFlat('activity_get_charity', { accountId: aid(data.accountId) });
+}
+
+export function fetchClaimFarmActivityCharitySeeds(data: Api.Farm.ActivityClaimParams) {
+  return invokeFlat('activity_claim_charity_seeds', { accountId: aid(data.accountId) });
+}
+
+export function fetchDonateFarmActivityCharityLove(data: Api.Farm.ActivityClaimParams) {
+  return invokeFlat('activity_donate_charity_love', { accountId: aid(data.accountId) });
+}
+
+export function fetchClaimFarmActivityCharityDailyGift(data: Api.Farm.ActivityClaimParams) {
+  return invokeFlat('activity_claim_charity_daily_gift', { accountId: aid(data.accountId) });
+}
+
 export async function fetchGetFarmAnalyticsDetail(params?: any) {
   const res = await invokeFlat<any>('farm_analytics', {
     sortBy: params?.sortBy ?? params?.sort ?? null

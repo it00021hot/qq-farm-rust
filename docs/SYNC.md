@@ -17,8 +17,8 @@
 
 | 仓库 | Commit | 日期 | 说明 |
 |------|--------|------|------|
-| **qq-farm-rust** | `main`（本提交：bot 8-28 大版本同步 + 删除 server crate） | 2026-08-28 | 天气活动/宠物体系/生涯/申请过滤/变异/互动清理/版本 1.13.3.14 + 只维护桌面版 |
-| **qq-farm-bot** | `8dae528` | 2026-08-28 | 雨落成诗 + 好友宠物按天缓存/自适应同步 + 统一好友任务 |
+| **qq-farm-rust** | `main`（本提交：bot 9-1 增量同步） | 2026-09-01 | 公益小红花 + 施肥协议修正 + QQVip 非会员跳过 + 协议 1.13.3.16 |
+| **qq-farm-bot** | `e44cc12` | 2026-09-01 | 公益小红花 + MeoW 推送渠道 + 施肥回包解析修复 + 协议版本升级 |
 
 文档范围：**业务行为 + 面板 HTTP/Socket 契约**（不含改 Vue 面板本身）。
 
@@ -26,9 +26,10 @@
 
 | 概念 | 当前值 | 用途 |
 |------|--------|------|
-| 客户端版本 `FARM_CLIENT_VERSION` | 默认 `1.13.2.8_20260723`（与 bot `config.ts` 默认一致） | 进游戏网关声明 |
-| bot `core` 包版本号 | `20260812` | 原项目发布标签，≠ 客户端版本字符串 |
+| 客户端版本 `FARM_CLIENT_VERSION` | 默认 `1.13.3.16_20260826`（与 bot `config.ts` 默认一致） | 进游戏网关声明 |
+| bot `core` 包版本号 | `20260901` | 原项目发布标签，≠ 客户端版本字符串 |
 | 青梅活动 ID | 每日 `2026081201` / 酿造 `2026081202` | 活动协议 |
+| 公益小红花活动 ID | 活动组 `2026090900` / 活动 `2026090901` | 活动协议 |
 
 ---
 
@@ -69,12 +70,12 @@
 | 自动/手动出售果实 | 齐 | 自动受 `sell` 开关；`sell_cond` 满足后用 `cond_sells`（活动结束后 / 道具过期后等）；手动预检拒绝不可售 | `warehouse` + `game_config` + `activity_windows` |
 | 商城 / 神秘商店 / 月卡 / 钻石 | 齐 | 列表、购买（神秘 Buy 无回包）、月卡、充值信息 | `mall`, `mystery_shop`, `monthcard`, `pay`, `commerce` |
 | 日常领取 | 齐 | 任务（成长 claim 后刷新 TaskInfo + `currentTask`）、邮件、分享等 | `task`, `email`, `share`, … |
-| 活动中心 | 齐 | 千星游记、观星、星砂、节令、青梅（含已领幂等）、鹊桥寄情（筑桥领取 + 赠香囊） | `activity_center*` |
+| 活动中心 | 齐 | 千星游记、观星、星砂、节令、青梅（含已领幂等）、鹊桥寄情（筑桥领取 + 赠香囊）、公益小红花（领种子/捐爱心/每日礼包） | `activity_center*` |
 | 面板鉴权与账号 | 齐 | 登录注册（无卡密）、账号 CRUD、设置 | `routes/auth`, `account`, `admin` |
 | 面板农场/好友/活动/商业 API | 已随 server 删除 | **只维护桌面版**（Tauri IPC 语义对齐原 HTTP 契约） | `qq-farm-desktop/src/commands/*` |
 | Socket 状态/日志推送 | 齐 | `status:update` / `log:new` 等 | `socket.rs` |
 | 离线重登提醒 | Rust 增强 | QQ 官方机器人主动单聊提醒；应用宝失败附重登录二维码 | `runtime/relogin_reminder.rs` |
-| 推送通知 | Rust 增强 | Rust 原生 QQ Bot AccessToken + Gateway + C2C；微信 Bot 预留 | `services/qq_bot` |
+| 推送通知 | Rust 增强 | Rust 原生 QQ Bot AccessToken + Gateway + C2C；微信 Bot 预留；**渠道面固定为 QQ Bot / 钉钉 / 微信，不对齐 bot MeoW（用户决策 2026-09-01）** | `services/qq_bot` |
 | 统计 / 状态汇总 | 齐 | 效率与状态可给面板 | `stats`, `status`, `analytics` |
 
 ---
@@ -657,3 +658,39 @@
   并行下 `zero_interval` 为存量 30ms 时序 flake）；`pnpm -C desktop-ui typecheck` 0 错、
   `pnpm -C desktop-ui build` 成功
 - 能力状态：矩阵保持齐；实机 L 清单仍待勾选（天气活动链路、宠物同步节奏、统一巡查为新增待验项）
+
+### 2026-09-01 — 增量同步 bot（`8dae528..e44cc12`）
+
+- 基准：rust 本提交 / bot `e44cc12`（区间 4 个提交：`228f1b9`、`56f71a5`、`25a5cf0`、`e44cc12`）
+- 前置：把 8-28 大同步（含删除 server crate）补落为独立 commit `8a3d1e6`，本次增量单独成提交
+- **公益小红花**（全新，对齐 bot `e44cc12`）：
+  - 协议：activitypb 同步（`ActivityData.charity_red_flower=116` + `CharityRedFlower*` 消息族 +
+    `ActivityOperateReply` 135/136/138/139），proto 与 bot 哈希一致
+  - core：常量 活动组 `2026090900` / 活动 `2026090901` / op 35（领种子）36（捐爱心，一次捐全部）
+    38（每日礼包 send_public_fund）；状态走 `ActivityService.List` BFS（含 children）定位；
+    `activity_center/charity.rs` DTO 对齐 bot `charityRedFlowerDto`（seedReward 2=可领/3=已领、
+    dailyGift 以 public_fund 记录判已领、progressRewards `claimSupported:false` 只展示、
+    globalProgress/settlement/actions）；写操作 mutation 串行 + 动作门控 + 回包校验
+    activity_id/operate_type
+  - 快照：新增 `charity` 字段、actions `charityClaimSeeds/charityDonateLove/charityClaimDailyGift`、
+    capabilities、`errors.charity`；目录绑定 gameplay=charity priority 70（对齐 bot 注册表）
+  - 桌面：IPC `activity_get_charity` / `activity_claim_charity_seeds` /
+    `activity_donate_charity_love` / `activity_claim_charity_daily_gift`；活动页小红花视图
+    （爱心/累计/结算/全服进度 + 领种子/捐爱心（二次确认）/每日礼包三操作卡 + 档位奖励 + 说明）；
+    目录未命中时快照兜底入口
+- **施肥协议修正**（bot `25a5cf0`）：plantpb `FertilizeReply.fertilizer` int64→`corepb.Item`、
+  新增 `FertilizerUse`/`fertilizer_use=4`；rust 施肥路径本就丢弃回包（`api.rs fertilize`），
+  无行为变化，仅协议文件对齐
+- **QQVip 非会员**（bot `e44cc12`）：`code=1021001` → 当日 markDone + result=none，
+  当天不再重试（原仅处理 1021002 已领取）
+- **版本**：`DEFAULT_CLIENT_VERSION` → `1.13.3.16_20260826`（updatedAt 1788238800000）
+- **明确不对齐（用户决策）**：bot 新增的 MeoW 推送渠道**不移植**；rust 推送渠道面固定为
+  QQ 官方机器人 / 钉钉 / 微信（预留），后续同步不以 MeoW 为缺口
+- 顺手修复（存量）：`card_claim` 测试 `reset()` 未清 `data/cards.json`，其它用例创建的卡密
+  持久化后令「库存不足」断言间歇失败；reset 现同步删除卡库存文件
+- 验证：`RUSTFLAGS=-D warnings cargo check --workspace --all-targets` 0 错 0 警；
+  `cargo test -p qq-farm-core --lib` 新增 charity 7 / qqvip 8 用例全过（934+）；
+  存量 flake 与 8-28 记录一致（`zero_interval` 30ms 时序；`init_status_bar_tty` /
+  `known_friend_gids_with_file_cache` 并行竞态，隔离运行均过）；
+  `pnpm -C desktop-ui typecheck` 0 错、`pnpm -C desktop-ui build` 成功
+- 能力状态：矩阵保持齐；小红花链路列入实机待验（L5 扩展）

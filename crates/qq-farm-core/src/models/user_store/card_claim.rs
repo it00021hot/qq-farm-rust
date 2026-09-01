@@ -268,6 +268,9 @@ mod tests {
         RECORDS.write().clear();
         *ENABLED.write() = true;
         let _ = fs::remove_file(card_claim_file());
+        // 卡库存存在 users 的 cards.json；一并清理，避免其它用例创建的卡密
+        // 持久化后让「库存不足」断言失效（claim 前会重新 load_cards）
+        let _ = fs::remove_file(crate::models::user_store::users::cards_file());
     }
 
     #[test]

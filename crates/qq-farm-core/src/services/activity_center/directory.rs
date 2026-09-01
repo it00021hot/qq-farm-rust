@@ -50,6 +50,7 @@ pub fn build_activity_directory(
     solar_terms: Option<&SolarTermsDto>,
     constellation: Option<&ConstellationDto>,
     qixi: &serde_json::Value,
+    charity: Option<&serde_json::Value>,
 ) -> Vec<serde_json::Value> {
     let mut bindings = std::collections::HashMap::new();
     if let Some(pass) = season.and_then(|s| s.pass.as_ref()) {
@@ -82,6 +83,16 @@ pub fn build_activity_directory(
         "qixi",
         50,
     );
+    // 公益小红花（静态活动 ID 对齐 bot 注册表；快照存在时再补动态 ID）
+    let mut charity_ids = vec![
+        crate::constants::CHARITY_RED_FLOWER_GROUP_ID.to_string(),
+        crate::constants::CHARITY_RED_FLOWER_ACTIVITY_ID.to_string(),
+    ];
+    if let Some(c) = charity {
+        charity_ids.push(json_id(c, "groupId"));
+        charity_ids.push(json_id(c, "activityId"));
+    }
+    push_binding(&mut bindings, charity_ids, "charity", "charity", 70);
 
     struct Group {
         id: String,
