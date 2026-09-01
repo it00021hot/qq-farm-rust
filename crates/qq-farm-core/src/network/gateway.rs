@@ -13,7 +13,7 @@
 //! 登录流程（ACE runtime / WASM 握手）留到阶段 1B 业务模块。
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -143,6 +143,28 @@ pub struct Gateway {
     inner: Arc<Inner>,
 }
 
+/// 临时 Notify 订阅（Drop 时自动退订）。
+///
+/// 供"操作窗口捕获"使用：订阅 → 执行 RPC → 收集紧随其后的 ItemNotify → Drop 退订。
+pub struct NotifySubscription {
+    id: u64,
+    rx: mpsc::Receiver<NotifyEvent>,
+    inner: Arc<Inner>,
+}
+
+impl NotifySubscription {
+    /// 等待下一条事件（None = 所有发送端都已消失，连接已关闭）
+    pub async fn recv(&mut self) -> Option<NotifyEvent> {
+        self.rx.recv().await
+    }
+}
+
+impl Drop for NotifySubscription {
+    fn drop(&mut self) {
+        self.inner.notify_subscribers.write().retain(|(id, _)| *id != self.id);
+    }
+}
+
 struct Inner {
     config: GatewayConfig,
     phase: RwLock<ConnectionPhase>,
@@ -154,8 +176,9 @@ struct Inner {
     /// 用 parking_lot::RwLock 是因为 dyn Encryptor 不是 Sized，arc-swap 需要 Sized。
     /// 读路径在 fast path 用 `read()`（无等待），写路径（TSDK 重建时）极短。
     encryptor: parking_lot::RwLock<Arc<dyn Encryptor>>,
-    /// 收到 Notify 事件订阅者
-    notify_subscribers: RwLock<Vec<mpsc::Sender<NotifyEvent>>>,
+    /// 收到 Notify 事件订阅者（id 用于临时订阅退订）
+    notify_subscribers: RwLock<Vec<(u64, mpsc::Sender<NotifyEvent>)>>,
+    next_notify_sub_id: AtomicU64,
     /// WS 发送端（connect 时设置）
     ws_sender: parking_lot::Mutex<Option<mpsc::Sender<Vec<u8>>>>,
     /// 当前连接的 client handle（connect 时设置；force_disconnect 时硬关闭）
@@ -189,6 +212,7 @@ impl Gateway {
                 requests: RequestManager::new(),
                 encryptor: parking_lot::RwLock::new(encryptor),
                 notify_subscribers: RwLock::new(Vec::new()),
+                next_notify_sub_id: AtomicU64::new(1),
                 ws_sender: parking_lot::Mutex::new(None),
                 ws_client: parking_lot::Mutex::new(None),
                 session_end,
@@ -596,11 +620,27 @@ impl Gateway {
         self.inner.last_rx_ms.load(Ordering::Acquire)
     }
 
-    /// 订阅 Notify 事件
+    /// 订阅 Notify 事件（永久订阅；worker 主循环用）
     pub fn subscribe_notify(&self) -> mpsc::Receiver<NotifyEvent> {
         let (tx, rx) = mpsc::channel(32);
-        self.inner.notify_subscribers.write().push(tx);
+        let id = self.inner.next_notify_sub_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.inner.notify_subscribers.write().push((id, tx));
         rx
+    }
+
+    /// 订阅 Notify 事件（临时订阅；Drop 时自动退订，供操作窗口捕获用）
+    #[must_use]
+    pub fn subscribe_notify_scoped(&self) -> NotifySubscription {
+        let (tx, rx) = mpsc::channel(32);
+        let id = self.inner.next_notify_sub_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.inner.notify_subscribers.write().push((id, tx));
+        NotifySubscription { id, rx, inner: Arc::clone(&self.inner) }
+    }
+
+    /// 当前 Notify 订阅数（测试断言退订用）
+    #[cfg(test)]
+    pub(crate) fn notify_subscriber_count(&self) -> usize {
+        self.inner.notify_subscribers.read().len()
     }
 
     /// 标记登录完成（阶段 1A 外部调用；阶段 1B 由业务模块在收到登录响应后调用）
@@ -885,7 +925,7 @@ fn handle_notify(inner: &Arc<Inner>, parsed: &FrameParser) {
     let event = crate::network::notify::parse_event(&event_msg);
     // 广播给所有订阅者
     let subs = inner.notify_subscribers.read().clone();
-    for tx in subs {
+    for (_, tx) in subs {
         if tx.try_send(event.clone()).is_err() {
             // channel 满或已关闭 —— 静默丢弃
         }

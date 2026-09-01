@@ -116,44 +116,110 @@ pub async fn bag(
     loop_.warehouse().get_bag_detail().await.map_err(AppError::from_core)
 }
 
-/// 使用背包物品。
+/// 使用背包物品。返回获得明细（ItemNotify 捕获优先，回退 `UseReply.items`）。
 pub async fn bag_use(
     ctx: &AppContext,
     account_id: &str,
     item_id: i64,
     count: i64,
     uid: i64,
-) -> AppResult<()> {
+) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
-    let result = loop_.warehouse().use_item(item_id, count.max(1), uid).await;
-    let (ok, err_text) = match &result {
-        Ok(_) => (true, None),
-        Err(e) => (false, Some(e.to_string())),
+    let (result, deltas) = qq_farm_core::services::item_capture::capture_deltas(
+        loop_.gateway(),
+        loop_.warehouse().use_item(item_id, count.max(1), uid),
+    )
+    .await;
+    let use_summary = |entries: &[qq_farm_core::services::item_capture::GainEntry]| {
+        let text = qq_farm_core::services::item_capture::format_gains(entries);
+        if text.is_empty() { String::new() } else { format!("获得 {text}") }
     };
-    let message = match (ok, &err_text) {
-        (true, _) => format!("使用物品 {item_id} x{} 成功", count.max(1)),
-        (false, Some(err)) => format!("使用物品 {item_id} 失败: {err}"),
-        (false, None) => format!("使用物品 {item_id} 失败"),
-    };
-    qq_farm_core::services::panel_log::log(
-        account_id,
-        "背包",
-        message,
-        qq_farm_core::constants::PanelEvent::TaskClaim,
-        Some(serde_json::json!({ "module": "warehouse", "itemId": item_id, "count": count, "isWarn": !ok })),
-    );
-    result.map(|_| ())
-        .map_err(AppError::from_core)
+    match result {
+        Ok(reply) => {
+            // ItemNotify 是背包真实变化；为空时回退回包的 items / land_reward
+            let mut gains = qq_farm_core::services::item_capture::aggregate_deltas(&deltas, true);
+            if gains.is_empty() {
+                let mut acc: std::collections::BTreeMap<i64, i64> = std::collections::BTreeMap::new();
+                for item in reply.items.iter().chain(reply.land_reward.iter().flat_map(|r| r.items.iter())) {
+                    if item.count > 0 {
+                        *acc.entry(item.id).or_insert(0) += item.count;
+                    }
+                }
+                gains = acc
+                    .into_iter()
+                    .map(|(id, count)| qq_farm_core::services::item_capture::GainEntry { id, delta: count })
+                    .collect();
+            }
+            let summary = use_summary(&gains);
+            let log_message = if summary.is_empty() {
+                format!("使用物品 {item_id} x{count} 成功")
+            } else {
+                format!("使用物品 {item_id} x{count} 成功，{summary}")
+            };
+            qq_farm_core::services::panel_log::log(
+                account_id,
+                "背包",
+                log_message,
+                qq_farm_core::constants::PanelEvent::TaskClaim,
+                Some(serde_json::json!({ "module": "warehouse", "itemId": item_id, "count": count })),
+            );
+            Ok(json!({
+                "ok": true,
+                "rewards": qq_farm_core::services::item_capture::gain_dtos(&gains),
+                "summary": summary,
+            }))
+        }
+        Err(e) => {
+            qq_farm_core::services::panel_log::log(
+                account_id,
+                "背包",
+                format!("使用物品 {item_id} 失败: {e}"),
+                qq_farm_core::constants::PanelEvent::TaskClaim,
+                Some(serde_json::json!({ "module": "warehouse", "itemId": item_id, "count": count, "isWarn": true })),
+            );
+            Err(AppError::from_core(e))
+        }
+    }
 }
 
 /// 出售背包物品。
+/// 出售背包物品。返回卖出 / 所得明细（`SellReply`）。
 pub async fn bag_sell(
     ctx: &AppContext,
     account_id: &str,
     items: &[(i64, i64, i64)],
-) -> AppResult<()> {
+) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
-    loop_.warehouse().sell_items(items).await.map(|_| ()).map_err(AppError::from_core)
+    let reply = loop_.warehouse().sell_items(items).await.map_err(AppError::from_core)?;
+    let to_entries = |list: &[qq_farm_core::proto::generated::corepb::Item]| {
+        let mut acc: std::collections::BTreeMap<i64, i64> = std::collections::BTreeMap::new();
+        for item in list {
+            if item.count > 0 {
+                *acc.entry(item.id).or_insert(0) += item.count;
+            }
+        }
+        acc.into_iter()
+            .map(|(id, count)| qq_farm_core::services::item_capture::GainEntry { id, delta: count })
+            .collect::<Vec<_>>()
+    };
+    let sold = to_entries(&reply.sell_items);
+    let gained = to_entries(&reply.get_items);
+    let mut parts = Vec::new();
+    let sold_text = qq_farm_core::services::item_capture::format_gains(&sold);
+    if !sold_text.is_empty() {
+        parts.push(format!("出售 {sold_text}"));
+    }
+    let gained_text = qq_farm_core::services::item_capture::format_gains(&gained);
+    if !gained_text.is_empty() {
+        parts.push(format!("获得 {gained_text}"));
+    }
+    let summary = parts.join("，");
+    Ok(json!({
+        "ok": true,
+        "sold": qq_farm_core::services::item_capture::gain_dtos(&sold),
+        "gained": qq_farm_core::services::item_capture::gain_dtos(&gained),
+        "summary": summary,
+    }))
 }
 
 /// 背包种子。

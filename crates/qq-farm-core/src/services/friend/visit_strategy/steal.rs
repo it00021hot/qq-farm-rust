@@ -546,24 +546,59 @@ pub(crate) async fn do_steal_op(
     if status.stealable.is_empty() {
         return serde_json::json!({"ok": true, "opType": "steal", "count": 0, "message": "没有可偷取土地"});
     }
-    let result = steal_lands_with_reward_log(
-        api,
-        recent_help,
-        friend_gid,
-        &status.stealable,
-        &status.stealable_info,
-        None,
+    // Harvest 回包不带获得物品，实际所得走紧随的 ItemNotify；窗口内捕获精确数量
+    let (result, deltas) = crate::services::item_capture::capture_deltas(
+        api.gateway(),
+        steal_lands_with_reward_log(
+            api,
+            recent_help,
+            friend_gid,
+            &status.stealable,
+            &status.stealable_info,
+            None,
+        ),
     )
     .await;
+    let gains = crate::services::item_capture::aggregate_deltas(&deltas, true);
+    let items = crate::services::item_capture::gain_dtos(&gains);
+    let summary = if result.ok > 0 {
+        // 精确数量优先；没有 ItemNotify 时退化用被偷地块的作物名
+        let detail = if !gains.is_empty() {
+            crate::services::item_capture::format_gains(&gains)
+        } else {
+            result
+                .stolen_infos
+                .iter()
+                .map(|info| info.name.clone())
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>()
+                .join("、")
+        };
+        if detail.is_empty() {
+            format!("偷取 {} 块地", result.ok)
+        } else {
+            format!("偷取 {} 块地：{detail}", result.ok)
+        }
+    } else {
+        String::new()
+    };
     let msg = if result.ok > 0 {
         let score_hint = if result.score_gained > 0 {
             format!("，获得积分x{}", result.score_gained)
         } else {
             String::new()
         };
-        format!("一键偷取完成 {} 块{}", result.ok, score_hint)
+        format!("一键偷取完成 {} 块{}{}", result.ok, if summary.is_empty() { String::new() } else { format!("（{summary}）") }, score_hint)
     } else {
         "一键偷取失败或无可偷".to_string()
     };
-    serde_json::json!({"ok": true, "opType": "steal", "count": result.ok, "message": msg})
+    serde_json::json!({
+        "ok": true,
+        "opType": "steal",
+        "count": result.ok,
+        "message": msg,
+        "summary": summary,
+        "items": items,
+    })
 }

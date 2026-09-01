@@ -49,6 +49,7 @@ pub mod farm;
 pub mod friend;
 pub mod friend_interaction_items;
 pub mod illustrated;
+pub mod item_capture;
 pub mod dog_skill_gifts;
 pub mod guide;
 pub mod interact;

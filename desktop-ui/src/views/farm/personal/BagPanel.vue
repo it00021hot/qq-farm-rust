@@ -149,7 +149,7 @@ async function handleSell(item: Api.Farm.BagItem) {
   }
   sellingId.value = item.id;
   try {
-    const { error } = await fetchSellFarmBag({
+    const { error, data } = await fetchSellFarmBag({
       accountId: farmAccountStore.currentAccountId,
       items: sellItems
     });
@@ -157,7 +157,8 @@ async function handleSell(item: Api.Farm.BagItem) {
       message.error(error.message || $t('page.farm.personal.sellFailed'));
       return;
     }
-    message.success($t('page.farm.personal.sellSuccess'));
+    const summary = String((data as Record<string, unknown> | null | undefined)?.summary || '').trim();
+    message.success(summary || $t('page.farm.personal.sellSuccess'));
     await loadBag();
   } finally {
     sellingId.value = null;
@@ -169,7 +170,7 @@ async function handleUse(item: Api.Farm.BagItem) {
   usingId.value = item.id;
   try {
     // 对齐 node：每次使用 1 个（礼包类服务端按单个结算）
-    const { error } = await fetchUseFarmBag({
+    const { error, data } = await fetchUseFarmBag({
       accountId: farmAccountStore.currentAccountId,
       itemId: item.id,
       count: 1
@@ -178,7 +179,8 @@ async function handleUse(item: Api.Farm.BagItem) {
       message.error(error.message || $t('page.farm.personal.useFailed'));
       return;
     }
-    message.success($t('page.farm.personal.useSuccess'));
+    const summary = String((data as Record<string, unknown> | null | undefined)?.summary || '').trim();
+    message.success(summary || $t('page.farm.personal.useSuccess'));
     await loadBag();
   } finally {
     usingId.value = null;
@@ -199,7 +201,7 @@ async function handleBatchSell() {
   }
   batchSelling.value = true;
   try {
-    const { error } = await fetchSellFarmBag({
+    const { error, data } = await fetchSellFarmBag({
       accountId: farmAccountStore.currentAccountId,
       items: sellItems
     });
@@ -207,7 +209,8 @@ async function handleBatchSell() {
       message.error(error.message || $t('page.farm.personal.sellFailed'));
       return;
     }
-    message.success($t('page.farm.personal.batchSellSuccess'));
+    const summary = String((data as Record<string, unknown> | null | undefined)?.summary || '').trim();
+    message.success(summary || $t('page.farm.personal.batchSellSuccess'));
     selectedIds.value = new Set();
     batchMode.value = false;
     await loadBag();

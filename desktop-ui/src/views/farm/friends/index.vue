@@ -354,7 +354,7 @@ async function runFriendOp(
   friend: Api.Farm.Friend,
   op: FriendOp,
   event?: MouseEvent,
-  options?: { quiet?: boolean }
+  options?: { quiet?: boolean; onData?: (data: Record<string, unknown>) => void }
 ): Promise<boolean> {
   event?.stopPropagation();
   if (!farmAccountStore.currentAccountId) return false;
@@ -373,6 +373,7 @@ async function runFriendOp(
     }
     const count = Number(data?.count || 0);
     if (count > 0) {
+      options?.onData?.(data as Record<string, unknown>);
       if (!quiet) {
         const summary = String(data?.summary || data?.helpSummary || '').trim();
         message.success(summary || $t('page.farm.friends.opSuccess'));
@@ -410,13 +411,26 @@ async function stealAllFriends() {
   stealAllLoading.value = true;
   let ok = 0;
   let skip = 0;
+  const totals = new Map<string, number>();
   try {
     for (const friend of targets) {
-      const stolen = await runFriendOp(friend, 'steal', undefined, { quiet: true });
+      const stolen = await runFriendOp(friend, 'steal', undefined, {
+        quiet: true,
+        onData: data => {
+          const items = Array.isArray(data.items) ? (data.items as Array<{ name?: string; count?: number }>) : [];
+          for (const item of items) {
+            const name = String(item?.name || '').trim();
+            if (!name) continue;
+            totals.set(name, (totals.get(name) || 0) + Number(item.count || 0));
+          }
+        }
+      });
       if (stolen) ok += 1;
       else skip += 1;
     }
-    message.success($t('page.farm.friends.stealAllDone', { ok, skip }));
+    const done = $t('page.farm.friends.stealAllDone', { ok, skip });
+    const detail = [...totals.entries()].map(([name, n]) => `${name}×${n}`).join('、');
+    message.success(detail ? `${done}：${detail}` : done);
   } finally {
     stealAllLoading.value = false;
   }

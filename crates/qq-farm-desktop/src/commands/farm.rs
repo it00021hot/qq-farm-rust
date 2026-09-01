@@ -70,7 +70,7 @@ pub async fn farm_bag_sell(
     state: State<'_, DesktopState>,
     account_id: String,
     items: Vec<BagSellItem>,
-) -> IpcResult<()> {
+) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
     let tuples: Vec<(i64, i64, i64)> =
         items.into_iter().map(|i| (i.item_id, i.count, i.uid)).collect();
@@ -85,7 +85,7 @@ pub async fn farm_bag_use(
     item_id: i64,
     count: i64,
     uid: Option<i64>,
-) -> IpcResult<()> {
+) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
     farm::bag_use(&state.app, &account_id, item_id, count, uid.unwrap_or(0))
         .await

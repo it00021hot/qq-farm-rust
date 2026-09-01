@@ -694,3 +694,21 @@
   `known_friend_gids_with_file_cache` 并行竞态，隔离运行均过）；
   `pnpm -C desktop-ui typecheck` 0 错、`pnpm -C desktop-ui build` 成功
 - 能力状态：矩阵保持齐；小红花链路列入实机待验（L5 扩展）
+
+### 2026-09-01 — 手动操作结果明细（用户反馈，超越 bot 的本地增强）
+
+- 痛点：开礼包 / 手动偷菜 / 出售只提示「操作成功」，看不到开出什么、偷到什么
+- **基础设施**：
+  - `Gateway::subscribe_notify_scoped()`：带生命周期的 Notify 订阅（Drop 自动退订，
+    订阅表按 id 清理，不残留发送端）
+  - `services/item_capture`：操作窗口内捕获 ItemNotify 物品增量（回包后 400ms 排空，
+    对齐 Harvest/Use 实际所得走推送的协议行为）+ 聚合 / 命名（货币固定文案、果实走
+    作物名、其余走 ItemInfo）/ DTO
+- **偷菜**：`do_steal_op` 返回 `summary`（如「偷取 3 块地：白萝卜×12、南瓜×3」）与
+  `items` 明细；ItemNotify 缺失时退化用被偷地块作物名；「全部偷取」跨好友聚合作物数量
+- **使用物品 / 礼包**：`farm_bag_use` 返回 `rewards` + `summary`（「获得 金币×100、点券×10」），
+  ItemNotify 捕获优先、为空回退 `UseReply.items`/`land_reward`；背包页展示明细并写入运行日志
+- **出售**：`farm_bag_sell` 返回 `sold`/`gained` + `summary`（「出售 白萝卜×20，获得 金币×340」）
+- 验证：`RUSTFLAGS=-D warnings cargo check --workspace --all-targets` 0 错 0 警；
+  item_capture 4 用例（聚合/命名/退订）通过；`pnpm -C desktop-ui typecheck`/`build` 通过
+- 能力状态：面板操作反馈增强；与 bot 面板契约兼容（新增字段，旧字段不变）
