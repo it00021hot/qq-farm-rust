@@ -746,3 +746,17 @@
   新增 5 用例（前台保留槽饱和/后台不得占用、task-local 缺省前台+scope 翻转、判死三条件
   与 120s 封顶、列表失败冷却、冷却回退陈旧缓存）全过；`cargo test -p qq-farm-app` 15/15
 - 能力状态：连接稳定性对齐 bot 单飞/前台保护语义；实机待验（大号登录连点菜单+好友列表）
+
+### 2026-09-02 — 修复小红花操作被 ACL 拦截（漏声明 IPC 白名单）
+
+- 现象：捐赠爱心报 `Command activity_donate_charity_love not allowed by ACL`
+  （视图正常——数据走 `activity_snapshot`；四个操作/查询命令全部被拦）
+- 根因：新增 4 条小红花 IPC 只注册了 `generate_handler!`，漏了
+  `permissions/desktop.toml` 的 ACL 白名单
+- 修复：补声明 `activity_get_charity` / `activity_claim_charity_seeds` /
+  `activity_donate_charity_love` / `activity_claim_charity_daily_gift`；
+  新增防回归单测（`qq-farm-desktop` 内比对 handler 注册与 ACL 白名单，
+  漏声明直接测试失败）
+- 验证：`cargo test -p qq-farm-desktop acl` 通过；
+  `RUSTFLAGS="-D warnings" cargo check -p qq-farm-desktop --all-targets` 0 错 0 警
+- 能力状态：小红花操作链路修复，随 v0.2.11 发布

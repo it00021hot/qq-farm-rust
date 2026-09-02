@@ -224,3 +224,44 @@ pub fn run() {
     #[cfg(not(target_os = "macos"))]
     app.run(|_, _| {});
 }
+
+#[cfg(test)]
+mod acl_tests {
+    /// 防回归：`generate_handler!` 注册的每条 IPC 命令都必须在
+    /// `permissions/desktop.toml` 的 ACL 白名单里，漏声明会在运行期报
+    /// "Command xxx not allowed by ACL"（小红花四条命令曾漏过）。
+    #[test]
+    fn every_handler_command_is_allowed_by_acl() {
+        let lib_src = include_str!("lib.rs");
+        let mut handler: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for line in lib_src.lines() {
+            let line = line.trim().trim_end_matches(',');
+            if let Some((path, _)) = line.split_once("::").map(|(a, b)| (a, b)) {
+                // 形如 commands::activity::activity_snapshot
+                if path == "commands" {
+                    if let Some(name) = line.rsplit("::").next() {
+                        if name.chars().all(|c| c.is_ascii_lowercase() || c == '_') && !name.is_empty()
+                        {
+                            handler.insert(name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        let acl_src = include_str!("../permissions/desktop.toml");
+        let mut acl: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        for line in acl_src.lines() {
+            let line = line.trim().trim_end_matches(',');
+            if let Some(name) = line.strip_prefix('"').and_then(|l| l.strip_suffix('"')) {
+                acl.insert(name);
+            }
+        }
+        assert!(!handler.is_empty(), "handler 命令解析失败");
+        assert!(!acl.is_empty(), "ACL 白名单解析失败");
+        let missing: Vec<&String> = handler.iter().filter(|c| !acl.contains(c.as_str())).collect();
+        assert!(
+            missing.is_empty(),
+            "以下 IPC 命令未在 permissions/desktop.toml 声明，运行期会被 ACL 拦截: {missing:?}"
+        );
+    }
+}
