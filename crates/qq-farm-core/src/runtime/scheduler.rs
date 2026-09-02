@@ -149,7 +149,8 @@ impl Scheduler {
                         let task = task_for_run.clone();
                         let running = running.clone();
                         crate::runtime::safe_spawn::spawn_logged("scheduler_tick", async move {
-                            task().await;
+                            // 定时任务一律标记为后台 RPC 班次：不占前台保留槽
+                            crate::network::gateway::background_scope(task()).await;
                             running.store(false, Ordering::Release);
                         });
                     }
@@ -181,7 +182,7 @@ impl Scheduler {
                 _ = tokio::time::sleep(delay) => {
                     // 到期后另起 task 跑回调，clear() 只取消尚未开火的 timer。
                     crate::runtime::safe_spawn::spawn_logged("scheduler_timeout_fire", async move {
-                        task().await;
+                        crate::network::gateway::background_scope(task()).await;
                     });
                 }
             }

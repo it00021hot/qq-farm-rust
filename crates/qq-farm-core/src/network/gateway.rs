@@ -13,6 +13,7 @@
 //! 登录流程（ACE runtime / WASM 握手）留到阶段 1B 业务模块。
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -143,6 +144,23 @@ pub struct Gateway {
     inner: Arc<Inner>,
 }
 
+tokio::task_local! {
+    /// 前台（面板触发）请求标记。自动化定时任务用 [`background_scope`] 包裹；
+    /// 其余调用链（桌面 IPC / 登录）默认视为前台。
+    static IS_FOREGROUND_RPC: bool;
+}
+
+/// 当前调用链是否前台。缺省 = 前台（IPC 发起的链路不打标记）。
+fn rpc_call_is_foreground() -> bool {
+    IS_FOREGROUND_RPC.try_with(|v| *v).unwrap_or(true)
+}
+
+/// 把 future 标记为后台（自动化定时任务）：只竞争共享槽，不占前台保留槽
+/// （对齐 bot request-priority 的「非前台业务 ≤ 总预算-1，前台永远留一个槽」）。
+pub fn background_scope<F: Future>(fut: F) -> impl Future<Output = F::Output> {
+    IS_FOREGROUND_RPC.scope(false, fut)
+}
+
 /// 临时 Notify 订阅（Drop 时自动退订）。
 ///
 /// 供"操作窗口捕获"使用：订阅 → 执行 RPC → 收集紧随其后的 ItemNotify → Drop 退订。
@@ -192,11 +210,20 @@ struct Inner {
     /// TSDK 重建中标志（worker rebuild 期间置 true，WorkerLoop 据此放宽 silence 阈值）
     rebuilding: AtomicBool,
     /// 业务 RPC 并发槽（对齐 bot 5 in-flight / 100 排队）。Heartbeat 不占槽。
+    /// 拆成共享 4 + 前台保留 1：后台自动化只可用共享槽，面板请求永远有通道。
     rpc_slots: Arc<Semaphore>,
+    fg_rpc_slot: Arc<Semaphore>,
     rpc_queued: AtomicUsize,
     /// 出站 token 提供器：登录后暂存一次性 TSDK 初始化凭据，由下一条消息携带
     /// （对齐 bot `GatewayTokenProvider.stageInitToken/next/clear`）。
     token_provider: crate::utils::random::GatewayTokenProvider,
+}
+
+/// 已占用的业务并发槽（共享或前台保留）。字段不读：持有即占用，Drop 释放。
+#[allow(dead_code)]
+enum RpcPermit {
+    Shared(OwnedSemaphorePermit),
+    Foreground(OwnedSemaphorePermit),
 }
 
 impl Gateway {
@@ -219,7 +246,10 @@ impl Gateway {
                 disconnect_reason: parking_lot::Mutex::new(None),
                 last_rx_ms: AtomicI64::new(0),
                 rebuilding: AtomicBool::new(false),
-                rpc_slots: Arc::new(Semaphore::new(crate::constants::MAX_IN_FLIGHT_REQUESTS)),
+                rpc_slots: Arc::new(Semaphore::new(
+                    crate::constants::MAX_IN_FLIGHT_REQUESTS.saturating_sub(1).max(1),
+                )),
+                fg_rpc_slot: Arc::new(Semaphore::new(1)),
                 rpc_queued: AtomicUsize::new(0),
                 token_provider: crate::utils::random::GatewayTokenProvider::new(),
             }),
@@ -478,9 +508,16 @@ impl Gateway {
         Ok(())
     }
 
-    async fn acquire_rpc_slot(&self) -> Result<OwnedSemaphorePermit> {
+    /// 获取业务并发槽。后台只用共享池；前台额外可用保留槽
+    /// （`acquire_owned` 可安全取消，select 分支落选即释放）。
+    async fn acquire_rpc_slot(&self, foreground: bool) -> Result<RpcPermit> {
         if let Ok(permit) = Arc::clone(&self.inner.rpc_slots).try_acquire_owned() {
-            return Ok(permit);
+            return Ok(RpcPermit::Shared(permit));
+        }
+        if foreground {
+            if let Ok(permit) = Arc::clone(&self.inner.fg_rpc_slot).try_acquire_owned() {
+                return Ok(RpcPermit::Foreground(permit));
+            }
         }
         let queued = self.inner.rpc_queued.fetch_add(1, Ordering::SeqCst);
         if queued >= crate::constants::MAX_QUEUED_REQUESTS {
@@ -490,10 +527,23 @@ impl Gateway {
                 queued,
             });
         }
-        let permit = Arc::clone(&self.inner.rpc_slots)
-            .acquire_owned()
-            .await
-            .map_err(|_| NetworkError::Phase("rpc limiter closed".into()))?;
+        let permit = if foreground {
+            tokio::select! {
+                p = Arc::clone(&self.inner.rpc_slots).acquire_owned() => {
+                    RpcPermit::Shared(p.map_err(|_| NetworkError::Phase("rpc limiter closed".into()))?)
+                }
+                p = Arc::clone(&self.inner.fg_rpc_slot).acquire_owned() => {
+                    RpcPermit::Foreground(p.map_err(|_| NetworkError::Phase("rpc limiter closed".into()))?)
+                }
+            }
+        } else {
+            RpcPermit::Shared(
+                Arc::clone(&self.inner.rpc_slots)
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| NetworkError::Phase("rpc limiter closed".into()))?,
+            )
+        };
         self.inner.rpc_queued.fetch_sub(1, Ordering::SeqCst);
         Ok(permit)
     }
@@ -518,12 +568,13 @@ impl Gateway {
         // 饿死，否则 ACE 数据流中断会被服务端踢线。
         let bypass_rpc_slot = method.eq_ignore_ascii_case("Heartbeat")
             || method.eq_ignore_ascii_case("AntiData");
+        let is_foreground = rpc_call_is_foreground();
         let _slot = if require_online && !bypass_rpc_slot {
             // 排队也限时（对齐 bot 超时从 sendMsgAsync 调用起算）：槽被卡死时请求
             // 不会无限排队，超时返回而非把队列堆满。
             match tokio::time::timeout(
                 std::time::Duration::from_millis(crate::constants::RPC_QUEUE_TIMEOUT_MS),
-                self.acquire_rpc_slot(),
+                self.acquire_rpc_slot(is_foreground),
             )
             .await
             {
@@ -939,6 +990,20 @@ use prost::Message as _;
 mod tests {
     use super::*;
 
+    fn test_gateway() -> Gateway {
+        Gateway::new(
+            GatewayConfig {
+                server_url: "wss://gate.example.com/ws".into(),
+                platform: "qq".into(),
+                os: "windows".into(),
+                client_version: "1.0.0".into(),
+                auth_code: "test".into(),
+                headers: HashMap::new(),
+            },
+            std::sync::Arc::new(crate::network::encryptor::NoopEncryptor),
+        )
+    }
+
     #[test]
     fn login_send_allowed_in_login_phase() {
         assert!(rpc_phase_ok(ConnectionPhase::Login, false).is_ok());
@@ -964,6 +1029,51 @@ mod tests {
         assert!(url.contains("os=linux"));
         assert!(url.contains("ver=1.0.0"));
         assert!(url.contains("code=abc123"));
+    }
+
+    #[tokio::test]
+    async fn foreground_reserved_slot_survives_shared_saturation() {
+        let gateway = test_gateway();
+        // 后台占满共享槽（MAX_IN_FLIGHT_REQUESTS - 1 = 4）
+        let mut background = Vec::new();
+        for _ in 0..(crate::constants::MAX_IN_FLIGHT_REQUESTS - 1) {
+            background.push(gateway.acquire_rpc_slot(false).await.expect("shared slot"));
+        }
+        // 后台拿不到保留槽（排队挂起）
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), gateway.acquire_rpc_slot(false))
+                .await
+                .is_err(),
+            "background must not take the foreground-reserved slot"
+        );
+        // 前台仍可通过保留槽立即拿到
+        let fg = tokio::time::timeout(std::time::Duration::from_millis(50), gateway.acquire_rpc_slot(true))
+            .await
+            .expect("foreground reserved slot")
+            .expect("permit");
+        drop(fg);
+        drop(background);
+    }
+
+    #[tokio::test]
+    async fn task_local_defaults_to_foreground_and_background_scope_flips_it() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let seen_default = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let seen_bg = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        // 缺省 = 前台
+        assert!(rpc_call_is_foreground());
+        seen_default.store(rpc_call_is_foreground(), Relaxed);
+
+        background_scope(async {
+            seen_bg.store(!rpc_call_is_foreground(), Relaxed);
+        })
+        .await;
+
+        assert!(seen_default.load(Relaxed));
+        assert!(seen_bg.load(Relaxed));
+        // scope 结束后恢复前台
+        assert!(rpc_call_is_foreground());
     }
 
     #[test]

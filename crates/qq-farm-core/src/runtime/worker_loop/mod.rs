@@ -179,6 +179,35 @@ fn heartbeat_silence_exceeded(now: i64, last_hb: i64, last_rx: i64, silence_ms: 
     last > 0 && now.saturating_sub(last) > silence_ms
 }
 
+/// 心跳判死：连续 miss 达上限、入站静默超阈值，且**没有任何在途请求**。
+///
+/// pending 保护：巨型回包（大号好友 GetAll）下载期间没有完整消息到达 dispatch，
+/// 入站静默会虚高、心跳回包也被压在后面——但连接是活的。所有业务 RPC 都有
+/// 20s 超时，真断线时 pending 会在 20s 内归零、下一拍照常判死；保护窗封顶
+/// [`PENDING_DEFER_MAX_SILENCE_MS`]，避免持续发请求的僵尸连接永远不被杀。
+#[cfg_attr(test, allow(dead_code))]
+fn heartbeat_should_force_disconnect(
+    miss_n: u32,
+    max_miss: u32,
+    inbound_silence_ms: i64,
+    stale_ms: i64,
+    pending: usize,
+) -> bool {
+    if miss_n < max_miss {
+        return false;
+    }
+    if inbound_silence_ms <= stale_ms {
+        return false;
+    }
+    if pending > 0 && inbound_silence_ms <= PENDING_DEFER_MAX_SILENCE_MS {
+        return false;
+    }
+    true
+}
+
+/// pending>0 时判死保护窗的上限（2 分钟）。
+const PENDING_DEFER_MAX_SILENCE_MS: i64 = 120_000;
+
 struct FlagGuard<'a>(&'a AtomicBool);
 
 impl Drop for FlagGuard<'_> {
@@ -875,9 +904,24 @@ impl WorkerLoop {
                                     error = %e,
                                     "心跳未响应"
                                 );
-                                if miss_n < MAX_HEARTBEAT_MISS
-                                    || inbound_silence <= effective_stale_ms
-                                {
+                                // 判死需三条件：miss 达上限 + 入站静默超阈值 + 无在途请求
+                                //（巨型回包下载期间 pending>0，连接仍在收数据，不杀）
+                                let pending = gateway.pending_count();
+                                if !heartbeat_should_force_disconnect(
+                                    miss_n,
+                                    MAX_HEARTBEAT_MISS,
+                                    inbound_silence,
+                                    effective_stale_ms,
+                                    pending,
+                                ) {
+                                    if pending > 0 && inbound_silence > effective_stale_ms {
+                                        tracing::debug!(
+                                            account_id = %acc_id,
+                                            pending,
+                                            inbound_s = inbound_silence / 1000,
+                                            "心跳超时但仍有在途请求，暂不判死"
+                                        );
+                                    }
                                     return;
                                 }
                                 tracing::error!(account_id = %acc_id, "连续心跳超时且连接无入站数据，触发重连");
@@ -1601,6 +1645,23 @@ mod tests {
         assert!(!heartbeat_silence_exceeded(1_000, 100, 980, 50));
         // pending 不是参数：从未收到过任何帧时不杀
         assert!(!heartbeat_silence_exceeded(1_000, 0, 0, 30));
+    }
+
+    #[test]
+    fn heartbeat_kill_requires_miss_silence_and_no_pending() {
+        let max = 3_u32;
+        let stale = 30_000_i64;
+        // miss 不足
+        assert!(!heartbeat_should_force_disconnect(2, max, 60_000, stale, 0));
+        // 静默不足
+        assert!(!heartbeat_should_force_disconnect(3, max, 20_000, stale, 0));
+        // 经典判死：miss 达标 + 静默超阈值 + 无在途
+        assert!(heartbeat_should_force_disconnect(3, max, 60_000, stale, 0));
+        // 巨型回包下载中：有在途请求 → 不杀
+        assert!(!heartbeat_should_force_disconnect(3, max, 60_000, stale, 2));
+        // 保护窗封顶：静默超过 2 分钟，即使有在途也判死
+        assert!(heartbeat_should_force_disconnect(3, max, PENDING_DEFER_MAX_SILENCE_MS + 1, stale, 5));
+        assert!(!heartbeat_should_force_disconnect(3, max, PENDING_DEFER_MAX_SILENCE_MS, stale, 5));
     }
 
     #[test]

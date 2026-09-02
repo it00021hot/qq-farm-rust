@@ -723,3 +723,26 @@
   「宠物状态 N/M 已确认，其余由每日同步自动补齐」（全部确认后隐藏）
 - 验证：`pnpm -C desktop-ui typecheck` / `build` 通过
 - 能力状态：面板交互优化；`petState` 契约不变
+
+### 2026-09-02 — 修复大号登录初期「转圈→掉线」（socket 发送机制三连修）
+
+- 现象：刚登录点菜单（尤其好友列表，大号必现）转圈后掉线
+- 根因链：
+  1. 好友 GetAll 无失败单飞（bot `allFriendsRequests` 存 in-flight promise）：rust 只有 800ms
+     成功缓存，20s 超时后 tick/面板立刻重发 → 巨型回包在链路上排队叠加
+  2. `last_rx_ms` 只在完整消息解析后更新：单个几 MB 回包下载+解密期间入站静默虚高、
+     心跳回包被压在后面 → 3 次 miss + 静默>30s 误杀活连接
+  3. rust 无 bot 请求班次：登录自动化 burst 与面板点击挤同一 FIFO 5 槽
+- **修复**：
+  1. `get_all_game_friends` 失败进入 30s 冷却（`FRIEND_LIST_FAIL_COOLDOWN_MS`），冷却期内
+     回退陈旧缓存；rpc_gate 串行 + 成功缓存构成完整单飞语义（对齐 bot）
+  2. 心跳判死加 pending 保护：`heartbeat_should_force_disconnect`（miss 达标 + 静默超阈值 +
+     **无在途请求**）；保护窗封顶 120s（防持续发请求的僵尸连接永不判死）。所有业务 RPC
+     20s 超时，真断线 pending 20s 内归零、下一拍照常判死
+  3. 前台保留槽：`rpc_slots` 拆共享 4 + `fg_rpc_slot` 保留 1（对齐 bot「非前台业务 ≤ 总预算-1」）；
+     `background_scope`（task-local）在调度器两个回调执行点与 pet_sync 循环标记后台，
+     桌面 IPC 链路缺省前台
+- 验证：`RUSTFLAGS=-D warnings cargo check --workspace --all-targets` 0 错 0 警；
+  新增 5 用例（前台保留槽饱和/后台不得占用、task-local 缺省前台+scope 翻转、判死三条件
+  与 120s 封顶、列表失败冷却、冷却回退陈旧缓存）全过；`cargo test -p qq-farm-app` 15/15
+- 能力状态：连接稳定性对齐 bot 单飞/前台保护语义；实机待验（大号登录连点菜单+好友列表）

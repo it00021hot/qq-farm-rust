@@ -64,6 +64,8 @@ pub struct FriendApi {
     /// FriendService 串行（对齐 TS rate-limiter maxConcurrent=1）
     rpc_gate: Arc<AsyncMutex<()>>,
     last_list: Arc<parking_lot::Mutex<Option<(Instant, Vec<GameFriend>)>>>,
+    /// 最近一次列表拉取失败时间（冷却用）
+    last_list_failed_at: Arc<parking_lot::Mutex<Option<Instant>>>,
 }
 
 impl FriendApi {
@@ -83,6 +85,7 @@ impl FriendApi {
             bad_mark_limit: Arc::new(parking_lot::Mutex::new(None)),
             rpc_gate: Arc::new(AsyncMutex::new(())),
             last_list: Arc::new(parking_lot::Mutex::new(None)),
+            last_list_failed_at: Arc::new(parking_lot::Mutex::new(None)),
         }
     }
 
@@ -152,6 +155,11 @@ impl FriendApi {
     }
 
     /// 完整 GameFriend 列表。WX 走 GetAll；QQ 走 GetGameFriends + 已知 GID。
+    ///
+    /// 单飞语义（对齐 bot `allFriendsRequests`）：`rpc_gate` 把并发调用者串成
+    /// 一条队，成功结果写入 800ms 短缓存给后来的等待者共享；失败进入 30s
+    /// 冷却——巨型 GetAll 超时后回包可能还在路上，立刻重发只会让大包在
+    /// 链路上排队叠加、把心跳饿死。冷却期内回退陈旧缓存（若有）。
     pub async fn get_all_game_friends(&self) -> Result<Vec<GameFriend>> {
         let _gate = self.rpc_gate.lock().await;
         if let Some((at, friends)) = self.last_list.lock().as_ref() {
@@ -159,14 +167,34 @@ impl FriendApi {
                 return Ok(friends.clone());
             }
         }
+        if let Some(failed_at) = *self.last_list_failed_at.lock() {
+            if failed_at.elapsed() < Duration::from_millis(crate::constants::FRIEND_LIST_FAIL_COOLDOWN_MS) {
+                if let Some((_, friends)) = self.last_list.lock().as_ref() {
+                    tracing::debug!("好友列表拉取失败冷却中，回退陈旧缓存");
+                    return Ok(friends.clone());
+                }
+                return Err(crate::error::Error::Business(
+                    "好友列表刚才获取失败，30 秒内不重试（避免大包重发叠加）".to_string(),
+                ));
+            }
+        }
         let platform = self.gateway.platform();
-        let friends = if platform.eq_ignore_ascii_case("qq") {
-            self.fetch_qq_friends().await?
+        let result = if platform.eq_ignore_ascii_case("qq") {
+            self.fetch_qq_friends().await
         } else {
-            self.fetch_wx_friends().await?
+            self.fetch_wx_friends().await
         };
-        *self.last_list.lock() = Some((Instant::now(), friends.clone()));
-        Ok(friends)
+        match result {
+            Ok(friends) => {
+                *self.last_list.lock() = Some((Instant::now(), friends.clone()));
+                *self.last_list_failed_at.lock() = None;
+                Ok(friends)
+            }
+            Err(e) => {
+                *self.last_list_failed_at.lock() = Some(Instant::now());
+                Err(e)
+            }
+        }
     }
 
     /// 只拉一个好友的 GetAll 气泡字段（微信/QQ 都走 GetGameFriends）。
@@ -769,9 +797,8 @@ fn dedupe_friends_by_gid(friends: Vec<GameFriend>) -> Vec<GameFriend> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn friend_api_constructs() {
-        let gw = Arc::new(crate::network::gateway::Gateway::new(
+    fn test_api() -> FriendApi {
+        FriendApi::new(Arc::new(crate::network::gateway::Gateway::new(
             crate::network::gateway::GatewayConfig {
                 server_url: "ws://localhost".into(),
                 platform: "test".into(),
@@ -781,7 +808,35 @@ mod tests {
                 headers: Default::default(),
             },
             Arc::new(crate::network::encryptor::NoopEncryptor),
-        ));
-        let _ = FriendApi::new(gw);
+        )))
+    }
+
+    #[test]
+    fn friend_api_constructs() {
+        let _ = test_api();
+    }
+
+    #[tokio::test]
+    async fn list_failure_enters_cooldown_instead_of_refiring() {
+        let api = test_api();
+        // 网关未连接：第一次拉取失败（phase 错误），进入 30s 冷却
+        let first = api.get_all_game_friends().await;
+        assert!(first.is_err());
+        assert!(api.last_list_failed_at.lock().is_some());
+        // 第二次（tick / 面板再点）在冷却期内：直接报冷却错误，不再打网关
+        let second = api.get_all_game_friends().await;
+        let msg = second.err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(msg.contains("30 秒内不重试"), "expected cooldown error, got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn list_cooldown_falls_back_to_stale_cache() {
+        let api = test_api();
+        // 预置一份"陈旧"成功缓存，再制造一次失败
+        *api.last_list.lock() = Some((Instant::now() - Duration::from_secs(60), vec![]));
+        assert!(api.get_all_game_friends().await.is_err());
+        // 冷却期内应回退陈旧缓存而不是报错
+        let fallback = api.get_all_game_friends().await;
+        assert!(fallback.is_ok());
     }
 }

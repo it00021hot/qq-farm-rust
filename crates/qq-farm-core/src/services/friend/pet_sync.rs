@@ -269,7 +269,8 @@ pub fn spawn_friend_pet_sync(
     active_tokens().lock().insert(account_id.clone(), token.clone());
     let service = Arc::clone(service);
     crate::runtime::safe_spawn::spawn_logged("friend_pet_sync", async move {
-        run_sync_chain(service, account_id, is_running, token).await;
+        // 补数据任务标记为后台 RPC 班次：只在网关有空闲时占用共享槽
+        crate::network::gateway::background_scope(run_sync_chain(service, account_id, is_running, token)).await;
     });
 }
 

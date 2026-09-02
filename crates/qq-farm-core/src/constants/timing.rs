@@ -12,10 +12,14 @@ pub const MIN_FRIENDS_LIST_CACHE_TTL_MS: u64 = 10_000;
 pub const INVALID_KNOWN_FRIEND_GID_COOLDOWN_MS: u64 = 24 * 60 * 60 * 1000;
 
 pub const FRIEND_LIST_COALESCE_MS: u64 = 800;
+/// 好友列表拉取失败后的冷却：巨型 GetAll 超时后回包可能还在路上，
+/// 立刻重发只会让大包在链路上排队叠加（对齐 bot 单飞 promise 的失败窗口）。
+pub const FRIEND_LIST_FAIL_COOLDOWN_MS: u64 = 30_000;
 /// 好友 LandsNotify 按 gid 去抖，避免连发气泡打满 GetGameFriends。
 pub const FRIEND_LANDS_NOTIFY_DEBOUNCE_MS: u64 = 500;
 pub const QQ_FRIEND_LIST_BATCH_SIZE: usize = 35;
 /// 网关 in-flight 上限（对齐 bot `MAX_IN_FLIGHT_REQUESTS`）；Heartbeat 不受此限。
+/// 实际拆成共享 4 + 前台保留 1（`gateway::acquire_rpc_slot`）：后台自动化只用共享槽。
 pub const MAX_IN_FLIGHT_REQUESTS: usize = 5;
 /// 网关等待队列上限（对齐 bot `MAX_QUEUED_REQUESTS`）。
 pub const MAX_QUEUED_REQUESTS: usize = 100;
