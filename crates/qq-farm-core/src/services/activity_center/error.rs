@@ -35,6 +35,14 @@ pub enum ActivityErrorCode {
     CharityProgressRewardUnavailable,
     CharityProgressRewardAlreadyClaimed,
     CharityResponseInvalid,
+    PetDiaryUnavailable,
+    InvalidPetStory,
+    InvalidPetGoods,
+    InvalidPetCount,
+    InvalidPetCharm,
+    InvalidPetFriendGid,
+    InvalidPetChallenge,
+    InvalidPetSolarTerm,
 }
 
 impl ActivityErrorCode {
@@ -73,6 +81,14 @@ impl ActivityErrorCode {
             Self::CharityProgressRewardUnavailable => "CHARITY_PROGRESS_REWARD_UNAVAILABLE",
             Self::CharityProgressRewardAlreadyClaimed => "CHARITY_PROGRESS_REWARD_ALREADY_CLAIMED",
             Self::CharityResponseInvalid => "CHARITY_RED_FLOWER_RESPONSE_INVALID",
+            Self::PetDiaryUnavailable => "PET_DIARY_UNAVAILABLE",
+            Self::InvalidPetStory => "INVALID_STORY",
+            Self::InvalidPetGoods => "INVALID_GOODS",
+            Self::InvalidPetCount => "INVALID_COUNT",
+            Self::InvalidPetCharm => "INVALID_CHARM",
+            Self::InvalidPetFriendGid => "INVALID_FRIEND_GID",
+            Self::InvalidPetChallenge => "INVALID_CHALLENGE",
+            Self::InvalidPetSolarTerm => "INVALID_SOLAR_TERM",
         }
     }
 }

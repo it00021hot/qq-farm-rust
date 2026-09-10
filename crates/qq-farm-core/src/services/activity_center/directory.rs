@@ -94,6 +94,37 @@ pub fn build_activity_directory(
     }
     push_binding(&mut bindings, charity_ids, "charity", "charity", 70);
 
+    // 萌宠成长日记（静态活动 ID 对齐 bot 注册表，priority 5 最高）
+    push_binding(
+        &mut bindings,
+        [
+            crate::constants::PET_DIARY_GROUP_ID.to_string(),
+            crate::constants::PET_DIARY_ACTIVITY_ID.to_string(),
+            crate::constants::PET_DIARY_SEEDS_ID.to_string(),
+            crate::constants::PET_DIARY_SHOP_ID.to_string(),
+        ],
+        "pet",
+        "pet",
+        5,
+    );
+
+    // 雨落成诗（静态活动 ID 对齐 bot 注册表；绑定后目录条目继承 List 窗口的
+    // 真实起止时间，活动结束后显示「已结束」而不是前端兜底入口的「进行中」）
+    push_binding(
+        &mut bindings,
+        [
+            "2026070300".to_string(),
+            "2026070301".to_string(),
+            "2026070302".to_string(),
+            "2026070303".to_string(),
+            "2026070304".to_string(),
+            "2026070305".to_string(),
+        ],
+        "weather",
+        "weather",
+        80,
+    );
+
     struct Group {
         id: String,
         name: String,

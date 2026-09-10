@@ -920,6 +920,30 @@ export function fetchClaimFarmActivityCharityDailyGift(data: Api.Farm.ActivityCl
   return invokeFlat('activity_claim_charity_daily_gift', { accountId: aid(data.accountId) });
 }
 
+export function fetchGetFarmActivityPetDiary(accountId: number) {
+  return invokeFlat('activity_get_pet_diary', { accountId: aid(accountId) });
+}
+
+export function fetchOperateFarmActivityPetDiary(
+  accountId: number,
+  action: string,
+  params: Record<string, unknown>
+) {
+  return invokeFlat('activity_operate_pet_diary', {
+    accountId: aid(accountId),
+    action,
+    params
+  });
+}
+
+export function fetchGetFarmActivityPetDiaryRecords(accountId: number, kind: 'interact' | 'plunder') {
+  return invokeFlat('activity_get_pet_diary_records', { accountId: aid(accountId), kind });
+}
+
+export function fetchGetFarmActivityPetDiaryFriend(accountId: number, gid: string) {
+  return invokeFlat('activity_get_pet_diary_friend', { accountId: aid(accountId), gid });
+}
+
 export function fetchClaimFarmActivityCharityProgressReward(data: Api.Farm.ActivityClaimParams) {
   const body = data as any;
   return invokeFlat('activity_claim_charity_progress_reward', {

@@ -19,7 +19,7 @@ use crate::proto::generated::gamepb::dogpb::{
 
 const DOG_SERVICE: &str = "gamepb.dogpb.DogService";
 const MAX_PROTECT_DURATION_SECONDS: i64 = 30 * 24 * 60 * 60;
-const PET_IDS: &[i64] = &[90001, 90002, 90003, 90011, 90021];
+const PET_IDS: &[i64] = &[90001, 90002, 90003, 90011, 90021, 90031];
 
 fn dog_food_duration(id: i64) -> Option<i64> {
     match id {
@@ -47,6 +47,7 @@ fn obtain_condition(id: i64) -> &'static str {
         90003 => "商店购买：200 点券",
         90011 => "商店购买：200 点券",
         90021 => "限时活动获得",
+        90031 => "萌宠成长日记：将比熊幼崽培育至成年后永久获得",
         _ => "游戏内活动或购买获得",
     }
 }
@@ -73,6 +74,15 @@ fn pet_skill_definitions(pet_id: i64) -> Vec<serde_json::Value> {
                 "description": "好友前来农场互助（浇水/除草/除虫）时，有概率掉落同气连枝礼包（每日限30次），主人与好友均可获得奖励。",
                 "dailyLimit": 30,
                 "source": "client-static",
+            }),
+        ],
+        90031 => vec![
+            loyalty(50),
+            serde_json::json!({
+                "skillId": 3001,
+                "name": "比熊润田",
+                "description": "看护状态下，作物有概率触发比熊变异（售价 ×4），可叠加冰冻、爱心、暗化、湿润等变异效果。",
+                "source": "game-config",
             }),
         ],
         _ => vec![],

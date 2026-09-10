@@ -27,6 +27,7 @@ import {
   fetchExchangeFarmActivityShop,
   fetchGetFarmActivitySnapshot,
   fetchGetFarmFriendList,
+  fetchGetWeatherSnapshot,
   fetchGiftFarmActivityQixiSachet,
   fetchLightFarmActivityConstellation,
   fetchSettleFarmActivityGreenPlumBrew,
@@ -39,6 +40,7 @@ import ActivityRulesDialog from './activity-rules-dialog.vue';
 import { normalizeActivityRules } from './rules';
 import { $t } from '@/locales';
 import CharityView, { type CharityActivity } from './charity-view.vue';
+import PetDiaryView from './pet-diary-view.vue';
 import QixiView from './qixi-view.vue';
 import WeatherView from './weather-view.vue';
 
@@ -47,7 +49,7 @@ defineOptions({
 });
 
 type ActivityTab = 'travel' | 'constellation' | 'shop' | 'solar';
-type GameplayKey = 'stellar' | 'qixi' | 'greenPlum' | 'weather' | 'charity';
+type GameplayKey = 'stellar' | 'qixi' | 'greenPlum' | 'weather' | 'charity' | 'pet';
 type ActivityStatus = 'active' | 'upcoming' | 'ended';
 type ActivityDirectoryItem = {
   id?: string;
@@ -210,6 +212,8 @@ const message = useMessage();
 
 const activeTab = ref<ActivityTab>('travel');
 const selectedGameplay = ref<GameplayKey | null>(null);
+// 雨落成诗活动窗口（目录兜底入口的状态判定）
+const weatherActivity = ref<{ startTime?: number | string; endTime?: number | string } | null>(null);
 const loading = ref(false);
 const pendingKey = ref<string | null>(null);
 const season = ref<Record<string, unknown>>({});
@@ -397,10 +401,19 @@ function resolveGameplay(activity: ActivityDirectoryItem): GameplayKey | null {
           ? 'weather'
           : activity.detailTarget === 'charity'
             ? 'charity'
-            : activity.detailTarget
-              ? 'stellar'
-              : null);
-  if (key === 'qixi' || key === 'stellar' || key === 'greenPlum' || key === 'weather' || key === 'charity') {
+            : activity.detailTarget === 'pet'
+              ? 'pet'
+              : activity.detailTarget
+                ? 'stellar'
+                : null);
+  if (
+    key === 'qixi' ||
+    key === 'stellar' ||
+    key === 'greenPlum' ||
+    key === 'weather' ||
+    key === 'charity' ||
+    key === 'pet'
+  ) {
     return key;
   }
   return null;
@@ -447,13 +460,14 @@ const displayActivities = computed(() => {
       detailTarget: 'qixi'
     });
   }
-  // 雨落成诗（天气活动，固定入口；进行状态由 weather_snapshot 决定）
+  // 雨落成诗（天气活动，固定兜底入口；时间窗用 weather_snapshot 的真实值，
+  // 活动结束后目录显示「已结束」而不是无窗口时的「进行中」）
   if (!entries.some(item => resolveGameplay(item) === 'weather')) {
     entries.push({
       id: '2026070300',
       name: $t('page.farm.activity.tabWeather'),
-      startTime: 0,
-      endTime: 0,
+      startTime: Number(weatherActivity.value?.startTime || 0),
+      endTime: Number(weatherActivity.value?.endTime || 0),
       gameplayKey: 'weather',
       detailTarget: 'weather'
     });
@@ -1124,6 +1138,11 @@ onMounted(async () => {
     await farmAccountStore.loadAccounts();
   }
   await loadActivities();
+  // 雨落成诗窗口（静默，仅用于目录兜底入口的状态）
+  if (farmAccountStore.currentAccountId) {
+    const { error, data } = await fetchGetWeatherSnapshot(farmAccountStore.currentAccountId);
+    if (!error) weatherActivity.value = data?.activity ?? null;
+  }
   clockTimer.start(() => {
     clockNow.value = Date.now();
   }, 1000);
@@ -1546,6 +1565,8 @@ onMounted(async () => {
           @claim-daily-gift="claimCharityDailyGift"
           @claim-progress="claimCharityProgress"
         />
+        <!-- 萌宠成长日记（自加载视图） -->
+        <PetDiaryView v-else-if="selectedGameplay === 'pet'" />
         <!-- 雨落成诗（天气活动） -->
         <WeatherView v-else-if="selectedGameplay === 'weather'" />
         <!-- 青梅 -->

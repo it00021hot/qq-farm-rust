@@ -31,7 +31,15 @@ export function resolveCatalogImage(path?: string | null): string {
 
   const rel = catalogRelativePath(path);
   if (!rel) return '';
-  if (isTauriRuntime()) return `farmcfg://localhost/${rel}`;
+  if (isTauriRuntime()) {
+    // Windows WebView2 下自定义协议必须用映射形式 http://farmcfg.localhost/ 才能从
+    // 任意页面 origin（含 tauri-cli dev 的 http://127.0.0.1:*）加载资源；
+    // macOS WKWebView 用标准 farmcfg:// 形式。
+    if (navigator.userAgent.includes('Windows')) {
+      return `http://farmcfg.localhost/${rel}`;
+    }
+    return `farmcfg://localhost/${rel}`;
+  }
   return `/game-config/${rel}`;
 }
 
