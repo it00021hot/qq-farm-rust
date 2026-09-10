@@ -39,3 +39,8 @@ crates/qq-farm-desktop/icons/ios/
 
 # WASM 临时文件
 *.wasm.tmp
+
+# 根目录误生成的 npm 模板
+/package.json
+/package-lock.json
+/node_modules/
