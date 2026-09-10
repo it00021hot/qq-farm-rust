@@ -18,6 +18,23 @@
     "core:window:allow-show",
     "core:window:allow-set-focus",
     "dialog:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://localhost.weixin.qq.com:14013/api/check-login" },
+        { "url": "https://localhost.weixin.qq.com:14014/api/check-login" },
+        { "url": "https://localhost.weixin.qq.com:14015/api/check-login" },
+        { "url": "https://localhost.weixin.qq.com:13013/api/check-login" },
+        { "url": "https://localhost.weixin.qq.com:13014/api/check-login" },
+        { "url": "https://localhost.weixin.qq.com:13015/api/check-login" },
+        { "url": "https://localhost.weixin.qq.com:14013/api/authorize" },
+        { "url": "https://localhost.weixin.qq.com:14014/api/authorize" },
+        { "url": "https://localhost.weixin.qq.com:14015/api/authorize" },
+        { "url": "https://localhost.weixin.qq.com:13013/api/authorize" },
+        { "url": "https://localhost.weixin.qq.com:13014/api/authorize" },
+        { "url": "https://localhost.weixin.qq.com:13015/api/authorize" }
+      ]
+    },
     "opener:default",
     "process:default",
     "updater:default",

@@ -805,10 +805,9 @@
   「个人达标 && 全服达标」（补齐 globalReached/personalReached）；写操作（领种子/捐赠/
   日礼/进度奖励）删除客户端前置校验直接 Operate，快照改由回包 `reply.data` 构造
   （不再发全量 snapshot 请求）；捐赠数回退走 `charity_donate_result.count`
-- **farm tick 公益结算礼包**：新增 `warehouse.open_charity_settlement_gift_packs_silent`
-  （对齐 bot `openCharitySettlementGiftPacksSilently`：礼包 id 101604、5min 冷却、只记
-  日志不抛错），挂入 farm tick（bot 用 `auto.email !== false` 门控，rust 无 email 开关，
-  走默认开启行为）
+- **公益结算礼包检查移除**：bot 中的 `openCharitySettlementGiftPacksSilently` 使用了
+  当前游戏不存在的固定道具 id `101604`；Rust 不再在 farm tick 中查询或记录该礼包，避免
+  产生虚假的“打开公益小红花结算礼包失败”日志。
 - **背包分类修复**（cc6a8ab）：分类优先用物品元数据 type（17=mutant 新分支 / 6=fruit /
   5=seed，缺失时回退反查植物表）；排序改 fruit → mutant → seed
 - **自动化任务全局互斥**（bot `b487b0f`）：新增 `infra/automation_lock`（按账号 FIFO
@@ -863,3 +862,21 @@
   登录始终可用；LoginSettings 存储字段保留，保存时不动该值）
 - 验证：`vue-tsc --noEmit` / `vite build` 通过；实机待验（本机微信已登录未锁定时
   微信授权页应显示头像昵称并可一键授权）
+
+### 2026-09-10 — 微信快捷登录统一使用 Tauri HTTP 插件
+
+- macOS 本机微信在 `127.0.0.1:14013` 正常监听，检测接口返回 `errcode=0` 和
+  `authorize_uuid`；响应的 CORS 来源固定为 `https://open.weixin.qq.com`。
+  前次修复的 `additionalBrowserArgs` 仅适用于 Windows，无法放行 WKWebView 跨域请求。
+- 前端检测和授权统一使用 `@tauri-apps/plugin-http` 的 fetch，底层由插件的 Rust
+  reqwest 发起请求；注册 HTTP 插件，ACL 仅允许六个微信端口的 check-login / authorize。
+  配置微信 Origin/Referer、自签证书兼容和禁止重定向；移除 `--disable-web-security`。
+- 请求超时覆盖连接和响应体，结束后清理定时器；插件字符串错误转换为 Error，保留
+  诊断信息。换票和账号保存沿用原流程。
+- 新增前端 IPC 回归测试（检测、授权、HTTP 错误、字符串错误、超时取消），以及端口
+  权限检查和默认忽略的本机微信连通性测试。后者只检测状态，不确认授权或保存账号。
+- 验证：前端 5 项回归测试、类型检查和生产构建通过；Rust 工作区 989 项单元测试
+  通过；新增端口权限检查及 macOS 本机微信实测均通过（插件所用 reqwest 客户端收到
+  有效授权标识）。`cargo fmt --all --check` / `git diff --check` 通过。
+- 平台限制：插件底层仍是原生进程；此前 Windows 环境记录的进程过滤需在该环境
+  重新验证，不能由 macOS 连通结果推断 Windows 已解决。

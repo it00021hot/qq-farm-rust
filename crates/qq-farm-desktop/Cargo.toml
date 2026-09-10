@@ -27,6 +27,8 @@ qq-farm-app = { workspace = true }
 qq-farm-core = { workspace = true }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-dialog = "2"
+# 仅启用本机微信所需的 TLS、自定义 Origin 和自签证书支持。
+tauri-plugin-http = { version = "2.6", default-features = false, features = ["rustls-tls", "unsafe-headers", "dangerous-settings"] }
 tauri-plugin-process = "2"
 tauri-plugin-updater = "2"
 serde = { workspace = true }

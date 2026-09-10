@@ -83,7 +83,7 @@ const qqLoading = ref(false);
 const qqSubmitting = ref(false);
 let qqPollTimer: ReturnType<typeof setTimeout> | undefined;
 
-// 浏览器直连本机微信所需的 OAuth 参数（create session 返回）
+// 前端调用本机微信 HTTP 插件所需的 OAuth 参数（create session 返回）
 const wxQuickOauth = ref<{ appId: string; scope: string; redirectUri: string; state: string } | null>(
   null
 );
@@ -491,8 +491,7 @@ async function detectLocalWechat() {
       redirectUri: String(data.redirectUri),
       state: String(data.state)
     };
-    // 本地微信服务按进程过滤连接（只放行浏览器等，Rust 进程被静默丢弃），
-    // 探测必须由 WebView 直接 fetch（CORS 由 additionalBrowserArgs 放行）
+    // 各平台统一通过 HTTP 插件请求，避免 WebView 的跨域限制。
     const oauth = wxQuickOauth.value;
     const ports = (data.ports || []).map(Number);
     if (!ports.length) {
@@ -558,7 +557,7 @@ async function authorizeLocalWechat() {
   let quickCode = '';
   try {
     const pos = authorizePosition();
-    // 浏览器直连授权（同 detect：本机微信按进程过滤，必须 WebView 发请求）
+    // 授权与检测使用相同的 HTTP 插件通道。
     const oauth = wxQuickOauth.value;
     if (!oauth) {
       throw new Error('授权会话缺少 OAuth 参数，请重新检测');
@@ -873,19 +872,21 @@ onBeforeUnmount(() => {
               </div>
             </NSpin>
             <p v-if="wxError" class="text-13px text-error">{{ wxError }}</p>
-            <NButton
-              v-if="wxQuickProfile"
-              block
-              color="#07c160"
-              :loading="wxSubmitting"
-              :disabled="!wxQuickPort"
-              @click="authorizeLocalWechat"
-            >
-              微信快捷登录
-            </NButton>
-            <NButton v-if="wxQuickProfile" text type="primary" @click="switchToQrLogin">
-              使用其他头像、昵称或账号
-            </NButton>
+            <NSpace justify="center" :wrap="true">
+              <NButton
+                v-if="wxQuickProfile"
+                type="success"
+                size="small"
+                :loading="wxSubmitting"
+                :disabled="!wxQuickPort"
+                @click="authorizeLocalWechat"
+              >
+                微信快捷登录
+              </NButton>
+              <NButton size="small" secondary @click="switchToQrLogin">
+                切换扫码登录
+              </NButton>
+            </NSpace>
           </div>
 
           <div v-else class="mb-12px flex flex-col items-center gap-12px">

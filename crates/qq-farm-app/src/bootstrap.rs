@@ -38,18 +38,23 @@ pub fn gateway_template_from_env(gateway_origin: &str) -> GatewayConfigTemplate 
         // 版本解析对齐 bot `resolveClientVersion`：保存的版本只有在其时间戳
         // 比默认值更新时才沿用，否则回默认（随 Login/Heartbeat 上报，旧版本
         // 可能被服务端冷落）；发生回退时持久化避免每次启动重复迁移。
+        // bot 读取配置时优先使用 deviceInfo.clientVersion，然后将生效版本
+        // 同步回顶层和设备字段。旧版 Rust 曾只解析顶层字段，导致两个版本
+        // 不一致时 update_runtime_config 又把旧设备版本覆盖回运行时配置。
+        let saved_version = if sys.device_info.client_version.trim().is_empty() {
+            &sys.client_version
+        } else {
+            &sys.device_info.client_version
+        };
         let (resolved_version, resolved_at) = qq_farm_core::config::resolve_client_version(
-            &sys.client_version,
+            saved_version,
             sys.client_version_updated_at,
         );
-        let mut changed = resolved_version != sys.client_version;
+        let mut changed = resolved_version != sys.client_version
+            || resolved_version != sys.device_info.client_version;
         sys.client_version = resolved_version;
         sys.client_version_updated_at = resolved_at;
-        if sys.device_info.client_version.trim().is_empty()
-            || sys.device_info.client_version == sys.client_version
-        {
-            sys.device_info.client_version = sys.client_version.clone();
-        }
+        sys.device_info.client_version = sys.client_version.clone();
         let tz = qq_farm_core::config::normalize_time_zone(&sys.time_zone);
         if tz != sys.time_zone {
             sys.time_zone = tz;

@@ -1268,9 +1268,6 @@ impl WorkerLoop {
                     if this.auto_on("task") {
                         let _ = this.task.check_and_claim_tasks().await;
                     }
-                    // 对齐 bot：farm tick 不领邮件，改为静默开背包中的公益小红花结算礼包
-                    // （bot `auto.email !== false` 默认开启；rust 无 email 开关，走默认行为）
-                    let _ = this.warehouse.open_charity_settlement_gift_packs_silent().await;
                     if this.auto_on("fertilizer_gift") {
                         let _ = this.warehouse.auto_open_fertilizer_gift_packs().await;
                     }

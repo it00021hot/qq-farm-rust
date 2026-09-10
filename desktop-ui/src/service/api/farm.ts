@@ -1,4 +1,5 @@
 import type { FlatResponseData } from '@sa/axios';
+import { fetch as nativeHttpFetch } from '@tauri-apps/plugin-http';
 import { invokeDesktop } from '@/service/tauri/client';
 import { formatInvokeError } from '@/utils/error';
 
@@ -393,7 +394,7 @@ export function fetchConfirmFarmWxQuickLogin(sessionId: string, redirectUrl: str
   );
 }
 
-// ===== 本机微信 API（前端直连）=====
+// ===== 本机微信 API（前端统一调用 HTTP 插件，由 Rust 发请求，不受 WebView CORS 限制）=====
 
 interface WxLocalPayload {
   errcode: number;
@@ -420,16 +421,36 @@ async function wxLocalFetch(
   jsdata: Record<string, unknown>,
   timeoutMs: number
 ): Promise<WxLocalPayload> {
-  const res = await fetch(`https://localhost.weixin.qq.com:${port}${path}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      apiname: path === '/api/authorize' ? 'qrconnectfastauthorize' : 'qrconnectchecklogin',
-      jsdata
-    }),
-    signal: AbortSignal.timeout(timeoutMs)
-  });
-  return parseWxLocalResponse(await res.text());
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await nativeHttpFetch(`https://localhost.weixin.qq.com:${port}${path}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        origin: 'https://open.weixin.qq.com',
+        referer: 'https://open.weixin.qq.com/'
+      },
+      connectTimeout: timeoutMs,
+      maxRedirections: 0,
+      // 仅上述 capability 白名单内的本机微信接口接受自签证书。
+      danger: { acceptInvalidCerts: true, acceptInvalidHostnames: false },
+      body: JSON.stringify({
+        apiname: path === '/api/authorize' ? 'qrconnectfastauthorize' : 'qrconnectchecklogin',
+        jsdata
+      }),
+      signal: controller.signal
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`本机微信 HTTP ${res.status}（端口 ${port}）`);
+    return parseWxLocalResponse(text);
+  } catch (error) {
+    // 插件 IPC 可能抛出字符串，统一为 Error 以保留抽屉中的诊断信息。
+    throw new Error(controller.signal.aborted ? '本机微信请求超时' : formatInvokeError(error));
+  } finally {
+    // 避免请求成功后定时器再次触发，取消插件已经释放的资源。
+    clearTimeout(timer);
+  }
 }
 
 /** 本机微信探测（POST /api/check-login） */

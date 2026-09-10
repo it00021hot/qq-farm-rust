@@ -35,11 +35,6 @@ use crate::proto::generated::gamepb::itempb::{
 const FERTILIZER_RELATED_IDS: &[i64] =
     &[100_003, 100_004, 80_001, 80_002, 80_003, 80_004, 80_011, 80_012, 80_013, 80_014];
 
-/// 公益小红花结算礼包 item id（对齐 bot `CHARITY_SETTLEMENT_GIFT_ID`）
-const CHARITY_SETTLEMENT_GIFT_ID: i64 = 101_604;
-/// 特殊礼包检查冷却（对齐 bot `SPECIAL_GIFT_CHECK_COOLDOWN_MS`）
-const SPECIAL_GIFT_CHECK_COOLDOWN_MS: i64 = 5 * 60 * 1000;
-
 // 化肥道具每小时数
 fn normal_fertilizer_hours(id: i64) -> Option<i64> {
     match id {
@@ -92,7 +87,6 @@ pub struct WarehouseService {
     gateway: Arc<Gateway>,
     fertilizer_gift_done_date_key: Mutex<String>,
     fertilizer_gift_last_open_at: Mutex<i64>,
-    charity_gift_last_open_at: Mutex<i64>,
     account_id: Mutex<String>,
     pending_bag: AsyncMutex<Option<broadcast::Sender<std::result::Result<BagReply, String>>>>,
 }
@@ -104,7 +98,6 @@ impl WarehouseService {
             gateway,
             fertilizer_gift_done_date_key: Mutex::new(String::new()),
             fertilizer_gift_last_open_at: Mutex::new(0),
-            charity_gift_last_open_at: Mutex::new(0),
             account_id: Mutex::new(String::new()),
             pending_bag: AsyncMutex::new(None),
         }
@@ -326,75 +319,6 @@ impl WarehouseService {
             );
         }
         (opened, normal_h, organic_h)
-    }
-
-    /// 静默开启公益小红花结算礼包（对齐 bot `openCharitySettlementGiftPacksSilently`，
-    /// farm tick 调用；失败只记日志不抛错）。返回开启的礼包数，冷却 5 分钟。
-    pub async fn open_charity_settlement_gift_packs_silent(&self) -> i64 {
-        let now = crate::utils::time::now_ms();
-        {
-            let mut last = self.charity_gift_last_open_at.lock();
-            if now - *last < SPECIAL_GIFT_CHECK_COOLDOWN_MS {
-                return 0;
-            }
-            *last = now;
-        }
-
-        let opened = match self.try_open_charity_settlement_gift_packs().await {
-            Ok(n) => n,
-            Err(e) => {
-                tracing::warn!("[仓库] 打开公益小红花结算礼包失败: {e}");
-                crate::services::panel_log::log_warn(
-                    &self.account_id.lock(),
-                    "仓库",
-                    format!("打开公益小红花结算礼包失败: {e}"),
-                    crate::constants::PanelEvent::CharitySettlementGiftOpen,
-                    Some(serde_json::json!({
-                        "module": "warehouse",
-                        "event": "charity_settlement_gift_open",
-                        "result": "error",
-                    })),
-                );
-                0
-            }
-        };
-        if opened > 0 {
-            tracing::info!("[仓库] 自动打开公益小红花结算礼包 x{opened}");
-            crate::services::panel_log::log(
-                &self.account_id.lock(),
-                "仓库",
-                format!("自动打开公益小红花结算礼包 x{opened}"),
-                crate::constants::PanelEvent::CharitySettlementGiftOpen,
-                Some(serde_json::json!({
-                    "module": "warehouse",
-                    "event": "charity_settlement_gift_open",
-                    "result": "ok",
-                    "count": opened,
-                })),
-            );
-        }
-        opened
-    }
-
-    async fn try_open_charity_settlement_gift_packs(&self) -> Result<i64> {
-        let bag = self.get_bag().await?;
-        let gift_items: Vec<BagItemLite> = get_bag_items(&bag)
-            .into_iter()
-            .filter(|it| it.id == CHARITY_SETTLEMENT_GIFT_ID && !it.locked && it.count > 0)
-            .collect();
-        if gift_items.is_empty() {
-            return Ok(0);
-        }
-
-        let mut opened: i64 = 0;
-        for item in &gift_items {
-            let count = item.count.max(1);
-            // 背包变化或请求失败时留待下个冷却重试
-            if self.use_item(CHARITY_SETTLEMENT_GIFT_ID, count, item.uid).await.is_ok() {
-                opened += count;
-            }
-        }
-        Ok(opened)
     }
 
     /// 自动出售所有果实。对齐 TS `sellAllFruits`：
