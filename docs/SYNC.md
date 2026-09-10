@@ -17,8 +17,8 @@
 
 | 仓库 | Commit | 日期 | 说明 |
 |------|--------|------|------|
-| **qq-farm-rust** | `main`（本提交：bot 9-1 增量同步） | 2026-09-01 | 公益小红花 + 施肥协议修正 + QQVip 非会员跳过 + 协议 1.13.3.16 |
-| **qq-farm-bot** | `e44cc12` | 2026-09-01 | 公益小红花 + MeoW 推送渠道 + 施肥回包解析修复 + 协议版本升级 |
+| **qq-farm-rust** | `main`（本提交：bot 9-10 萌宠日记增量） | 2026-09-10 | 萌宠成长日记 + 协议 1.14.0.1_20260909 + TSDK QQ 宿主初始化 |
+| **qq-farm-bot** | `3bb11e2` | 2026-09-10 | 萌宠成长日记（PR #71）+ TSDK QQ 宿主初始化（`b0a4405`）+ 版本 20260910 |
 
 文档范围：**业务行为 + 面板 HTTP/Socket 契约**（不含改 Vue 面板本身）。
 
@@ -26,10 +26,11 @@
 
 | 概念 | 当前值 | 用途 |
 |------|--------|------|
-| 客户端版本 `FARM_CLIENT_VERSION` | 默认 `1.13.3.16_20260826`（与 bot `config.ts` 默认一致） | 进游戏网关声明 |
-| bot `core` 包版本号 | `20260901` | 原项目发布标签，≠ 客户端版本字符串 |
+| 客户端版本 `FARM_CLIENT_VERSION` | 默认 `1.14.0.1_20260909`（与 bot `config.ts` 默认一致，UPDATED_AT `1789004223123`） | 进游戏网关声明 |
+| bot `core` 包版本号 | `20260910` | 原项目发布标签，≠ 客户端版本字符串 |
 | 青梅活动 ID | 每日 `2026081201` / 酿造 `2026081202` | 活动协议 |
 | 公益小红花活动 ID | 活动组 `2026090900` / 活动 `2026090901` | 活动协议 |
+| 萌宠成长日记活动 ID | 活动组 `2026090100` / 养成 `2026090101` / 种子赠礼 `2026090102` / 拾物小铺 `2026090103` | 活动协议 |
 
 ---
 
@@ -70,7 +71,7 @@
 | 自动/手动出售果实 | 齐 | 自动受 `sell` 开关；`sell_cond` 满足后用 `cond_sells`（活动结束后 / 道具过期后等）；手动预检拒绝不可售 | `warehouse` + `game_config` + `activity_windows` |
 | 商城 / 神秘商店 / 月卡 / 钻石 | 齐 | 列表、购买（神秘 Buy 无回包）、月卡、充值信息 | `mall`, `mystery_shop`, `monthcard`, `pay`, `commerce` |
 | 日常领取 | 齐 | 任务（成长 claim 后刷新 TaskInfo + `currentTask`）、邮件、分享等 | `task`, `email`, `share`, … |
-| 活动中心 | 齐 | 千星游记、观星、星砂、节令、青梅（含已领幂等）、鹊桥寄情（筑桥领取 + 赠香囊）、公益小红花（领种子/捐爱心/每日礼包） | `activity_center*` |
+| 活动中心 | 齐 | 千星游记、观星、星砂、节令、青梅（含已领幂等）、鹊桥寄情（筑桥领取 + 赠香囊）、公益小红花（领种子/捐爱心/每日礼包）、萌宠成长日记（养成/寻宝/锦囊/夺宝/种子/小铺/节令/记录） | `activity_center*` |
 | 面板鉴权与账号 | 齐 | 登录注册（无卡密）、账号 CRUD、设置 | `routes/auth`, `account`, `admin` |
 | 面板农场/好友/活动/商业 API | 已随 server 删除 | **只维护桌面版**（Tauri IPC 语义对齐原 HTTP 契约） | `qq-farm-desktop/src/commands/*` |
 | Socket 状态/日志推送 | 齐 | `status:update` / `log:new` 等 | `socket.rs` |
@@ -880,3 +881,77 @@
   有效授权标识）。`cargo fmt --all --check` / `git diff --check` 通过。
 - 平台限制：插件底层仍是原生进程；此前 Windows 环境记录的进程过滤需在该环境
   重新验证，不能由 macOS 连通结果推断 Windows 已解决。
+
+### 2026-09-10 — 增量同步 bot 707a47c..3bb11e2（萌宠成长日记 / 协议 1.14.0.1_20260909 / TSDK QQ 宿主）
+
+- 对照基准：bot `3bb11e2`（2026-09-10，core `20260910`，PR #71 合入）。此前基准
+  `707a47c`（同日早间记录）。
+- **萌宠成长日记**（全新活动，对齐 bot `bb2f78a` 主适配 + `03c2bef` 护送/锦囊收敛）：
+  - proto：新增 `proto/pet-diary.proto`（478 行整份镜像）；`activitypb.proto` 补
+    `import "pet-diary.proto";` 与 `ActivityData.pet_treasure_hunt = 115`
+  - core：`services/activity_center/pet.rs` —— `GetGroup(2026090100)` 读取分组；
+    快照 = 分组 + 拾物小铺目录（op=7）+ 背包余额 + 节令（仅保留与活动窗口重叠项），
+    各源容错收集 `warnings`，独立单飞（对齐 bot `pendingRead`，不进活动中心总快照）
+  - 写操作 `PetDiaryOperateRequest` 15 个动作（领养/投喂/寻宝/手记领取/锦囊刷新/
+    锦囊装备/夺宝/开宝藏/夺宝补偿/领永久比熊/手记已播标记/跳过夺宝动画/种子一键领/
+    小铺兑换），门控 1:1 对齐 bot：付费刷新须 `payment=tickets` +
+    `expectedPaidRefreshCount` 与服务端计数一致 + 发送前重读点券余额（防官方客户端
+    「点券不足自动落钻石」，`allowDiamonds` 一律拒绝）；夺宝前置 op47 好友宝藏
+    status==2 且 preview.canStart + 挑战书白名单 80101-03 + 挑战书余额；小铺兑换
+    目录重查 + 限购合并校验；任何钻石成本（道具 1004 / id 0 / 负数 /
+    `diamond_cost_count>0`）一律拒绝兑换
+  - 节令小礼：`SolarTermsService.ClaimSolarTerms`，仅允许与活动窗口重叠且
+    `canClaim` 的节令；回包校验 `term_id` + `status==3`
+  - 记录读取：互动日志 op=31 / 被夺日志 op=44；好友活动信息 op=47（回包 gid 校验）
+  - 数值配置镜像 `assets/activity-data/pet-diary-2026090101.json`（投喂/寻宝消耗
+    1028:700、成年阈值 7000、日限投喂 16 / 寻宝 10 / 夺宝 20、锦囊 101-105、刷新
+    免费 1 次/日 + 30 点券 ≤3 次/日）与素材映射 `pet-diary-assets.json`；132 张官方
+    素材镜像入 `desktop-ui/public/activity-assets/pet-diary/`
+  - 目录注册：gameplay `pet` priority 5（活动组 `2026090100-03`），桌面面板入口
+    「萌宠日记」；纯面板驱动、无自动化任务（对齐 bot）
+  - 宠物表：`pets.rs` 补 90031 比熊（忠心护主 50% + 技能 3001 比熊润田：看护状态
+    作物概率变异售价×4；获得方式=萌宠日记培育至成年）
+- **协议版本**：`1.13.3.17_20260826` → `1.14.0.1_20260909`
+  （`DEFAULT_CLIENT_VERSION_UPDATED_AT` → `1789004223123`，活动协议前提）
+- **TSDK 升级**（对齐 bot `b0a4405`）：wasm `v3.9.0.1787640848` →
+  `v3.9.0.1788165223`（SHA-256 `a95b1781…b5f99f`）；宿主初始化按账号平台选择：
+  QQ（App ID `1112386029`、设备文本 `windows;windows;windows 10.0;0;`、用户目录
+  `qqfile://usr/`、debugMode 0），微信维持原宿主；QQ 宿主特征状态归一（数据段
+  17288/17352 各 64B，仅 index 1 差 1 时归一为官方值，每次发送 init token 前执行）
+- **桌面端**：`activity_get_pet_diary` / `activity_operate_pet_diary` /
+  `activity_get_pet_diary_records` / `activity_get_pet_diary_friend` 4 条 IPC（ACL
+  两处注册，防回归测试通过）；`pet-diary-view.vue` 紧凑功能视图——养成/寻宝/宝藏/
+  锦囊（含付费刷新确认）/夺宝（好友查询→选宝藏→挑战书→战斗结果）/种子日历/小铺/
+  手记/节令/双日志全操作可用；不做护送横幅动画等纯视觉复刻（用户决策 2026-09-10，
+  符合「业务目标一致」验收口径）
+- bot `03c2bef` 回退的 network `sendTail` 发包串行化不在 rust 范围（rust 网关本就
+  账号内串行）；bot web 面板视觉件（PetEscortLandscape 等）不移植
+- 验证：`RUSTFLAGS="-D warnings" cargo check --workspace --all-targets` 0 错 0 警；
+  `cargo test --workspace` 全过（core 977 项含 pet 新增 8 项常量/门控/normalize
+  测试、desktop 5 项含 ACL 防回归）；`cargo fmt --all --check` 通过；新 tsdk.wasm
+  加密/解密往返实测通过；`pnpm typecheck` / `pnpm build` 通过
+- 能力状态：矩阵活动中心行补「萌宠成长日记」；实机待验：萌宠活动全链路（活动窗口
+  内领取/投喂/寻宝/夺宝/兑换）、QQ 平台账号 TSDK QQ 宿主（并入 L1/L5 待验）
+
+### 2026-09-10 — 热修：萌宠页道具图路径 + 雨落成诗目录状态（实机发现）
+
+- **萌宠页图片全挂**（pet-diary-view 首版笔误连锁）：道具图 `item.image` 是后端
+  `/game-config/seed_images_named/...` 相对路径，桌面端必须经 `resolveCatalogImage`
+  转成 `farmcfg://localhost/...` 才能在 webview 加载；首版误传 `item.id` 进该函数，
+  修类型错误时又简化成直接返回 `item.image` → 萌宠页全部道具/奖励图 404。已改回
+  `resolveCatalogImage(item.image)`，其余页面不受影响（它们的转换调用一直正确）
+- **雨落成诗目录状态**：目录对齐 bot registry 补 weather 绑定（静态 ID
+  `2026070300-05`，priority 80），目录条目继承 List 窗口真实起止时间，活动结束后
+  显示「已结束」；前端固定兜底入口同步改用 `weather_snapshot` 的真实窗口时间，
+  不再无窗口时恒显「进行中」
+- 验证：`cargo test -p qq-farm-core --lib` 977 项全过；`pnpm typecheck` /
+  `pnpm build` 通过；构建产物确认 activity chunk 已引用 shared 的 farmcfg 转换，
+  dist 内 `/activity-assets/pet-diary/` 素材可访问（1430 服务实测 image/png 200）；
+  dev 实机登录链路正常
+- **补记（同日二轮热修）**：上条热修只修了萌宠页自身的参数错误；实机复查发现
+  「所有图片（含游戏配置页）」在 dev 实例下仍挂——真正全局根因是 tauri-cli dev
+  的页面 origin 为 `http://127.0.0.1:1430`，Windows WebView2 下 `farmcfg://`
+  形式的自定义协议资源无法从该 origin 加载（安装版 origin `http://tauri.localhost`
+  不受影响，因此线上一直正常）。修复：`resolveCatalogImage` Windows 分支统一改用
+  WebView2 映射形式 `http://farmcfg.localhost/<rel>`（后端 assets.rs 本就支持该
+  host 形式并有单测），macOS 保持 `farmcfg://localhost/`。dev 实机验证图片恢复。

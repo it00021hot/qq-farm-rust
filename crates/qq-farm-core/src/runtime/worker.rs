@@ -124,8 +124,14 @@ impl Worker {
                 let tsdk_data_dir = config.data_dir.join(account_id.as_str());
                 let wasm_path = config.tsdk_wasm_path.clone();
                 let data_dir_s = tsdk_data_dir.to_string_lossy().to_string();
+                // TSDK 宿主按账号平台初始化（QQ 账号走 QQ 宿主，对齐 bot b0a4405）
+                let tsdk_platform = config.gateway.platform.clone();
                 let tsdk = match tokio::task::spawn_blocking(move || {
-                    crate::crypto::tsdk::TsdkRuntime::load(&wasm_path, data_dir_s)
+                    crate::crypto::tsdk::TsdkRuntime::load_for_platform(
+                        &wasm_path,
+                        data_dir_s,
+                        &tsdk_platform,
+                    )
                 })
                 .await
                 {

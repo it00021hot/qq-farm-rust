@@ -12,6 +12,7 @@ mod constellation;
 mod directory;
 mod dto;
 mod error;
+mod pet;
 mod qingmei;
 mod qixi;
 mod rpc;
@@ -80,6 +81,8 @@ pub struct ActivityCenterService {
     mutation_lock: Arc<AsyncMutex<()>>,
     /// 快照单飞，避免活动+背包并发打满网关
     snapshot_lock: Arc<AsyncMutex<()>>,
+    /// 萌宠日记快照单飞（独立于活动中心总快照，对齐 bot `pendingRead`）
+    pet_snapshot_lock: Arc<AsyncMutex<()>>,
     /// 缓存上一次拉取的赛季信息（用于轻量刷新）
     cached_season: Mutex<Option<GetSeasonInfoReply>>,
     qingmei_seed_claimed_date: Mutex<String>,
@@ -98,6 +101,7 @@ impl ActivityCenterService {
             gateway,
             mutation_lock: Arc::new(AsyncMutex::new(())),
             snapshot_lock: Arc::new(AsyncMutex::new(())),
+            pet_snapshot_lock: Arc::new(AsyncMutex::new(())),
             cached_season: Mutex::new(None),
             qingmei_seed_claimed_date: Mutex::new(String::new()),
             account_id: Mutex::new(String::new()),

@@ -173,3 +173,34 @@ pub async fn claim_charity_progress_reward(
         .await
         .map_err(AppError::from_core)
 }
+
+/// 萌宠成长日记快照。
+pub async fn pet_diary(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    loop_.activity_center().get_pet_diary().await.map_err(AppError::from_core)
+}
+
+/// 萌宠成长日记写操作（feed/draw/battle/exchange/… 共 15 个动作 + solar）。
+pub async fn operate_pet_diary(
+    ctx: &AppContext,
+    account_id: &str,
+    action: &str,
+    params: &Value,
+) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    loop_.activity_center().operate_pet_diary(action, params).await.map_err(AppError::from_core)
+}
+
+/// 萌宠成长日记互动 / 被夺日志。
+pub async fn pet_diary_records(ctx: &AppContext, account_id: &str, kind: &str) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    let records =
+        loop_.activity_center().get_pet_diary_records(kind).await.map_err(AppError::from_core)?;
+    serde_json::to_value(records).map_err(|e| AppError::Internal(e.to_string()))
+}
+
+/// 好友的萌宠活动信息（夺宝前置查询）。
+pub async fn pet_diary_friend(ctx: &AppContext, account_id: &str, gid: &str) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    loop_.activity_center().get_pet_diary_friend(gid).await.map_err(AppError::from_core)
+}

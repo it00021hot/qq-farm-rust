@@ -214,3 +214,54 @@ mod tests {
         assert_eq!(json_i64(&json!(null)), 0);
     }
 }
+
+/// 萌宠成长日记快照。
+#[tauri::command]
+pub async fn activity_get_pet_diary(
+    state: State<'_, DesktopState>,
+    account_id: String,
+) -> IpcResult<Value> {
+    ensure(&state, &account_id)?;
+    activity::pet_diary(&state.app, &account_id).await.map_err(IpcError::from)
+}
+
+/// 萌宠成长日记写操作（action + params JSON）。
+#[tauri::command]
+pub async fn activity_operate_pet_diary(
+    state: State<'_, DesktopState>,
+    account_id: String,
+    action: String,
+    params: Value,
+) -> IpcResult<Value> {
+    ensure(&state, &account_id)?;
+    activity::operate_pet_diary(&state.app, &account_id, &action, &params)
+        .await
+        .map_err(IpcError::from)
+}
+
+/// 萌宠成长日记互动 / 被夺日志（kind = interact | plunder）。
+#[tauri::command]
+pub async fn activity_get_pet_diary_records(
+    state: State<'_, DesktopState>,
+    account_id: String,
+    kind: String,
+) -> IpcResult<Value> {
+    ensure(&state, &account_id)?;
+    activity::pet_diary_records(&state.app, &account_id, &kind).await.map_err(IpcError::from)
+}
+
+/// 好友的萌宠活动信息（gid 兼容数字 / 字符串）。
+#[tauri::command]
+pub async fn activity_get_pet_diary_friend(
+    state: State<'_, DesktopState>,
+    account_id: String,
+    gid: Value,
+) -> IpcResult<Value> {
+    ensure(&state, &account_id)?;
+    let gid = match &gid {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        _ => String::new(),
+    };
+    activity::pet_diary_friend(&state.app, &account_id, &gid).await.map_err(IpcError::from)
+}

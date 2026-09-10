@@ -174,6 +174,10 @@ pub fn run() {
             commands::activity::activity_donate_charity_love,
             commands::activity::activity_claim_charity_daily_gift,
             commands::activity::activity_claim_charity_progress_reward,
+            commands::activity::activity_get_pet_diary,
+            commands::activity::activity_operate_pet_diary,
+            commands::activity::activity_get_pet_diary_records,
+            commands::activity::activity_get_pet_diary_friend,
             // weather
             commands::weather::weather_snapshot,
             commands::weather::weather_friends,

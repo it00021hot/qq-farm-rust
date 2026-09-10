@@ -54,11 +54,89 @@ pub const WASM_CONSECUTIVE_FAIL_THRESHOLD: u32 = 3;
 
 // ===== TSDK 元信息（与原项目保持一致） =====
 
-const TSDK_VERSION: &str = "v3.9.0.1787640848";
+const TSDK_VERSION: &str = "v3.9.0.1788165223";
 const MINI_PROGRAM_APP_ID: &str = "wx5306c5978fdb76e4";
+/// QQ 小程序 App ID（QQ 平台宿主初始化，对齐 bot `MINI_PROGRAM_APP_IDS.qq`）
+const QQ_MINI_PROGRAM_APP_ID: &str = "1112386029";
 const TSDK_GAME_ID: u32 = 3167;
 const TSDK_APP_KEY: &str = "0";
 const MERGED_DATA_KEY: u32 = 1_871_261_153;
+/// QQ 宿主用户目录（QQ 平台 dataDir 回调返回它而不是本地目录）
+const QQ_USER_DATA_PATH: &str = "qqfile://usr/";
+/// QQ 桌面端设备文本（QQ 平台 deviceText 回调固定值）
+const QQ_DEVICE_TEXT: &str = "windows;windows;windows 10.0;0;";
+/// QQ 宿主特征状态（wasm 数据段内 current/reference 两块 64 字节，
+/// Node 宿主在 index 1 处与官方客户端差 1，发送 init token 前须归一）
+const QQ_HOST_CURRENT_PTR: usize = 17_288;
+const QQ_HOST_REFERENCE_PTR: usize = 17_352;
+const QQ_HOST_STATE_LENGTH: usize = 64;
+const QQ_HOST_NODE_MISMATCH_INDEX: usize = 1;
+
+/// 平台宿主画像（对齐 bot `resolveTsdkHostProfile`）：
+/// QQ 账号走 QQ 宿主（App ID/设备文本/用户目录/非调试），其余默认微信宿主。
+#[derive(Clone)]
+struct HostProfile {
+    app_id: &'static str,
+    debug_mode: i32,
+    device_text: Option<&'static str>,
+    user_data_path: Option<&'static str>,
+    platform: &'static str,
+}
+
+impl Default for HostProfile {
+    fn default() -> Self {
+        Self {
+            app_id: MINI_PROGRAM_APP_ID,
+            debug_mode: 2,
+            device_text: None,
+            user_data_path: None,
+            platform: "wx",
+        }
+    }
+}
+
+impl HostProfile {
+    fn resolve(platform: &str) -> Self {
+        let normalized = platform.trim().to_ascii_lowercase();
+        if normalized == "qq" {
+            Self {
+                app_id: QQ_MINI_PROGRAM_APP_ID,
+                debug_mode: 0,
+                device_text: Some(QQ_DEVICE_TEXT),
+                user_data_path: Some(QQ_USER_DATA_PATH),
+                platform: "qq",
+            }
+        } else {
+            Self::default()
+        }
+    }
+}
+
+/// QQ 宿主特征状态归一（对齐 bot `normalizeQqHostFeatureState`）：
+/// wasm 数据段内 current/reference 两块 64 字节只允许在 index 1 处相差 1（Node 宿主特征），
+/// 发送 init token 前把它归一为官方客户端值；布局与已验证版本不符则报错。
+fn normalize_qq_host_feature_state(store: &mut Store<HostState>, memory: &Memory) -> Result<()> {
+    let data = memory.data_mut(&mut *store);
+    let end = QQ_HOST_REFERENCE_PTR + QQ_HOST_STATE_LENGTH;
+    if QQ_HOST_CURRENT_PTR + QQ_HOST_STATE_LENGTH > data.len() || end > data.len() {
+        return Err(Error::crypto("TSDK QQ 宿主特征区越界"));
+    }
+    let mismatches: Vec<usize> = (0..QQ_HOST_STATE_LENGTH)
+        .filter(|&i| data[QQ_HOST_CURRENT_PTR + i] != data[QQ_HOST_REFERENCE_PTR + i])
+        .collect();
+    if mismatches.is_empty() {
+        return Ok(());
+    }
+    let idx = QQ_HOST_NODE_MISMATCH_INDEX;
+    if mismatches.len() != 1
+        || mismatches[0] != idx
+        || data[QQ_HOST_CURRENT_PTR + idx] != data[QQ_HOST_REFERENCE_PTR + idx].wrapping_add(1)
+    {
+        return Err(Error::crypto("TSDK QQ 宿主特征布局与已验证版本不一致"));
+    }
+    data[QQ_HOST_CURRENT_PTR + idx] = data[QQ_HOST_REFERENCE_PTR + idx];
+    Ok(())
+}
 
 /// Runtime table (59 bytes)
 const RUNTIME_TABLE: [u8; 59] = [
@@ -97,6 +175,8 @@ struct HostState {
     memory: Option<Memory>,
     /// 数据目录
     data_dir: String,
+    /// 平台宿主画像（QQ / 微信）
+    host: HostProfile,
 }
 
 // ===== Engine 单例 =====
@@ -139,6 +219,8 @@ fn shared_module(engine: &Engine, wasm_path: &Path) -> Result<&'static Module> {
 /// TSDK 单实例。每个账号对应一个 runtime。
 pub struct TsdkRuntime {
     data_dir: String,
+    /// 平台宿主画像（QQ / 微信）
+    host_profile: HostProfile,
     /// wasm 文件路径（`init` 时填充，`rebuild` 用它重新实例化）
     wasm_path: parking_lot::Mutex<Option<std::path::PathBuf>>,
     /// 上次成功 bind_user 的 open_id（`rebuild` 用它重绑用户）
@@ -189,11 +271,18 @@ struct Exports {
 }
 
 impl TsdkRuntime {
-    /// 创建 runtime（不加载 wasm）
+    /// 创建 runtime（不加载 wasm）；默认微信宿主，QQ 账号用 [`Self::for_platform`]。
     #[must_use]
     pub fn new(data_dir: impl Into<String>) -> Self {
+        Self::for_platform(data_dir, "wx")
+    }
+
+    /// 按账号平台创建 runtime（`qq` → QQ 宿主，其余 → 微信宿主）。
+    #[must_use]
+    pub fn for_platform(data_dir: impl Into<String>, platform: &str) -> Self {
         Self {
             data_dir: data_dir.into(),
+            host_profile: HostProfile::resolve(platform),
             wasm_path: parking_lot::Mutex::new(None),
             last_open_id: parking_lot::Mutex::new(None),
             inner: parking_lot::Mutex::new(None),
@@ -202,14 +291,24 @@ impl TsdkRuntime {
         }
     }
 
-    /// 便捷构造：创建 + 初始化
+    /// 便捷构造：创建 + 初始化（微信宿主）
     pub fn load(wasm_path: &Path, data_dir: impl Into<String>) -> Result<Self> {
-        let rt = Self::new(data_dir);
+        Self::load_for_platform(wasm_path, data_dir, "wx")
+    }
+
+    /// 便捷构造：创建 + 初始化（按账号平台选择宿主）
+    pub fn load_for_platform(
+        wasm_path: &Path,
+        data_dir: impl Into<String>,
+        platform: &str,
+    ) -> Result<Self> {
+        let rt = Self::for_platform(data_dir, platform);
         let start = Instant::now();
         rt.init(wasm_path)?;
         tracing::info!(
             elapsed_ms = start.elapsed().as_millis() as u64,
             version = TSDK_VERSION,
+            platform = rt.host_profile.platform,
             "TSDK 初始化完成"
         );
         Ok(rt)
@@ -325,7 +424,11 @@ impl TsdkRuntime {
         let engine = shared_engine()?;
         let module = shared_module(engine, wasm_path)?;
 
-        let host = HostState { data_dir: self.data_dir.clone(), ..Default::default() };
+        let host = HostState {
+            data_dir: self.data_dir.clone(),
+            host: self.host_profile.clone(),
+            ..Default::default()
+        };
         let mut store = Store::new(engine, host);
         let linker = create_linker(engine)?;
         let instance = linker
@@ -537,7 +640,8 @@ impl TsdkRuntime {
         Ok(())
     }
 
-    /// 拿加密的 init info（base64 字符串，原 TS 调 H()）
+    /// 拿加密的 init info（base64 字符串，原 TS 调 H()）。
+    /// QQ 宿主在发送前须归一宿主特征状态（对齐 bot `normalizeQqHostFeatureState`）。
     pub fn get_encrypted_init_info(&self) -> Result<String> {
         if self.pending_reset.load(Ordering::Acquire) {
             return Err(Error::crypto("TSDK 已请求重置，等待 worker 重建"));
@@ -546,6 +650,9 @@ impl TsdkRuntime {
         let inner = guard.as_mut().ok_or_else(|| Error::crypto("TSDK 未初始化"))?;
         let store = &mut inner.store;
         let exports = &inner.exports;
+        if self.host_profile.platform == "qq" {
+            normalize_qq_host_feature_state(store, &exports.memory)?;
+        }
 
         let mut ret = [Val::I32(0); 1];
         if let Err(e) = exports
@@ -997,13 +1104,18 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
         },
     )?;
 
-    // i: dataDir（对齐 bot：目录 + 平台路径分隔符）
+    // i: dataDir（对齐 bot：QQ 宿主返回 qqfile://usr/，其余目录 + 平台路径分隔符）
     linker.func_wrap(
         "a",
         "i",
         |mut c: wasmtime::Caller<'_, HostState>, ptr: i32, cap: i32| -> WasmResult<i32> {
-            let dir = format!("{}{}", c.data().data_dir, std::path::MAIN_SEPARATOR);
-            let bytes = dir.as_bytes();
+            let owned;
+            let bytes: &[u8] = if let Some(path) = c.data().host.user_data_path {
+                path.as_bytes()
+            } else {
+                owned = format!("{}{}", c.data().data_dir, std::path::MAIN_SEPARATOR);
+                owned.as_bytes()
+            };
             if bytes.len() < cap as usize {
                 write_cstring_in_caller(&mut c, ptr, bytes)?;
                 Ok(1)
@@ -1013,12 +1125,20 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
         },
     )?;
 
-    // j: deviceText（对齐 bot getDeviceText tsdk-runtime.ts:131-137：
-    // `{deviceId};{os};{sysSoftware};Node.js;`，来自运行时配置——与登录 device_info 同源）
+    // j: deviceText（对齐 bot getDeviceText：QQ 宿主固定 `windows;windows;windows 10.0;0;`；
+    // 其余 `{deviceId};{os};{sysSoftware};Node.js;`，来自运行时配置——与登录 device_info 同源）
     linker.func_wrap(
         "a",
         "j",
         |mut c: wasmtime::Caller<'_, HostState>, ptr: i32, cap: i32| -> WasmResult<i32> {
+            if let Some(text) = c.data().host.device_text {
+                let bytes = text.as_bytes();
+                if bytes.len() < cap as usize {
+                    write_cstring_in_caller(&mut c, ptr, bytes)?;
+                    return Ok(1);
+                }
+                return Ok(0);
+            }
             let rt = crate::config::get_runtime_config();
             let model = if rt.device_info.device_id.is_empty() {
                 format!("{} {}", std::env::consts::OS, std::env::consts::ARCH)
@@ -1063,39 +1183,27 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
         },
     )?;
 
-    // l: arch (2 = wasm32)
-    linker
-        .func_wrap("a", "l", |_c: wasmtime::Caller<'_, HostState>| -> WasmResult<i32> { Ok(2) })?;
+    // l: debugMode（对齐 bot hostProfile.debugMode：微信 2 / QQ 0）
+    linker.func_wrap("a", "l", |c: wasmtime::Caller<'_, HostState>| -> WasmResult<i32> {
+        Ok(c.data().host.debug_mode)
+    })?;
 
-    // m: appId
-    linker.func_wrap(
-        "a",
-        "m",
-        |mut c: wasmtime::Caller<'_, HostState>, ptr: i32, cap: i32| -> WasmResult<i32> {
-            let bytes = MINI_PROGRAM_APP_ID.as_bytes();
-            if bytes.len() < cap as usize {
-                write_cstring_in_caller(&mut c, ptr, bytes)?;
-                Ok(1)
-            } else {
-                Ok(0)
-            }
-        },
-    )?;
-
-    // n: appId (另一处)
-    linker.func_wrap(
-        "a",
-        "n",
-        |mut c: wasmtime::Caller<'_, HostState>, ptr: i32, cap: i32| -> WasmResult<i32> {
-            let bytes = MINI_PROGRAM_APP_ID.as_bytes();
-            if bytes.len() < cap as usize {
-                write_cstring_in_caller(&mut c, ptr, bytes)?;
-                Ok(1)
-            } else {
-                Ok(0)
-            }
-        },
-    )?;
+    // m / n: appId（按宿主画像：QQ 1112386029 / 微信 wx5306c5978fdb76e4）
+    for name in ["m", "n"] {
+        linker.func_wrap(
+            "a",
+            name,
+            |mut c: wasmtime::Caller<'_, HostState>, ptr: i32, cap: i32| -> WasmResult<i32> {
+                let bytes = c.data().host.app_id.as_bytes();
+                if bytes.len() < cap as usize {
+                    write_cstring_in_caller(&mut c, ptr, bytes)?;
+                    Ok(1)
+                } else {
+                    Ok(0)
+                }
+            },
+        )?;
+    }
 
     // o: integrity functions — noop（4 个 i32 参数，无返回）
     linker.func_wrap(
