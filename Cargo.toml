@@ -89,8 +89,9 @@ prost = "0.14"
 prost-types = "0.14"
 prost-build = "0.14"
 
-# WASM
-wasmtime = "48"
+# WASM：TSDK 只使用传统 Wasm 模块 + Cranelift，同步调用和编译缓存。
+# 关闭组件模型、GC、profiling、coredump、WAT 等未使用能力，减少桌面端链接体积。
+wasmtime = { version = "48", default-features = false, features = ["anyhow", "cache", "cranelift", "runtime"] }
 
 # 工具
 hex = "0.4"
@@ -125,8 +126,8 @@ qq-farm-app = { path = "crates/qq-farm-app" }
 opt-level = 3
 lto = "thin"
 codegen-units = 1
-# 保留符号便于符号化崩溃栈；后台 task panic 需 unwind 才能被 Tokio 隔离
-strip = "none"
+# 发布包不携带调试/链接符号；后台 task panic 仍需 unwind 才能被 Tokio 隔离
+strip = "symbols"
 panic = "unwind"
 
 [profile.dev]

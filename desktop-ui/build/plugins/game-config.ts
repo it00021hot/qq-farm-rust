@@ -5,8 +5,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin, PreviewServer, ViteDevServer } from 'vite';
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
-const desktopUiRoot = path.resolve(currentDir, '../..');
-const workspaceRoot = path.resolve(desktopUiRoot, '..');
+const workspaceRoot = path.resolve(currentDir, '../../..');
 
 /** Align with `qq_farm_core::config::paths::game_config_static_dir`. */
 function resolveGameConfigDir(): string {
@@ -75,18 +74,12 @@ function attachGameConfigMiddleware(server: ViteDevServer | PreviewServer, root:
   server.config.logger.info(`[game-config] serving ${root} at /game-config`);
 }
 
-function copyGameConfigIntoDist(root: string, outDir: string) {
-  const dest = path.join(outDir, 'game-config');
-  fs.mkdirSync(outDir, { recursive: true });
-  fs.cpSync(root, dest, { recursive: true });
-}
-
 /**
  * Serve `/game-config/*` from the local gameConfig tree.
  *
  * - Vite `serve` / preview: middleware (align Go panel `express.static`).
- * - `vite build`: copy into `dist/game-config` so `cargo tauri dev` (builtin
- *   static server, no Vite) and packaged `tauri://` can load same-origin icons.
+ * - Tauri runtime: the UI uses the `farmcfg://` protocol, so the 19MB asset
+ *   tree does not need to be duplicated into `dist`.
  */
 export function setupGameConfigStatic(): Plugin {
   const root = resolveGameConfigDir();
@@ -100,13 +93,7 @@ export function setupGameConfigStatic(): Plugin {
       attachGameConfigMiddleware(server, root);
     },
     closeBundle() {
-      if (!fs.existsSync(root)) {
-        this.warn(`[game-config] missing ${root}`);
-        return;
-      }
-      const outDir = path.resolve(desktopUiRoot, 'dist');
-      copyGameConfigIntoDist(root, outDir);
-      this.info(`[game-config] copied ${root} → ${path.join(outDir, 'game-config')}`);
+      if (!fs.existsSync(root)) this.warn(`[game-config] missing ${root}`);
     }
   };
 }

@@ -722,13 +722,13 @@ impl GameConfig {
         self.get_mutant_effects_by_ids(ids).into_iter().map(|e| e.name).collect()
     }
 
-    /// 变异图标 URL（`seed_images_named/mutant/{id}.png`）
+    /// 变异图标 URL（`seed_images_named/mutant/{id}.webp`）
     #[must_use]
     pub fn get_mutant_image_by_id(&self, mutant_id: i64) -> String {
         if mutant_id <= 0 {
             String::new()
         } else {
-            format!("/game-config/seed_images_named/mutant/{mutant_id}.png")
+            format!("/game-config/seed_images_named/mutant/{mutant_id}.webp")
         }
     }
 
@@ -939,7 +939,7 @@ impl GameConfig {
         obj.get("count").and_then(|v| v.as_i64())
     }
 
-    /// 物品图标 URL（对齐 TS `/game-config/seed_images_named/seed_images/{id}.png`）
+    /// 物品图标 URL（对齐 TS `/game-config/seed_images_named/seed_images/{id}.webp`）
     #[must_use]
     pub fn get_item_image_by_id(&self, item_id: i64) -> Option<String> {
         let url = mapped_item_image(item_id);
@@ -1121,7 +1121,7 @@ pub fn mapped_item_image(item_id: i64) -> String {
     if item_id <= 0 {
         String::new()
     } else {
-        format!("/game-config/seed_images_named/seed_images/{item_id}.png")
+        format!("/game-config/seed_images_named/seed_images/{item_id}.webp")
     }
 }
 
@@ -1242,7 +1242,7 @@ mod tests {
         assert!(!seeds.is_empty());
         assert!(seeds.iter().any(|s| s.seed_id == 29999));
         let one = seeds.iter().find(|s| s.seed_id == 29999).unwrap();
-        assert_eq!(one.image, "/game-config/seed_images_named/seed_images/29999.png");
+        assert_eq!(one.image, "/game-config/seed_images_named/seed_images/29999.webp");
         assert_eq!(one.required_level, 1);
         let pumpkin = seeds.iter().find(|s| s.seed_id == 29998).expect("哈哈南瓜种子");
         assert_eq!(pumpkin.required_level, 31);
@@ -1251,11 +1251,11 @@ mod tests {
     #[test]
     fn item_image_url_matches_panel_path() {
         assert_eq!(mapped_item_image(0), "");
-        assert_eq!(mapped_item_image(1), "/game-config/seed_images_named/seed_images/1.png");
+        assert_eq!(mapped_item_image(1), "/game-config/seed_images_named/seed_images/1.webp");
         let gc = reload_for_test();
         assert_eq!(
             gc.get_item_image_by_id(10000).as_deref(),
-            Some("/game-config/seed_images_named/seed_images/10000.png")
+            Some("/game-config/seed_images_named/seed_images/10000.webp")
         );
     }
 
