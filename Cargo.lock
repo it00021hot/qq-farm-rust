@@ -3988,7 +3988,7 @@ checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
 name = "qq-farm-app"
-version = "0.2.8"
+version = "0.2.14"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4004,7 +4004,7 @@ dependencies = [
 
 [[package]]
 name = "qq-farm-core"
-version = "0.2.8"
+version = "0.2.14"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -4055,7 +4055,7 @@ dependencies = [
 
 [[package]]
 name = "qq-farm-desktop"
-version = "0.2.8"
+version = "0.2.14"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
