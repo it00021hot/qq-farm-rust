@@ -31,24 +31,13 @@ const REQUEST_TIMEOUT_MS: u64 = 120_000;
 pub type QqLoginTaskStatus = String;
 
 /// NapCat 登录任务
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct QqLoginTask {
     pub task_id: String,
     pub status: QqLoginTaskStatus,
     pub qr_image: String,
     pub expires_at: i64,
-}
-
-impl Default for QqLoginTask {
-    fn default() -> Self {
-        Self {
-            task_id: String::new(),
-            status: String::new(),
-            qr_image: String::new(),
-            expires_at: 0,
-        }
-    }
 }
 
 /// NapCat 接口客户端（endpoint + 签名在创建时校验，对齐 bot `loginSettings()`）。

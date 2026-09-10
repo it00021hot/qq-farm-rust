@@ -46,10 +46,10 @@ fn find_activity_data(entries: &[ActivityData], activity_id: i64) -> Option<&Act
 }
 
 /// 在 List 回包的活动窗口里定位公益小红花窗口；找不到活动级窗口时回退分组窗口。
-fn find_activity_window<'a>(
-    reply: &'a ActivityListReply,
+fn find_activity_window(
+    reply: &ActivityListReply,
     activity_id: i64,
-) -> Option<&'a crate::proto::generated::gamepb::activitypb::ActivityWindow> {
+) -> Option<&crate::proto::generated::gamepb::activitypb::ActivityWindow> {
     let windows = &reply.activity_windows;
     windows
         .iter()
@@ -283,9 +283,7 @@ impl ActivityCenterService {
         reply: &ActivityOperateReply,
     ) -> Option<serde_json::Value> {
         let entry = reply.data.as_ref()?;
-        if entry.charity_red_flower.is_none() {
-            return None;
-        }
+        entry.charity_red_flower.as_ref()?;
         let progress_state = self.resolve_charity_progress_state(entry);
         self.charity_dto_with_state(entry, Some(&progress_state)).ok()
     }
