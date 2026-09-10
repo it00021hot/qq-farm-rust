@@ -213,10 +213,19 @@ function resetWxLogin() {
   wxSubmitting.value = false;
 }
 
-/** 对齐官方快捷登录交互：先探本机微信，全部失败自动回退扫码。 */
+function isAndroidRuntime() {
+  return /android/i.test(window.navigator.userAgent);
+}
+
+/** 桌面端先探本机微信；Android 直接扫码，避免探测不存在的桌面微信端口。 */
 async function startWxAuthFlow() {
-  wxMode.value = 'local';
   resetWxLogin();
+  if (isAndroidRuntime()) {
+    wxMode.value = 'qr';
+    await startWxLogin();
+    return;
+  }
+  wxMode.value = 'local';
   await detectLocalWechat();
 }
 

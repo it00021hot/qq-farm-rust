@@ -35,6 +35,21 @@ pub fn prepare_data_dir() {
     }
 }
 
+/// Android 的工作目录只读，使用 Tauri 提供的应用数据目录。
+#[cfg(target_os = "android")]
+pub fn prepare_android_data_dir(app: &AppHandle) {
+    if env_unset("FARM_DATA_DIR") {
+        if let Ok(dir) = app.path().app_data_dir() {
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                eprintln!("create Android data dir failed ({}): {e}", dir.display());
+            } else {
+                std::env::set_var("FARM_DATA_DIR", &dir);
+                eprintln!("FARM_DATA_DIR={}", dir.display());
+            }
+        }
+    }
+}
+
 /// 安装包内把 TSDK / `game_config` 指到 Tauri resource dir。`tauri dev` 保持仓库根路径。
 pub fn apply_bundled_resource_env(app: &AppHandle) {
     if cfg!(dev) {

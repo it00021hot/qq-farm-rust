@@ -9,9 +9,12 @@ mod events;
 #[cfg(target_os = "macos")]
 mod menu;
 mod paths;
+#[cfg(desktop)]
 mod shell;
 mod state;
+#[cfg(desktop)]
 mod tray;
+#[cfg(desktop)]
 mod updater;
 
 use std::sync::Arc;
@@ -20,10 +23,33 @@ use tauri::Manager;
 
 use crate::state::DesktopState;
 
+#[cfg(target_os = "android")]
+use jni::objects::{JClass, JObject};
+
+/// Initialize rustls' Android system certificate verifier before any async
+/// network request can be created by reqwest.
+#[cfg(target_os = "android")]
+#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_qqfarm_rust_MainActivity_initRustlsVerifier<'caller>(
+    mut unowned_env: jni::EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    context: JObject<'caller>,
+) {
+    use jni::errors::LogErrorAndDefault;
+
+    unowned_env
+        .with_env(|env| {
+            rustls_platform_verifier::android::init_with_env(env, context)
+        })
+        .resolve::<LogErrorAndDefault>();
+}
+
 /// 桌面端进程入口（由 `main` / 移动端入口调用）。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     paths::prepare_data_dir();
+    #[cfg(not(target_os = "android"))]
     qq_farm_core::utils::logger::init();
 
     // 单一 Tokio runtime：业务 `tokio::spawn` 与 Tauri async_runtime 共用，避免双 runtime。
@@ -39,15 +65,24 @@ pub fn run() {
     // setup / sync IPC 线程上的 `tokio::spawn` 需要当前线程已 enter。
     let _enter = handle.enter();
 
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .register_uri_scheme_protocol("farmcfg", |_ctx, request| assets::handle_request(request))
-        .on_menu_event(|app, event| shell::handle_menu_event(app, event.id()))
+        .register_uri_scheme_protocol("farmcfg", |_ctx, request| assets::handle_request(request));
+
+    #[cfg(desktop)]
+    let builder = builder.on_menu_event(|app, event| shell::handle_menu_event(app, event.id()));
+
+    let app = builder
         .setup(|app| {
+            #[cfg(target_os = "android")]
+            {
+                paths::prepare_android_data_dir(app.handle());
+                qq_farm_core::utils::logger::init();
+            }
             paths::apply_bundled_resource_env(app.handle());
             let max_workers =
                 std::env::var("MAX_WORKERS").ok().and_then(|s| s.parse().ok()).unwrap_or(16);
@@ -62,9 +97,12 @@ pub fn run() {
 
             #[cfg(target_os = "macos")]
             menu::install(app.handle())?;
-            tray::install(app.handle())?;
-            shell::install_close_to_tray(app.handle());
-            updater::setup(app.handle());
+            #[cfg(desktop)]
+            {
+                tray::install(app.handle())?;
+                shell::install_close_to_tray(app.handle());
+                updater::setup(app.handle());
+            }
 
             #[cfg(target_os = "windows")]
             if let Some(window) = app.get_webview_window("main") {

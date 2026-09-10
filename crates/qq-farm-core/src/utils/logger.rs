@@ -184,45 +184,59 @@ pub fn init() {
 }
 
 fn install_tracing_subscriber() {
-    use tracing_appender::non_blocking;
     use tracing_subscriber::fmt::writer::MakeWriterExt;
     use tracing_subscriber::prelude::*;
     use tracing_subscriber::EnvFilter;
 
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let dir = ensure_log_dir();
-    let combined = dir.join("combined.log");
 
+    #[cfg(not(target_os = "android"))]
+    let file_layer = {
+        use tracing_appender::non_blocking;
+
+        let dir = ensure_log_dir();
+        let combined = dir.join("combined.log");
+
+        // 用 non_blocking 后台线程刷盘：tracing 调用方（tokio worker）只负责把
+        // 行写入内部 ring buffer；后台线程把 buffer flush 到 fs::File。
+        // 一旦磁盘 I/O 卡住，受影响的是后台 flush 线程，tokio workers 永远不阻塞。
+        let file_appender = tracing_appender::rolling::daily(dir, "combined.log");
+        let (file_writer, guard) = non_blocking(file_appender);
+
+        // guard 必须 leak 到 static：worker 线程结束 / 进程退出前保证 flush 完。
+        Box::leak(Box::new(guard));
+
+        let layer = tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_target(true)
+            .with_thread_names(true)
+            .with_writer(file_writer);
+
+        // 单独保留 combined.log 路径用于兼容旧的 `append_fallback_log` 路径。
+        let _ = combined;
+        layer
+    };
+
+    // Android 应用的当前工作目录是只读的，日志文件应等 Tauri 提供 app data
+    // 目录后再初始化；启动阶段先写 logcat，避免 rolling appender panic。
     // 用 non_blocking 后台线程刷盘：tracing 调用方（tokio worker）只负责把
     // 行写入内部 ring buffer；后台线程把 buffer flush 到 fs::File。
     // 一旦磁盘 I/O 卡住，受影响的是后台 flush 线程，tokio workers 永远不阻塞。
-    let file_appender = tracing_appender::rolling::daily(dir, "combined.log");
-    let (file_writer, guard) = non_blocking(file_appender);
-
-    // guard 必须 leak 到 static：worker 线程结束 / 进程退出前保证 flush 完。
-    Box::leak(Box::new(guard));
-
     let stderr_layer = tracing_subscriber::fmt::layer()
         .with_ansi(cfg!(debug_assertions))
         .with_target(true)
         .with_thread_names(true)
         .with_writer(io::stderr.with_max_level(tracing::Level::INFO));
 
-    let file_layer = tracing_subscriber::fmt::layer()
-        .with_ansi(false)
-        .with_target(true)
-        .with_thread_names(true)
-        .with_writer(file_writer);
+    #[cfg(target_os = "android")]
+    let result = tracing_subscriber::registry().with(filter).with(stderr_layer).try_init();
 
+    #[cfg(not(target_os = "android"))]
     let result =
         tracing_subscriber::registry().with(filter).with(stderr_layer).with(file_layer).try_init();
     if let Err(e) = result {
         eprintln!("tracing subscriber already set: {e}");
     }
-
-    // 单独保留 combined.log 路径用于兼容旧的 `append_fallback_log` 路径（fallback 写原路径，不走 tracing）
-    // （其实 fallback 路径现在也用 spawn_blocking，不再直接 fs::write，但保留引用以备不时之需）
-    let _ = combined; // suppress unused warning
 }
 
 /// 安装进程级 panic hook：写入 `logs/panic-*.log` + error.log，并保留默认钩子。

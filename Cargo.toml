@@ -19,7 +19,9 @@ keywords = ["qq-farm", "automation", "tauri", "rust"]
 categories = ["games", "gui"]
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# JNI entry points on Android require one narrowly-scoped unsafe FFI boundary;
+# individual crates/functions can still opt into a stricter level.
+unsafe_code = "deny"
 unused_must_use = "deny"
 
 [workspace.lints.clippy]
@@ -80,6 +82,7 @@ tower = "0.5"
 tower-http = { version = "0.7", features = ["trace", "cors", "fs"] }
 hyper = "1"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "gzip"] }
+rustls-platform-verifier = "0.7"
 
 # WebSocket / Socket.IO（对齐原 bot `/socket.io`，给 Vue 前端用）
 socketioxide = "0.18"
