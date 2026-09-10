@@ -499,21 +499,28 @@ impl WorkerLoop {
                             if !this.login_ready() {
                                 return;
                             }
-                            let gid = *this.gid.lock();
+                            let account_id = this.account.id.clone();
                             let planting = this.farm.planting();
-                            let _ = planting
-                                .lock()
-                                .await
-                                .fertilize_by_config_ex(
-                                    &[],
-                                    gid,
-                                    &this.account.id,
-                                    crate::services::farm::planting::FertilizeOptions {
-                                        skip_normal: true,
-                                        ..Default::default()
-                                    },
-                                )
-                                .await;
+                            let _ = crate::infra::automation_lock::run_exclusive_automation_task(
+                                &account_id,
+                                "fertilizer_immediate",
+                                async move {
+                                    let gid = *this.gid.lock();
+                                    let planting = planting.lock().await;
+                                    let _ = planting
+                                        .fertilize_by_config_ex(
+                                            &[],
+                                            gid,
+                                            &this.account.id,
+                                            crate::services::farm::planting::FertilizeOptions {
+                                                skip_normal: true,
+                                                ..Default::default()
+                                            },
+                                        )
+                                        .await;
+                                },
+                            )
+                            .await;
                         })
                     }),
                 );
@@ -562,7 +569,15 @@ impl WorkerLoop {
                         }
                         loop {
                             tokio::time::sleep(Duration::from_millis(800)).await;
-                            let _ = warehouse.sell_all_fruits().await;
+                            // 对齐 bot：收获后出售走互斥任务（runExclusiveAutomationTask）
+                            let warehouse = Arc::clone(&warehouse);
+                            let account = harvest_account_id.clone();
+                            let _ = crate::infra::automation_lock::run_exclusive_automation_task(
+                                &account,
+                                "harvest_sell",
+                                async move { warehouse.sell_all_fruits().await },
+                            )
+                            .await;
                             if !harvest_sell_pending.swap(false, Ordering::AcqRel) {
                                 harvest_sell_running.store(false, Ordering::Release);
                                 break;
@@ -576,30 +591,57 @@ impl WorkerLoop {
             }
         });
 
-        // 对齐 worker.ts onLoginSuccess：先背包点券/金豆 → 统计基线 → 邀请码 → 礼包
-        if let Ok(bag) = self.warehouse.get_bag().await {
-            let items = crate::services::warehouse::get_bag_items(&bag);
-            let coupon = items.iter().find(|i| i.id == 1002).map(|i| i.count).unwrap_or(0);
-            let gold_bean = items.iter().find(|i| i.id == 1005).map(|i| i.count).unwrap_or(0);
-            *self.coupon.lock() = coupon.max(0);
-            if gold_bean > 0 {
-                *self.gold_bean.lock() = gold_bean;
-            }
-            let st = status_svc::status_data_for(&self.account.id);
-            crate::services::stats::init_stats_with_persistence(
-                &self.account.id,
-                st.gold,
-                st.exp,
-                coupon.max(0),
-            );
-            crate::services::stats::reset_session_gains_for(&self.account.id);
+        // 对齐 worker.ts onLoginSuccess：先背包点券/金豆 → 统计基线（互斥）→ 邀请码 → 礼包
+        {
+            let this = Arc::clone(self);
+            let account_id = self.account.id.clone();
+            let _ = crate::infra::automation_lock::run_exclusive_automation_task(
+                &account_id,
+                "login_bag_init",
+                async move {
+                    if let Ok(bag) = this.warehouse.get_bag().await {
+                        let items = crate::services::warehouse::get_bag_items(&bag);
+                        let coupon =
+                            items.iter().find(|i| i.id == 1002).map(|i| i.count).unwrap_or(0);
+                        let gold_bean =
+                            items.iter().find(|i| i.id == 1005).map(|i| i.count).unwrap_or(0);
+                        *this.coupon.lock() = coupon.max(0);
+                        if gold_bean > 0 {
+                            *this.gold_bean.lock() = gold_bean;
+                        }
+                        let st = status_svc::status_data_for(&this.account.id);
+                        crate::services::stats::init_stats_with_persistence(
+                            &this.account.id,
+                            st.gold,
+                            st.exp,
+                            coupon.max(0),
+                        );
+                        crate::services::stats::reset_session_gains_for(&this.account.id);
+                    }
+                },
+            )
+            .await;
         }
 
-        let invite = crate::services::invite::InviteService::new(self.gateway.clone());
-        let _ = invite.process_invite_codes().await;
+        {
+            let invite = crate::services::invite::InviteService::new(self.gateway.clone());
+            let account_id = self.account.id.clone();
+            let _ = crate::infra::automation_lock::run_exclusive_automation_task(
+                &account_id,
+                "invite_codes",
+                async move { invite.process_invite_codes().await },
+            )
+            .await;
+        }
 
         if self.auto_on("fertilizer_gift") {
-            let _ = self.warehouse.auto_open_fertilizer_gift_packs().await;
+            let warehouse = self.warehouse.clone();
+            let _ = crate::infra::automation_lock::run_exclusive_automation_task(
+                &self.account.id,
+                "fertilizer_gifts_login",
+                async move { warehouse.auto_open_fertilizer_gift_packs().await },
+            )
+            .await;
         }
 
         let this = Arc::clone(self);
@@ -620,14 +662,28 @@ impl WorkerLoop {
             }),
         );
 
-        self.start_farm_ticks(scheduler);
+        // 对齐 bot runStartupSequence（b487b0f）：登录期领取串行跑完后才挂
+        // farm/friend 主循环与周期定时器，避免启动期任务叠跑、重复领取。
         {
             *self.last_daily_date.lock() = get_local_date_key();
             let this = Arc::clone(self);
-            tokio::spawn(async move {
-                this.run_daily_routines(true).await;
-            });
+            let account_id = this.account.id.clone();
+            crate::infra::automation_lock::run_exclusive_automation_task(
+                &account_id,
+                "daily_routines",
+                async move { this.run_daily_routines(true).await },
+            )
+            .await;
+            // bot 启动序列在日更后立即领取一次任务
+            let this = Arc::clone(self);
+            crate::infra::automation_lock::run_exclusive_automation_task(
+                &self.account.id,
+                "startup_tasks",
+                async move { this.task.check_and_claim_tasks().await },
+            )
+            .await;
         }
+        self.start_farm_ticks(scheduler);
         self.start_fertilizer_buy_timer(scheduler);
         self.start_mystery_shop_timer(scheduler);
         {
@@ -1085,31 +1141,40 @@ impl WorkerLoop {
         if !crate::services::mystery_shop_auto::is_watch_enabled(&automation) {
             return;
         }
-        let commerce = Arc::new(crate::services::commerce::CommerceService::new(
-            self.mall.clone(),
-            self.mystery_shop.clone(),
-            self.warehouse.clone(),
-        ));
-        // 克隆去重状态，避免 guard 跨 await（Future 需要 Send）
-        let mut state = self.mystery_auto_state.lock().clone();
-        let account_id = self.account.id.clone();
-        let outcome = crate::services::mystery_shop_auto::check_tick(
-            &commerce,
-            &automation,
-            &mut state,
-            &account_id,
+        // 对齐 bot：神秘商店 tick 在互斥任务里执行（runExclusiveAutomationTask）
+        let this = Arc::clone(self);
+        crate::infra::automation_lock::run_exclusive_automation_task(
+            &self.account.id,
+            "mystery_shop",
+            async move {
+                let commerce = Arc::new(crate::services::commerce::CommerceService::new(
+                    this.mall.clone(),
+                    this.mystery_shop.clone(),
+                    this.warehouse.clone(),
+                ));
+                // 克隆去重状态，避免 guard 跨 await（Future 需要 Send）
+                let mut state = this.mystery_auto_state.lock().clone();
+                let account_id = this.account.id.clone();
+                let outcome = crate::services::mystery_shop_auto::check_tick(
+                    &commerce,
+                    &automation,
+                    &mut state,
+                    &account_id,
+                )
+                .await;
+                *this.mystery_auto_state.lock() = state;
+                if let Some((title, content)) = outcome.push {
+                    // 推送走 worker 事件总线（面板通知 + relogin_reminder 通知链路）
+                    let _ = this.event_tx.send(WorkerEvent::Notify {
+                        account_id: account_id.clone(),
+                        account_name: this.account.display_name.clone(),
+                        title,
+                        message: content,
+                    });
+                }
+            },
         )
         .await;
-        *self.mystery_auto_state.lock() = state;
-        if let Some((title, content)) = outcome.push {
-            // 推送走 worker 事件总线（面板通知 + relogin_reminder 通知链路）
-            let _ = self.event_tx.send(WorkerEvent::Notify {
-                account_id: account_id.clone(),
-                account_name: self.account.display_name.clone(),
-                title,
-                message: content,
-            });
-        }
     }
 
     /// 神秘商人监控定时器：登录后 10s 首查，之后每 10min tick（对齐 node `startMysteryShopTimer`）
@@ -1139,7 +1204,7 @@ impl WorkerLoop {
     }
 
     /// 对齐 TS `runUnifiedTick`：串行执行，避免并发请求过多导致超时
-    async fn run_unified_tick(&self) {
+    async fn run_unified_tick(self: &Arc<Self>) {
         if !self.login_ready() {
             return;
         }
@@ -1170,7 +1235,7 @@ impl WorkerLoop {
     }
 
     /// 触发 farm tick（对外暴露给 on_login_success 启动独立 task）
-    pub async fn run_farm_tick(&self) {
+    pub async fn run_farm_tick(self: &Arc<Self>) {
         if self.farm_tick_running.swap(true, Ordering::AcqRel) {
             return;
         }
@@ -1183,23 +1248,36 @@ impl WorkerLoop {
             max_ms,
         };
         if self.login_ready() {
-            // 静默时段默认只停帮助/偷菜；好友静默开启 continueFarm=false 时本田巡查也停
-            // （对齐 bot checkFarm → inFarmQuietHours）
-            let farm_quiet = crate::services::friend::visit_strategy::in_farm_quiet_hours_for(
-                Some(&self.account.id),
-                None,
-            );
-            if self.auto_on("farm") && !farm_quiet {
-                let _ = self.farm.check_farm().await;
-            }
-            if self.auto_on("task") {
-                let _ = self.task.check_and_claim_tasks().await;
-            }
-            // bot 无 auto.email：邮件只走日更 run_daily_routines，不在 farm tick 领取
-            if self.auto_on("fertilizer_gift") {
-                let _ = self.warehouse.auto_open_fertilizer_gift_packs().await;
-            }
-            self.sync_status();
+            // 对齐 bot：farm tick 整体在互斥任务里执行（runExclusiveAutomationTask）
+            let this = Arc::clone(self);
+            let account_id = self.account.id.clone();
+            crate::infra::automation_lock::run_exclusive_automation_task(
+                &account_id,
+                "farm_tick",
+                async move {
+                    // 静默时段默认只停帮助/偷菜；好友静默开启 continueFarm=false 时本田巡查也停
+                    // （对齐 bot checkFarm → inFarmQuietHours）
+                    let farm_quiet =
+                        crate::services::friend::visit_strategy::in_farm_quiet_hours_for(
+                            Some(&this.account.id),
+                            None,
+                        );
+                    if this.auto_on("farm") && !farm_quiet {
+                        let _ = this.farm.check_farm().await;
+                    }
+                    if this.auto_on("task") {
+                        let _ = this.task.check_and_claim_tasks().await;
+                    }
+                    // 对齐 bot：farm tick 不领邮件，改为静默开背包中的公益小红花结算礼包
+                    // （bot `auto.email !== false` 默认开启；rust 无 email 开关，走默认行为）
+                    let _ = this.warehouse.open_charity_settlement_gift_packs_silent().await;
+                    if this.auto_on("fertilizer_gift") {
+                        let _ = this.warehouse.auto_open_fertilizer_gift_packs().await;
+                    }
+                    this.sync_status();
+                },
+            )
+            .await;
         }
     }
 
@@ -1209,7 +1287,7 @@ impl WorkerLoop {
     /// - 门控：好友自动化总开关（friend）——偷/帮/捣乱的细分开关在
     ///   `check_friends_unified` 的计划阶段逐位判定；
     /// - 静默时段跳过；偷到 > 0 时沿用「sleep 800ms → sell_all_fruits」。
-    pub async fn run_friend_tick(&self) {
+    pub async fn run_friend_tick(self: &Arc<Self>) {
         if !self.login_ready() {
             return;
         }
@@ -1235,29 +1313,47 @@ impl WorkerLoop {
         ) {
             return;
         }
-        let stolen = self.friend.check_friends_unified(&self.account.id).await.unwrap_or(0);
-        if stolen > 0 {
-            tokio::time::sleep(Duration::from_millis(800)).await;
-            let _ = self.warehouse.sell_all_fruits().await;
-        }
-        self.sync_status();
+        // 对齐 bot：friend tick 整体在互斥任务里执行（runExclusiveAutomationTask）
+        let this = Arc::clone(self);
+        let account_id = self.account.id.clone();
+        crate::infra::automation_lock::run_exclusive_automation_task(
+            &account_id,
+            "friend_tick",
+            async move {
+                let stolen = this.friend.check_friends_unified(&this.account.id).await.unwrap_or(0);
+                if stolen > 0 {
+                    tokio::time::sleep(Duration::from_millis(800)).await;
+                    let _ = this.warehouse.sell_all_fruits().await;
+                }
+                this.sync_status();
+            },
+        )
+        .await;
     }
 
-    /// 跑每日任务
-    pub async fn run_daily_routines(&self, force: bool) {
+    /// 跑每日任务（对齐 bot：整个日更在互斥任务里执行，嵌套调用直接内联）
+    pub async fn run_daily_routines(self: &Arc<Self>, force: bool) {
         if !self.login_ready() && !force {
             return;
         }
-        // email
-        let _ = self.email.check_and_claim_emails(force).await;
-        // share
-        let _ = self.share.check_daily_share_status(force).await;
-        // monthcard
-        let _ = self.monthcard.perform_daily_month_card_gift(force).await;
-        // 商城免费礼包
-        let _ = self.mall.buy_free_gifts(force).await;
-        // qqvip
-        let _ = self.qqvip.perform_daily_vip_gift(force).await;
+        let this = Arc::clone(self);
+        crate::infra::automation_lock::run_exclusive_automation_task(
+            &self.account.id,
+            "daily_routines",
+            async move {
+                // email
+                let _ = this.email.check_and_claim_emails(force).await;
+                // share
+                let _ = this.share.check_daily_share_status(force).await;
+                // monthcard
+                let _ = this.monthcard.perform_daily_month_card_gift(force).await;
+                // 商城免费礼包
+                let _ = this.mall.buy_free_gifts(force).await;
+                // qqvip
+                let _ = this.qqvip.perform_daily_vip_gift(force).await;
+            },
+        )
+        .await;
     }
 
     /// 处理 kickout（用户被踢下线）

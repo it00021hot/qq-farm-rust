@@ -576,6 +576,12 @@ impl PlantingEngine {
             let mut organic_targets = planted.clone();
             if !latest_lands.is_empty() {
                 organic_targets = get_organic_fertilizer_targets_from_lands(&latest_lands);
+                // 对齐 bot：多季补肥时有机肥目标限定到本次多季地块
+                if options.multi_season && !planted.is_empty() {
+                    let planted_set: std::collections::HashSet<i64> =
+                        planted.iter().copied().collect();
+                    organic_targets.retain(|id| planted_set.contains(id));
+                }
                 organic_targets =
                     filter_ids_by_land_types(&organic_targets, &latest_lands, &selected);
             }

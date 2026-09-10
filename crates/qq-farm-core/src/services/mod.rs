@@ -63,6 +63,7 @@ pub mod pay;
 pub mod pets;
 pub mod push;
 pub mod qq_bot;
+pub mod qq_login;
 pub mod qqvip;
 pub mod qrlogin;
 pub mod randomdrop;

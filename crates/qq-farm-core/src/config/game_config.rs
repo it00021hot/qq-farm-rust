@@ -52,6 +52,14 @@ pub struct PlantFruit {
     pub count: i64,
 }
 
+/// 生长阶段配置项（对齐 bot `PlantGrowPhase`）
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlantGrowPhase {
+    pub index: usize,
+    pub name: String,
+    pub duration: i64,
+}
+
 /// 种子信息（plant 中提取的子集，对齐 TS getAllSeeds）
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -599,25 +607,31 @@ impl GameConfig {
     /// 求和所有阶段的秒数（成熟阶段一般是 0 终点）。
     #[must_use]
     pub fn get_plant_grow_time(&self, plant_id: i64) -> i64 {
+        self.get_plant_grow_phases(plant_id).iter().map(|p| p.duration).sum()
+    }
+
+    /// 解析官方 `Plant.grow_phases`（对齐 bot `getPlantGrowPhases`）。
+    ///
+    /// 官方客户端把每项转换成内部 phase_id；服务端响应的 phases
+    /// 是从当前阶段开始的配置后缀。配置缺失或为空时返回空 Vec。
+    #[must_use]
+    pub fn get_plant_grow_phases(&self, plant_id: i64) -> Vec<PlantGrowPhase> {
         let Some(plant) = self.get_plant_by_id(plant_id) else {
-            return 0;
+            return Vec::new();
         };
         let Some(phases) = plant.grow_phases.as_ref() else {
-            return 0;
+            return Vec::new();
         };
-        // 格式：`name:secs;name:secs;...`
-        let mut total = 0i64;
-        for part in phases.split(';') {
-            if part.is_empty() {
-                continue;
-            }
-            if let Some((_, secs_str)) = part.split_once(':') {
-                if let Ok(secs) = secs_str.parse::<i64>() {
-                    total += secs;
-                }
-            }
+        let mut out = Vec::new();
+        for (index, part) in phases.split(';').filter(|p| !p.is_empty()).enumerate() {
+            // 名称里可能含 ':'，以最后一个冒号分隔（对齐 TS lastIndexOf）
+            let (name, duration) = match part.rsplit_once(':') {
+                Some((name, dur)) => (name.to_string(), dur.parse::<i64>().unwrap_or(0)),
+                None => (part.to_string(), 0),
+            };
+            out.push(PlantGrowPhase { index, name, duration });
         }
-        total
+        out
     }
 
     /// 格式化生长时间为人类可读字符串

@@ -9,6 +9,7 @@ pub mod config;
 pub mod farm;
 pub mod friend;
 pub mod pets;
+pub mod qq_login;
 pub mod settings;
 pub mod snapshot;
 pub mod weather;

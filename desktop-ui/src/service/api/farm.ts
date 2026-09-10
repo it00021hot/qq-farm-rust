@@ -305,6 +305,45 @@ export function fetchFarmWxLoginCode(taskId: string) {
   return invokeFlat<{ code: string }>('wx_login_code', { taskId });
 }
 
+// ===== QQ 扫码登录（NapCat 对接，对齐 bot qq-login）=====
+
+export function fetchGetQqLoginSettings() {
+  return invokeFlat<{
+    qqQrLogin: boolean;
+    napCatEndpoint: string;
+    napCatSignature: string;
+  }>('get_qq_login_settings');
+}
+
+export function fetchSaveQqLoginSettings(settings: {
+  qqQrLogin: boolean;
+  napCatEndpoint: string;
+  napCatSignature: string;
+}) {
+  return invokeFlat('save_qq_login_settings', { settings });
+}
+
+export function fetchQqLoginCreateTask() {
+  return invokeFlat<{ taskId: string; status: string; qrImage: string; expiresAt?: number }>(
+    'qq_login_create_task'
+  );
+}
+
+export function fetchQqLoginTaskStatus(taskId: string) {
+  return invokeFlat<{ taskId: string; status: string; qrImage: string; expiresAt?: number }>(
+    'qq_login_task_status',
+    { taskId }
+  );
+}
+
+export function fetchQqLoginMiniappCode(taskId: string) {
+  return invokeFlat<{ code: string }>('qq_login_miniapp_code', { taskId });
+}
+
+export function fetchQqLoginCancelTask(taskId: string) {
+  return invokeFlat<{ ok: boolean }>('qq_login_cancel_task', { taskId });
+}
+
 export function fetchCreateFarmWxQuickLoginSession() {
   return invokeFlat<{
     sessionId: string;
@@ -351,6 +390,87 @@ export function fetchConfirmFarmWxQuickLogin(sessionId: string, redirectUrl: str
       redirectUrl
     },
     { silent: true }
+  );
+}
+
+// ===== 本机微信 API（前端直连）=====
+
+interface WxLocalPayload {
+  errcode: number;
+  errmsg?: string;
+  jsdata?: Record<string, unknown> | string | null;
+}
+
+function parseWxLocalResponse(text: string): WxLocalPayload {
+  let value: unknown = JSON.parse(text);
+  if (typeof value === 'string') value = JSON.parse(value as string);
+  return (value ?? {}) as WxLocalPayload;
+}
+
+export interface WxLocalOauth {
+  appId: string;
+  scope: string;
+  redirectUri: string;
+  state: string;
+}
+
+async function wxLocalFetch(
+  port: number,
+  path: '/api/check-login' | '/api/authorize',
+  jsdata: Record<string, unknown>,
+  timeoutMs: number
+): Promise<WxLocalPayload> {
+  const res = await fetch(`https://localhost.weixin.qq.com:${port}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      apiname: path === '/api/authorize' ? 'qrconnectfastauthorize' : 'qrconnectchecklogin',
+      jsdata
+    }),
+    signal: AbortSignal.timeout(timeoutMs)
+  });
+  return parseWxLocalResponse(await res.text());
+}
+
+/** 本机微信探测（POST /api/check-login） */
+export function fetchWxLocalCheckLogin(
+  port: number,
+  oauth: WxLocalOauth,
+  timeoutMs = 8000
+): Promise<WxLocalPayload> {
+  return wxLocalFetch(
+    port,
+    '/api/check-login',
+    {
+      appid: oauth.appId,
+      scope: oauth.scope,
+      redirect_uri: oauth.redirectUri,
+      state: oauth.state
+    },
+    timeoutMs
+  );
+}
+
+/** 本机微信快捷授权（POST /api/authorize），成功返回 redirect_url */
+export function fetchWxLocalAuthorize(
+  port: number,
+  oauth: WxLocalOauth,
+  authorizeUuid: string,
+  position: { x: number; y: number },
+  timeoutMs = 40_000
+): Promise<WxLocalPayload> {
+  return wxLocalFetch(
+    port,
+    '/api/authorize',
+    {
+      data: JSON.stringify(position),
+      appid: oauth.appId,
+      scope: oauth.scope,
+      redirect_uri: oauth.redirectUri,
+      state: oauth.state,
+      authorize_uuid: authorizeUuid
+    },
+    timeoutMs
   );
 }
 

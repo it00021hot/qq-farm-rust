@@ -137,6 +137,13 @@ impl LocalWechatClient {
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
             )
             .header("Accept", "application/json, text/plain, */*")
+            // 官方快捷登录页（open.weixin.qq.com）发起的请求带微信自家来源，
+            // 本地服务的 CORS 白名单只认该域名；native 请求不带会被拒绝
+            .header("Origin", "https://open.weixin.qq.com")
+            .header("Referer", "https://open.weixin.qq.com/")
+            .header("Sec-Fetch-Site", "same-site")
+            .header("Sec-Fetch-Mode", "cors")
+            .header("Sec-Fetch-Dest", "empty")
             .json(body)
             .send()
             .await

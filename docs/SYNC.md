@@ -760,3 +760,106 @@
 - 验证：`cargo test -p qq-farm-desktop acl` 通过；
   `RUSTFLAGS="-D warnings" cargo check -p qq-farm-desktop --all-targets` 0 错 0 警
 - 能力状态：小红花操作链路修复，随 v0.2.11 发布
+
+### 2026-09-10 — 微信快捷登录对齐官方端口与交互（合并子 Tab）
+
+- 对照官方快捷登录实现（`localhost.weixin.qq.com` → 127.0.0.1）：Windows / macOS 均探测
+  `14013/14014/14015` + `13013/13014/13015` 共 6 个端口；此前自扩到 14013-14025（含
+  14016-14025 观测端口）属过度探测，回退到官方列表
+- 交互对齐官方：添加/编辑账号「微信授权」去掉「本机微信 / 扫码」子 Tab。进入即自动探测，
+  任一端口命中 → 显示头像 + 昵称 + 绿色「微信快捷登录」按钮 +
+  「使用其他头像、昵称或账号」链接（切扫码）；全部失败 → 自动展示二维码并提示
+  「未检测到本机微信，请扫码登录」。扫码页保留「重新检测本机微信」入口
+- 本机授权失败（如手机端拒绝）不再静默回退：二维码页展示失败原因
+- 验证：`RUSTFLAGS="-D warnings" cargo check -p qq-farm-core -p qq-farm-app -p qq-farm-desktop --all-targets`
+  与 `vue-tsc --noEmit` 通过
+- 能力状态：已登录未锁定的桌面微信在「微信授权」页应直接显示昵称头像并可一键授权；
+  未运行桌面微信时自动落到扫码
+
+### 2026-09-10 — 增量同步 bot e44cc12..707a47c（协议 1.13.3.17 / PR #68 / 活动协议修正 / 自动化互斥锁 / NapCat 扫码 / 资源全量覆盖）
+
+- 对照基准：bot `707a47c`（2026-09-09，core 20260908）。此前基准 `e44cc12`（9-1 增量）
+  + 小红花进度奖励（`887f0db`）+ 前台请求优先（`d0a6904` 行为对齐）
+- **静态资源全量覆盖**（`tools/sync-from-bot.mjs --apply`）：`ItemInfo/Plant/Illustrated/
+  MutantEffect` 等配置 JSON 与 60+ 张种子图更新；`mysteryshoppb.proto` 覆盖（activitypb
+  的 cabb958 字段 rust 已有，覆盖后与 bot 哈希一致）。脚本 `CONFIG_FILES` 补
+  `Illustrated.json`（bot 更新了该文件且 rust 在用，此前一直不在镜像清单）
+- **协议版本**：`1.13.3.16_20260826` → `1.13.3.17_20260826`（UPDATED_AT `1788763651029`，
+  对齐 bot `cc6a8ab`）
+- **PR #68 多季作物阶段识别与补肥**：
+  - `game_config.get_plant_grow_phases`：解析官方 `Plant.grow_phases`（名称+时长，
+    末冒号分隔）
+  - `land_analysis.convert_server_phase_to_client`：phases 按配置后缀对齐（当前下标 =
+    grow_phases 总数 − 剩余 phases 数）；成熟判定加 phase==19 / phase_id==19 /
+    末配置阶段（盛开）粗状态 2 或 >7；新增 `Unknown` 语义；`PlantPhase::from_i32`
+    0/8+ 归 `Unknown`（不再当 Seed）
+  - `has_remaining_seasons`（season vs 配置 seasons）；`get_land_lifecycle_state` /
+    `classify_harvested_lands_by_map` 对齐：多季或有剩余季 → growing，未知 → unknown
+  - `farm scheduler`：收获后 unknown **不再默认铲除**（bot 修复前行为），补拉全量后仍
+    未知则跳过并记面板 warn（skip_unknown）
+  - `planting.fertilize_by_config_ex`：`multi_season` 此前被忽略，现对齐 bot——有机肥
+    目标限定到本次多季地块
+  - 新增 10 个回归用例（对齐 bot `farm-multi-season.test.js`）
+- **charity 对齐 cc6a8ab**：active 优先取 List 回包 `activity_windows`；进度档与奖励
+  种子 claimable 加 `active &&`；DTO 增 `agreementStatus`；settlement 需要
+  「个人达标 && 全服达标」（补齐 globalReached/personalReached）；写操作（领种子/捐赠/
+  日礼/进度奖励）删除客户端前置校验直接 Operate，快照改由回包 `reply.data` 构造
+  （不再发全量 snapshot 请求）；捐赠数回退走 `charity_donate_result.count`
+- **farm tick 公益结算礼包**：新增 `warehouse.open_charity_settlement_gift_packs_silent`
+  （对齐 bot `openCharitySettlementGiftPacksSilently`：礼包 id 101604、5min 冷却、只记
+  日志不抛错），挂入 farm tick（bot 用 `auto.email !== false` 门控，rust 无 email 开关，
+  走默认开启行为）
+- **背包分类修复**（cc6a8ab）：分类优先用物品元数据 type（17=mutant 新分支 / 6=fruit /
+  5=seed，缺失时回退反查植物表）；排序改 fruit → mutant → seed
+- **自动化任务全局互斥**（bot `b487b0f`）：新增 `infra/automation_lock`（按账号 FIFO
+  队列 + task_local 重入直执行 + running 查询；bot 每账号一进程，rust 单进程多账号，
+  故按账号维度建队列，语义一致）。farm tick / friend tick / daily_routines / 神秘商店
+  tick / harvest_sell / 登录期背包初始化 / 邀请码 / 登录期化肥礼包 / 施肥立即生效
+  全部包进互斥任务
+- **启动序列重排**（bot `runStartupSequence`）：登录期领取（daily_routines(true) →
+  任务领取）**串行跑完后**才挂 farm/friend 主循环与周期定时器；此前 rust 先挂
+  farm ticks 再 fire-and-forget 日更，存在启动期叠跑
+- **QQ 扫码登录（NapCat 对接，bot `4ee6894`+`5ddb70b`）**：core 新 `services/qq_login`
+  （4 个 NapCat 接口、X-API-Signature、120s 超时、错误码中文映射、任务归一化）；
+  `LoginSettings` 持久化（wechatQrLogin/qqQrLogin/napCatEndpoint/napCatSignature，
+  store.json `loginSettings`）；app 门面 + desktop 6 条命令 + `generate_handler!` +
+  ACL 白名单；desktop-ui 设置页新增「登录设置」页签（开关 + NapCat 地址/签名），
+  账号抽屉新增「QQ 扫码」页签（二维码、1.2s 轮询、取消，confirmed 后换 code 走
+  platform=qq 保存并自动启动；按登录设置显示页签）。与既有 QQ 小程序 IDE 扫码
+  （`qrlogin.rs`）并存，对应 bot 两套方案并存
+- **好友页懒加载**（bot `8da9a5a`）：好友列表/黑名单/互动记录按「已加载账号」标记，
+  每账号只拉一次；切账号重置标记；WS 触发的列表刷新不再连带重拉黑名单；
+  删除好友后强制重拉黑名单；互动记录手动刷新按钮强制重拉
+- 验证：`RUSTFLAGS=-D warnings cargo check --workspace --all-targets` 0 错 0 警；
+  `cargo fmt --check` 通过；`cargo test -p qq-farm-core --lib` 969/969；
+  `cargo test -p qq-farm-desktop`（含 ACL 防回归）通过；
+  `desktop-ui` `vue-tsc --noEmit` 与 `vite build --mode prod` 通过
+- 环境注：desktop-ui 的 `crypto-es`（887f0db 引入）本机 node_modules 缺装且 pnpm
+  shim 损坏，本次已手动补放 `crypto-es@3.1.3` 后构建通过；下次 `pnpm install` 后无感
+- 能力状态：业务能力与 bot `707a47c` 对齐；NapCat 需外部 NapCat 服务才能实际使用；
+  SYNC.md 已知缺口 L1–L8 实机回归仍待验
+
+### 2026-09-10 — 修复本机微信「检测不到」（微信本地服务按进程过滤连接）
+
+- 现象：账号抽屉「微信授权」始终提示未检测到本机微信（官方网页快捷登录正常）
+- 排查（对照官网 qrconnect 抓包 + 本机实测）：
+  1. 微信本地服务（`localhost.weixin.qq.com:14013-14015/13013-13015`）对连接做
+     **进程过滤**：Edge/WebView2/node 放行；Rust（reqwest-rustls）、curl(schannel)、
+     openssl s_client 的 TLS ClientHello 被静默丢弃（连接后服务端 0 字节回包即断）
+  2. 排除了 ALPN / TLS 版本 / 密钥交换组 / ClientHello 大小 / ECH GREASE /
+     Origin 头等因素：同一份 ClientHello 直连必死、经 node 转发必活；
+     curl 改名 node.exe 仍被拦
+- **修复**：detect / authorize 两步改由 WebView 直接 fetch（Chromium 网络栈天然
+  被放行，与官方页面同路径）；CORS（服务端 ACAO 锁死 open.weixin.qq.com）通过
+  主窗口 `additionalBrowserArgs --disable-web-security` 放行（本地工具应用，
+  加载内容全部为本地 dist，风险可控）
+  - `desktop-ui`：`fetchWxLocalCheckLogin` / `fetchWxLocalAuthorize` 浏览器直连
+    （create session 返回的 OAuth 参数 + 端口列表直接可用）；authorize 的 errcode
+    （10050/10046/10057）中文映射；探测失败展示具体原因（此前被吞）
+  - confirm 换票仍走后端（yybadaccess 请求不受过滤影响）
+  - 后端 `local_wechat` 请求头补 Origin/Referer/Sec-Fetch-*（对齐官方页面，保留
+    作为非 Windows / 未来解禁后的直连能力）
+- 设置页「登录设置」去掉「微信扫码登录」开关（bot 面板概念，rust 桌面版微信
+  登录始终可用；LoginSettings 存储字段保留，保存时不动该值）
+- 验证：`vue-tsc --noEmit` / `vite build` 通过；实机待验（本机微信已登录未锁定时
+  微信授权页应显示头像昵称并可一键授权）

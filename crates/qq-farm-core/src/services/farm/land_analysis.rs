@@ -291,13 +291,18 @@ pub enum PlantPhase {
     Growing,
     Ripe,
     Dead,
+    /// 0（UNKNOWN）或无法归类的详细阶段值（8+，含 19 等记录态）
+    Unknown,
 }
 
 impl PlantPhase {
-    /// 从 `PlantPhaseInfo` 列表解析当前阶段（对齐 TS `getCurrentPhase`）
+    /// 从 `PlantPhaseInfo` 列表解析当前阶段（对齐 TS `getCurrentPhase` 的粗状态部分）
     ///
     /// 从后往前找第一个 `begin_time > 0 && begin_time <= nowSec` 的阶段；
     /// 全部在未来则回退到第一个阶段。
+    ///
+    /// 注意：本函数只识别服务端粗状态，识别不了 phase_id=19 / 末阶段盛开
+    /// 等成熟形态；业务侧判定成熟请用 [`convert_server_phase_to_client`]。
     #[must_use]
     pub fn from_phases(phases: &[PlantPhaseInfo]) -> Option<Self> {
         if phases.is_empty() {
@@ -315,11 +320,12 @@ impl PlantPhase {
 
     /// 直接从 i32 解析（对齐 TS `PlantPhase` 枚举）
     ///
-    /// - 0 UNKNOWN / 1 SEED → `Seed`
+    /// - 1 SEED → `Seed`
     /// - 2 GERMINATION → `Sprout`
     /// - 3 SMALL_LEAVES / 4 LARGE_LEAVES / 5 BLOOMING → `Growing`
     /// - 6 MATURE → `Ripe`
     /// - 7 DEAD → `Dead`
+    /// - 0 UNKNOWN / 其它（8+ 详细阶段记录值）→ `Unknown`
     #[must_use]
     pub fn from_i32(phase: i32) -> Self {
         match phase {
@@ -327,8 +333,9 @@ impl PlantPhase {
             3..=5 => Self::Growing,
             6 => Self::Ripe,
             7 => Self::Dead,
-            // 0 UNKNOWN / 1 SEED / 其它未知 → Seed
-            _ => Self::Seed,
+            1 => Self::Seed,
+            // 0 UNKNOWN / 8+（含 19 等记录态）→ Unknown
+            _ => Self::Unknown,
         }
     }
 
@@ -339,10 +346,103 @@ impl PlantPhase {
     }
 }
 
+/// 服务端 phases 转换结果（对齐 bot `convertServerPhaseToClient` 的关键输出）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConvertedPhase {
+    /// 客户端阶段值：成熟判定通过后改写为 6（MATURE）；
+    /// 无法归类时保留服务端原值（0 / 8+），由调用方按语义处理
+    pub phase: i32,
+    /// 在 grow_phases 配置中的下标（无法确定时为 -1）
+    pub phase_index: i64,
+    /// 展示图阶段（Dead=7；有配置时 phase_index+1；否则沿用客户端阶段值）
+    pub image_phase: i64,
+    pub server_phase: i32,
+    pub phase_record_id: i64,
+    /// 配置阶段名（枯死固定「枯死」；无配置时为空串）
+    pub phase_name: String,
+}
+
+/// 服务端响应的 phases 是从当前阶段开始的配置后缀，因此当前配置下标等于：
+/// grow_phases 总数 - 服务端剩余 phases 数。响应 phase 只表示生长中/成熟/枯死
+/// 等粗状态，phase_id 是详细阶段类型，二者都不能直接作为配置数组下标。
+///
+/// 对齐 bot `convertServerPhaseToClient`（PR #68）。
+#[must_use]
+pub fn convert_server_phase_to_client(
+    phases: &[PlantPhaseInfo],
+    plant_id: i64,
+) -> Option<ConvertedPhase> {
+    let info = current_phase_info(phases)?;
+    let server_phase = info.phase;
+    let phase_record_id = info.phase_id;
+    let gc = crate::config::game_config::global();
+    let grow_phases = gc.get_plant_grow_phases(plant_id);
+
+    let remaining_count = phases.len() as i64;
+    let phase_index = if !grow_phases.is_empty() && remaining_count > 0 {
+        (grow_phases.len() as i64 - remaining_count).max(0)
+    } else {
+        -1
+    };
+    let configured_phase =
+        if phase_index >= 0 { grow_phases.get(phase_index as usize) } else { None };
+    let is_final_configured =
+        !grow_phases.is_empty() && phase_index == grow_phases.len() as i64 - 1;
+
+    // 大多数作物成熟时 phase=6，但部分作物（例如最后阶段名为“盛开”的牵牛花）
+    // 仍可能返回粗状态 2，或把详细阶段 ID 19 放进 phase。成熟阶段同时可由
+    // phase_id=19 和 grow_phases 的最后一个剩余阶段确定，不能只依赖粗状态。
+    let is_mature = server_phase != PHASE_DEAD
+        && (server_phase == PHASE_MATURE
+            || i64::from(server_phase) == MATURE_PHASE_RECORD_ID
+            || phase_record_id == MATURE_PHASE_RECORD_ID
+            || (is_final_configured
+                && (server_phase == PHASE_GERMINATION || server_phase > PHASE_DEAD)));
+    let client_phase = if is_mature { PHASE_MATURE } else { server_phase };
+
+    let image_phase = if server_phase == PHASE_DEAD {
+        i64::from(PHASE_DEAD)
+    } else if configured_phase.is_some() {
+        phase_index + 1
+    } else {
+        i64::from(client_phase)
+    };
+    let phase_name = if server_phase == PHASE_DEAD {
+        PHASE_NAMES[PHASE_DEAD as usize].to_string()
+    } else {
+        configured_phase.map(|c| c.name.clone()).unwrap_or_default()
+    };
+
+    let known_client_phase = (PHASE_SEED..=PHASE_MATURE).contains(&client_phase);
+    if configured_phase.is_none() && server_phase != PHASE_DEAD && !known_client_phase {
+        return Some(ConvertedPhase {
+            phase: PHASE_UNKNOWN,
+            phase_index,
+            image_phase: 0,
+            server_phase,
+            phase_record_id,
+            phase_name: String::new(),
+        });
+    }
+
+    Some(ConvertedPhase {
+        phase: client_phase,
+        phase_index,
+        image_phase,
+        server_phase,
+        phase_record_id,
+        phase_name,
+    })
+}
+
 /// 土地当前阶段（无 plant 时为 Seed）
 #[must_use]
 pub fn current_phase(land: &LandInfo) -> PlantPhase {
-    land.plant.as_ref().and_then(|p| PlantPhase::from_phases(&p.phases)).unwrap_or(PlantPhase::Seed)
+    land.plant
+        .as_ref()
+        .and_then(|p| convert_server_phase_to_client(&p.phases, p.id))
+        .map(|c| PlantPhase::from_i32(c.phase))
+        .unwrap_or(PlantPhase::Seed)
 }
 
 /// 判断土地是否可种植
@@ -383,6 +483,12 @@ pub fn summarize_lands(lands: &[LandInfo]) -> LandSummary {
     for land in lands {
         match current_phase(land) {
             PlantPhase::Seed => {
+                if land.unlocked {
+                    s.plantable += 1;
+                }
+            }
+            // 对齐 bot getPlantStatus：UNKNOWN → 'empty' → 计入空地/可种
+            PlantPhase::Unknown => {
                 if land.unlocked {
                     s.plantable += 1;
                 }
@@ -695,7 +801,9 @@ pub fn analyze_lands(lands: &[LandInfo], own_gid: i64) -> LandAnalysis {
             result.need_interaction_cleanup.push(id);
         }
 
-        let Some(phase) = PlantPhase::from_phases(&plant.phases) else {
+        let Some(phase) = convert_server_phase_to_client(&plant.phases, plant.id)
+            .map(|c| PlantPhase::from_i32(c.phase))
+        else {
             result.empty.push(id);
             continue;
         };
@@ -722,10 +830,7 @@ pub fn analyze_lands(lands: &[LandInfo], own_gid: i64) -> LandAnalysis {
                 });
                 continue;
             }
-            PlantPhase::Seed if plant.phases.is_empty() => {
-                result.empty.push(id);
-                continue;
-            }
+            // Unknown / Seed 阶段落入 growing（对齐 bot：UNKNOWN 不影响 growing 判定）
             _ => {}
         }
 
@@ -958,30 +1063,67 @@ pub fn get_land_lifecycle_state(land: Option<&LandInfo>) -> &'static str {
     if plant.phases.is_empty() {
         return "empty";
     }
-    match PlantPhase::from_phases(&plant.phases) {
-        Some(PlantPhase::Dead) => "dead",
-        // 对齐 bot：SEED..MATURE 视为 growing（多季作物收获后仍为 SEED 阶段，需保留而非铲除）
-        Some(PlantPhase::Seed) => "growing",
-        Some(_) => "growing",
-        None => "empty",
+    let Some(converted) = convert_server_phase_to_client(&plant.phases, plant.id) else {
+        return "empty";
+    };
+    let phase_val = converted.phase;
+    if phase_val == PHASE_DEAD {
+        return "dead";
     }
+    if phase_val == PHASE_UNKNOWN {
+        return "empty";
+    }
+    if (PHASE_SEED..=PHASE_MATURE).contains(&phase_val) {
+        return "growing";
+    }
+    "unknown"
 }
 
-/// 按 map 分类刚收获的土地
+/// 判断多季作物是否还有后续季（对齐 bot `hasRemainingSeasons`）：
+/// 已进入第 2 季、或当前季还没到配置总季数，都算有剩余季。
+#[must_use]
+pub fn has_remaining_seasons(plant: Option<&PlantInfo>) -> bool {
+    let Some(plant) = plant else {
+        return false;
+    };
+    let gc = crate::config::game_config::global();
+    let plant_cfg = if plant.id > 0 { gc.get_plant_by_id(plant.id) } else { None };
+    let total_season = plant_cfg.as_ref().and_then(|p| p.seasons).unwrap_or(1).max(1);
+    let current_season = if plant.season > 0 { plant.season } else { 1 };
+    current_season > 1 || current_season < total_season
+}
+
+/// 按 map 分类刚收获的土地（对齐 bot PR #68）：
+/// 死亡/空地可铲；生长中或还有剩余季的多季作物保留；未知状态单独归入
+/// unknown，由调用方跳过铲除而不是当成枯地误铲。
 #[must_use]
 pub fn classify_harvested_lands_by_map(land_ids: &[i64], lands_map: &LandMap) -> HarvestedClassify {
     let mut out = HarvestedClassify::default();
     for &id in land_ids {
-        match get_land_lifecycle_state(lands_map.get(&id)) {
+        let Some(land) = lands_map.get(&id) else {
+            out.unknown.push(id);
+            continue;
+        };
+        let plant = land.plant.as_ref();
+        match get_land_lifecycle_state(Some(land)) {
             "dead" | "empty" => out.removable.push(id),
             "growing" => out.growing.push(id),
-            _ => out.unknown.push(id),
+            _ => {
+                if has_remaining_seasons(plant) {
+                    out.growing.push(id);
+                } else {
+                    out.unknown.push(id);
+                }
+            }
         }
     }
     out
 }
 
-use crate::constants::{PHASE_DEAD, PHASE_MATURE, PHASE_NAMES, PHASE_UNKNOWN};
+use crate::constants::{
+    MATURE_PHASE_RECORD_ID, PHASE_DEAD, PHASE_GERMINATION, PHASE_MATURE, PHASE_NAMES, PHASE_SEED,
+    PHASE_UNKNOWN,
+};
 
 /// 面板土地汇总（对齐 TS `summarizeLandDetails`）
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -1177,7 +1319,17 @@ pub fn build_lands_panel_dto(lands: &[LandInfo], kind: LandDetailKind) -> Vec<se
             out.push(obj);
             continue;
         };
-        let phase_val = current_phase.phase;
+        // 对齐 bot：面板阶段值经 grow_phases 后缀对齐 + 成熟记录态（19/末阶段盛开）改写
+        let converted =
+            convert_server_phase_to_client(&plant.phases, plant.id).unwrap_or(ConvertedPhase {
+                phase: current_phase.phase,
+                phase_index: -1,
+                image_phase: 0,
+                server_phase: current_phase.phase,
+                phase_record_id: current_phase.phase_id,
+                phase_name: String::new(),
+            });
+        let phase_val = converted.phase;
         let plant_id = plant.id;
         // 变异配置：mutant_config_ids + 当前阶段(缺省扫全部) + extended_mutations
         let mutant_config_ids = get_plant_mutant_config_ids(plant, Some(current_phase));
@@ -1244,7 +1396,11 @@ pub fn build_lands_panel_dto(lands: &[LandInfo], kind: LandDetailKind) -> Vec<se
         let current_season_raw = plant.season;
         let current_season =
             if current_season_raw > 0 { current_season_raw.min(total_season) } else { 1 };
-        let phase_name = PHASE_NAMES.get(phase_val as usize).copied().unwrap_or("");
+        let phase_name = if !converted.phase_name.is_empty() {
+            converted.phase_name.clone()
+        } else {
+            PHASE_NAMES.get(phase_val as usize).copied().unwrap_or("").to_string()
+        };
         let mature_begin = plant
             .phases
             .iter()
@@ -1377,6 +1533,7 @@ mod tests {
             PlantPhase::Growing => 3,
             PlantPhase::Ripe => 6,
             PlantPhase::Dead => 7,
+            PlantPhase::Unknown => 0,
         }
     }
 
@@ -1620,5 +1777,197 @@ mod tests {
         }
         let targets = get_organic_fertilizer_targets_from_lands(&[allow, deny, ok]);
         assert_eq!(targets, vec![1, 3]);
+    }
+
+    // ===== 多季作物阶段识别（对齐 bot farm-multi-season.test.js，PR #68）=====
+
+    /// 白蘑菇（多季，grow_phases 末段为「成熟」）
+    const MUSHROOM_ID: i64 = 102_0050;
+    /// 白萝卜（单季）
+    const RADISH_ID: i64 = 202_0002;
+    /// 牵牛花（grow_phases 末段为「盛开」）
+    const MORNING_GLORY_ID: i64 = 102_0147;
+
+    fn phase_rec(phase: i32, phase_id: i64, begin_time: i64) -> PlantPhaseInfo {
+        PlantPhaseInfo { phase, phase_id, begin_time, ..Default::default() }
+    }
+
+    fn land_with_plant(
+        id: i64,
+        plant_id: i64,
+        season: i64,
+        phases: Vec<PlantPhaseInfo>,
+    ) -> LandInfo {
+        LandInfo {
+            id,
+            unlocked: true,
+            plant: Some(PlantInfo { id: plant_id, season, phases, ..Default::default() }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn grow_phases_parses_multi_season_and_bloom_final() {
+        let gc = crate::config::game_config::global();
+        assert!(
+            gc.get_plant_by_id(MUSHROOM_ID).is_some() && gc.get_plant_by_id(RADISH_ID).is_some(),
+            "assets/game_config/Plant.json 需包含测试作物"
+        );
+        let mushroom = gc.get_plant_grow_phases(MUSHROOM_ID);
+        assert!(mushroom.len() >= 2);
+        assert_eq!(mushroom.last().map(|p| p.name.as_str()), Some("成熟"));
+        assert_eq!(gc.get_plant_by_id(MUSHROOM_ID).and_then(|p| p.seasons), Some(2));
+
+        let glory = gc.get_plant_grow_phases(MORNING_GLORY_ID);
+        assert_eq!(glory.last().map(|p| p.name.as_str()), Some("盛开"));
+    }
+
+    #[test]
+    fn convert_uses_phases_suffix_for_phase_index() {
+        // phases 是从当前阶段开始的配置后缀：剩余 2 项 → 下标 = len - 2
+        let gc = crate::config::game_config::global();
+        let now = crate::utils::time::get_server_time_secs();
+        let total = gc.get_plant_grow_phases(MUSHROOM_ID).len() as i64;
+        let converted = convert_server_phase_to_client(
+            &[phase_rec(2, 0, now - 100), phase_rec(6, 0, now + 100)],
+            MUSHROOM_ID,
+        )
+        .expect("converted");
+        assert_eq!(converted.phase_index, total - 2);
+        assert_eq!(converted.phase, PHASE_GERMINATION);
+        assert_eq!(converted.image_phase, total - 1);
+    }
+
+    #[test]
+    fn convert_maps_phase_id_19_to_mature() {
+        let now = crate::utils::time::get_server_time_secs();
+        let converted = convert_server_phase_to_client(
+            &[phase_rec(2, 19, now - 10), phase_rec(6, 0, now + 100), phase_rec(6, 0, now + 200)],
+            MUSHROOM_ID,
+        )
+        .expect("converted");
+        assert_eq!(converted.phase, PHASE_MATURE);
+    }
+
+    #[test]
+    fn convert_maps_final_configured_bloom_phase_to_mature() {
+        let now = crate::utils::time::get_server_time_secs();
+        let converted =
+            convert_server_phase_to_client(&[phase_rec(2, 0, now - 10)], MORNING_GLORY_ID)
+                .expect("converted");
+        assert_eq!(converted.phase, PHASE_MATURE);
+    }
+
+    #[test]
+    fn analyze_harvests_radish_at_phase_6() {
+        let now = crate::utils::time::get_server_time_secs();
+        let lands =
+            vec![land_with_plant(1, RADISH_ID, 1, vec![phase_rec(PHASE_MATURE, 0, now - 10)])];
+        let status = analyze_lands(&lands, 0);
+        assert_eq!(status.harvestable, vec![1]);
+        assert!(status.dead.is_empty());
+    }
+
+    #[test]
+    fn analyze_treats_glory_final_remaining_phase_as_harvestable() {
+        let now = crate::utils::time::get_server_time_secs();
+        let lands = vec![land_with_plant(8, MORNING_GLORY_ID, 1, vec![phase_rec(2, 0, now - 10)])];
+        let status = analyze_lands(&lands, 0);
+        assert_eq!(status.harvestable, vec![8]);
+    }
+
+    #[test]
+    fn classify_dead_and_empty_to_removable_missing_stays_unknown() {
+        let now = crate::utils::time::get_server_time_secs();
+        let lands = vec![
+            land_with_plant(1, RADISH_ID, 1, vec![phase_rec(PHASE_DEAD, 0, now)]),
+            make_land(2, true, None),
+            land_with_plant(3, RADISH_ID, 1, vec![]),
+        ];
+        let map = build_land_map(&lands);
+        let result = classify_harvested_lands_by_map(&[1, 2, 3, 99], &map);
+        let mut removable = result.removable;
+        removable.sort_unstable();
+        assert_eq!(removable, vec![1, 2, 3]);
+        assert!(result.growing.is_empty());
+        assert_eq!(result.unknown, vec![99]);
+    }
+
+    #[test]
+    fn classify_next_season_multi_crop_is_growing_not_removable() {
+        let now = crate::utils::time::get_server_time_secs();
+        let lands = vec![land_with_plant(
+            4,
+            MUSHROOM_ID,
+            2,
+            vec![phase_rec(2, 0, now - 10), phase_rec(PHASE_MATURE, 0, now + 3600)],
+        )];
+        let result = classify_harvested_lands_by_map(&[4], &build_land_map(&lands));
+        assert_eq!(result.growing, vec![4]);
+        assert!(result.removable.is_empty());
+        assert!(result.unknown.is_empty());
+    }
+
+    #[test]
+    fn classify_unusual_phase_still_growing_when_seasons_remain() {
+        let now = crate::utils::time::get_server_time_secs();
+        let lands = vec![land_with_plant(
+            5,
+            MUSHROOM_ID,
+            1,
+            vec![phase_rec(20, 20, now - 10), phase_rec(PHASE_MATURE, 0, now + 3600)],
+        )];
+        let result = classify_harvested_lands_by_map(&[5], &build_land_map(&lands));
+        assert_eq!(result.growing, vec![5]);
+        assert!(result.removable.is_empty());
+    }
+
+    #[test]
+    fn classify_unusual_phase_on_single_season_crop_stays_unknown() {
+        let now = crate::utils::time::get_server_time_secs();
+        let lands = vec![land_with_plant(
+            6,
+            RADISH_ID,
+            1,
+            vec![phase_rec(20, 20, now - 10), phase_rec(PHASE_MATURE, 0, now + 60)],
+        )];
+        let result = classify_harvested_lands_by_map(&[6], &build_land_map(&lands));
+        assert_eq!(result.unknown, vec![6]);
+        assert!(result.removable.is_empty());
+        assert!(result.growing.is_empty());
+    }
+
+    #[test]
+    fn classify_dead_last_season_of_multi_crop_is_removable() {
+        let now = crate::utils::time::get_server_time_secs();
+        let lands = vec![land_with_plant(7, MUSHROOM_ID, 2, vec![phase_rec(PHASE_DEAD, 0, now)])];
+        let result = classify_harvested_lands_by_map(&[7], &build_land_map(&lands));
+        assert_eq!(result.removable, vec![7]);
+        assert!(result.growing.is_empty());
+    }
+
+    #[test]
+    fn has_remaining_seasons_boundaries() {
+        let now = crate::utils::time::get_server_time_secs();
+        let mushroom_s2 = land_with_plant(1, MUSHROOM_ID, 2, vec![phase_rec(2, 0, now - 10)]).plant;
+        let mushroom_s1 = land_with_plant(2, MUSHROOM_ID, 1, vec![phase_rec(2, 0, now - 10)]).plant;
+        let radish_s1 = land_with_plant(3, RADISH_ID, 1, vec![phase_rec(2, 0, now - 10)]).plant;
+        let no_season = land_with_plant(4, RADISH_ID, 0, vec![phase_rec(2, 0, now - 10)]).plant;
+        assert!(has_remaining_seasons(mushroom_s2.as_ref()));
+        assert!(has_remaining_seasons(mushroom_s1.as_ref()));
+        assert!(!has_remaining_seasons(radish_s1.as_ref()));
+        // season 缺省按第 1 季处理
+        assert!(!has_remaining_seasons(no_season.as_ref()));
+        assert!(!has_remaining_seasons(None));
+    }
+
+    #[test]
+    fn from_i32_unknown_values() {
+        assert_eq!(PlantPhase::from_i32(0), PlantPhase::Unknown);
+        assert_eq!(PlantPhase::from_i32(19), PlantPhase::Unknown);
+        assert_eq!(PlantPhase::from_i32(20), PlantPhase::Unknown);
+        assert_eq!(PlantPhase::from_i32(1), PlantPhase::Seed);
+        assert_eq!(PlantPhase::from_i32(6), PlantPhase::Ripe);
+        assert_eq!(PlantPhase::from_i32(7), PlantPhase::Dead);
     }
 }

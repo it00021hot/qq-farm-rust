@@ -34,7 +34,8 @@
           "y": 18
         },
         "center": true,
-        "devtools": false
+        "devtools": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-web-security"
       }
     ],
     "security": {

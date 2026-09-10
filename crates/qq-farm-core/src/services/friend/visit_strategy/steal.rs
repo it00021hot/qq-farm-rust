@@ -115,6 +115,8 @@ pub fn get_current_phase(land: &LandInfo) -> Option<PlantPhase> {
         crate::services::farm::land_analysis::PlantPhase::Growing => PlantPhase::Growing,
         crate::services::farm::land_analysis::PlantPhase::Ripe => PlantPhase::Ripe,
         crate::services::farm::land_analysis::PlantPhase::Dead => PlantPhase::Dead,
+        // 无法归类的详细阶段值按种子态处理（不可偷、不铲）
+        crate::services::farm::land_analysis::PlantPhase::Unknown => PlantPhase::Seed,
     })
 }
 

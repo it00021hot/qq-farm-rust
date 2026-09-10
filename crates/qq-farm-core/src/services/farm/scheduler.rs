@@ -588,7 +588,29 @@ impl FarmService {
                     unknown = second.unknown;
                 }
             }
-            removable.extend(unknown);
+            if !unknown.is_empty() {
+                // 收获响应可能省略 2x2 主地块，或全量土地响应暂时不完整；
+                // 把未知状态当成枯死会误铲仍在生长/进入下一季的合种作物（bot PR #68）
+                let land_ids =
+                    unknown.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+                tracing::warn!(
+                    "[农场] 收后仍有 {} 块土地状态未知，已跳过铲除 ({})",
+                    unknown.len(),
+                    land_ids
+                );
+                crate::services::panel_log::log_warn(
+                    account_id,
+                    "农场",
+                    format!("收后仍有 {} 块土地状态未知，已跳过铲除", unknown.len()),
+                    crate::constants::PanelEvent::HarvestCrop,
+                    Some(serde_json::json!({
+                        "module": "farm",
+                        "event": "收获后状态补拉",
+                        "result": "skip_unknown",
+                        "landIds": unknown,
+                    })),
+                );
+            }
             removable.sort_unstable();
             removable.dedup();
             all_dead.extend(removable);

@@ -59,6 +59,10 @@ const interactError = ref('');
 const opLoadingKey = ref<string | null>(null);
 const stealAllLoading = ref(false);
 const blacklistLoading = ref(false);
+// 对齐 bot 好友页懒加载：记录各页签已完成加载的账号，避免重复请求
+const friendsLoadedAccount = ref(0);
+const blacklistLoadedAccount = ref(0);
+const interactLoadedAccount = ref(0);
 const deletingGid = ref<number | null>(null);
 const friends = ref<Api.Farm.Friend[]>([]);
 const friendCareers = ref<Record<number, Api.Farm.Career | null>>({});
@@ -212,14 +216,20 @@ const visibleInteractRecords = computed(() => {
   return list.filter(item => Number(item.actionType) === want);
 });
 
-async function loadBlacklist() {
+async function loadBlacklist(opts?: { force?: boolean }) {
   if (!farmAccountStore.currentAccountId) {
     friendBlacklist.value = [];
+    blacklistLoadedAccount.value = 0;
+    return;
+  }
+  // 对齐 bot 好友页懒加载：每账号只拉一次，切账号重置，手动刷新强制重拉
+  if (!opts?.force && blacklistLoadedAccount.value === farmAccountStore.currentAccountId) {
     return;
   }
   const { error, data } = await fetchGetFarmAutomationDetail(farmAccountStore.currentAccountId);
   if (!error && data) {
     friendBlacklist.value = (data.friendBlacklist || []).map(Number).filter(Boolean);
+    blacklistLoadedAccount.value = farmAccountStore.currentAccountId;
   }
 }
 
@@ -241,6 +251,7 @@ async function loadFriends(opts?: { force?: boolean }) {
     ]);
     if (!error && data) {
       friends.value = data.records || [];
+      friendsLoadedAccount.value = farmAccountStore.currentAccountId;
     }
   } finally {
     loading.value = false;
@@ -255,10 +266,15 @@ async function refreshFriendList() {
   }
 }
 
-async function loadInteractRecords() {
+async function loadInteractRecords(opts?: { force?: boolean }) {
   if (!farmAccountStore.currentAccountId) {
     interactRecords.value = [];
     interactError.value = '';
+    interactLoadedAccount.value = 0;
+    return;
+  }
+  // 对齐 bot 好友页懒加载：已加载过当前账号则跳过
+  if (!opts?.force && interactLoadedAccount.value === farmAccountStore.currentAccountId) {
     return;
   }
   interactLoading.value = true;
@@ -271,6 +287,7 @@ async function loadInteractRecords() {
       return;
     }
     interactRecords.value = data || [];
+    interactLoadedAccount.value = farmAccountStore.currentAccountId;
   } finally {
     interactLoading.value = false;
   }
@@ -472,7 +489,8 @@ async function deleteFriend(friend: Api.Farm.Friend) {
     friends.value = friends.value.filter(item => Number(item.gid) !== Number(friend.gid));
     if (expandedGid.value === Number(friend.gid)) expandedGid.value = null;
     message.success($t('page.farm.friends.deleteSuccess', { name: friend.nickname || friend.gid }));
-    await loadBlacklist();
+    // 后端同时把该好友加入黑名单，强制重拉
+    await loadBlacklist({ force: true });
   } finally {
     deletingGid.value = null;
   }
@@ -571,6 +589,7 @@ function stopTick() {}
 
 watch(activeTab, tab => {
   if (tab === 'visitors') void loadInteractRecords();
+  else if (tab === 'blacklist') void loadBlacklist();
 });
 
 watch(
@@ -579,8 +598,13 @@ watch(
     expandedGid.value = null;
     friendLands.value = {};
     friendPage.value = 1;
+    // 切账号重置懒加载标记，各页签重新拉取
+    friendsLoadedAccount.value = 0;
+    blacklistLoadedAccount.value = 0;
+    interactLoadedAccount.value = 0;
     await loadFriends();
     if (activeTab.value === 'visitors') await loadInteractRecords();
+    else if (activeTab.value === 'blacklist') await loadBlacklist();
   }
 );
 
@@ -1011,7 +1035,7 @@ onUnmounted(() => {
                 {{ $t(item.labelKey) }}
               </NButton>
             </div>
-            <NButton size="small" :loading="interactLoading" @click="loadInteractRecords">
+            <NButton size="small" :loading="interactLoading" @click="loadInteractRecords({ force: true })">
               {{ $t('common.refresh') }}
             </NButton>
           </div>

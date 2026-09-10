@@ -126,6 +126,13 @@ pub fn run() {
             commands::account::wx_quick_login_detect,
             commands::account::wx_quick_login_authorize,
             commands::account::wx_quick_login_confirm,
+            // qq login (NapCat)
+            commands::qq_login::get_qq_login_settings,
+            commands::qq_login::save_qq_login_settings,
+            commands::qq_login::qq_login_create_task,
+            commands::qq_login::qq_login_task_status,
+            commands::qq_login::qq_login_miniapp_code,
+            commands::qq_login::qq_login_cancel_task,
             // farm
             commands::farm::farm_status_detail,
             commands::farm::farm_diamond,

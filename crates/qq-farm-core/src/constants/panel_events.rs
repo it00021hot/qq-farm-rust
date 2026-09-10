@@ -17,6 +17,7 @@ pub enum PanelEvent {
     SeedBuy,
     FertilizerBuy,
     FertilizerGiftOpen,
+    CharitySettlementGiftOpen,
     FertilizerBuyTimer,
     TaskScan,
     TaskClaim,
@@ -68,6 +69,7 @@ impl PanelEvent {
             Self::SeedBuy => "seed_buy",
             Self::FertilizerBuy => "fertilizer_buy",
             Self::FertilizerGiftOpen => "fertilizer_gift_open",
+            Self::CharitySettlementGiftOpen => "charity_settlement_gift_open",
             Self::FertilizerBuyTimer => "fertilizer_buy_timer",
             Self::TaskScan => "task_scan",
             Self::TaskClaim => "task_claim",
@@ -122,6 +124,7 @@ impl PanelEvent {
             Self::FertilizerBuy | Self::FertilizerGiftOpen | Self::FertilizerBuyTimer => {
                 "warehouse"
             }
+            Self::CharitySettlementGiftOpen => "warehouse",
             Self::SellSuccess | Self::SellDone => "warehouse",
             Self::TaskScan
             | Self::TaskClaim
@@ -167,6 +170,7 @@ impl PanelEvent {
             "seed_buy" => Some(Self::SeedBuy),
             "fertilizer_buy" => Some(Self::FertilizerBuy),
             "fertilizer_gift_open" => Some(Self::FertilizerGiftOpen),
+            "charity_settlement_gift_open" => Some(Self::CharitySettlementGiftOpen),
             "fertilizer_buy_timer" | "购买化肥计时器" => Some(Self::FertilizerBuyTimer),
             "task_scan" | "检查任务" => Some(Self::TaskScan),
             "task_claim" | "领取任务" => Some(Self::TaskClaim),

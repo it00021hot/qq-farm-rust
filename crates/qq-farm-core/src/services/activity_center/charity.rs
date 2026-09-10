@@ -45,6 +45,18 @@ fn find_activity_data(entries: &[ActivityData], activity_id: i64) -> Option<&Act
     None
 }
 
+/// 在 List 回包的活动窗口里定位公益小红花窗口；找不到活动级窗口时回退分组窗口。
+fn find_activity_window<'a>(
+    reply: &'a ActivityListReply,
+    activity_id: i64,
+) -> Option<&'a crate::proto::generated::gamepb::activitypb::ActivityWindow> {
+    let windows = &reply.activity_windows;
+    windows
+        .iter()
+        .find(|w| w.id == activity_id)
+        .or_else(|| windows.iter().find(|w| w.id == CHARITY_RED_FLOWER_GROUP_ID))
+}
+
 fn charity_active(begin_time: i64, end_time: i64, server_time: i64) -> bool {
     if begin_time > 0 && server_time < begin_time {
         return false;
@@ -66,6 +78,15 @@ impl ActivityCenterService {
         entry: &ActivityData,
         progress_state: Option<&CharityRedFlowerState>,
     ) -> Result<serde_json::Value> {
+        self.charity_dto_with_window(entry, progress_state, None)
+    }
+
+    fn charity_dto_with_window(
+        &self,
+        entry: &ActivityData,
+        progress_state: Option<&CharityRedFlowerState>,
+        activity_window: Option<&crate::proto::generated::gamepb::activitypb::ActivityWindow>,
+    ) -> Result<serde_json::Value> {
         let activity = entry.activity.as_ref().ok_or_else(|| {
             charity_err(
                 ActivityErrorCode::CharityRedFlowerUnavailable,
@@ -80,9 +101,15 @@ impl ActivityCenterService {
         })?;
 
         let server_time = crate::utils::time::get_server_time_secs();
+        // 活动时间窗优先取 List 回包的 activity_windows（对齐 bot cc6a8ab）：
+        // 活动明细的 begin/end_time 缺失或过期时不再误判 active
+        let window_begin = activity_window.map(|w| w.begin_time).filter(|v| *v > 0).unwrap_or(0);
+        let window_end = activity_window.map(|w| w.end_time).filter(|v| *v > 0).unwrap_or(0);
+        let activity_start_time = if window_begin > 0 { window_begin } else { activity.begin_time };
+        let activity_end_time = if window_end > 0 { window_end } else { activity.end_time };
         // 活动结束时间以状态里的 end_time 优先
-        let end_time = if state.end_time > 0 { state.end_time } else { activity.end_time };
-        let active = charity_active(activity.begin_time, end_time, server_time);
+        let end_time = if state.end_time > 0 { state.end_time } else { activity_end_time };
+        let active = charity_active(activity_start_time, end_time, server_time);
         let love_balance = state.love_balance;
         let donated_love = state.donated_love;
         let seed_status = state.seed_reward_status;
@@ -114,7 +141,7 @@ impl ActivityCenterService {
                     "statusCode": reward.status.to_string(),
                     "reached": reached,
                     "claimed": claimed,
-                    "claimable": reached && reward.status == 1 && !claimed && pending_targets.contains(&target),
+                    "claimable": active && reached && reward.status == 1 && !claimed && pending_targets.contains(&target),
                     "claimSupported": true,
                 })
             })
@@ -122,6 +149,13 @@ impl ActivityCenterService {
         let global_reward = state.global_reward.as_ref();
         let global_reward_target =
             merge_reward_target(global_reward.map(|g| g.target), state.global_target_love);
+        // 结算礼包需要「个人捐赠达标」+「全服目标达成」同时满足（对齐 bot）；
+        // 邮件在活动结束后发放，因此这两项判定不叠加活动窗口
+        let settlement_global_target =
+            if global_reward_target != 0 { global_reward_target } else { state.global_target_love };
+        let settlement_global_reached =
+            settlement_global_target != 0 && state.global_donated_love >= settlement_global_target;
+        let settlement_personal_reached = donated_love >= state.settlement_required_love;
 
         let name = if activity.name.trim().is_empty() {
             "公益小红花".to_string()
@@ -133,7 +167,7 @@ impl ActivityCenterService {
             "activityId": CHARITY_RED_FLOWER_ACTIVITY_ID.to_string(),
             "name": name,
             "title": name,
-            "startTime": activity.begin_time.to_string(),
+            "startTime": activity_start_time.to_string(),
             "endTime": end_time.to_string(),
             "serverTime": server_time.to_string(),
             "active": active,
@@ -142,9 +176,10 @@ impl ActivityCenterService {
             "loveBalance": love_balance.to_string(),
             "donatedLove": donated_love.to_string(),
             "flowStatus": state.flow_status.to_string(),
+            "agreementStatus": state.agreement_status.to_string(),
             "seedReward": {
                 "statusCode": seed_status.to_string(),
-                "claimable": seed_status == 2,
+                "claimable": active && seed_status == 2,
                 "claimed": seed_status == 3,
                 "reward": activity_item_or_default(&state.seed_reward),
             },
@@ -172,7 +207,9 @@ impl ActivityCenterService {
             },
             "settlement": {
                 "requiredLove": state.settlement_required_love.to_string(),
-                "eligible": donated_love >= state.settlement_required_love,
+                "eligible": settlement_global_reached && settlement_personal_reached,
+                "globalReached": settlement_global_reached,
+                "personalReached": settlement_personal_reached,
                 "reward": activity_item_or_default(&state.settlement_reward),
             },
             "actions": {
@@ -210,10 +247,11 @@ impl ActivityCenterService {
         &self,
     ) -> Result<Option<serde_json::Value>> {
         let reply = self.query_charity_list().await?;
+        let window = find_activity_window(&reply, CHARITY_RED_FLOWER_ACTIVITY_ID);
         match find_activity_data(&reply.activities, CHARITY_RED_FLOWER_ACTIVITY_ID) {
             Some(entry) if entry.charity_red_flower.is_some() => {
                 let progress_state = self.resolve_charity_progress_state(entry);
-                Ok(Some(self.charity_dto_with_state(entry, Some(&progress_state))?))
+                Ok(Some(self.charity_dto_with_window(entry, Some(&progress_state), window)?))
             }
             _ => Ok(None),
         }
@@ -238,17 +276,23 @@ impl ActivityCenterService {
         Ok(reply)
     }
 
-    /// 领取小红花种子（op=35）。
+    /// 用 Operate 回包内携带的活动数据构造快照（对齐 bot `charitySnapshotFromOperateReply`，
+    /// 零额外请求）；回包无活动数据时返回 None。
+    fn charity_snapshot_from_operate_reply(
+        &self,
+        reply: &ActivityOperateReply,
+    ) -> Option<serde_json::Value> {
+        let entry = reply.data.as_ref()?;
+        if entry.charity_red_flower.is_none() {
+            return None;
+        }
+        let progress_state = self.resolve_charity_progress_state(entry);
+        self.charity_dto_with_state(entry, Some(&progress_state)).ok()
+    }
+
+    /// 领取小红花种子（op=35）。对齐 bot：不做客户端前置校验，直接 Operate。
     pub async fn claim_charity_red_flower_seeds(&self) -> Result<serde_json::Value> {
         let _guard = self.mutation_lock.lock().await;
-        let activity = self.require_charity_activity().await?;
-        if !action_enabled(&activity, "claimSeeds") {
-            return Err(charity_err(
-                ActivityErrorCode::CharitySeedsUnavailable,
-                "当前没有可领取的小红花种子",
-            )
-            .into());
-        }
         let reply = self
             .operate_charity_red_flower(
                 CLAIM_CHARITY_SEED_OPERATE_TYPE,
@@ -269,7 +313,7 @@ impl ActivityCenterService {
         if rewards.is_empty() {
             rewards.extend(reply.rewards.iter().map(item_dto_json));
         }
-        let snapshot = self.snapshot_with_shop(None).await.ok();
+        let snapshot = self.charity_snapshot_from_operate_reply(&reply);
         Ok(serde_json::json!({
             "rewards": rewards,
             "message": "小红花种子领取成功",
@@ -277,22 +321,9 @@ impl ActivityCenterService {
         }))
     }
 
-    /// 捐赠全部爱心（op=36）。
+    /// 捐赠全部爱心（op=36）。对齐 bot：直接 Operate；捐赠数回退用回包 count。
     pub async fn donate_charity_red_flower_love(&self) -> Result<serde_json::Value> {
         let _guard = self.mutation_lock.lock().await;
-        let activity = self.require_charity_activity().await?;
-        if !action_enabled(&activity, "donateLove") {
-            return Err(charity_err(
-                ActivityErrorCode::InsufficientCharityLove,
-                "当前没有可捐赠的爱心",
-            )
-            .into());
-        }
-        let love_balance = activity
-            .get("loveBalance")
-            .and_then(serde_json::Value::as_str)
-            .and_then(|s| s.parse::<i64>().ok())
-            .unwrap_or(0);
         let reply = self
             .operate_charity_red_flower(
                 DONATE_CHARITY_LOVE_OPERATE_TYPE,
@@ -304,60 +335,24 @@ impl ActivityCenterService {
                 },
             )
             .await?;
-        let donated = reply
-            .charity_donate_result
-            .as_ref()
-            .map(|r| r.donated)
-            .filter(|v| *v != 0)
-            .unwrap_or(love_balance);
-        let global_donated = reply
-            .charity_donate_result
-            .as_ref()
-            .map(|r| r.global_donated.to_string())
-            .unwrap_or_default();
-        let snapshot = self.snapshot_with_shop(None).await.ok();
+        let donate_result = reply.charity_donate_result.as_ref();
+        let donated = donate_result.map(|r| r.donated).unwrap_or(0);
+        let donated_count =
+            if donated != 0 { donated } else { donate_result.map(|r| r.count).unwrap_or(0) };
+        let global_donated =
+            donate_result.map(|r| r.global_donated.to_string()).unwrap_or_default();
+        let snapshot = self.charity_snapshot_from_operate_reply(&reply);
         Ok(serde_json::json!({
-            "donated": donated.to_string(),
+            "donated": donated_count.to_string(),
             "globalDonated": global_donated,
-            "message": format!("已捐赠全部 {donated} 份爱心"),
+            "message": format!("已捐赠全部 {donated_count} 份爱心"),
             "snapshot": snapshot,
         }))
     }
 
-    /// 领取今日公益礼包（op=38）。
+    /// 领取今日公益礼包（op=38）。对齐 bot：不做客户端前置校验，直接 Operate。
     pub async fn claim_charity_red_flower_daily_gift(&self) -> Result<serde_json::Value> {
         let _guard = self.mutation_lock.lock().await;
-        let activity = self.require_charity_activity().await?;
-        let claimed = activity
-            .pointer("/dailyGift/claimed")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        if claimed {
-            return Err(charity_err(
-                ActivityErrorCode::CharityDailyGiftUnavailable,
-                "今日公益礼包已经领取",
-            )
-            .into());
-        }
-        let harvested_today = activity
-            .pointer("/dailyGift/harvestedToday")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        if !harvested_today {
-            return Err(charity_err(
-                ActivityErrorCode::CharityDailyGiftNotHarvested,
-                "今天还没有收获小红花，暂时无法领取公益礼包",
-            )
-            .into());
-        }
-        let active = activity.get("active").and_then(serde_json::Value::as_bool).unwrap_or(false);
-        if !active {
-            return Err(charity_err(
-                ActivityErrorCode::CharityRedFlowerUnavailable,
-                "公益小红花活动暂未开放或已经结束",
-            )
-            .into());
-        }
         let reply = self
             .operate_charity_red_flower(
                 CLAIM_CHARITY_DAILY_GIFT_OPERATE_TYPE,
@@ -383,7 +378,7 @@ impl ActivityCenterService {
             .as_ref()
             .map(|r| r.status.to_string())
             .unwrap_or_default();
-        let snapshot = self.snapshot_with_shop(None).await.ok();
+        let snapshot = self.charity_snapshot_from_operate_reply(&reply);
         Ok(serde_json::json!({
             "rewards": rewards,
             "publicFund": {
@@ -395,47 +390,18 @@ impl ActivityCenterService {
     }
 
     /// 领取公益小红花个人进度奖励（op=37）。
+    /// 对齐 bot：不做客户端前置校验，直接 Operate；重复领取错误码按已领取成功返回。
     pub async fn claim_charity_red_flower_progress_reward(
         &self,
         target: &str,
     ) -> Result<serde_json::Value> {
         let _guard = self.mutation_lock.lock().await;
-        let activity = self.require_charity_activity().await?;
         let target = super::dto::positive_decimal(
             target,
             ActivityErrorCode::CharityProgressRewardUnavailable,
             "target",
         )?;
         let target_text = target.to_string();
-        let progress = activity
-            .get("progressRewards")
-            .and_then(serde_json::Value::as_array)
-            .and_then(|rewards| {
-                rewards.iter().find(|reward| {
-                    reward.get("target").and_then(serde_json::Value::as_str)
-                        == Some(target_text.as_str())
-                })
-            })
-            .ok_or_else(|| {
-                charity_err(
-                    ActivityErrorCode::CharityProgressRewardUnavailable,
-                    "当前没有可领取的公益进度奖励",
-                )
-            })?;
-        if progress.get("claimed").and_then(serde_json::Value::as_bool).unwrap_or(false) {
-            return Err(charity_err(
-                ActivityErrorCode::CharityProgressRewardAlreadyClaimed,
-                "该公益进度奖励档位已经领取",
-            )
-            .into());
-        }
-        if !progress.get("claimable").and_then(serde_json::Value::as_bool).unwrap_or(false) {
-            return Err(charity_err(
-                ActivityErrorCode::CharityProgressRewardUnavailable,
-                "当前没有可领取的公益进度奖励",
-            )
-            .into());
-        }
 
         let request = CharityRedFlowerOperateRequest {
             activity_id: CHARITY_RED_FLOWER_ACTIVITY_ID,
@@ -472,7 +438,7 @@ impl ActivityCenterService {
                 rewards.extend(reply.rewards.iter().map(item_dto_json));
             }
         }
-        let snapshot = self.snapshot_with_shop(None).await.ok();
+        let snapshot = reply.as_ref().and_then(|r| self.charity_snapshot_from_operate_reply(r));
         Ok(serde_json::json!({
             "target": target_text,
             "rewards": rewards,
@@ -485,17 +451,6 @@ impl ActivityCenterService {
             },
             "snapshot": snapshot,
         }))
-    }
-
-    /// 写操作前拉取当前活动；不存在直接报「暂未开放或已经结束」。
-    async fn require_charity_activity(&self) -> Result<serde_json::Value> {
-        self.get_current_charity_red_flower_activity().await?.ok_or_else(|| {
-            charity_err(
-                ActivityErrorCode::CharityRedFlowerUnavailable,
-                "公益小红花活动暂未开放或已经结束",
-            )
-            .into()
-        })
     }
 
     fn resolve_charity_progress_state(&self, entry: &ActivityData) -> CharityRedFlowerState {
@@ -610,13 +565,6 @@ fn reconcile_charity_progress_state(
     state.claimed_progress_targets = claimed.into_iter().collect();
     state.pending_progress_targets = pending.into_iter().collect();
     state
-}
-
-fn action_enabled(activity: &serde_json::Value, key: &str) -> bool {
-    activity
-        .pointer(&format!("/actions/{key}/enabled"))
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
 }
 
 fn item_dto_json(item: &crate::proto::generated::corepb::Item) -> serde_json::Value {
@@ -843,10 +791,39 @@ mod tests {
                 },
             ))
             .expect("dto");
-        assert_eq!(dto["settlement"]["eligible"], serde_json::json!(true));
+        assert_eq!(dto["settlement"]["eligible"], serde_json::json!(false));
+        assert_eq!(dto["settlement"]["personalReached"], serde_json::json!(true));
+        assert_eq!(dto["settlement"]["globalReached"], serde_json::json!(false));
         assert_eq!(dto["globalProgress"]["reached"], serde_json::json!(false));
         // global_reward.target == 0 → 回退 global_target_love
         assert_eq!(dto["globalProgress"]["rewardTarget"], serde_json::json!("1000"));
+    }
+
+    #[test]
+    fn dto_settlement_requires_both_personal_and_global() {
+        use crate::proto::generated::gamepb::activitypb::{
+            ActivityItem, CharityRedFlowerGlobalReward,
+        };
+        let svc = service();
+        let dto = svc
+            .charity_dto(&entry(
+                crate::proto::generated::gamepb::activitypb::CharityRedFlowerData {
+                    donated_love: 100,
+                    settlement_required_love: 80,
+                    global_donated_love: 1200,
+                    global_target_love: 1000,
+                    global_reward: Some(CharityRedFlowerGlobalReward {
+                        target: 0,
+                        reward: Some(ActivityItem { item_id: 9, count: 1 }),
+                    }),
+                    ..Default::default()
+                },
+            ))
+            .expect("dto");
+        // 个人与全服目标同时达成 → eligible（对齐 bot cc6a8ab）
+        assert_eq!(dto["settlement"]["eligible"], serde_json::json!(true));
+        assert_eq!(dto["settlement"]["personalReached"], serde_json::json!(true));
+        assert_eq!(dto["settlement"]["globalReached"], serde_json::json!(true));
     }
 
     #[test]
