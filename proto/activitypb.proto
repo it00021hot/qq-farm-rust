@@ -393,11 +393,13 @@ message GiftQixiSachetRequest {
 message CharityRedFlowerOperateRequest {
     message Empty {}
     message QueryParams { bool accepted = 1; }
+    message ProgressRewardParams { int64 target = 1; }
 
     int64 activity_id = 1;
     int64 operate_type = 2;
     Empty claim_seed = 134;
     Empty donate_love = 135;
+    ProgressRewardParams claim_progress_reward = 136;
     Empty send_public_fund = 137;
     QueryParams query = 138;
 }
@@ -422,6 +424,11 @@ message CharityRedFlowerPublicFundResult {
 
 message CharityRedFlowerQueryResult {
     bool accepted = 1;
+}
+
+message CharityRedFlowerProgressRewardResult {
+    int64 target = 1;
+    corepb.Item reward = 2;
 }
 
 message QixiGiftResult {
@@ -449,6 +456,7 @@ message ActivityOperateReply {
     WeatherResearchOperateResult weather_research_result = 140;
     CharityRedFlowerSeedResult charity_seed_result = 135;
     CharityRedFlowerDonateResult charity_donate_result = 136;
+    CharityRedFlowerProgressRewardResult charity_progress_reward_result = 137;
     CharityRedFlowerPublicFundResult charity_public_fund_result = 138;
     CharityRedFlowerQueryResult charity_query_result = 139;
 }

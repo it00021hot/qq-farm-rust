@@ -182,7 +182,9 @@ const filteredFriends = computed(() => {
   const matched = keyword
     ? list.filter(
         friend =>
-          String(friend.name || '').toLowerCase().includes(keyword) || String(friend.gid).includes(keyword)
+          String(friend.name || '')
+            .toLowerCase()
+            .includes(keyword) || String(friend.gid).includes(keyword)
       )
     : list;
   return matched.slice(0, FRIEND_SHOW_LIMIT);
@@ -191,9 +193,7 @@ const filteredFriends = computed(() => {
 const selectedBase = computed(
   () => weatherFriends.value.find(friend => String(friend.gid) === selectedGid.value) || null
 );
-const selectedScan = computed(() =>
-  selectedGid.value ? scannedRows.value[String(selectedGid.value)] || null : null
-);
+const selectedScan = computed(() => (selectedGid.value ? scannedRows.value[String(selectedGid.value)] || null : null));
 const selectedFriend = computed<WeatherFriendRow | null>(() => {
   if (!selectedBase.value) return null;
   const scanned = selectedScan.value?.row;
@@ -331,9 +331,7 @@ async function scanFriend(friend: WeatherFriendRow) {
   if (!farmAccountStore.currentAccountId || scanDisabled.value) return;
   scanningGid.value = String(friend.gid);
   try {
-    const { error, data } = await fetchScanWeatherFriends(farmAccountStore.currentAccountId, [
-      String(friend.gid)
-    ]);
+    const { error, data } = await fetchScanWeatherFriends(farmAccountStore.currentAccountId, [String(friend.gid)]);
     if (error) {
       message.error(stripErrorCode(error.message));
       return;
@@ -385,9 +383,7 @@ async function exchangeCollector() {
     }
     const rewards = rewardSummary((data?.rewards || []) as WeatherItem[]);
     message.success(
-      rewards
-        ? $t('page.farm.activity.claimRewardsSuccess', { items: rewards })
-        : $t('page.farm.activity.claimSuccess')
+      rewards ? $t('page.farm.activity.claimRewardsSuccess', { items: rewards }) : $t('page.farm.activity.claimSuccess')
     );
     applyActionResult(data as Record<string, unknown>);
   } finally {
@@ -406,9 +402,7 @@ async function advanceResearch(nodeId?: string) {
     }
     const rewards = rewardSummary((data?.rewards || []) as WeatherItem[]);
     message.success(
-      rewards
-        ? $t('page.farm.activity.claimRewardsSuccess', { items: rewards })
-        : $t('page.farm.activity.claimSuccess')
+      rewards ? $t('page.farm.activity.claimRewardsSuccess', { items: rewards }) : $t('page.farm.activity.claimSuccess')
     );
     applyActionResult(data as Record<string, unknown>);
   } finally {
@@ -427,9 +421,7 @@ async function collectWeather(friend: WeatherFriendRow | null) {
     }
     const rewards = rewardSummary((data?.rewards || []) as WeatherItem[]);
     message.success(
-      rewards
-        ? $t('page.farm.activity.claimRewardsSuccess', { items: rewards })
-        : $t('page.farm.activity.claimSuccess')
+      rewards ? $t('page.farm.activity.claimRewardsSuccess', { items: rewards }) : $t('page.farm.activity.claimSuccess')
     );
     applyActionResult(data as Record<string, unknown>);
   } finally {
@@ -461,21 +453,14 @@ async function mischiefCloud(friend: WeatherFriendRow | null) {
   if (!(friend.eligibleCloudLandIds || []).length) return;
   pendingKey.value = 'cloud';
   try {
-    const { error, data } = await fetchWeatherMischiefCloud(
-      farmAccountStore.currentAccountId,
-      String(friend.gid)
-    );
+    const { error, data } = await fetchWeatherMischiefCloud(farmAccountStore.currentAccountId, String(friend.gid));
     if (error) {
       message.error(stripErrorCode(error.message));
       return;
     }
     const rewards = rewardSummary((data?.use?.rewards || []) as WeatherItem[]);
     const landId = String(data?.landId || '');
-    message.success(
-      rewards
-        ? `乌云使坏成功${landId ? `（地块 ${landId}）` : ''}：${rewards}`
-        : '乌云使坏成功'
-    );
+    message.success(rewards ? `乌云使坏成功${landId ? `（地块 ${landId}）` : ''}：${rewards}` : '乌云使坏成功');
     applyActionResult(data as Record<string, unknown>);
   } finally {
     pendingKey.value = '';
@@ -553,7 +538,7 @@ onMounted(() => {
               <div class="mt-2px text-12px text-gray-500">
                 <template v-if="ownWeather?.active">
                   剩余 {{ ownRemainingText || '进行中' }}
-                  <template v-if="ownWeather.collectedThisCycle"> · 本轮已采</template>
+                  <template v-if="ownWeather.collectedThisCycle">· 本轮已采</template>
                 </template>
                 <template v-else>使用雷雨召唤瓶为农场召唤一场雷雨</template>
               </div>
@@ -589,9 +574,7 @@ onMounted(() => {
                 />
                 <span v-else class="text-24px opacity-40">🧴</span>
                 <div class="min-w-0 flex-1">
-                  <div class="truncate text-13px font-medium">
-                    {{ itemLabel(shop.item) }}{{ itemCount(shop.item) }}
-                  </div>
+                  <div class="truncate text-13px font-medium">{{ itemLabel(shop.item) }}{{ itemCount(shop.item) }}</div>
                   <div class="mt-2px flex-y-center gap-6px text-12px text-amber-600">
                     <img
                       v-if="itemImage(shop.cost)"
@@ -632,7 +615,9 @@ onMounted(() => {
                 class="flex items-center justify-between gap-10px rounded-8px bg-gray-50 px-10px py-8px dark:bg-gray-800"
               >
                 <div class="min-w-0 flex-1">
-                  <div class="truncate text-13px font-medium" :title="task.title">{{ task.title || `任务 ${task.id}` }}</div>
+                  <div class="truncate text-13px font-medium" :title="task.title">
+                    {{ task.title || `任务 ${task.id}` }}
+                  </div>
                   <div class="mt-4px flex-y-center gap-8px">
                     <NProgress
                       type="line"
@@ -658,10 +643,7 @@ onMounted(() => {
         </div>
 
         <!-- 气象研究 -->
-        <div
-          v-if="researchNodes.length"
-          class="mb-16px rounded-8px border border-gray-200 p-14px dark:border-gray-700"
-        >
+        <div v-if="researchNodes.length" class="mb-16px rounded-8px border border-gray-200 p-14px dark:border-gray-700">
           <div class="mb-10px flex items-center justify-between gap-8px">
             <span class="text-14px font-medium">气象研究</span>
             <span class="text-12px text-gray-500">
@@ -727,12 +709,7 @@ onMounted(() => {
             class="flex-y-center gap-4px rounded-6px bg-gray-50 px-8px py-4px text-12px dark:bg-gray-800"
             :title="itemLabel(item)"
           >
-            <img
-              v-if="itemImage(item)"
-              :src="itemImage(item)"
-              class="h-22px w-22px object-contain"
-              loading="lazy"
-            />
+            <img v-if="itemImage(item)" :src="itemImage(item)" class="h-22px w-22px object-contain" loading="lazy" />
             <span>{{ itemLabel(item) }}</span>
             <span class="font-medium">×{{ item.count ?? '0' }}</span>
           </div>
@@ -743,9 +720,7 @@ onMounted(() => {
           <div class="mb-10px flex flex-wrap items-center justify-between gap-8px">
             <span class="text-14px font-medium">好友天气采集</span>
             <NSpace :size="6" align="center">
-              <span class="text-12px text-gray-500">
-                每日上限 {{ actions.collectWeather?.dailyLimit ?? '--' }} 次
-              </span>
+              <span class="text-12px text-gray-500">每日上限 {{ actions.collectWeather?.dailyLimit ?? '--' }} 次</span>
               <NTag v-if="scanDisabled" size="tiny" type="warning" :bordered="false">
                 {{ actions.scanFriendWeather?.reason || '暂不可扫描' }}
               </NTag>
@@ -816,7 +791,9 @@ onMounted(() => {
                     <div class="truncate text-14px font-medium" :title="selectedFriend.name">
                       {{ selectedFriend.name || `好友 ${selectedFriend.gid}` }}
                     </div>
-                    <div class="text-12px text-gray-500">Lv.{{ selectedFriend.level || '--' }} · GID {{ selectedFriend.gid }}</div>
+                    <div class="text-12px text-gray-500">
+                      Lv.{{ selectedFriend.level || '--' }} · GID {{ selectedFriend.gid }}
+                    </div>
                   </div>
                 </div>
 
@@ -828,10 +805,7 @@ onMounted(() => {
                     {{ friendRemainingText(selectedFriend) ? `雷雨剩余 ${friendRemainingText(selectedFriend)}` : '' }}
                   </span>
                 </div>
-                <div
-                  v-if="selectedFriend.availabilityReason"
-                  class="mt-6px text-12px text-gray-500"
-                >
+                <div v-if="selectedFriend.availabilityReason" class="mt-6px text-12px text-gray-500">
                   {{ selectedFriend.availabilityReason }}
                 </div>
                 <div v-if="selectedFriend.scanError" class="mt-6px text-12px text-red-500">
@@ -866,8 +840,7 @@ onMounted(() => {
                       ghost
                       :loading="pendingKey === 'cloud'"
                       :disabled="
-                        actions.cloudMischief?.enabled === false ||
-                        !(selectedFriend.eligibleCloudLandIds || []).length
+                        actions.cloudMischief?.enabled === false || !(selectedFriend.eligibleCloudLandIds || []).length
                       "
                       @click="mischiefCloud(selectedFriend)"
                     >

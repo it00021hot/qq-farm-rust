@@ -3,7 +3,9 @@
 mod bind;
 mod error;
 
-pub use bind::{BindPollResult, BindPollStatus, BindSessionManager, BindStartResult, SharedBindSessionManager};
+pub use bind::{
+    BindPollResult, BindPollStatus, BindSessionManager, BindStartResult, SharedBindSessionManager,
+};
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -205,11 +207,13 @@ impl QqBotService {
     pub fn reconcile_background(&self, config: Option<QqBotConfig>) {
         let service = self.clone();
         crate::runtime::safe_spawn::spawn_logged("qq_bot_reconcile", async move {
-            let desired_key = config.as_ref().filter(|cfg| cfg.has_credentials()).map(credentials_key);
+            let desired_key =
+                config.as_ref().filter(|cfg| cfg.has_credentials()).map(credentials_key);
             {
                 let mut gateways = service.inner.gateways.lock().await;
                 gateways.retain(|_, handle| {
-                    let keep = desired_key.as_ref().is_some_and(|key| key == &handle.credentials_key);
+                    let keep =
+                        desired_key.as_ref().is_some_and(|key| key == &handle.credentials_key);
                     if !keep {
                         handle.cancel.cancel();
                     }
@@ -521,20 +525,15 @@ impl QqBotService {
             .or_else(|| payload.pointer("/author/id"))
             .and_then(serde_json::Value::as_str)
             .unwrap_or("");
-        let nickname = payload
-            .pointer("/author/username")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("");
+        let nickname =
+            payload.pointer("/author/username").and_then(serde_json::Value::as_str).unwrap_or("");
         let content = payload.get("content").and_then(serde_json::Value::as_str).unwrap_or("");
         let msg_id = payload.get("id").and_then(serde_json::Value::as_str).unwrap_or("");
         if user_openid.is_empty() {
             return;
         }
 
-        let result = self
-            .inner
-            .bind_sessions
-            .complete_from_message(user_openid, nickname, content);
+        let result = self.inner.bind_sessions.complete_from_message(user_openid, nickname, content);
         let Some((username, binding)) = result else {
             return;
         };
@@ -543,9 +542,7 @@ impl QqBotService {
             crate::models::store::global_config::apply_qq_bot_binding(&username, binding.clone());
             self.inner.bind_sessions.register_binding(&username, &binding);
             if !msg_id.is_empty() {
-                let _ = self
-                    .reply_c2c_text(config, user_openid, msg_id, BIND_SUCCESS_REPLY)
-                    .await;
+                let _ = self.reply_c2c_text(config, user_openid, msg_id, BIND_SUCCESS_REPLY).await;
             } else {
                 let _ = self.send_text_to_user(config, user_openid, BIND_SUCCESS_REPLY).await;
             }
@@ -554,9 +551,8 @@ impl QqBotService {
             crate::models::store::global_config::clear_qq_bot_binding(&username);
             self.inner.bind_sessions.clear_user(&username);
             if !msg_id.is_empty() {
-                let _ = self
-                    .reply_c2c_text(config, user_openid, msg_id, UNBIND_SUCCESS_REPLY)
-                    .await;
+                let _ =
+                    self.reply_c2c_text(config, user_openid, msg_id, UNBIND_SUCCESS_REPLY).await;
             }
             tracing::info!(username = %username, "QQ Bot 已解绑");
         }

@@ -428,7 +428,7 @@ mod tests {
         let v: serde_json::Value = serde_json::to_value(&r).unwrap();
         // ticket / uin / nickname / msg 都应为 null 或 absent
         assert_eq!(v["status"], "Wait");
-        assert!(v.get("ticket").map_or(true, |x| x.is_null()));
+        assert!(v.get("ticket").is_none_or(|x| x.is_null()));
     }
 
     #[test]

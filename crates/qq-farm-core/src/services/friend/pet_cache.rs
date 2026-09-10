@@ -139,7 +139,7 @@ fn flush_locked(account_id: &str, state: &AccountState) {
         entries: state.entries.iter().map(|(gid, e)| (gid.to_string(), e.clone())).collect(),
     };
     if let Err(e) =
-        crate::services::json_db::write_json_file_atomic(&cache_file_path(account_id), &file)
+        crate::services::json_db::write_json_file_atomic(cache_file_path(account_id), &file)
     {
         tracing::warn!(account_id, error = %e, "保存好友宠物缓存失败");
     }
@@ -203,7 +203,8 @@ pub fn record_friend_dog(account_id: &str, gid: i64, dog_id: i64) {
         let mut guard = state.lock();
         let previous = guard.entries.get(&gid);
         let changed = previous.is_none() || previous.is_some_and(|e| e.dog_id != next_dog_id);
-        guard.entries
+        guard
+            .entries
             .insert(gid, DogEntry { dog_id: next_dog_id, date: today, checked_at: now_ms_i64() });
         changed
     };
@@ -423,15 +424,16 @@ mod tests {
         {
             let mut guard = state.lock();
             let today = crate::utils::time::today_system_date_key();
-            let yesterday =
-                if today.starts_with("20") { "1999-01-01".to_string() } else { today };
-            guard.entries
-                .insert(300, DogEntry { dog_id: PROTECT_DOG_ID, date: yesterday.clone(), checked_at: 0 });
+            let yesterday = if today.starts_with("20") { "1999-01-01".to_string() } else { today };
+            guard.entries.insert(
+                300,
+                DogEntry { dog_id: PROTECT_DOG_ID, date: yesterday.clone(), checked_at: 0 },
+            );
             guard.last_full_sync_date = yesterday;
         }
         drop_stale_entries(&acc);
         let guard = state.lock();
-        assert!(guard.entries.get(&300).is_none(), "stale entry must be dropped");
+        assert!(!guard.entries.contains_key(&300), "stale entry must be dropped");
         assert!(guard.last_full_sync_date.is_empty());
     }
 

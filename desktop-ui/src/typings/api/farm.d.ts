@@ -622,6 +622,7 @@ declare namespace Api {
       termId?: string;
       itemId?: string;
       count?: number;
+      target?: string;
       activityId?: string;
       operateType?: number;
       ingredients?: Array<{ uid: number | string; count: number }>;

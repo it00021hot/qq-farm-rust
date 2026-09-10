@@ -10,7 +10,7 @@ use crate::dto::{LandsPayload, PanelStatus};
 use crate::error::{AppError, AppResult};
 use crate::session::AppContext;
 
-/// 要求账号 worker 正在运行，返回 WorkerLoop。
+/// 要求账号 worker 正在运行，返回 `WorkerLoop`。
 pub fn require_worker_loop(ctx: &AppContext, account_id: &str) -> AppResult<Arc<WorkerLoop>> {
     if account_id.is_empty() {
         return Err(AppError::BadRequest("missing account id".to_string()));
@@ -23,8 +23,8 @@ pub fn require_worker_loop(ctx: &AppContext, account_id: &str) -> AppResult<Arc<
 pub fn panel_status_with_progress(ctx: &AppContext, account_id: &str) -> PanelStatus {
     let mut data = ctx.engine.panel_status(account_id);
     if let Some(status) = data.get("status") {
-        let level = status.get("level").and_then(|v| v.as_i64()).unwrap_or(0);
-        let exp = status.get("exp").and_then(|v| v.as_i64()).unwrap_or(0);
+        let level = status.get("level").and_then(serde_json::Value::as_i64).unwrap_or(0);
+        let exp = status.get("exp").and_then(serde_json::Value::as_i64).unwrap_or(0);
         let (current, needed) =
             qq_farm_core::config::game_config::global().get_level_exp_progress(level, exp);
         if let Some(obj) = data.as_object_mut() {
@@ -101,8 +101,7 @@ pub async fn lands(ctx: &AppContext, account_id: &str) -> AppResult<LandsPayload
     let own_gid = loop_.own_gid();
     if own_gid > 0 {
         payload.career =
-            qq_farm_core::services::career::get_career_info_or_null(&loop_.gateway(), own_gid)
-                .await;
+            qq_farm_core::services::career::get_career_info_or_null(loop_.gateway(), own_gid).await;
     }
     Ok(payload)
 }
@@ -132,22 +131,32 @@ pub async fn bag_use(
     .await;
     let use_summary = |entries: &[qq_farm_core::services::item_capture::GainEntry]| {
         let text = qq_farm_core::services::item_capture::format_gains(entries);
-        if text.is_empty() { String::new() } else { format!("获得 {text}") }
+        if text.is_empty() {
+            String::new()
+        } else {
+            format!("获得 {text}")
+        }
     };
     match result {
         Ok(reply) => {
             // ItemNotify 是背包真实变化；为空时回退回包的 items / land_reward
             let mut gains = qq_farm_core::services::item_capture::aggregate_deltas(&deltas, true);
             if gains.is_empty() {
-                let mut acc: std::collections::BTreeMap<i64, i64> = std::collections::BTreeMap::new();
-                for item in reply.items.iter().chain(reply.land_reward.iter().flat_map(|r| r.items.iter())) {
+                let mut acc: std::collections::BTreeMap<i64, i64> =
+                    std::collections::BTreeMap::new();
+                for item in
+                    reply.items.iter().chain(reply.land_reward.iter().flat_map(|r| r.items.iter()))
+                {
                     if item.count > 0 {
                         *acc.entry(item.id).or_insert(0) += item.count;
                     }
                 }
                 gains = acc
                     .into_iter()
-                    .map(|(id, count)| qq_farm_core::services::item_capture::GainEntry { id, delta: count })
+                    .map(|(id, count)| qq_farm_core::services::item_capture::GainEntry {
+                        id,
+                        delta: count,
+                    })
                     .collect();
             }
             let summary = use_summary(&gains);
@@ -161,7 +170,9 @@ pub async fn bag_use(
                 "背包",
                 log_message,
                 qq_farm_core::constants::PanelEvent::TaskClaim,
-                Some(serde_json::json!({ "module": "warehouse", "itemId": item_id, "count": count })),
+                Some(
+                    serde_json::json!({ "module": "warehouse", "itemId": item_id, "count": count }),
+                ),
             );
             Ok(json!({
                 "ok": true,
@@ -175,7 +186,9 @@ pub async fn bag_use(
                 "背包",
                 format!("使用物品 {item_id} 失败: {e}"),
                 qq_farm_core::constants::PanelEvent::TaskClaim,
-                Some(serde_json::json!({ "module": "warehouse", "itemId": item_id, "count": count, "isWarn": true })),
+                Some(
+                    serde_json::json!({ "module": "warehouse", "itemId": item_id, "count": count, "isWarn": true }),
+                ),
             );
             Err(AppError::from_core(e))
         }
@@ -387,8 +400,10 @@ pub async fn daily_gift_overview(ctx: &AppContext, account_id: &str) -> AppResul
     let free_state = mall.get_free_gift_daily_state();
     let growth = task.get_growth_task_state_like_app().await;
 
-    let extract_bool = |v: &Value, k: &str| v.get(k).and_then(|x| x.as_bool()).unwrap_or(false);
-    let extract_i64 = |v: &Value, k: &str| v.get(k).and_then(|x| x.as_i64()).unwrap_or(0);
+    let extract_bool =
+        |v: &Value, k: &str| v.get(k).and_then(serde_json::Value::as_bool).unwrap_or(false);
+    let extract_i64 =
+        |v: &Value, k: &str| v.get(k).and_then(serde_json::Value::as_i64).unwrap_or(0);
 
     Ok(json!({
         "date": chrono::Local::now().format("%Y-%m-%d").to_string(),

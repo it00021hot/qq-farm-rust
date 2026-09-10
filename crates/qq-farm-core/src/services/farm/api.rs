@@ -137,10 +137,8 @@ impl Api {
         social_event_item_ids: Vec<i64>,
     ) -> Result<FarmingReply> {
         let mut seen = std::collections::HashSet::new();
-        let social_event_item_ids: Vec<i64> = social_event_item_ids
-            .into_iter()
-            .filter(|id| *id > 0 && seen.insert(*id))
-            .collect();
+        let social_event_item_ids: Vec<i64> =
+            social_event_item_ids.into_iter().filter(|id| *id > 0 && seen.insert(*id)).collect();
         let body =
             FarmingRequest { land_ids, host_gid, social_event_item_ids, ..Default::default() }
                 .encode_to_vec();
@@ -234,13 +232,24 @@ mod tests {
         let with_defaults =
             FarmingRequest { land_ids: vec![1, 2], host_gid: 123, ..Default::default() }
                 .encode_to_vec();
-        let explicit_zeros =
-            FarmingRequest { land_ids: vec![1, 2], host_gid: 123, field_3: 0, field_4: 0, social_event_item_ids: Vec::new() }
-                .encode_to_vec();
+        let explicit_zeros = FarmingRequest {
+            land_ids: vec![1, 2],
+            host_gid: 123,
+            field_3: 0,
+            field_4: 0,
+            social_event_item_ids: Vec::new(),
+        }
+        .encode_to_vec();
         assert_eq!(with_defaults, explicit_zeros);
         // field 4 = 2 (帮好友) 必须出现在 wire 上
-        let help = FarmingRequest { land_ids: vec![1, 2], host_gid: 123, field_3: 0, field_4: 2, social_event_item_ids: Vec::new() }
-            .encode_to_vec();
+        let help = FarmingRequest {
+            land_ids: vec![1, 2],
+            host_gid: 123,
+            field_3: 0,
+            field_4: 2,
+            social_event_item_ids: Vec::new(),
+        }
+        .encode_to_vec();
         assert_ne!(with_defaults, help);
     }
 }

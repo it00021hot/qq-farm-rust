@@ -144,7 +144,7 @@ pub async fn activity_gift_qixi_sachet(
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
     let gid = json_i64(&friend_gid);
-    let n = sachet_count.as_ref().or(count.as_ref()).map(json_i64).unwrap_or(0);
+    let n = sachet_count.as_ref().or(count.as_ref()).map_or(0, json_i64);
     activity::gift_qixi_sachet(&state.app, &account_id, gid, n).await.map_err(IpcError::from)
 }
 
@@ -186,6 +186,19 @@ pub async fn activity_claim_charity_daily_gift(
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
     activity::claim_charity_daily_gift(&state.app, &account_id).await.map_err(IpcError::from)
+}
+
+/// 领取公益小红花个人进度奖励。
+#[tauri::command]
+pub async fn activity_claim_charity_progress_reward(
+    state: State<'_, DesktopState>,
+    account_id: String,
+    target: String,
+) -> IpcResult<Value> {
+    ensure(&state, &account_id)?;
+    activity::claim_charity_progress_reward(&state.app, &account_id, &target)
+        .await
+        .map_err(IpcError::from)
 }
 
 #[cfg(test)]

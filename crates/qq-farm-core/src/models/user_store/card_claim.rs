@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use rand::Rng;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -109,7 +109,7 @@ pub fn save_card_claim_records() {
     if let Ok(body) = serde_json::to_string_pretty(&data) {
         let path = card_claim_file();
         let tmp = path.with_extension("json.tmp");
-        let _ = crate::infra::spawn_blocking(move || {
+        crate::infra::spawn_blocking(move || {
             let _ = fs::write(&tmp, &body);
             let _ = fs::rename(&tmp, &path);
         });
@@ -230,8 +230,8 @@ pub fn claim_card_by_ua(ua: &str, username: Option<&str>) -> ClaimResult {
         return Err("卡密库存不足，请联系管理员！".to_string());
     }
 
-    let mut rng = rand::thread_rng();
-    let selected = unused_time[rng.gen_range(0..unused_time.len())].clone();
+    let mut rng = rand::rng();
+    let selected = unused_time[rng.random_range(0..unused_time.len())].clone();
 
     let ua_hash = hash_ua(ua);
     RECORDS.write().push(CardClaimRecord {
@@ -252,7 +252,8 @@ pub fn claim_card_by_ua(ua: &str, username: Option<&str>) -> ClaimResult {
 fn hash_ua(ua: &str) -> String {
     let mut h = Sha256::new();
     h.update(ua.as_bytes());
-    format!("{:x}", h.finalize())
+    // hybrid-array 不再为 Array<u8, N> 实现 LowerHex，显式走 hex 编码
+    hex::encode(h.finalize())
 }
 
 // =====================================================================
@@ -275,6 +276,7 @@ mod tests {
 
     #[test]
     #[serial(user_store)]
+    #[serial(farm_data_dir)]
     fn default_enabled() {
         reset();
         assert!(get_card_claim_status());
@@ -282,6 +284,7 @@ mod tests {
 
     #[test]
     #[serial(user_store)]
+    #[serial(farm_data_dir)]
     fn set_status() {
         reset();
         set_card_claim_status(false);
@@ -292,6 +295,7 @@ mod tests {
 
     #[test]
     #[serial(user_store)]
+    #[serial(farm_data_dir)]
     fn claim_blocked_when_disabled() {
         reset();
         set_card_claim_status(false);
@@ -302,6 +306,7 @@ mod tests {
 
     #[test]
     #[serial(user_store)]
+    #[serial(farm_data_dir)]
     fn claim_no_cards_available() {
         reset();
         let r = claim_card_by_ua("test-ua", None);
@@ -311,6 +316,7 @@ mod tests {
 
     #[test]
     #[serial(user_store)]
+    #[serial(farm_data_dir)]
     fn claim_success() {
         reset();
         let _c = users::create_card("test", 30, "time");
@@ -321,6 +327,7 @@ mod tests {
 
     #[test]
     #[serial(user_store)]
+    #[serial(farm_data_dir)]
     fn claim_rate_limit_24h() {
         reset();
         let _c1 = users::create_card("test", 30, "time");
@@ -333,6 +340,7 @@ mod tests {
 
     #[test]
     #[serial(user_store)]
+    #[serial(farm_data_dir)]
     fn check_ua_limit_allows_first_time() {
         reset();
         let r = check_ua_claim_limit("new-ua");
@@ -341,6 +349,7 @@ mod tests {
 
     #[test]
     #[serial(user_store)]
+    #[serial(farm_data_dir)]
     fn clear_expired_keeps_recent() {
         reset();
         let _c = users::create_card("test", 30, "time");

@@ -566,7 +566,8 @@ mod tests {
         let (v, _) = resolve_client_version("1.13.2.10_20260723", 0);
         assert_eq!(v, DEFAULT_CLIENT_VERSION);
         // 比默认新 → 沿用
-        let (v, t) = resolve_client_version("1.13.4.0_20260901", DEFAULT_CLIENT_VERSION_UPDATED_AT + 1);
+        let (v, t) =
+            resolve_client_version("1.13.4.0_20260901", DEFAULT_CLIENT_VERSION_UPDATED_AT + 1);
         assert_eq!(v, "1.13.4.0_20260901");
         assert_eq!(t, DEFAULT_CLIENT_VERSION_UPDATED_AT + 1);
     }
@@ -575,20 +576,11 @@ mod tests {
     fn resolve_client_version_updated_at_rules() {
         let now = 1_800_000_000_000_i64;
         // 显式请求优先
-        assert_eq!(
-            resolve_client_version_updated_at("a", "b", 5, 42, now),
-            42
-        );
+        assert_eq!(resolve_client_version_updated_at("a", "b", 5, 42, now), 42);
         // 版本变化 → now
-        assert_eq!(
-            resolve_client_version_updated_at("a", "b", 5, 0, now),
-            now
-        );
+        assert_eq!(resolve_client_version_updated_at("a", "b", 5, 0, now), now);
         // 版本不变 → 保留当前值
-        assert_eq!(
-            resolve_client_version_updated_at("a", "a", 5, 0, now),
-            5
-        );
+        assert_eq!(resolve_client_version_updated_at("a", "a", 5, 0, now), 5);
         // 无当前值 → 默认
         assert_eq!(
             resolve_client_version_updated_at("a", "a", 0, 0, now),

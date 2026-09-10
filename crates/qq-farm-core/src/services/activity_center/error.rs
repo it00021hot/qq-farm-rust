@@ -31,6 +31,9 @@ pub enum ActivityErrorCode {
     CharitySeedsUnavailable,
     InsufficientCharityLove,
     CharityDailyGiftUnavailable,
+    CharityDailyGiftNotHarvested,
+    CharityProgressRewardUnavailable,
+    CharityProgressRewardAlreadyClaimed,
     CharityResponseInvalid,
 }
 
@@ -66,6 +69,9 @@ impl ActivityErrorCode {
             Self::CharitySeedsUnavailable => "CHARITY_SEEDS_UNAVAILABLE",
             Self::InsufficientCharityLove => "INSUFFICIENT_CHARITY_LOVE",
             Self::CharityDailyGiftUnavailable => "CHARITY_DAILY_GIFT_UNAVAILABLE",
+            Self::CharityDailyGiftNotHarvested => "CHARITY_DAILY_GIFT_NOT_HARVESTED",
+            Self::CharityProgressRewardUnavailable => "CHARITY_PROGRESS_REWARD_UNAVAILABLE",
+            Self::CharityProgressRewardAlreadyClaimed => "CHARITY_PROGRESS_REWARD_ALREADY_CLAIMED",
             Self::CharityResponseInvalid => "CHARITY_RED_FLOWER_RESPONSE_INVALID",
         }
     }

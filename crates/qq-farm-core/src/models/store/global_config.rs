@@ -499,7 +499,7 @@ pub fn save_global_config() -> std::io::Result<()> {
 
     let path = store_file();
     let tmp = path.with_extension("json.tmp");
-    let _ = crate::infra::spawn_blocking(move || -> std::io::Result<()> {
+    crate::infra::spawn_blocking(move || -> std::io::Result<()> {
         if let Some(parent) = path.parent() {
             if !parent.exists() {
                 fs::create_dir_all(parent)?;
@@ -761,10 +761,8 @@ mod tests {
             bot_invite_url: String::new(),
         };
         assert!(creds.invite_url().is_empty());
-        let with_url = QqBotCredentials {
-            bot_invite_url: "https://example.com/bot".into(),
-            ..creds
-        };
+        let with_url =
+            QqBotCredentials { bot_invite_url: "https://example.com/bot".into(), ..creds };
         assert_eq!(with_url.invite_url(), "https://example.com/bot");
     }
 

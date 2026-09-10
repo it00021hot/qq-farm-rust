@@ -220,51 +220,51 @@ async function saveWxCode(codeInput: string) {
   wxStatus.value = '正在保存账号...';
   try {
     const code = String(codeInput).trim();
-  const name = String(model.value.name || '').trim();
-  const remark = model.value.remark;
-  if (props.operateType === 'edit') {
-    if (!model.value.id) {
-      throw new Error('账号信息不完整');
-    }
-    const { error: modifyError } = await fetchModifyFarmAccount({
-      id: model.value.id,
-      code,
-      name,
-      platform: 'wx',
-      remark,
-      status: (Number(model.value.status || 1) === 2 ? 2 : 1) as unknown as Api.Farm.EnableStatus
-    });
-    if (modifyError) {
-      throw new Error((modifyError as any)?.message || '更新账号失败');
-    }
-    // Backend also auto-starts on code refresh; call start as a safety net for stopped accounts.
-    const { error: startError } = await fetchStartFarmAccount(model.value.id);
-    if (startError) {
-      window.$message?.warning($t('common.updateSuccess') + '，自动启动失败，请手动重新登录');
-    } else {
-      window.$message?.success($t('common.updateSuccess') + '，已自动启动');
-    }
-  } else {
-    const { data: added, error: addError } = await fetchAddFarmAccount({
-      name,
-      code,
-      platform: 'wx',
-      remark
-    });
-    if (addError) {
-      throw new Error((addError as any)?.message || '保存账号失败');
-    }
-    // QR add: start running immediately (code-paste add still requires manual start).
-    if (added?.id) {
-      const { error: startError } = await fetchStartFarmAccount(added.id);
+    const name = String(model.value.name || '').trim();
+    const remark = model.value.remark;
+    if (props.operateType === 'edit') {
+      if (!model.value.id) {
+        throw new Error('账号信息不完整');
+      }
+      const { error: modifyError } = await fetchModifyFarmAccount({
+        id: model.value.id,
+        code,
+        name,
+        platform: 'wx',
+        remark,
+        status: (Number(model.value.status || 1) === 2 ? 2 : 1) as unknown as Api.Farm.EnableStatus
+      });
+      if (modifyError) {
+        throw new Error((modifyError as any)?.message || '更新账号失败');
+      }
+      // Backend also auto-starts on code refresh; call start as a safety net for stopped accounts.
+      const { error: startError } = await fetchStartFarmAccount(model.value.id);
       if (startError) {
-        window.$message?.warning($t('common.addSuccess') + '，自动启动失败，请手动点击启动');
+        window.$message?.warning($t('common.updateSuccess') + '，自动启动失败，请手动重新登录');
       } else {
-        window.$message?.success($t('common.addSuccess') + '，已自动启动');
+        window.$message?.success($t('common.updateSuccess') + '，已自动启动');
       }
     } else {
-      window.$message?.success($t('common.addSuccess'));
-    }
+      const { data: added, error: addError } = await fetchAddFarmAccount({
+        name,
+        code,
+        platform: 'wx',
+        remark
+      });
+      if (addError) {
+        throw new Error((addError as any)?.message || '保存账号失败');
+      }
+      // QR add: start running immediately (code-paste add still requires manual start).
+      if (added?.id) {
+        const { error: startError } = await fetchStartFarmAccount(added.id);
+        if (startError) {
+          window.$message?.warning($t('common.addSuccess') + '，自动启动失败，请手动点击启动');
+        } else {
+          window.$message?.success($t('common.addSuccess') + '，已自动启动');
+        }
+      } else {
+        window.$message?.success($t('common.addSuccess'));
+      }
     }
     closeDrawer();
     emit('submitted');
@@ -335,10 +335,7 @@ async function authorizeLocalWechat() {
     if (authorized.error || !authorized.data?.redirectUrl) {
       throw new Error((authorized.error as any)?.message || '桌面微信未返回有效授权结果');
     }
-    const { data, error } = await fetchConfirmFarmWxQuickLogin(
-      wxSessionId.value,
-      String(authorized.data.redirectUrl)
-    );
+    const { data, error } = await fetchConfirmFarmWxQuickLogin(wxSessionId.value, String(authorized.data.redirectUrl));
     if (error || !data?.code) {
       throw new Error((error as any)?.message || '快速授权确认失败');
     }
@@ -587,7 +584,9 @@ onBeforeUnmount(() => {
 
           <div v-if="isWxLocalMode" class="mb-12px flex flex-col items-center gap-12px">
             <NSpin :show="wxLoading || wxSubmitting">
-              <div class="min-h-180px w-full flex flex-col items-center justify-center gap-8px rounded-8px bg-#f5f5f5 p-16px">
+              <div
+                class="min-h-180px w-full flex flex-col items-center justify-center gap-8px rounded-8px bg-#f5f5f5 p-16px"
+              >
                 <img
                   v-if="wxQuickProfile?.headimgurl"
                   :src="wxQuickProfile.headimgurl"

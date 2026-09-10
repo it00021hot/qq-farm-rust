@@ -7,7 +7,7 @@ use tokio::sync::broadcast;
 
 use crate::session::AppContext;
 
-/// 应用层事件（当前直接包装 RuntimeEvent）。
+/// 应用层事件（当前直接包装 `RuntimeEvent`）。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
 pub struct AppEvent(pub RuntimeEvent);
@@ -19,11 +19,11 @@ impl AppEvent {
     }
 
     #[must_use]
-    pub fn as_inner(&self) -> &RuntimeEvent {
+    pub const fn as_inner(&self) -> &RuntimeEvent {
         &self.0
     }
 
-    /// 转成 web / desktop 共用的实时信封（一条 RuntimeEvent 可能对应多条）。
+    /// 转成 web / desktop 共用的实时信封（一条 `RuntimeEvent` 可能对应多条）。
     #[must_use]
     pub fn to_realtime(&self) -> Vec<PanelRealtimeEvent> {
         PanelRealtimeEvent::from_runtime(&self.0)
@@ -162,7 +162,7 @@ fn flatten_status_body(status: &Value, account_id: &str, account_name: &str) -> 
             }
         }
         obj.insert("online".into(), json!(connected));
-        obj.entry("runStatus".to_string()).or_insert_with(|| json!(if connected { 1 } else { 0 }));
+        obj.entry("runStatus".to_string()).or_insert_with(|| json!(i32::from(connected)));
     }
     out
 }

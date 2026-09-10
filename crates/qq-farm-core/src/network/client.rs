@@ -55,7 +55,7 @@ enum WsCommand {
     Send(Vec<u8>),
     /// 回复 Ping
     /// 主动关闭
-    Close(Option<CloseFrame<'static>>),
+    Close(Option<CloseFrame>),
 }
 
 /// WebSocket 客户端（轻量 handle）
@@ -77,11 +77,10 @@ impl WsClient {
     ) -> Result<(Self, mpsc::Receiver<ReceivedFrame>)> {
         // 对齐 Go gorilla / Node `ws`：握手头用规范大小写（Origin / User-Agent）。
         // tungstenite 会把额外头写成小写，腾讯网关经常直接 400。
-        #[allow(deprecated)]
-        let mut ws_config = WebSocketConfig::default();
-        ws_config.max_message_size = Some(100 * 1024 * 1024);
-        ws_config.max_frame_size = Some(100 * 1024 * 1024);
-        ws_config.write_buffer_size = 0;
+        let ws_config = WebSocketConfig::default()
+            .max_message_size(Some(100 * 1024 * 1024))
+            .max_frame_size(Some(100 * 1024 * 1024))
+            .write_buffer_size(0);
         let stream = dial_gateway_ws(url, &options, ws_config)
             .await
             .map_err(|e| NetworkError::WebSocket(format!("connect: {e}")))?;
@@ -97,10 +96,7 @@ impl WsClient {
         let read_task = tokio::spawn(run_read_task(read, frame_tx, cmd_tx.clone()));
 
         Ok((
-            Self {
-                tx: cmd_tx,
-                tasks: std::sync::Arc::from(vec![write_task, read_task]),
-            },
+            Self { tx: cmd_tx, tasks: std::sync::Arc::from(vec![write_task, read_task]) },
             frame_rx,
         ))
     }
@@ -139,7 +135,7 @@ type WsRead = futures::stream::SplitStream<WsStream>;
 async fn run_write_task(mut sink: WsSink, mut cmd_rx: mpsc::Receiver<WsCommand>) {
     while let Some(cmd) = cmd_rx.recv().await {
         let ok = match cmd {
-            WsCommand::Send(bytes) => sink.send(WsMessage::Binary(bytes)).await.is_ok(),
+            WsCommand::Send(bytes) => sink.send(WsMessage::Binary(bytes.into())).await.is_ok(),
             WsCommand::Close(frame) => {
                 let _ = sink.send(WsMessage::Close(frame)).await;
                 let _ = sink.close().await;
@@ -400,7 +396,7 @@ mod tests {
                         if let Ok(Message::Binary(data)) = msg {
                             let mut echoed = b"ECHO:".to_vec();
                             echoed.extend_from_slice(&data);
-                            if ws.send(Message::Binary(echoed)).await.is_err() {
+                            if ws.send(Message::Binary(echoed.into())).await.is_err() {
                                 break;
                             }
                         }
@@ -433,8 +429,7 @@ mod tests {
     async fn write_proceeds_when_inbound_channel_is_full() {
         let (port, _h) = start_mock_ws().await;
         let url = format!("ws://127.0.0.1:{port}/");
-        let mut opts = ConnectOptions::default();
-        opts.rx_capacity = 1;
+        let opts = ConnectOptions { rx_capacity: 1, ..Default::default() };
         let (client, mut rx) = WsClient::connect(&url, opts).await.expect("connect");
 
         client.send(b"one").await.expect("send one");

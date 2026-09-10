@@ -151,7 +151,7 @@ pub fn build_friend_visit_plan(
         b.steal_num.cmp(&a.steal_num).then(b.help_num.cmp(&a.help_num)).then(b.level.cmp(&a.level))
     });
     // 捣乱优先挑等级高的好友（visit-plan.ts:145）
-    bad_only.sort_by(|a, b| b.level.cmp(&a.level));
+    bad_only.sort_by_key(|target| std::cmp::Reverse(target.level));
     bad_only.truncate(max_bad_only_visits);
     for target in &mut bad_only {
         target.want_bad = true;
@@ -190,11 +190,7 @@ mod tests {
         }
     }
 
-    fn plan_with(
-        friends: &[PlanFriend],
-        help_allowed_for_all: bool,
-        bypass: bool,
-    ) -> VisitPlan {
+    fn plan_with(friends: &[PlanFriend], help_allowed_for_all: bool, bypass: bool) -> VisitPlan {
         build_friend_visit_plan(
             friends,
             1,

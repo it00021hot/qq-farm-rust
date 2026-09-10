@@ -36,6 +36,16 @@ use crate::error::{Error, Result};
 /// wasmtime 闭包返回类型（避免与本 crate 的 `Result` 冲突）
 type WasmResult<T> = std::result::Result<T, wasmtime::Error>;
 
+/// 在 [`WasmResult`] 上下文构造错误。
+///
+/// wasmtime 48 起 `wasmtime::Error` 不再是从 `anyhow::Error` 的透明别名
+/// （trait 一致性不允许 `From<anyhow::Error>`），须显式走 [`wasmtime::Error::from_anyhow`]。
+macro_rules! werr {
+    ($($arg:tt)*) => {
+        wasmtime::Error::from_anyhow(anyhow!($($arg)*))
+    };
+}
+
 /// wasm 单次回灌的合理上限（与 Node `readCString` 默认 `maxLength=64 * 1024` 对齐）
 pub const MAX_SANE_LEN: usize = 64 * 1024;
 
@@ -287,10 +297,7 @@ impl TsdkRuntime {
         let cstr = format!("{open_id}\0");
         let cap = (cstr.len() as i32).max(64);
         let alloc_result = AllocGuard::alloc(store, exports, cap);
-        let mut ptr_guard = match alloc_result {
-            Ok(g) => g,
-            Err(e) => return Err(e),
-        };
+        let mut ptr_guard = alloc_result?;
         let ptr = ptr_guard.ptr();
         if let Err(e) = write_bytes(store, &exports.memory, ptr, cstr.as_bytes()) {
             ptr_guard.free_now(store, exports);
@@ -298,11 +305,7 @@ impl TsdkRuntime {
         }
         if let Err(e) = exports
             .g
-            .call(
-                &mut *store,
-                &mut [Val::I32(TSDK_GAME_ID as i32), Val::I32(ptr)],
-                &mut [],
-            )
+            .call(&mut *store, &[Val::I32(TSDK_GAME_ID as i32), Val::I32(ptr)], &mut [])
             .map_err(|e| Error::crypto(format!("G(bind) failed: {e}")))
         {
             ptr_guard.free_now(store, exports);
@@ -326,11 +329,11 @@ impl TsdkRuntime {
         let mut store = Store::new(engine, host);
         let linker = create_linker(engine)?;
         let instance = linker
-            .instantiate(&mut store, &module)
+            .instantiate(&mut store, module)
             .map_err(|e| Error::crypto(format!("instantiate failed: {e}")))?;
 
         let exports = extract_exports(&instance, &mut store)?;
-        store.data_mut().memory = Some(exports.memory.clone());
+        store.data_mut().memory = Some(exports.memory);
 
         // 校验 merged data 段范围
         let mem_size = exports.memory.data(&store).len();
@@ -348,7 +351,7 @@ impl TsdkRuntime {
                 .decrypt_strings
                 .call(
                     &mut store,
-                    &mut [
+                    &[
                         Val::I32(*offset as i32),
                         Val::I32(*length as i32),
                         Val::I32(MERGED_DATA_KEY as i32),
@@ -361,7 +364,7 @@ impl TsdkRuntime {
         // 调 x() 初始化
         exports
             .x
-            .call(&mut store, &mut [], &mut [])
+            .call(&mut store, &[], &mut [])
             .map_err(|e| Error::crypto(format!("init x() failed: {e}")))?;
 
         // 设置 game id + app key
@@ -371,7 +374,7 @@ impl TsdkRuntime {
         write_cstring(&mut store, &exports.memory, app_key_ptr, TSDK_APP_KEY.as_bytes())?;
         exports
             .g
-            .call(&mut store, &mut [Val::I32(TSDK_GAME_ID as i32), Val::I32(app_key_ptr)], &mut [])
+            .call(&mut store, &[Val::I32(TSDK_GAME_ID as i32), Val::I32(app_key_ptr)], &mut [])
             .map_err(|e| Error::crypto(format!("G(gameId) failed: {e}")))?;
         app_key_guard.free_now(&mut store, &exports);
 
@@ -436,7 +439,7 @@ impl TsdkRuntime {
         // 3. 加密/解密
         let func = if decrypt { &exports.decrypt } else { &exports.encrypt };
         let enc_res = func
-            .call(&mut *store, &mut [Val::I32(ptr), Val::I32(input.len() as i32)], &mut [])
+            .call(&mut *store, &[Val::I32(ptr), Val::I32(input.len() as i32)], &mut [])
             .map_err(|e| {
                 Error::crypto(format!(
                     "{} failed: {e}",
@@ -516,7 +519,7 @@ impl TsdkRuntime {
         // 调 G(game_id, app_key_ptr) —— 把用户绑到 wasm
         if let Err(e) = exports
             .g
-            .call(&mut *store, &mut [Val::I32(TSDK_GAME_ID as i32), Val::I32(ptr)], &mut [])
+            .call(&mut *store, &[Val::I32(TSDK_GAME_ID as i32), Val::I32(ptr)], &mut [])
             .map_err(|e| Error::crypto(format!("G(bind) failed: {e}")))
         {
             ptr_guard.free_now(store, exports);
@@ -616,7 +619,7 @@ impl TsdkRuntime {
         let mut ret = [Val::I32(0); 1];
         let n_result = exports
             .n
-            .call(&mut *store, &mut [Val::I32(length_ptr)], &mut ret)
+            .call(&mut *store, &[Val::I32(length_ptr)], &mut ret)
             .map_err(|e| Error::crypto(format!("N() failed: {e}")));
         if let Err(e) = n_result {
             length_guard.free_now(store, exports);
@@ -714,7 +717,7 @@ impl TsdkRuntime {
 
         if let Err(e) = exports
             .o
-            .call(&mut *store, &mut [Val::I32(ptr), Val::I32(data.len() as i32)], &mut [])
+            .call(&mut *store, &[Val::I32(ptr), Val::I32(data.len() as i32)], &mut [])
             .map_err(|e| Error::crypto(format!("O() failed: {e}")))
         {
             ptr_guard.free_now(store, exports);
@@ -816,7 +819,7 @@ impl TsdkRuntime {
         let call_result = inner
             .exports
             .fa
-            .call(&mut *store, &mut [Val::I32(elapsed_ms as i32)], &mut [])
+            .call(&mut *store, &[Val::I32(elapsed_ms as i32)], &mut [])
             .map_err(|e| Error::crypto(format!("fa() failed: {e}")));
         match &call_result {
             Ok(()) => self.record_wasm_success(),
@@ -864,7 +867,7 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
          _f: i32,
          _l: i32,
          _fn_: i32|
-         -> WasmResult<()> { Err(anyhow!("TSDK assertion")) },
+         -> WasmResult<()> { Err(werr!("TSDK assertion")) },
     )?;
 
     // b: writeStringToFile（对齐 bot tsdk-runtime.ts:148-158：真实写文件，utf-8）
@@ -873,13 +876,11 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
         "b",
         |mut c: wasmtime::Caller<'_, HostState>, f: i32, d: i32, _e: i32| -> WasmResult<i32> {
             let data_dir = c.data().data_dir.clone();
-            let (file, content) = match (
-                read_cstring_in_caller(&mut c, f),
-                read_cstring_in_caller(&mut c, d),
-            ) {
-                (Ok(f), Ok(d)) => (f, d),
-                (Err(e), _) | (_, Err(e)) => return Err(e),
-            };
+            let (file, content) =
+                match (read_cstring_in_caller(&mut c, f), read_cstring_in_caller(&mut c, d)) {
+                    (Ok(f), Ok(d)) => (f, d),
+                    (Err(e), _) | (_, Err(e)) => return Err(e),
+                };
             let Some(target) = resolve_data_path(&data_dir, &file) else {
                 tracing::warn!(file = %file, "TSDK 文件写入失败: 路径越出账号目录");
                 return Ok(0);
@@ -937,12 +938,14 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
     linker.func_wrap(
         "a",
         "g",
-        |mut c: wasmtime::Caller<'_, HostState>, f: i32, o: i32, cap: i32, _e: i32| -> WasmResult<i32> {
+        |mut c: wasmtime::Caller<'_, HostState>,
+         f: i32,
+         o: i32,
+         cap: i32,
+         _e: i32|
+         -> WasmResult<i32> {
             let data_dir = c.data().data_dir.clone();
-            let file = match read_cstring_in_caller(&mut c, f) {
-                Ok(f) => f,
-                Err(e) => return Err(e),
-            };
+            let file = read_cstring_in_caller(&mut c, f)?;
             let Some(target) = resolve_data_path(&data_dir, &file) else {
                 return Ok(0);
             };
@@ -982,7 +985,7 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
                 process_start().elapsed().as_millis() as u64
             };
             let value = (ms as u128) * 1_000_000;
-            let mem = c.data().memory.clone();
+            let mem = c.data().memory;
             if let Some(m) = mem {
                 let data = m.data_mut(&mut c);
                 let low = (value & 0xFFFF_FFFF) as u32;
@@ -1046,7 +1049,7 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
         "k",
         |mut c: wasmtime::Caller<'_, HostState>, ptr: i32, cap: i32| -> WasmResult<i32> {
             if (RUNTIME_TABLE.len() as i32) <= cap {
-                let mem = c.data().memory.clone();
+                let mem = c.data().memory;
                 if let Some(m) = mem {
                     let data = m.data_mut(&mut c);
                     let off = ptr as usize;
@@ -1112,10 +1115,7 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
         "p",
         |mut c: wasmtime::Caller<'_, HostState>, f: i32| -> WasmResult<i32> {
             let data_dir = c.data().data_dir.clone();
-            let file = match read_cstring_in_caller(&mut c, f) {
-                Ok(f) => f,
-                Err(e) => return Err(e),
-            };
+            let file = read_cstring_in_caller(&mut c, f)?;
             let Some(target) = resolve_data_path(&data_dir, &file) else {
                 return Ok(0);
             };
@@ -1136,16 +1136,18 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
                 .map(|d| d.as_millis() as i64)
                 .unwrap_or(0);
             // 回调 wasm 导出 y(mode, size, atime, mtime)
-            let y = c
-                .get_export("y")
-                .and_then(wasmtime::Extern::into_func);
+            let y = c.get_export("y").and_then(wasmtime::Extern::into_func);
             let Some(y) = y else {
                 return Ok(0);
             };
             let mut ret = [Val::I32(0); 1];
             // mode 沿用 Node Windows 语义（普通文件 0o100666 = 33206）
-            y.call(&mut c, &[Val::I32(33_206), Val::I32(size), Val::I32(atime as i32), Val::I32(mtime as i32)], &mut ret)
-                .map_err(|e| anyhow!("TSDK stat 回调 y() 失败: {e}"))?;
+            y.call(
+                &mut c,
+                &[Val::I32(33_206), Val::I32(size), Val::I32(atime as i32), Val::I32(mtime as i32)],
+                &mut ret,
+            )
+            .map_err(|e| werr!("TSDK stat 回调 y() 失败: {e}"))?;
             Ok(i32_val(&ret, 0).unwrap_or(0))
         },
     )?;
@@ -1157,7 +1159,7 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
         "q",
         |mut c: wasmtime::Caller<'_, HostState>, out: i32| -> WasmResult<i32> {
             let now = (crate::utils::time::now_ms() / 1000) as u32;
-            let mem = c.data().memory.clone();
+            let mem = c.data().memory;
             if let Some(m) = mem {
                 write_u32_le(m.data_mut(&mut c), out, now);
             }
@@ -1170,7 +1172,7 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
         "a",
         "r",
         |_c: wasmtime::Caller<'_, HostState>, size: i32| -> WasmResult<i32> {
-            Err(anyhow!("TSDK 内存扩展失败: {size}"))
+            Err(werr!("TSDK 内存扩展失败: {size}"))
         },
     )?;
 
@@ -1189,13 +1191,11 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
         "t",
         |mut c: wasmtime::Caller<'_, HostState>, f: i32, d: i32, _e: i32| -> WasmResult<i32> {
             let data_dir = c.data().data_dir.clone();
-            let (file, content) = match (
-                read_cstring_in_caller(&mut c, f),
-                read_cstring_in_caller(&mut c, d),
-            ) {
-                (Ok(f), Ok(d)) => (f, d),
-                (Err(e), _) | (_, Err(e)) => return Err(e),
-            };
+            let (file, content) =
+                match (read_cstring_in_caller(&mut c, f), read_cstring_in_caller(&mut c, d)) {
+                    (Ok(f), Ok(d)) => (f, d),
+                    (Err(e), _) | (_, Err(e)) => return Err(e),
+                };
             let Some(target) = resolve_data_path(&data_dir, &file) else {
                 return Ok(0);
             };
@@ -1219,7 +1219,7 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
 
     // u: abort
     linker.func_wrap("a", "u", |_c: wasmtime::Caller<'_, HostState>| -> WasmResult<()> {
-        Err(anyhow!("TSDK aborted"))
+        Err(werr!("TSDK aborted"))
     })?;
 
     // v: TQOS 上报（对齐 bot tsdk-runtime.ts:226-242：解析 wasm 内存 JSON
@@ -1231,7 +1231,7 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
             if ptr <= 0 || len <= 0 {
                 return Ok(0);
             }
-            let mem = c.data().memory.clone();
+            let mem = c.data().memory;
             let Some(m) = mem else { return Ok(0) };
             let mem_size = m.data(&c).len();
             let off = ptr as usize;
@@ -1432,9 +1432,7 @@ impl AllocGuard {
     /// 通过调用 wasm `alloc(size)` 分配。失败时返回 `Err`，guard 保持 no-op 状态。
     fn alloc(store: &mut Store<HostState>, exports: &Exports, size: i32) -> Result<Self> {
         let mut alloc_res = [Val::I32(0); 1];
-        let call_result = exports
-            .alloc
-            .call(&mut *store, &mut [Val::I32(size)], &mut alloc_res);
+        let call_result = exports.alloc.call(&mut *store, &[Val::I32(size)], &mut alloc_res);
         if let Err(e) = &call_result {
             // 正式日志默认无 debug 级别，这里用 WARN 留下内存增长证据
             tracing::warn!(
@@ -1474,7 +1472,7 @@ impl AllocGuard {
         if self.ptr == 0 || self.defused {
             return;
         }
-        let _ = exports.free.call(store, &mut [Val::I32(self.ptr)], &mut []);
+        let _ = exports.free.call(store, &[Val::I32(self.ptr)], &mut []);
         self.ptr = 0;
     }
 }
@@ -1549,16 +1547,12 @@ fn write_cstring_in_caller(
     bytes: &[u8],
 ) -> WasmResult<()> {
     if ptr < 0 {
-        return Err(anyhow!("write_cstring_in_caller: negative ptr={ptr}"));
+        return Err(werr!("write_cstring_in_caller: negative ptr={ptr}"));
     }
     // clone Memory（cheap）以避免长生命周期借用 caller
-    let mem = caller
-        .data()
-        .memory
-        .clone()
-        .ok_or_else(|| anyhow!("memory not set"))?;
+    let mem = caller.data().memory.ok_or_else(|| werr!("memory not set"))?;
     let mem_size = mem.data(&*caller).len();
-    ensure_bounds(ptr, bytes.len() + 1, mem_size).map_err(|e| anyhow!("{e}"))?;
+    ensure_bounds(ptr, bytes.len() + 1, mem_size)?;
     let off = ptr as usize;
     let data = mem.data_mut(&mut *caller);
     data[off..off + bytes.len()].copy_from_slice(bytes);
@@ -1587,15 +1581,11 @@ fn read_cstring_in_caller(
     if ptr <= 0 {
         return Ok(String::new());
     }
-    let mem = caller
-        .data()
-        .memory
-        .clone()
-        .ok_or_else(|| anyhow!("memory not set"))?;
+    let mem = caller.data().memory.ok_or_else(|| werr!("memory not set"))?;
     let mem_size = mem.data(&*caller).len();
     let off = ptr as usize;
     if off >= mem_size {
-        return Err(anyhow!("read_cstring_in_caller: out of bounds ptr={ptr}"));
+        return Err(werr!("read_cstring_in_caller: out of bounds ptr={ptr}"));
     }
     let cap = (mem_size - off).min(64 * 1024);
     let data = mem.data(&*caller);
@@ -1603,7 +1593,7 @@ fn read_cstring_in_caller(
     while end - off < cap && data[end] != 0 {
         end += 1;
     }
-    let s = std::str::from_utf8(&data[off..end]).map_err(|e| anyhow!("invalid utf-8: {e}"))?;
+    let s = std::str::from_utf8(&data[off..end]).map_err(|e| werr!("invalid utf-8: {e}"))?;
     Ok(s.to_string())
 }
 

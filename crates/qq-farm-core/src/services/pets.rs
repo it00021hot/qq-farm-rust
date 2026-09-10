@@ -125,7 +125,11 @@ impl PetService {
                 let gc = global_game_config();
                 let info = gc.get_item_by_id(id);
                 let name = raw
-                    .and_then(|d| (d.name.trim().is_empty()).then_some(d.name.clone()).or(Some(d.name.clone())))
+                    .and_then(|d| {
+                        (d.name.trim().is_empty())
+                            .then_some(d.name.clone())
+                            .or(Some(d.name.clone()))
+                    })
                     .filter(|n| !n.trim().is_empty())
                     .or_else(|| info.as_ref().map(|i| i.name.clone()))
                     .unwrap_or_else(|| format!("宠物#{id}"));
@@ -250,11 +254,16 @@ impl PetService {
         crate::services::panel_log::log(
             "",
             "宠物",
-            format!("上场{}", if dog_name.is_empty() { format!("宠物#{dog_id}") } else { dog_name }),
+            format!(
+                "上场{}",
+                if dog_name.is_empty() { format!("宠物#{dog_id}") } else { dog_name }
+            ),
             crate::constants::PanelEvent::PetOp,
             Some(serde_json::json!({ "module": "dog", "dogId": dog_id })),
         );
-        Ok(serde_json::json!({ "snapshot": snapshot, "operation": { "type": "deploy", "dogId": dog_id } }))
+        Ok(
+            serde_json::json!({ "snapshot": snapshot, "operation": { "type": "deploy", "dogId": dog_id } }),
+        )
     }
 
     /// 收回宠物
@@ -263,7 +272,9 @@ impl PetService {
         let current = before.current_dog_id;
         if current == 0 {
             let snapshot = self.get_pet_info().await?;
-            return Ok(serde_json::json!({ "snapshot": snapshot, "operation": { "type": "withdraw", "dogId": 0 } }));
+            return Ok(
+                serde_json::json!({ "snapshot": snapshot, "operation": { "type": "withdraw", "dogId": 0 } }),
+            );
         }
         let req = WithdrawDogRequest {};
         let body = self.gateway.request(DOG_SERVICE, "WithdrawDog", &req.encode_to_vec()).await?;
@@ -279,11 +290,18 @@ impl PetService {
             crate::constants::PanelEvent::PetOp,
             Some(serde_json::json!({ "module": "dog", "dogId": current })),
         );
-        Ok(serde_json::json!({ "snapshot": snapshot, "operation": { "type": "withdraw", "dogId": current } }))
+        Ok(
+            serde_json::json!({ "snapshot": snapshot, "operation": { "type": "withdraw", "dogId": current } }),
+        )
     }
 
     /// 使用狗粮（走 DogService.AddFood，非 ItemService.Use；三重校验对齐 node）
-    pub async fn use_dog_food(&self, item_id: i64, count: i64, uid: i64) -> Result<serde_json::Value> {
+    pub async fn use_dog_food(
+        &self,
+        item_id: i64,
+        count: i64,
+        uid: i64,
+    ) -> Result<serde_json::Value> {
         let count = count.max(1);
         let Some(duration) = dog_food_duration(item_id) else {
             return Err(Error::Business("该物品不是可用狗粮".into()));
@@ -293,7 +311,11 @@ impl PetService {
         let requested_duration = duration * count;
         let max_protect = {
             let v = before.max_protect_time;
-            if v > 0 { v } else { MAX_PROTECT_DURATION_SECONDS }
+            if v > 0 {
+                v
+            } else {
+                MAX_PROTECT_DURATION_SECONDS
+            }
         };
         if current_duration + requested_duration > max_protect {
             let remaining = (max_protect - current_duration).max(0);
@@ -312,7 +334,9 @@ impl PetService {
             .map(|it| it.count.max(0))
             .sum();
         if available < count {
-            return Err(Error::Business(format!("狗粮可用数量不足：需要 {count}，当前 {available}")));
+            return Err(Error::Business(format!(
+                "狗粮可用数量不足：需要 {count}，当前 {available}"
+            )));
         }
 
         let req = AddFoodRequest { item_id, count };
@@ -345,7 +369,8 @@ impl PetService {
     /// 守护记录（真实点击固定 0/100/0）
     pub async fn get_protect_logs(&self) -> Result<serde_json::Value> {
         let req = GetProtectLogsRequest { field_1: 0, count: 100, field_3: 0 };
-        let body = self.gateway.request(DOG_SERVICE, "GetProtectLogs", &req.encode_to_vec()).await?;
+        let body =
+            self.gateway.request(DOG_SERVICE, "GetProtectLogs", &req.encode_to_vec()).await?;
         let reply = GetProtectLogsReply::decode(&body[..])?;
         let logs: Vec<serde_json::Value> = reply
             .logs
@@ -442,14 +467,26 @@ mod tests {
         assert_eq!(snapshot["activeDogId"].as_i64(), Some(90021));
         assert_eq!(snapshot["pendingGiftCount"].as_i64(), Some(3));
         // 狗粮库存取背包而非 DogItem 状态位
-        let food = snapshot["foods"].as_array().unwrap().iter()
-            .find(|f| f["id"].as_i64() == Some(90004)).unwrap();
+        let food = snapshot["foods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["id"].as_i64() == Some(90004))
+            .unwrap();
         assert_eq!(food["count"].as_i64(), Some(12));
         // 同气连枝用量合并
-        let dog = snapshot["dogs"].as_array().unwrap().iter()
-            .find(|d| d["id"].as_i64() == Some(90021)).unwrap();
-        let skill = dog["skills"].as_array().unwrap().iter()
-            .find(|s| s["skillId"].as_i64() == Some(2001)).unwrap();
+        let dog = snapshot["dogs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["id"].as_i64() == Some(90021))
+            .unwrap();
+        let skill = dog["skills"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["skillId"].as_i64() == Some(2001))
+            .unwrap();
         assert_eq!(skill["usedCount"].as_i64(), Some(7));
         assert_eq!(skill["remainingCount"].as_i64(), Some(23));
     }

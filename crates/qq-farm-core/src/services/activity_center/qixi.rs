@@ -291,7 +291,11 @@ impl ActivityCenterService {
     }
 
     /// 向好友赠送 1 个鹊羽香囊（对齐 node：每次固定赠 1 个，可附赠言文案 ID）。
-    pub async fn gift_qixi_sachet(&self, friend_gid: i64, message_text_id: i64) -> Result<serde_json::Value> {
+    pub async fn gift_qixi_sachet(
+        &self,
+        friend_gid: i64,
+        message_text_id: i64,
+    ) -> Result<serde_json::Value> {
         if friend_gid <= 0 {
             return Err(qixi_err(
                 ActivityErrorCode::InvalidQixiFriendGid,

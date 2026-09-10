@@ -40,7 +40,7 @@ impl WorkerLoop {
         let now = now_ms();
         let next = self.next_runs.lock().clone();
         // 量化到 5s 桶：否则倒计时字段每 3s 必变，门控永远不命中
-        let quantize = |ms: i64| (((ms / 1000).max(0) / 5) * 5) as i64;
+        let quantize = |ms: i64| ((ms / 1000).max(0) / 5) * 5;
         let farm = quantize(next.farm_at - now);
         let friend = quantize(next.friend_at - now);
         // help/steal 已合并为统一好友 tick（friend_at）；

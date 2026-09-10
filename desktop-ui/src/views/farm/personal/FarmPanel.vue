@@ -13,7 +13,6 @@ import {
   landIdLabel,
   soilLabel,
   soilLevelClass,
-  tickMatureLands,
   visibleLands,
   visibleOwnFarmOps
 } from '@/views/farm/shared/land-display';
@@ -105,25 +104,7 @@ function purpleCrystalPercent(land: Api.Farm.LandRow) {
 
 /** 互动道具效果行（itemName 列表）。 */
 function interactionNames(land: Api.Farm.LandRow) {
-  return (land.interactionEffects || [])
-    .map(effect => String(effect.itemName || '').trim())
-    .filter(Boolean);
-}
-
-function growProgress(land: Api.Farm.LandRow) {
-  const mature = Number(land.matureInSec || 0);
-  const total = Number(land.totalGrowTime || 0);
-  if (total <= 0) return 0;
-  // matureInSec = remaining; progress = elapsed / total
-  return Math.max(0, Math.min(100, Math.round(((total - mature) / total) * 100)));
-}
-
-function formatDuration(sec: number) {
-  if (sec <= 0) return '';
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  const s = sec % 60;
-  return `${h > 0 ? `${h}:` : ''}${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return (land.interactionEffects || []).map(effect => String(effect.itemName || '').trim()).filter(Boolean);
 }
 
 async function loadLands() {
@@ -270,11 +251,21 @@ defineExpose({ refresh: loadLands });
           <div class="truncate text-center text-13px font-medium" :title="land.plantName">
             {{ land.plantName || '-' }}
           </div>
-          <LandCountdown :at="land.matureAt || 0" :total="land.totalGrowTime || 0" :level="land.level" :phase="land.phaseName" />
+          <LandCountdown
+            :at="land.matureAt || 0"
+            :total="land.totalGrowTime || 0"
+            :level="land.level"
+            :phase="land.phaseName"
+          />
           <div v-if="mutantNames(land).length || purpleCrystalPercent(land) > 0" class="flex-center flex-wrap gap-4px">
             <span
               class="flex-y-center gap-2px rounded-4px bg-amber-50 px-5px py-1px text-11px text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
-              :title="(land.mutantEffects || []).map(effect => effect.description || effect.name).filter(Boolean).join('\n')"
+              :title="
+                (land.mutantEffects || [])
+                  .map(effect => effect.description || effect.name)
+                  .filter(Boolean)
+                  .join('\n')
+              "
             >
               <template v-for="(effect, idx) in land.mutantEffects || []" :key="`${effect.id}-${idx}`">
                 <img
@@ -290,7 +281,10 @@ defineExpose({ refresh: loadLands });
               {{ $t('page.farm.personal.purpleCrystalBadge', { percent: purpleCrystalPercent(land) }) }}
             </NTag>
           </div>
-          <div v-if="interactionNames(land).length || land.needInteractionCleanup" class="flex-center flex-wrap gap-4px">
+          <div
+            v-if="interactionNames(land).length || land.needInteractionCleanup"
+            class="flex-center flex-wrap gap-4px"
+          >
             <span
               class="rounded-4px bg-gray-100 px-5px py-1px text-11px text-gray-600 dark:bg-gray-800 dark:text-gray-300"
               :title="(land.interactionEffects || []).map(effect => `${effect.itemName || effect.itemId}`).join('、')"

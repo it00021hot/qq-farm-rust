@@ -32,10 +32,7 @@ pub fn read_file_blocking(path: PathBuf) -> tokio::task::JoinHandle<std::io::Res
 /// 直接用 `tokio::runtime::Handle::current().spawn_blocking` 仍可能在
 /// 当前任务上下文（worker 线程）上 spawn。**这个函数**保证真正异步触发：
 /// 如果没有 tokio runtime（如单元测试中），会 fallback 到同步 `fs::write`。
-pub fn write_file_async_or_sync(
-    path: PathBuf,
-    body: Vec<u8>,
-) -> std::io::Result<()> {
+pub fn write_file_async_or_sync(path: PathBuf, body: Vec<u8>) -> std::io::Result<()> {
     match tokio::runtime::Handle::try_current() {
         Ok(handle) => {
             // 在 tokio 上下文里 → spawn_blocking
@@ -49,7 +46,7 @@ pub fn write_file_async_or_sync(
 /// fire-and-forget 的 spawn_blocking 写文件，丢弃 JoinHandle。
 /// 用于"日志 / 状态更新"等不需要结果的场景。
 pub fn spawn_write_file(path: PathBuf, body: Vec<u8>) {
-    let _ = write_file_blocking(path, body);
+    drop(write_file_blocking(path, body));
 }
 
 /// 把一个 closure 扔到 blocking pool。用于零散的 sync I/O 块。
@@ -67,7 +64,7 @@ where
 {
     match tokio::runtime::Handle::try_current() {
         Ok(handle) => {
-            let _ = handle.spawn_blocking(f);
+            drop(handle.spawn_blocking(f));
         }
         Err(_) => {
             // 无 runtime：直接同步执行（drop 结果）

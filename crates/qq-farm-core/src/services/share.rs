@@ -89,7 +89,7 @@ impl ShareService {
                 &prost::Message::encode_to_vec(&req),
             )
             .await?;
-        Ok(CheckCanShareReply::decode(&body)?)
+        CheckCanShareReply::decode(&body)
     }
 
     /// GetInviteInfo RPC
@@ -103,7 +103,7 @@ impl ShareService {
                 &prost::Message::encode_to_vec(&req),
             )
             .await?;
-        Ok(GetInviteInfoReply::decode(&body)?)
+        GetInviteInfoReply::decode(&body)
     }
 
     /// ReportShare RPC（每日礼包：field_1=1 / field_4=42）
@@ -117,7 +117,7 @@ impl ShareService {
                 &prost::Message::encode_to_vec(&req),
             )
             .await?;
-        Ok(ReportShareReply::decode(&body)?)
+        ReportShareReply::decode(&body)
     }
 
     /// 对齐原 `reportActivityShare`：只发送不等待回包（青梅酿 field_1=11 / field_4=215）。
@@ -144,7 +144,7 @@ impl ShareService {
                 &prost::Message::encode_to_vec(&req),
             )
             .await?;
-        Ok(ClaimShareRewardReply::decode(&body)?)
+        ClaimShareRewardReply::decode(&body)
     }
 
     /// 检查并领取每日分享（5min 冷却）

@@ -49,10 +49,7 @@ pub enum NotifyEvent {
         events: Vec<crate::proto::generated::gamepb::plantpb::FarmSocialEvent>,
     },
     /// 天气变化（自己或好友农场；WeatherChangeNotify）
-    WeatherChanged {
-        event_type: String,
-        host_gid: i64,
-    },
+    WeatherChanged { event_type: String, host_gid: i64 },
 }
 
 /// ItemNotify 里一条物品变化（对齐 network.ts handleNotify）
@@ -160,10 +157,7 @@ pub fn parse_event(event: &EventMessage) -> NotifyEvent {
         }
     } else if event_type.contains("WeatherChangeNotify") {
         match crate::proto::generated::gamepb::weatherpb::WeatherChangeNotify::decode(body) {
-            Ok(notify) => NotifyEvent::WeatherChanged {
-                event_type,
-                host_gid: notify.host_gid,
-            },
+            Ok(notify) => NotifyEvent::WeatherChanged { event_type, host_gid: notify.host_gid },
             Err(_) => NotifyEvent::WeatherChanged { event_type, host_gid: 0 },
         }
     } else if event_type.contains("FarmSocialEventsNotify") {
@@ -207,7 +201,7 @@ fn field_present(buf: &[u8], field: u32) -> bool {
     false
 }
 
-fn find_length_delimited_field<'a>(buf: &'a [u8], field: u32) -> Option<&'a [u8]> {
+fn find_length_delimited_field(buf: &[u8], field: u32) -> Option<&[u8]> {
     let mut i = 0usize;
     while i < buf.len() {
         let (num, wire) = read_key(buf, &mut i)?;

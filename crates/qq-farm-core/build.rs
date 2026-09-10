@@ -71,9 +71,8 @@ fn main() -> io::Result<()> {
         if path.extension() != Some(OsStr::new("rs")) {
             continue;
         }
-        let stem = match path.file_stem().and_then(OsStr::to_str) {
-            Some(s) => s,
-            None => continue,
+        let Some(stem) = path.file_stem().and_then(OsStr::to_str) else {
+            continue;
         };
         // 排除：自身 mod 文件
         if stem == "mod" || stem == "generated" {
@@ -111,12 +110,11 @@ fn main() -> io::Result<()> {
         }
 
         // 打开到当前深度的所有中间 mod（不带 include!）
-        for i in open_stack.len()..depth - 1 {
-            let seg = segments[i];
+        for (i, seg) in segments.iter().enumerate().take(depth - 1).skip(open_stack.len()) {
             let indent = i;
             write_indent(&mut f, indent)?;
             writeln!(f, "pub mod {seg} {{")?;
-            open_stack.push((indent, seg.to_string()));
+            open_stack.push((indent, (*seg).to_string()));
         }
 
         // 写叶子 mod（带 include!）

@@ -208,7 +208,7 @@ const MUTANT_EFFECT_DESCRIPTION_FALLBACKS: &[(i64, &str)] =
 /// 图标取路径末段（`gui/.../crystal/spriteFrame` → `crystal`）
 fn normalize_mutant_icon_name(value: &str) -> String {
     let raw = value.trim().trim_end_matches("/spriteFrame");
-    raw.split('/').filter(|s| !s.is_empty()).next_back().unwrap_or("").to_string()
+    raw.split('/').rfind(|s| !s.is_empty()).unwrap_or("").to_string()
 }
 
 fn to_mutant_effect_dto(effect: Option<&MutantEffectEntry>, id: i64) -> MutantEffectDto {
@@ -565,7 +565,7 @@ impl GameConfig {
     #[must_use]
     pub fn get_plant_by_fruit_id(&self, fruit_id: i64) -> Option<Plant> {
         self.plant_map.read().as_ref().and_then(|p| {
-            p.iter().find(|x| x.fruit.as_ref().map_or(false, |f| f.id == fruit_id)).cloned()
+            p.iter().find(|x| x.fruit.as_ref().is_some_and(|f| f.id == fruit_id)).cloned()
         })
     }
 
@@ -681,13 +681,8 @@ impl GameConfig {
         if mutant_id <= 0 {
             return None;
         }
-        let entry = self
-            .mutant_effects
-            .read()
-            .as_ref()?
-            .iter()
-            .find(|e| e.id == mutant_id)
-            .cloned();
+        let entry =
+            self.mutant_effects.read().as_ref()?.iter().find(|e| e.id == mutant_id).cloned();
         Some(to_mutant_effect_dto(entry.as_ref(), mutant_id))
     }
 
@@ -741,9 +736,7 @@ impl GameConfig {
         let mut visited = std::collections::HashSet::from([current]);
         for _ in 0..4 {
             let Some(plant) = self.get_plant_by_id(current) else { break };
-            let Some(mapping) = plant.mutant_effect_plant.as_deref().map(str::trim) else {
-                break
-            };
+            let Some(mapping) = plant.mutant_effect_plant.as_deref().map(str::trim) else { break };
             if mapping.is_empty() {
                 break;
             }
@@ -779,22 +772,13 @@ impl GameConfig {
     /// 按 param（种子/果实参数）查图鉴条目
     #[must_use]
     pub fn get_illustrated_by_param(&self, param: i64) -> Option<IllustratedEntry> {
-        self.illustrated
-            .read()
-            .as_ref()?
-            .iter()
-            .find(|e| e.param == param)
-            .cloned()
+        self.illustrated.read().as_ref()?.iter().find(|e| e.param == param).cloned()
     }
 
     /// 图鉴分组：装扮果实 decoration / 活动果实 activity / 其余 gold
     #[must_use]
     pub fn illustrated_mutant_group(&self, seed_id: i64) -> &'static str {
-        match self
-            .get_illustrated_by_param(seed_id)
-            .map(|e| e.kind)
-            .as_deref()
-        {
+        match self.get_illustrated_by_param(seed_id).map(|e| e.kind).as_deref() {
             Some("装扮果实") => "decoration",
             Some("活动果实") => "activity",
             _ => "gold",
@@ -808,11 +792,8 @@ impl GameConfig {
             .read()
             .as_ref()
             .map(|items| {
-                let mut list: Vec<BuffConfigItem> = items
-                    .iter()
-                    .filter(|b| b.source_type == "超变升级")
-                    .cloned()
-                    .collect();
+                let mut list: Vec<BuffConfigItem> =
+                    items.iter().filter(|b| b.source_type == "超变升级").cloned().collect();
                 list.sort_by_key(|b| b.source_param);
                 list
             })
@@ -1153,7 +1134,7 @@ pub fn reload_for_test() -> GameConfig {
 #[must_use]
 pub fn load_seeds_config() -> Vec<SeedInfo> {
     let cfg = GameConfig::new();
-    let _ = cfg.load();
+    cfg.load();
     cfg.get_all_seeds()
 }
 
@@ -1161,7 +1142,7 @@ pub fn load_seeds_config() -> Vec<SeedInfo> {
 #[must_use]
 pub fn load_plants_config() -> Vec<Plant> {
     let cfg = GameConfig::new();
-    let _ = cfg.load();
+    cfg.load();
     cfg.get_all_plants()
 }
 
@@ -1169,7 +1150,7 @@ pub fn load_plants_config() -> Vec<Plant> {
 #[must_use]
 pub fn load_items_config() -> Vec<Item> {
     let cfg = GameConfig::new();
-    let _ = cfg.load();
+    cfg.load();
     cfg.get_all_items()
 }
 
@@ -1177,7 +1158,7 @@ pub fn load_items_config() -> Vec<Item> {
 #[must_use]
 pub fn load_items_by_type_config(item_type: i64) -> Vec<Item> {
     let cfg = GameConfig::new();
-    let _ = cfg.load();
+    cfg.load();
     cfg.get_items_by_type(item_type)
 }
 
@@ -1185,7 +1166,7 @@ pub fn load_items_by_type_config(item_type: i64) -> Vec<Item> {
 #[must_use]
 pub fn load_item_types_config() -> std::collections::HashMap<i64, i64> {
     let cfg = GameConfig::new();
-    let _ = cfg.load();
+    cfg.load();
     let items = cfg.get_all_items();
     let mut out = std::collections::HashMap::new();
     for it in items {
@@ -1198,7 +1179,7 @@ pub fn load_item_types_config() -> std::collections::HashMap<i64, i64> {
 #[must_use]
 pub fn load_fruits_config() -> Vec<PlantFruit> {
     let cfg = GameConfig::new();
-    let _ = cfg.load();
+    cfg.load();
     cfg.get_all_plants().into_iter().filter_map(|p| p.fruit).collect()
 }
 
@@ -1276,7 +1257,8 @@ mod tests {
         let gc = reload_for_test();
         // 官方配置含大量 null(effect_type/param/activity_id/icon/tips...),必须全部加载成功
         for id in 1..=14i64 {
-            let dto = gc.get_mutant_effect_by_id(id)
+            let dto = gc
+                .get_mutant_effect_by_id(id)
                 .unwrap_or_else(|| panic!("mutant effect {id} missing"));
             assert_eq!(dto.id, id);
             assert!(!dto.name.is_empty(), "mutant {id} name empty");
@@ -1356,10 +1338,12 @@ mod tests {
             begin_time: 1,
             end_time: 50,
         }]);
-        let mut item = Item::default();
-        item.sells = None;
-        item.sell_cond = Some(serde_json::Value::String("活动结束后:2026081800".into()));
-        item.cond_sells = Some(serde_json::Value::String("1:100".into()));
+        let item = Item {
+            sells: None,
+            sell_cond: Some(serde_json::Value::String("活动结束后:2026081800".into())),
+            cond_sells: Some(serde_json::Value::String("1:100".into())),
+            ..Default::default()
+        };
         let gc = GameConfig::default();
         let before = gc.get_effective_sell_info_at(
             &item,

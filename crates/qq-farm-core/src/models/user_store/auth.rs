@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-use rand::Rng;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256, Sha512};
 
@@ -128,7 +128,7 @@ pub fn save_login_attempts() {
     if let Ok(body) = serde_json::to_string_pretty(&data) {
         let path = login_attempts_file();
         let tmp = path.with_extension("json.tmp");
-        let _ = crate::infra::spawn_blocking(move || {
+        crate::infra::spawn_blocking(move || {
             let _ = fs::write(&tmp, &body);
             let _ = fs::rename(&tmp, &path);
         });
@@ -160,7 +160,7 @@ pub fn save_login_logs() {
     if let Ok(s) = serde_json::to_string_pretty(&body) {
         let path = login_logs_file();
         let tmp = path.with_extension("json.tmp");
-        let _ = crate::infra::spawn_blocking(move || {
+        crate::infra::spawn_blocking(move || {
             let _ = fs::write(&tmp, &s);
             let _ = fs::rename(&tmp, &path);
         });
@@ -193,7 +193,7 @@ pub fn get_login_logs(limit: usize, offset: usize) -> (Vec<LoginLogEntry>, usize
     load_login_logs();
     let logs = LOGIN_LOGS.read();
     let mut sorted: Vec<LoginLogEntry> = logs.clone();
-    sorted.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    sorted.sort_by_key(|entry| std::cmp::Reverse(entry.timestamp));
     let total = sorted.len();
     let end = (offset + limit).min(total);
     let sliced = if offset < sorted.len() { sorted[offset..end].to_vec() } else { vec![] };
@@ -208,8 +208,8 @@ pub fn clear_login_logs() {
 
 fn random_id_suffix() -> String {
     const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
-    let mut rng = rand::thread_rng();
-    (0..9).map(|_| CHARS[rng.gen_range(0..CHARS.len())] as char).collect()
+    let mut rng = rand::rng();
+    (0..9).map(|_| CHARS[rng.random_range(0..CHARS.len())] as char).collect()
 }
 
 // =====================================================================
@@ -321,7 +321,7 @@ pub fn record_failed_attempt(username: &str) -> FailedAttemptResult {
     let now = crate::utils::time::now_ms();
 
     let mut guard = LOGIN_ATTEMPTS.write();
-    let attempt = guard.entry(user_key.clone()).or_insert(LoginAttempt::default());
+    let attempt = guard.entry(user_key.clone()).or_default();
     if attempt.count == 0 {
         attempt.first_attempt = Some(now);
     }
@@ -403,8 +403,8 @@ pub fn hash_password(password: &str, salt: Option<&str>) -> String {
     let salt = if let Some(s) = salt {
         s
     } else {
-        let mut rng = rand::thread_rng();
-        let bytes: Vec<u8> = (0..SALT_LENGTH).map(|_| rng.gen()).collect();
+        let mut rng = rand::rng();
+        let bytes: Vec<u8> = (0..SALT_LENGTH).map(|_| rng.random()).collect();
         salt_owned = hex_encode(&bytes);
         &salt_owned
     };
@@ -576,6 +576,7 @@ mod tests {
 
     #[test]
     #[serial(user_store)]
+    #[serial(farm_data_dir)]
     fn rate_limit_first_call_allowed() {
         // 清空状态
         LOGIN_ATTEMPTS.write().clear();
@@ -586,6 +587,7 @@ mod tests {
 
     #[test]
     #[serial(user_store)]
+    #[serial(farm_data_dir)]
     fn rate_limit_blocks_after_max() {
         LOGIN_ATTEMPTS.write().clear();
         let _ = fs::remove_file(login_attempts_file());
@@ -600,6 +602,7 @@ mod tests {
 
     #[test]
     #[serial(user_store)]
+    #[serial(farm_data_dir)]
     fn account_lockout_after_max_attempts() {
         LOGIN_ATTEMPTS.write().clear();
         let _ = fs::remove_file(login_attempts_file());
@@ -612,6 +615,7 @@ mod tests {
 
     #[test]
     #[serial(user_store)]
+    #[serial(farm_data_dir)]
     fn clear_failed_attempts_unlocks() {
         LOGIN_ATTEMPTS.write().clear();
         let _ = fs::remove_file(login_attempts_file());
@@ -625,6 +629,7 @@ mod tests {
 
     #[test]
     #[serial(user_store)]
+    #[serial(farm_data_dir)]
     fn add_login_log_keeps_recent() {
         LOGIN_LOGS.write().clear();
         let _ = fs::remove_file(login_logs_file());

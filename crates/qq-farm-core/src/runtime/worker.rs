@@ -107,219 +107,233 @@ impl Worker {
             "worker",
             panic_account_id.clone(),
             async move {
-            if let Some(eng) = &engine {
-                crate::services::panel_log::register_with_runtime(
-                    &account_id,
-                    &account_name,
-                    eng.runtime_state(),
-                );
-            } else {
-                crate::services::panel_log::register(&account_id, &account_name, event_tx.clone());
-            }
-
-            let tsdk_data_dir = config.data_dir.join(account_id.as_str());
-            let wasm_path = config.tsdk_wasm_path.clone();
-            let data_dir_s = tsdk_data_dir.to_string_lossy().to_string();
-            let tsdk = match tokio::task::spawn_blocking(move || {
-                crate::crypto::tsdk::TsdkRuntime::load(&wasm_path, data_dir_s)
-            })
-            .await
-            {
-                Ok(Ok(rt)) => Arc::new(rt),
-                Ok(Err(e)) => {
-                    tracing::error!(account_id = %account_id, "TSDK 加载失败: {e}");
-                    emit_login_log(&account_id, &format!("TSDK 加载失败: {e}"), true);
-                    emit_terminal_stop(
-                        &event_tx,
+                if let Some(eng) = &engine {
+                    crate::services::panel_log::register_with_runtime(
                         &account_id,
                         &account_name,
-                        &format!("TSDK 加载失败: {e}"),
-                        "tsdk_load",
-                        false,
+                        eng.runtime_state(),
                     );
-                    crate::services::panel_log::unregister(&account_id);
-                    if let Some(eng) = &engine {
-                        eng.release_worker(&account_id);
-                    }
-                    return;
-                }
-                Err(e) => {
-                    tracing::error!(account_id = %account_id, "TSDK 加载任务失败: {e}");
-                    emit_login_log(&account_id, &format!("TSDK 加载失败: {e}"), true);
-                    emit_terminal_stop(
-                        &event_tx,
+                } else {
+                    crate::services::panel_log::register(
                         &account_id,
                         &account_name,
-                        &format!("TSDK 加载失败: {e}"),
-                        "tsdk_load",
-                        false,
+                        event_tx.clone(),
                     );
-                    crate::services::panel_log::unregister(&account_id);
-                    if let Some(eng) = &engine {
-                        eng.release_worker(&account_id);
-                    }
-                    return;
                 }
-            };
-            let encryptor: Arc<dyn Encryptor> =
-                Arc::new(crate::network::encryptor::TsdkEncryptor::new(tsdk.clone()));
 
-            let mut config = config;
-            if account.has_wx_auth() {
-                emit_login_log(&account_id, "正在用应用宝授权换取新的登录码", false);
-                match prepare_wx_gateway_code(&account).await {
-                    Ok((code, creds)) => {
-                        persist_wx_gateway_credentials(&account_id, &code, &creds);
-                        config.gateway.auth_code = code;
-                        emit_login_log(&account_id, "换码成功，正在连接网关", false);
-                    }
-                    Err(e) => {
-                        tracing::warn!(account_id = %account_id, "应用宝换码失败: {e}");
-                        let dead = e.kind == WxAuthErrorKind::CredentialsDead;
-                        if dead {
-                            crate::models::store::accounts::clear_wx_auth(&account_id);
-                            crate::models::store::accounts::persist_global();
-                        }
-                        emit_login_log(
-                            &account_id,
-                            &format!("应用宝换码失败，请重新扫码: {e}"),
-                            true,
-                        );
-                        let source = if dead { "wx_auth_failed" } else { "wx_mint_failed" };
-                        emit_wx_failure_stop(
+                let tsdk_data_dir = config.data_dir.join(account_id.as_str());
+                let wasm_path = config.tsdk_wasm_path.clone();
+                let data_dir_s = tsdk_data_dir.to_string_lossy().to_string();
+                let tsdk = match tokio::task::spawn_blocking(move || {
+                    crate::crypto::tsdk::TsdkRuntime::load(&wasm_path, data_dir_s)
+                })
+                .await
+                {
+                    Ok(Ok(rt)) => Arc::new(rt),
+                    Ok(Err(e)) => {
+                        tracing::error!(account_id = %account_id, "TSDK 加载失败: {e}");
+                        emit_login_log(&account_id, &format!("TSDK 加载失败: {e}"), true);
+                        emit_terminal_stop(
                             &event_tx,
                             &account_id,
                             &account_name,
-                            &format!("应用宝授权已失效，请重新扫码: {e}"),
-                            source,
+                            &format!("TSDK 加载失败: {e}"),
+                            "tsdk_load",
+                            false,
                         );
-                        if dead {
-                            if let Some(eng) = &engine {
-                                eng.notify_wx_auth_cleared(&account_id, &account_name);
-                            }
-                        }
                         crate::services::panel_log::unregister(&account_id);
                         if let Some(eng) = &engine {
                             eng.release_worker(&account_id);
                         }
                         return;
                     }
-                }
-            } else {
-                emit_login_log(&account_id, "正在用已保存的登录码连接网关", false);
-            }
-
-            // 构造 Gateway
-            let gateway = Arc::new(Gateway::new(config.gateway.clone(), encryptor));
-
-            // 构造所有 service + WorkerLoop，注册到 engine
-            if let Some(eng) = &engine {
-                let farm =
-                    Arc::new(crate::services::farm::scheduler::FarmService::new(gateway.clone()));
-                let friend = Arc::new(crate::services::friend::scheduler::FriendService::new(
-                    gateway.clone(),
-                    5,
-                ));
-                let email = Arc::new(crate::services::email::EmailService::new(gateway.clone()));
-                let share = Arc::new(crate::services::share::ShareService::new(gateway.clone()));
-                let monthcard =
-                    Arc::new(crate::services::monthcard::MonthCardService::new(gateway.clone()));
-                let qqvip = Arc::new(crate::services::qqvip::QQVipService::new(gateway.clone()));
-                let mall = Arc::new(crate::services::mall::MallService::new(gateway.clone()));
-                let task = Arc::new(crate::services::task::TaskService::new(gateway.clone()));
-                let warehouse =
-                    Arc::new(crate::services::warehouse::WarehouseService::new(gateway.clone()));
-                let mystery_shop = Arc::new(
-                    crate::services::mystery_shop::MysteryShopService::new(gateway.clone()),
-                );
-                let activity_center = Arc::new(
-                    crate::services::activity_center::ActivityCenterService::new(gateway.clone()),
-                );
-
-                let mut loop_cfg = crate::runtime::worker_loop::WorkerLoopConfig::default();
-                loop_cfg.status_interval = config.status_interval;
-                let rt = crate::config::get_runtime_config();
-                loop_cfg.client_version = if rt.client_version.is_empty() {
-                    config.gateway.client_version.clone()
-                } else {
-                    rt.client_version.clone()
-                };
-                if rt.heartbeat_interval_ms > 0 {
-                    loop_cfg.heartbeat_interval =
-                        Duration::from_millis(rt.heartbeat_interval_ms as u64);
-                }
-                let worker_loop = Arc::new(crate::runtime::worker_loop::WorkerLoop::new(
-                    account.clone(),
-                    loop_cfg,
-                    gateway.clone(),
-                    event_tx.clone(),
-                    farm,
-                    friend,
-                    email,
-                    share,
-                    monthcard,
-                    qqvip,
-                    mall,
-                    task,
-                    warehouse,
-                    mystery_shop,
-                    activity_center,
-                ));
-                eng.register_worker_loop(&account_id, worker_loop.clone());
-                tracing::info!(account_id = %account_id, "WorkerLoop 已注册到 engine");
-
-                let plat = if account.platform.trim().is_empty() {
-                    config.gateway.platform.clone()
-                } else {
-                    account.platform.clone()
-                };
-                if !plat.is_empty() {
-                    crate::services::status::set_status_platform_for(&account_id, &plat);
-                }
-
-                // 心跳超时 = 终端断开，不再用旧 Code 重连
-                let gw_for_hb = gateway.clone();
-                worker_loop.on_heartbeat_timeout(move |_acc_id| {
-                    gw_for_hb.force_disconnect_with_reason("heartbeat_timeout");
-                });
-
-                // === 1. WS 连接 + 登录；失败即退出（对齐 handleTerminalDisconnect） ===
-                if let Err(e) = gateway.connect().await {
-                    tracing::warn!(account_id = %account_id, "WS 连接失败: {e}");
-                    let err_s = format!("WS 连接失败: {e}");
-                    if parse_ws_http_code(&err_s) == Some(400) {
-                        let _ = event_tx.send(WorkerEvent::Error {
-                            account_id: account_id.clone(),
-                            message: err_s.clone(),
-                        });
+                    Err(e) => {
+                        tracing::error!(account_id = %account_id, "TSDK 加载任务失败: {e}");
+                        emit_login_log(&account_id, &format!("TSDK 加载失败: {e}"), true);
+                        emit_terminal_stop(
+                            &event_tx,
+                            &account_id,
+                            &account_name,
+                            &format!("TSDK 加载失败: {e}"),
+                            "tsdk_load",
+                            false,
+                        );
+                        crate::services::panel_log::unregister(&account_id);
+                        if let Some(eng) = &engine {
+                            eng.release_worker(&account_id);
+                        }
+                        return;
                     }
-                    emit_terminal_stop(
-                        &event_tx,
-                        &account_id,
-                        &account_name,
-                        &err_s,
-                        "ws_connect",
-                        has_wx_auth,
-                    );
-                    gateway.force_disconnect();
-                    crate::services::panel_log::unregister(&account_id);
-                    eng.release_worker(&account_id);
-                    return;
-                }
-                emit_login_log(&account_id, "网关已连接，正在登录", false);
-                tracing::info!(account_id = %account_id, "WS 已连接，开始登录");
+                };
+                let encryptor: Arc<dyn Encryptor> =
+                    Arc::new(crate::network::encryptor::TsdkEncryptor::new(tsdk.clone()));
 
-                {
-                    let mut notify_rx = gateway.subscribe_notify();
-                    let wl = worker_loop.clone();
-                    let gw = gateway.clone();
-                    let tx = event_tx.clone();
-                    let acc_id = account_id.clone();
-                    let acc_name = account_name.clone();
-                    let kick_wx_auth = has_wx_auth;
-                    tokio::spawn(async move {
-                        while let Some(ev) = notify_rx.recv().await {
-                            match ev {
+                let mut config = config;
+                if account.has_wx_auth() {
+                    emit_login_log(&account_id, "正在用应用宝授权换取新的登录码", false);
+                    match prepare_wx_gateway_code(&account).await {
+                        Ok((code, creds)) => {
+                            persist_wx_gateway_credentials(&account_id, &code, &creds);
+                            config.gateway.auth_code = code;
+                            emit_login_log(&account_id, "换码成功，正在连接网关", false);
+                        }
+                        Err(e) => {
+                            tracing::warn!(account_id = %account_id, "应用宝换码失败: {e}");
+                            let dead = e.kind == WxAuthErrorKind::CredentialsDead;
+                            if dead {
+                                crate::models::store::accounts::clear_wx_auth(&account_id);
+                                crate::models::store::accounts::persist_global();
+                            }
+                            emit_login_log(
+                                &account_id,
+                                &format!("应用宝换码失败，请重新扫码: {e}"),
+                                true,
+                            );
+                            let source = if dead { "wx_auth_failed" } else { "wx_mint_failed" };
+                            emit_wx_failure_stop(
+                                &event_tx,
+                                &account_id,
+                                &account_name,
+                                &format!("应用宝授权已失效，请重新扫码: {e}"),
+                                source,
+                            );
+                            if dead {
+                                if let Some(eng) = &engine {
+                                    eng.notify_wx_auth_cleared(&account_id, &account_name);
+                                }
+                            }
+                            crate::services::panel_log::unregister(&account_id);
+                            if let Some(eng) = &engine {
+                                eng.release_worker(&account_id);
+                            }
+                            return;
+                        }
+                    }
+                } else {
+                    emit_login_log(&account_id, "正在用已保存的登录码连接网关", false);
+                }
+
+                // 构造 Gateway
+                let gateway = Arc::new(Gateway::new(config.gateway.clone(), encryptor));
+
+                // 构造所有 service + WorkerLoop，注册到 engine
+                if let Some(eng) = &engine {
+                    let farm = Arc::new(crate::services::farm::scheduler::FarmService::new(
+                        gateway.clone(),
+                    ));
+                    let friend = Arc::new(crate::services::friend::scheduler::FriendService::new(
+                        gateway.clone(),
+                        5,
+                    ));
+                    let email =
+                        Arc::new(crate::services::email::EmailService::new(gateway.clone()));
+                    let share =
+                        Arc::new(crate::services::share::ShareService::new(gateway.clone()));
+                    let monthcard = Arc::new(crate::services::monthcard::MonthCardService::new(
+                        gateway.clone(),
+                    ));
+                    let qqvip =
+                        Arc::new(crate::services::qqvip::QQVipService::new(gateway.clone()));
+                    let mall = Arc::new(crate::services::mall::MallService::new(gateway.clone()));
+                    let task = Arc::new(crate::services::task::TaskService::new(gateway.clone()));
+                    let warehouse = Arc::new(crate::services::warehouse::WarehouseService::new(
+                        gateway.clone(),
+                    ));
+                    let mystery_shop = Arc::new(
+                        crate::services::mystery_shop::MysteryShopService::new(gateway.clone()),
+                    );
+                    let activity_center =
+                        Arc::new(crate::services::activity_center::ActivityCenterService::new(
+                            gateway.clone(),
+                        ));
+
+                    let rt = crate::config::get_runtime_config();
+                    let client_version = if rt.client_version.is_empty() {
+                        config.gateway.client_version.clone()
+                    } else {
+                        rt.client_version.clone()
+                    };
+                    let mut loop_cfg = crate::runtime::worker_loop::WorkerLoopConfig {
+                        status_interval: config.status_interval,
+                        client_version,
+                        ..Default::default()
+                    };
+                    if rt.heartbeat_interval_ms > 0 {
+                        loop_cfg.heartbeat_interval =
+                            Duration::from_millis(rt.heartbeat_interval_ms as u64);
+                    }
+                    let worker_loop = Arc::new(crate::runtime::worker_loop::WorkerLoop::new(
+                        account.clone(),
+                        loop_cfg,
+                        gateway.clone(),
+                        event_tx.clone(),
+                        farm,
+                        friend,
+                        email,
+                        share,
+                        monthcard,
+                        qqvip,
+                        mall,
+                        task,
+                        warehouse,
+                        mystery_shop,
+                        activity_center,
+                    ));
+                    eng.register_worker_loop(&account_id, worker_loop.clone());
+                    tracing::info!(account_id = %account_id, "WorkerLoop 已注册到 engine");
+
+                    let plat = if account.platform.trim().is_empty() {
+                        config.gateway.platform.clone()
+                    } else {
+                        account.platform.clone()
+                    };
+                    if !plat.is_empty() {
+                        crate::services::status::set_status_platform_for(&account_id, &plat);
+                    }
+
+                    // 心跳超时 = 终端断开，不再用旧 Code 重连
+                    let gw_for_hb = gateway.clone();
+                    worker_loop.on_heartbeat_timeout(move |_acc_id| {
+                        gw_for_hb.force_disconnect_with_reason("heartbeat_timeout");
+                    });
+
+                    // === 1. WS 连接 + 登录；失败即退出（对齐 handleTerminalDisconnect） ===
+                    if let Err(e) = gateway.connect().await {
+                        tracing::warn!(account_id = %account_id, "WS 连接失败: {e}");
+                        let err_s = format!("WS 连接失败: {e}");
+                        if parse_ws_http_code(&err_s) == Some(400) {
+                            let _ = event_tx.send(WorkerEvent::Error {
+                                account_id: account_id.clone(),
+                                message: err_s.clone(),
+                            });
+                        }
+                        emit_terminal_stop(
+                            &event_tx,
+                            &account_id,
+                            &account_name,
+                            &err_s,
+                            "ws_connect",
+                            has_wx_auth,
+                        );
+                        gateway.force_disconnect();
+                        crate::services::panel_log::unregister(&account_id);
+                        eng.release_worker(&account_id);
+                        return;
+                    }
+                    emit_login_log(&account_id, "网关已连接，正在登录", false);
+                    tracing::info!(account_id = %account_id, "WS 已连接，开始登录");
+
+                    {
+                        let mut notify_rx = gateway.subscribe_notify();
+                        let wl = worker_loop.clone();
+                        let gw = gateway.clone();
+                        let tx = event_tx.clone();
+                        let acc_id = account_id.clone();
+                        let acc_name = account_name.clone();
+                        let kick_wx_auth = has_wx_auth;
+                        tokio::spawn(async move {
+                            while let Some(ev) = notify_rx.recv().await {
+                                match ev {
                                 crate::network::notify::NotifyEvent::Kickout { reason, .. } => {
                                     let why = if reason.is_empty() {
                                         "未知".to_string()
@@ -433,152 +447,158 @@ impl Worker {
                                 }
                                 crate::network::notify::NotifyEvent::Unknown { .. } => {}
                             }
-                        }
-                    });
-                }
+                            }
+                        });
+                    }
 
-                let rt = crate::config::get_runtime_config();
-                let di = &rt.device_info;
-                let device_info = DeviceInfo {
-                    client_version: if di.client_version.is_empty() {
-                        config.gateway.client_version.clone()
-                    } else {
-                        di.client_version.clone()
-                    },
-                    sys_software: if di.sys_software.is_empty() {
-                        "Windows".to_string()
-                    } else {
-                        di.sys_software.clone()
-                    },
-                    screen_width: 0,
-                    ..Default::default()
-                };
-                let report_data = ReportData {
-                    minigame_channel: "other-qq".to_string(),
-                    minigame_platid: 2,
-                    ..Default::default()
-                };
-
-                match gateway.login(&device_info, &report_data, &tsdk).await {
-                    Ok(reply) => {
-                        let login_msg = if let Some(basic) = &reply.basic {
-                            let nick = if basic.name.is_empty() {
-                                account_name.as_str()
-                            } else {
-                                basic.name.as_str()
-                            };
-                            format!("登录成功：{nick} Lv{}", basic.level)
+                    let rt = crate::config::get_runtime_config();
+                    let di = &rt.device_info;
+                    let device_info = DeviceInfo {
+                        client_version: if di.client_version.is_empty() {
+                            config.gateway.client_version.clone()
                         } else {
-                            "登录成功".to_string()
-                        };
-                        emit_login_log(&account_id, &login_msg, false);
-                        if let Some(basic) = &reply.basic {
-                            worker_loop.set_gid(basic.gid);
-                            crate::services::status::update_status_from_login_for(
-                                &account_id,
-                                &serde_json::json!({
-                                    "name": basic.name,
-                                    "level": basic.level,
-                                    "gold": basic.gold,
-                                    "exp": basic.exp,
-                                    "avatar": basic.avatar_url,
-                                }),
-                            );
-                        }
-                        // 对齐 sendLogin 成功后的顺序：ACE → 金豆/设置 → 心跳/状态 → onLoginSuccess
-                        let ace = Arc::new(crate::services::ace::AceShared::new());
-                        ace.set_event_sink(event_tx.clone(), account_name.clone());
-                        let sender = Arc::new(crate::services::ace::GatewayAceSender {
-                            gateway: gateway.clone(),
-                        });
-                        ace.start(sender, tsdk.clone());
-                        // clone 一份给 WasmReset handler，attach_ace 后原变量被 move
-                        let ace_for_reset = ace.clone();
-                        worker_loop.attach_ace(ace);
+                            di.client_version.clone()
+                        },
+                        sys_software: if di.sys_software.is_empty() {
+                            "Windows".to_string()
+                        } else {
+                            di.sys_software.clone()
+                        },
+                        screen_width: 0,
+                        ..Default::default()
+                    };
+                    let report_data = ReportData {
+                        minigame_channel: "other-qq".to_string(),
+                        minigame_platid: 2,
+                        ..Default::default()
+                    };
 
-                        // 对齐 bot 登录序列：GetUserSettings 最先发出（携带 TSDK
-                        // 初始化凭据，对齐 bot 登录回调里的 fetchUserSettings），
-                        // 随后刷新活动窗口；GetBag 只由 on_login_success 拉一次
-                        // （此前这里重复多拉了一次）。
-                        let extras = worker_loop.clone();
-                        let gw_settings = gateway.clone();
-                        tokio::spawn(async move {
-                            let _ = gw_settings.fetch_user_settings().await;
-                            let _ = extras.refresh_activity_windows().await;
-                        });
+                    match gateway.login(&device_info, &report_data, &tsdk).await {
+                        Ok(reply) => {
+                            let login_msg = if let Some(basic) = &reply.basic {
+                                let nick = if basic.name.is_empty() {
+                                    account_name.as_str()
+                                } else {
+                                    basic.name.as_str()
+                                };
+                                format!("登录成功：{nick} Lv{}", basic.level)
+                            } else {
+                                "登录成功".to_string()
+                            };
+                            emit_login_log(&account_id, &login_msg, false);
+                            if let Some(basic) = &reply.basic {
+                                worker_loop.set_gid(basic.gid);
+                                crate::services::status::update_status_from_login_for(
+                                    &account_id,
+                                    &serde_json::json!({
+                                        "name": basic.name,
+                                        "level": basic.level,
+                                        "gold": basic.gold,
+                                        "exp": basic.exp,
+                                        "avatar": basic.avatar_url,
+                                    }),
+                                );
+                            }
+                            // 对齐 sendLogin 成功后的顺序：ACE → 金豆/设置 → 心跳/状态 → onLoginSuccess
+                            let ace = Arc::new(crate::services::ace::AceShared::new());
+                            ace.set_event_sink(event_tx.clone(), account_name.clone());
+                            let sender = Arc::new(crate::services::ace::GatewayAceSender {
+                                gateway: gateway.clone(),
+                            });
+                            ace.start(sender, tsdk.clone());
+                            // clone 一份给 WasmReset handler，attach_ace 后原变量被 move
+                            let ace_for_reset = ace.clone();
+                            worker_loop.attach_ace(ace);
 
-                        worker_loop.mark_login_ready();
-                        worker_loop.sync_status();
-                        worker_loop.start(&scheduler);
-                        let _ = event_tx.send(WorkerEvent::Started {
-                            account_id: account_id.clone(),
-                            account_name: account_name.clone(),
-                        });
-                        let wl = worker_loop.clone();
-                        let sched = scheduler.clone();
-                        tokio::spawn(async move {
-                            wl.on_login_success(&sched).await;
-                        });
+                            // 对齐 bot 登录序列：GetUserSettings 最先发出（携带 TSDK
+                            // 初始化凭据，对齐 bot 登录回调里的 fetchUserSettings），
+                            // 随后刷新活动窗口；GetBag 只由 on_login_success 拉一次
+                            // （此前这里重复多拉了一次）。
+                            let extras = worker_loop.clone();
+                            let gw_settings = gateway.clone();
+                            tokio::spawn(async move {
+                                let _ = gw_settings.fetch_user_settings().await;
+                                let _ = extras.refresh_activity_windows().await;
+                            });
 
-                        // === 订阅 WasmReset：tsdk 连续失败时由 ACE 触发。
-                        // 完整流程：rebuild TSDK → 原子替换 Gateway.encryptor → 重启 ACE
-                        // rebuild 期间 Gateway.begin_rebuild 让 WorkerLoop 放宽 silence 阈值
-                        let mut reset_rx = event_tx.subscribe();
-                        let acc_id_for_reset = account_id.clone();
-                        let acc_name_for_reset = account_name.clone();
-                        let tsdk_for_reset = tsdk.clone();
-                        let gateway_for_reset = gateway.clone();
-                        let log_tx = event_tx.clone();
-                        tokio::spawn(async move {
-                            while let Ok(ev) = reset_rx.recv().await {
-                                if let WorkerEvent::WasmReset {
-                                    account_id,
-                                    consecutive_fail_count,
-                                    reason,
-                                    ..
-                                } = ev
-                                {
-                                    if !account_id.is_empty() && account_id != acc_id_for_reset {
-                                        continue;
-                                    }
-                                    tracing::error!(
-                                        account_id = %acc_id_for_reset,
+                            worker_loop.mark_login_ready();
+                            worker_loop.sync_status();
+                            worker_loop.start(&scheduler);
+                            let _ = event_tx.send(WorkerEvent::Started {
+                                account_id: account_id.clone(),
+                                account_name: account_name.clone(),
+                            });
+                            let wl = worker_loop.clone();
+                            let sched = scheduler.clone();
+                            tokio::spawn(async move {
+                                wl.on_login_success(&sched).await;
+                            });
+
+                            // === 订阅 WasmReset：tsdk 连续失败时由 ACE 触发。
+                            // 完整流程：rebuild TSDK → 原子替换 Gateway.encryptor → 重启 ACE
+                            // rebuild 期间 Gateway.begin_rebuild 让 WorkerLoop 放宽 silence 阈值
+                            let mut reset_rx = event_tx.subscribe();
+                            let acc_id_for_reset = account_id.clone();
+                            let acc_name_for_reset = account_name.clone();
+                            let tsdk_for_reset = tsdk.clone();
+                            let gateway_for_reset = gateway.clone();
+                            let log_tx = event_tx.clone();
+                            tokio::spawn(async move {
+                                while let Ok(ev) = reset_rx.recv().await {
+                                    if let WorkerEvent::WasmReset {
+                                        account_id,
                                         consecutive_fail_count,
-                                        reason = %reason,
-                                        "TSDK wasm 连续失败达到阈值，开始重建"
-                                    );
-                                    let _ = log_tx.send(WorkerEvent::Log {
-                                        account_id: acc_id_for_reset.clone(),
-                                        account_name: acc_name_for_reset.clone(),
-                                        level: "warn".to_string(),
-                                        module: "tsdk".to_string(),
-                                        message: format!(
-                                            "TSDK 重建中：{} (连续失败 {} 次)",
-                                            reason, consecutive_fail_count
-                                        ),
-                                    });
+                                        reason,
+                                        ..
+                                    } = ev
+                                    {
+                                        if !account_id.is_empty() && account_id != acc_id_for_reset
+                                        {
+                                            continue;
+                                        }
+                                        tracing::error!(
+                                            account_id = %acc_id_for_reset,
+                                            consecutive_fail_count,
+                                            reason = %reason,
+                                            "TSDK wasm 连续失败达到阈值，开始重建"
+                                        );
+                                        let _ = log_tx.send(WorkerEvent::Log {
+                                            account_id: acc_id_for_reset.clone(),
+                                            account_name: acc_name_for_reset.clone(),
+                                            level: "warn".to_string(),
+                                            module: "tsdk".to_string(),
+                                            message: format!(
+                                                "TSDK 重建中：{} (连续失败 {} 次)",
+                                                reason, consecutive_fail_count
+                                            ),
+                                        });
 
-                                    // 1. 标记 rebuilding 期间，WorkerLoop 会放宽 silence 阈值
-                                    gateway_for_reset.begin_rebuild();
-                                    // 2. rebuild 是同步阻塞（wasm 编译 + 实例化），扔到 blocking pool
-                                    let tsdk_rebuild = tsdk_for_reset.clone();
-                                    let rebuild_result = tokio::task::spawn_blocking(move || {
-                                        tsdk_rebuild.rebuild()
-                                    })
-                                    .await;
-                                    match rebuild_result {
-                                        Ok(Ok(())) => {
-                                            // 3. 重建成功：原子换 Gateway 的 encryptor
-                                            let new_encryptor: Arc<dyn crate::network::encryptor::Encryptor> = Arc::new(
-                                                crate::network::encryptor::TsdkEncryptor::new(tsdk_for_reset.clone())
-                                            );
-                                            gateway_for_reset.replace_encryptor(new_encryptor);
-                                            // 4. 退出 rebuilding 状态
-                                            gateway_for_reset.end_rebuild();
-                                            // 5. 重启 ACE——仅当网关仍在线。
-                                            // 断线状态下拉起 ACE 会让 wasm 持续产出
-                                            // 无法上报的数据，堆增长直到 alloc failed。
-                                            if gateway_for_reset.phase()
+                                        // 1. 标记 rebuilding 期间，WorkerLoop 会放宽 silence 阈值
+                                        gateway_for_reset.begin_rebuild();
+                                        // 2. rebuild 是同步阻塞（wasm 编译 + 实例化），扔到 blocking pool
+                                        let tsdk_rebuild = tsdk_for_reset.clone();
+                                        let rebuild_result =
+                                            tokio::task::spawn_blocking(move || {
+                                                tsdk_rebuild.rebuild()
+                                            })
+                                            .await;
+                                        match rebuild_result {
+                                            Ok(Ok(())) => {
+                                                // 3. 重建成功：原子换 Gateway 的 encryptor
+                                                let new_encryptor: Arc<
+                                                    dyn crate::network::encryptor::Encryptor,
+                                                > = Arc::new(
+                                                    crate::network::encryptor::TsdkEncryptor::new(
+                                                        tsdk_for_reset.clone(),
+                                                    ),
+                                                );
+                                                gateway_for_reset.replace_encryptor(new_encryptor);
+                                                // 4. 退出 rebuilding 状态
+                                                gateway_for_reset.end_rebuild();
+                                                // 5. 重启 ACE——仅当网关仍在线。
+                                                // 断线状态下拉起 ACE 会让 wasm 持续产出
+                                                // 无法上报的数据，堆增长直到 alloc failed。
+                                                if gateway_for_reset.phase()
                                                 == crate::network::gateway::ConnectionPhase::Online
                                             {
                                                 let sender = Arc::new(crate::services::ace::GatewayAceSender {
@@ -596,83 +616,83 @@ impl Worker {
                                                     "TSDK 重建完成（网关离线，跳过 ACE 重启）"
                                                 );
                                             }
-                                            let _ = log_tx.send(WorkerEvent::Log {
-                                                account_id: acc_id_for_reset.clone(),
-                                                account_name: acc_name_for_reset.clone(),
-                                                level: "info".to_string(),
-                                                module: "tsdk".to_string(),
-                                                message: format!(
-                                                    "TSDK 重建完成（连续失败 {} 次）",
-                                                    consecutive_fail_count
-                                                ),
-                                            });
-                                        }
-                                        Ok(Err(e)) => {
-                                            // rebuild 失败：清 rebuilding，下次再有 reset 再试
-                                            gateway_for_reset.end_rebuild();
-                                            tracing::error!(
-                                                account_id = %acc_id_for_reset,
-                                                error = %e,
-                                                "TSDK 重建失败，下次 reset 时再试"
-                                            );
-                                            let _ = log_tx.send(WorkerEvent::Log {
-                                                account_id: acc_id_for_reset.clone(),
-                                                account_name: acc_name_for_reset.clone(),
-                                                level: "error".to_string(),
-                                                module: "tsdk".to_string(),
-                                                message: format!("TSDK 重建失败: {e}"),
-                                            });
-                                        }
-                                        Err(e) => {
-                                            gateway_for_reset.end_rebuild();
-                                            tracing::error!(
-                                                account_id = %acc_id_for_reset,
-                                                error = %e,
-                                                "TSDK rebuild 任务 panic"
-                                            );
+                                                let _ = log_tx.send(WorkerEvent::Log {
+                                                    account_id: acc_id_for_reset.clone(),
+                                                    account_name: acc_name_for_reset.clone(),
+                                                    level: "info".to_string(),
+                                                    module: "tsdk".to_string(),
+                                                    message: format!(
+                                                        "TSDK 重建完成（连续失败 {} 次）",
+                                                        consecutive_fail_count
+                                                    ),
+                                                });
+                                            }
+                                            Ok(Err(e)) => {
+                                                // rebuild 失败：清 rebuilding，下次再有 reset 再试
+                                                gateway_for_reset.end_rebuild();
+                                                tracing::error!(
+                                                    account_id = %acc_id_for_reset,
+                                                    error = %e,
+                                                    "TSDK 重建失败，下次 reset 时再试"
+                                                );
+                                                let _ = log_tx.send(WorkerEvent::Log {
+                                                    account_id: acc_id_for_reset.clone(),
+                                                    account_name: acc_name_for_reset.clone(),
+                                                    level: "error".to_string(),
+                                                    module: "tsdk".to_string(),
+                                                    message: format!("TSDK 重建失败: {e}"),
+                                                });
+                                            }
+                                            Err(e) => {
+                                                gateway_for_reset.end_rebuild();
+                                                tracing::error!(
+                                                    account_id = %acc_id_for_reset,
+                                                    error = %e,
+                                                    "TSDK rebuild 任务 panic"
+                                                );
+                                            }
                                         }
                                     }
                                 }
-                            }
-                        });
-                    }
-                    Err(e) => {
-                        tracing::warn!(account_id = %account_id, "登录失败: {e}");
-                        emit_login_log(&account_id, &format!("登录失败: {e}"), true);
-                        emit_terminal_stop(
-                            &event_tx,
-                            &account_id,
-                            &account_name,
-                            &format!("登录失败: {e}"),
-                            "login",
-                            has_wx_auth,
-                        );
-                        gateway.force_disconnect();
-                        crate::services::panel_log::unregister(&account_id);
-                        eng.release_worker(&account_id);
-                        return;
+                            });
+                        }
+                        Err(e) => {
+                            tracing::warn!(account_id = %account_id, "登录失败: {e}");
+                            emit_login_log(&account_id, &format!("登录失败: {e}"), true);
+                            emit_terminal_stop(
+                                &event_tx,
+                                &account_id,
+                                &account_name,
+                                &format!("登录失败: {e}"),
+                                "login",
+                                has_wx_auth,
+                            );
+                            gateway.force_disconnect();
+                            crate::services::panel_log::unregister(&account_id);
+                            eng.release_worker(&account_id);
+                            return;
+                        }
                     }
                 }
-            }
 
-            let exit = run_worker_loop(
-                account,
-                config,
-                scheduler,
-                msg_rx,
-                event_tx.clone(),
-                gateway,
-                cancel,
-                engine.clone(),
-            )
-            .await;
+                let exit = run_worker_loop(
+                    account,
+                    config,
+                    scheduler,
+                    msg_rx,
+                    event_tx.clone(),
+                    gateway,
+                    cancel,
+                    engine.clone(),
+                )
+                .await;
 
-            crate::services::panel_log::unregister(&account_id);
-            if let Some(eng) = &engine {
-                eng.release_worker(&account_id);
-            }
+                crate::services::panel_log::unregister(&account_id);
+                if let Some(eng) = &engine {
+                    eng.release_worker(&account_id);
+                }
 
-            let _ = event_tx.send(WorkerEvent::Stopped { account_id, reason: exit.reason });
+                let _ = event_tx.send(WorkerEvent::Stopped { account_id, reason: exit.reason });
             },
             move |account_id, msg| {
                 let _ = panic_event_tx.send(WorkerEvent::Stopped {

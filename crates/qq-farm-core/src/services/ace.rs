@@ -183,12 +183,8 @@ impl AceShared {
             return;
         }
         // RAII 复位：保证 panic 路径也会释放 request_running，避免调度永久卡死
-        let _reset_guard = RequestRunningGuard {
-            flag: &self.request_running,
-        };
-        let inner_result = AssertUnwindSafe(self.send_anti_data_inner())
-            .catch_unwind()
-            .await;
+        let _reset_guard = RequestRunningGuard { flag: &self.request_running };
+        let inner_result = AssertUnwindSafe(self.send_anti_data_inner()).catch_unwind().await;
         match inner_result {
             Ok(Ok(())) => {}
             Ok(Err(e)) => {
@@ -240,7 +236,10 @@ impl AceShared {
                 // 若已达阈值，is_reset_pending() 会返回 true，这里再发一次事件兜底
                 // （防止 ace 任务自己先踩到边缘）。
                 if tsdk.is_reset_pending() {
-                    self.emit_wasm_reset(tsdk.consecutive_fail_count(), format!("get_data_to_server failed: {e}"));
+                    self.emit_wasm_reset(
+                        tsdk.consecutive_fail_count(),
+                        format!("get_data_to_server failed: {e}"),
+                    );
                 }
                 return Err(e);
             }
@@ -263,9 +262,9 @@ impl AceShared {
         let reply_body = match sender.send("gamepb.acepb.AceService", "AntiData", &body).await {
             Ok(b) => b,
             // 断线瞬间的 Phase 错误：连接已结束，无需告警（否则僵尸任务掉线后持续刷屏）
-            Err(crate::error::Error::Network(
-                crate::network::error::NetworkError::Phase(_),
-            )) => return Ok(()),
+            Err(crate::error::Error::Network(crate::network::error::NetworkError::Phase(_))) => {
+                return Ok(())
+            }
             Err(e) => return Err(e),
         };
 

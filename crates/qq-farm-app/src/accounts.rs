@@ -18,7 +18,7 @@ pub enum AclPolicy {
     LocalOwner,
 }
 
-/// 账号 ACL：admin / LocalOwner 全放行；普通用户只能访问自己的账号。
+/// 账号 ACL：admin / `LocalOwner` 全放行；普通用户只能访问自己的账号。
 #[must_use]
 pub fn account_accessible(policy: &AclPolicy, account_id: &str) -> bool {
     if account_id.is_empty() {
@@ -161,8 +161,7 @@ fn redact_wx_auth_fields(obj: &mut serde_json::Map<String, Value>, acc: &Account
     obj.insert("wxAuthorized".to_string(), json!(acc.has_wx_auth()));
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs() as i64);
     obj.insert(
         "wxRescanRecommended".to_string(),
         json!(qq_farm_core::services::wx_login::wx_auth::rescan_recommended(
@@ -251,12 +250,12 @@ pub fn upsert_account(
             code_changed = code.trim() != existing.code.trim();
         }
         let updated = AccountRecord {
-            name: if name.is_empty() { existing.name.clone() } else { name.clone() },
-            code: if code.is_empty() { existing.code.clone() } else { code.clone() },
-            platform: if platform_set { platform.clone() } else { existing.platform.clone() },
+            name: if name.is_empty() { existing.name.clone() } else { name },
+            code: if code.is_empty() { existing.code.clone() } else { code },
+            platform: if platform_set { platform } else { existing.platform.clone() },
             qq: req.qq.clone().unwrap_or(existing.qq),
             uin: req.uin.clone().unwrap_or(existing.uin),
-            avatar: req.avatar.clone().unwrap_or(existing.avatar),
+            avatar: req.avatar.unwrap_or(existing.avatar),
             username: if owner.is_empty() { existing.username } else { owner },
             ..existing
         };
@@ -264,9 +263,9 @@ pub fn upsert_account(
     } else {
         let acc = AccountRecord {
             id: String::new(),
-            name: name.clone(),
-            code: code.clone(),
-            platform: platform.clone(),
+            name,
+            code,
+            platform,
             qq: req.qq.unwrap_or_default(),
             uin: req.uin.unwrap_or_default(),
             avatar: req.avatar.unwrap_or_default(),
@@ -291,8 +290,7 @@ pub fn upsert_account(
         } else {
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0)
+                .map_or(0, |d| d.as_secs() as i64)
         };
         saved = accounts::add_or_update_account(saved);
     }

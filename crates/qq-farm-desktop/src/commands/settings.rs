@@ -72,7 +72,10 @@ pub fn start_qq_bot_bind(state: State<'_, DesktopState>) -> IpcResult<BindStartR
 
 /// 轮询 QQ Bot 绑定状态。
 #[tauri::command]
-pub fn poll_qq_bot_bind(state: State<'_, DesktopState>, session_id: String) -> IpcResult<BindPollResult> {
+pub fn poll_qq_bot_bind(
+    state: State<'_, DesktopState>,
+    session_id: String,
+) -> IpcResult<BindPollResult> {
     Ok(qq_bot_bind::poll_qq_bot_bind(&state.app, &session_id))
 }
 
@@ -80,12 +83,7 @@ pub fn poll_qq_bot_bind(state: State<'_, DesktopState>, session_id: String) -> I
 #[tauri::command]
 pub fn unbind_qq_bot(state: State<'_, DesktopState>) -> IpcResult<Value> {
     qq_bot_bind::unbind_qq_bot(DESKTOP_USERNAME);
-    state
-        .app
-        .engine
-        .qq_bot()
-        .bind_sessions()
-        .clear_user(DESKTOP_USERNAME);
+    state.app.engine.qq_bot().bind_sessions().clear_user(DESKTOP_USERNAME);
     Ok(settings::offline_reminder_view(Some(DESKTOP_USERNAME)))
 }
 

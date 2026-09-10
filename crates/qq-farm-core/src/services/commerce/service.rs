@@ -722,8 +722,7 @@ pub fn mall_goods_dto(goods: &MallGoods, balances: &HashMap<i64, i64>) -> MallGo
     let balance = if price.id > 0 { balances.get(&price.id).copied() } else { None };
     let mut price_dto = price;
     price_dto.balance = balance;
-    let purchasable =
-        available && limit.as_ref().map_or(true, |l| l.remaining.is_none_or(|r| r > 0));
+    let purchasable = available && limit.as_ref().is_none_or(|l| l.remaining.is_none_or(|r| r > 0));
     MallGoodsDto {
         id: goods.goods_id as i64,
         name: goods.name.clone(),

@@ -7,16 +7,16 @@ defineOptions({ name: 'SearchFooter' });
 <template>
   <div class="h-44px flex-y-center gap-14px px-24px">
     <span class="flex-y-center">
-      <icon-mdi-keyboard-return class="operate-shadow operate-item" />
+      <IconMdiKeyboardReturn class="operate-shadow operate-item" />
       <span>{{ $t('common.confirm') }}</span>
     </span>
     <span class="flex-y-center">
-      <icon-mdi-arrow-up-thin class="operate-shadow operate-item" />
-      <icon-mdi-arrow-down-thin class="operate-shadow operate-item" />
+      <IconMdiArrowUpThin class="operate-shadow operate-item" />
+      <IconMdiArrowDownThin class="operate-shadow operate-item" />
       <span>{{ $t('common.switch') }}</span>
     </span>
     <span class="flex-y-center">
-      <icon-mdi-keyboard-esc class="operate-shadow operate-item" />
+      <IconMdiKeyboardEsc class="operate-shadow operate-item" />
       <span>{{ $t('common.close') }}</span>
     </span>
   </div>

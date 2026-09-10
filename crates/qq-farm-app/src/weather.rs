@@ -44,7 +44,11 @@ pub async fn summon(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
 }
 
 /// 青蛙使坏。
-pub async fn mischief_frog(ctx: &AppContext, account_id: &str, friend_gid: i64) -> AppResult<Value> {
+pub async fn mischief_frog(
+    ctx: &AppContext,
+    account_id: &str,
+    friend_gid: i64,
+) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
     loop_.weather().frog_mischief(friend_gid).await.map_err(AppError::from_core)
 }
@@ -61,7 +65,11 @@ pub async fn mischief_cloud(
 }
 
 /// 推进气象研究节点。
-pub async fn advance_research(ctx: &AppContext, account_id: &str, node_id: i64) -> AppResult<Value> {
+pub async fn advance_research(
+    ctx: &AppContext,
+    account_id: &str,
+    node_id: i64,
+) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
     loop_.weather().advance_research(node_id).await.map_err(AppError::from_core)
 }

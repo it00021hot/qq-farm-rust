@@ -26,12 +26,12 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use crate::error::{Error, Result};
 use crate::network::gateway::Gateway;
+use crate::proto::generated::corepb;
 use crate::proto::generated::gamepb::activitypb::{
     ActivityData, ActivityOperateReply, AdvanceWeatherResearchRequest, CollectWeatherRequest,
     ExchangeShopOperateParams, ExchangeShopRequest, GetGroupReply, GetGroupRequest,
     WeatherCollectOperateParams, WeatherResearchOperateParams,
 };
-use crate::proto::generated::corepb;
 use crate::proto::generated::gamepb::itempb::{UseReply, UseRequest, UseTarget};
 use crate::proto::generated::gamepb::plantpb::LandInfo;
 use crate::proto::generated::gamepb::weatherpb::{
@@ -210,11 +210,8 @@ pub fn activity_rules(extra: &[u8]) -> serde_json::Value {
 fn item_dto(item_id: i64, count: i64) -> serde_json::Value {
     let gc = crate::config::game_config::global();
     let meta = gc.get_item_by_id(item_id);
-    let name = meta
-        .as_ref()
-        .map(|i| i.name.clone())
-        .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| {
+    let name =
+        meta.as_ref().map(|i| i.name.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| {
             if item_id == LIGHTNING_BADGE_ID {
                 "雷电徽章".to_string()
             } else {
@@ -258,11 +255,9 @@ pub fn cloud_eligible_land_ids(lands: &[LandInfo]) -> Vec<i64> {
             Some(PlantPhase::Sprout) | Some(PlantPhase::Growing) => {}
             _ => continue,
         }
-        let has_cloud = plant.interaction_uses.iter().any(|e| e.item_id == CLOUD_MISCHIEF_BOTTLE_ID)
-            || plant
-                .interaction_targets
-                .iter()
-                .any(|e| e.item_id == CLOUD_MISCHIEF_BOTTLE_ID);
+        let has_cloud =
+            plant.interaction_uses.iter().any(|e| e.item_id == CLOUD_MISCHIEF_BOTTLE_ID)
+                || plant.interaction_targets.iter().any(|e| e.item_id == CLOUD_MISCHIEF_BOTTLE_ID);
         if has_cloud {
             continue;
         }
@@ -355,8 +350,7 @@ impl WeatherActivityService {
 
     async fn query_weather_group(&self) -> Result<GetGroupReply> {
         let req = GetGroupRequest { group_id: WEATHER_GROUP_ID };
-        let body =
-            self.gateway.request(ACTIVITY_SERVICE, "GetGroup", &req.encode_to_vec()).await?;
+        let body = self.gateway.request(ACTIVITY_SERVICE, "GetGroup", &req.encode_to_vec()).await?;
         Ok(GetGroupReply::decode(&body[..])?)
     }
 
@@ -439,10 +433,7 @@ impl WeatherActivityService {
         let balance = |id: i64| balances.get(&id).copied().unwrap_or(0);
 
         let find_child = |id: i64| -> Option<&ActivityData> {
-            group
-                .children
-                .iter()
-                .find(|c| c.activity.as_ref().map(|a| a.activity_id) == Some(id))
+            group.children.iter().find(|c| c.activity.as_ref().map(|a| a.activity_id) == Some(id))
         };
         let shop_child = find_child(WEATHER_SHOP_ACTIVITY_ID);
         let mutation_child = find_child(WEATHER_MUTATION_ACTIVITY_ID);
@@ -453,7 +444,8 @@ impl WeatherActivityService {
         let own_gid = self.own_gid();
         let own_weather = weather_status_dto(own_weather_reply.weather.as_ref(), own_gid);
         let own_active = own_weather.get("active").and_then(|v| v.as_bool()).unwrap_or(false);
-        let own_thunder = own_weather.get("isThunderstorm").and_then(|v| v.as_bool()).unwrap_or(false);
+        let own_thunder =
+            own_weather.get("isThunderstorm").and_then(|v| v.as_bool()).unwrap_or(false);
 
         // 兑换商店：goods 200（金豆豆兑换采集瓶），dailyLimit 1
         let shop = (|| -> Option<serde_json::Value> {
@@ -538,11 +530,8 @@ impl WeatherActivityService {
                 "operateReason": "",
             }))
         })();
-        let next_research_node = research
-            .as_ref()
-            .and_then(|r| r.get("nextNode"))
-            .filter(|n| !n.is_null())
-            .cloned();
+        let next_research_node =
+            research.as_ref().and_then(|r| r.get("nextNode")).filter(|n| !n.is_null()).cloned();
 
         // 采集瓶配置 / 任务列表
         let collector = bottle_child.and_then(|child| {
@@ -622,7 +611,11 @@ impl WeatherActivityService {
         let summon_reason = if !active {
             "活动尚未开放或已经结束".to_string()
         } else if own_active {
-            if own_thunder { "雷雨正在进行中".to_string() } else { "当前已有其他特殊天气".to_string() }
+            if own_thunder {
+                "雷雨正在进行中".to_string()
+            } else {
+                "当前已有其他特殊天气".to_string()
+            }
         } else if summon_balance <= 0 {
             "背包中没有可用的雷雨召唤瓶".to_string()
         } else {
@@ -762,7 +755,7 @@ impl WeatherActivityService {
         let result: std::result::Result<(Option<WeatherStatus>, Vec<LandInfo>), String> = async {
             let reply = self.friend_api.enter_farm(gid).await.map_err(|e| e.to_string())?;
             entered = true;
-            Ok((reply.weather.clone(), reply.lands.clone()))
+            Ok((reply.weather, reply.lands.clone()))
         }
         .await;
         if entered {
@@ -820,10 +813,7 @@ impl WeatherActivityService {
             ("unavailable".to_string(), "好友农场当前不是雷雨天气".to_string())
         };
         let eligible_cloud: Vec<String> = if scan_error.is_empty() {
-            cloud_eligible_land_ids(&inspection.lands)
-                .iter()
-                .map(|id| id.to_string())
-                .collect()
+            cloud_eligible_land_ids(&inspection.lands).iter().map(|id| id.to_string()).collect()
         } else {
             Vec::new()
         };
@@ -853,7 +843,10 @@ impl WeatherActivityService {
             }
         }
         if gids.is_empty() {
-            return Err(business_error("INVALID_WEATHER_FRIEND_GID", "请先选择需要检查现场天气的好友"));
+            return Err(business_error(
+                "INVALID_WEATHER_FRIEND_GID",
+                "请先选择需要检查现场天气的好友",
+            ));
         }
         if gids.len() > FRIEND_WEATHER_SCAN_BATCH_LIMIT {
             return Err(business_error(
@@ -938,9 +931,9 @@ impl WeatherActivityService {
             .map(|a| activity_is_active(a.begin_time, a.end_time))
             .unwrap_or(false);
         let shop_child = group_reply.group.as_ref().and_then(|g| {
-            g.children
-                .iter()
-                .find(|c| c.activity.as_ref().map(|a| a.activity_id) == Some(WEATHER_SHOP_ACTIVITY_ID))
+            g.children.iter().find(|c| {
+                c.activity.as_ref().map(|a| a.activity_id) == Some(WEATHER_SHOP_ACTIVITY_ID)
+            })
         });
         let goods_list = shop_child.and_then(|c| c.catalog.as_ref()).map(|cat| cat.goods.clone());
         let Some(goods_list) = goods_list else {
@@ -954,7 +947,10 @@ impl WeatherActivityService {
         let cost = goods.cost.unwrap_or_default();
         let cost_balance = balances.get(&cost.item_id).copied().unwrap_or(0);
         if goods.owned {
-            return Err(business_error("WEATHER_SHOP_ALREADY_EXCHANGED", "今日已经兑换过天气采集瓶"));
+            return Err(business_error(
+                "WEATHER_SHOP_ALREADY_EXCHANGED",
+                "今日已经兑换过天气采集瓶",
+            ));
         }
         let available = active && goods.status != 0 && cost_balance >= cost.count.max(0);
         if !available {
@@ -963,10 +959,12 @@ impl WeatherActivityService {
         let req = ExchangeShopRequest {
             activity_id: WEATHER_SHOP_ACTIVITY_ID,
             operate_type: EXCHANGE_SHOP_OPERATE_TYPE,
-            exchange_shop_operate: Some(ExchangeShopOperateParams { goods_id: goods.goods_id, count: 1 }),
+            exchange_shop_operate: Some(ExchangeShopOperateParams {
+                goods_id: goods.goods_id,
+                count: 1,
+            }),
         };
-        let body =
-            self.gateway.request(ACTIVITY_SERVICE, "Operate", &req.encode_to_vec()).await?;
+        let body = self.gateway.request(ACTIVITY_SERVICE, "Operate", &req.encode_to_vec()).await?;
         let reply = ActivityOperateReply::decode(&body[..])?;
         Ok(serde_json::json!({
             "outcome": "exchanged",
@@ -982,10 +980,16 @@ impl WeatherActivityService {
         let _mutation = self.mutation_lock.lock().await;
         let own_gid = self.own_gid();
         if friend_gid <= 0 || friend_gid == own_gid {
-            return Err(business_error("INVALID_WEATHER_FRIEND_GID", "天气采集瓶只能在好友农场使用"));
+            return Err(business_error(
+                "INVALID_WEATHER_FRIEND_GID",
+                "天气采集瓶只能在好友农场使用",
+            ));
         }
         if self.available_stack(COLLECTOR_BOTTLE_ID).await?.is_none() {
-            return Err(business_error("WEATHER_COLLECTOR_UNAVAILABLE", "背包中没有可用的天气采集瓶"));
+            return Err(business_error(
+                "WEATHER_COLLECTOR_UNAVAILABLE",
+                "背包中没有可用的天气采集瓶",
+            ));
         }
 
         let mut entered = false;
@@ -995,7 +999,7 @@ impl WeatherActivityService {
             self.cache_inspection(
                 friend_gid,
                 FriendInspection {
-                    weather: enter_reply.weather.clone(),
+                    weather: enter_reply.weather,
                     lands: Vec::new(),
                     inspected_at: crate::utils::time::get_server_time_secs(),
                     error: String::new(),
@@ -1023,22 +1027,20 @@ impl WeatherActivityService {
                 operate_type: COLLECT_WEATHER_OPERATE_TYPE,
                 weather_collect_operate: Some(WeatherCollectOperateParams { host_gid: friend_gid }),
             };
-            let body = match self
-                .gateway
-                .request(ACTIVITY_SERVICE, "Operate", &req.encode_to_vec())
-                .await
-            {
-                Ok(body) => body,
-                Err(crate::network::error::NetworkError::Gateway { code, .. })
-                    if code == WEATHER_ALREADY_COLLECTED_CODE =>
+            let body =
+                match self.gateway.request(ACTIVITY_SERVICE, "Operate", &req.encode_to_vec()).await
                 {
-                    return Err(business_error(
-                        "WEATHER_ALREADY_COLLECTED",
-                        "当前这轮雷雨已经采过，下轮雷雨可再次采集",
-                    ));
-                }
-                Err(e) => return Err(e.into()),
-            };
+                    Ok(body) => body,
+                    Err(crate::network::error::NetworkError::Gateway { code, .. })
+                        if code == WEATHER_ALREADY_COLLECTED_CODE =>
+                    {
+                        return Err(business_error(
+                            "WEATHER_ALREADY_COLLECTED",
+                            "当前这轮雷雨已经采过，下轮雷雨可再次采集",
+                        ));
+                    }
+                    Err(e) => return Err(e.into()),
+                };
             Ok((weather_before, ActivityOperateReply::decode(&body[..])?))
         }
         .await;
@@ -1102,7 +1104,10 @@ impl WeatherActivityService {
         let _mutation = self.mutation_lock.lock().await;
         let own_gid = self.own_gid();
         if friend_gid <= 0 || friend_gid == own_gid {
-            return Err(business_error("INVALID_WEATHER_FRIEND_GID", "青蛙使坏瓶只能在好友农场使用"));
+            return Err(business_error(
+                "INVALID_WEATHER_FRIEND_GID",
+                "青蛙使坏瓶只能在好友农场使用",
+            ));
         }
         let Some((uid, _)) = self.available_stack(FROG_MISCHIEF_BOTTLE_ID).await? else {
             return Err(business_error("WEATHER_FROG_UNAVAILABLE", "背包中没有可用的青蛙使坏瓶"));
@@ -1114,7 +1119,7 @@ impl WeatherActivityService {
             self.cache_inspection(
                 friend_gid,
                 FriendInspection {
-                    weather: enter_reply.weather.clone(),
+                    weather: enter_reply.weather,
                     lands: enter_reply.lands.clone(),
                     inspected_at: crate::utils::time::get_server_time_secs(),
                     error: String::new(),
@@ -1154,7 +1159,10 @@ impl WeatherActivityService {
         let _mutation = self.mutation_lock.lock().await;
         let own_gid = self.own_gid();
         if friend_gid <= 0 || friend_gid == own_gid {
-            return Err(business_error("INVALID_WEATHER_FRIEND_GID", "乌云使坏瓶只能在好友农场使用"));
+            return Err(business_error(
+                "INVALID_WEATHER_FRIEND_GID",
+                "乌云使坏瓶只能在好友农场使用",
+            ));
         }
         let Some((uid, _)) = self.available_stack(CLOUD_MISCHIEF_BOTTLE_ID).await? else {
             return Err(business_error("WEATHER_CLOUD_UNAVAILABLE", "背包中没有可用的乌云使坏瓶"));
@@ -1219,28 +1227,33 @@ impl WeatherActivityService {
             .map(|a| activity_is_active(a.begin_time, a.end_time))
             .unwrap_or(false);
         if !active {
-            return Err(business_error("WEATHER_ACTIVITY_UNAVAILABLE", "雨落成诗活动尚未开放或已经结束"));
+            return Err(business_error(
+                "WEATHER_ACTIVITY_UNAVAILABLE",
+                "雨落成诗活动尚未开放或已经结束",
+            ));
         }
         let balances = self.bag_balances().await?;
         let badge_balance = balances.get(&LIGHTNING_BADGE_ID).copied().unwrap_or(0);
         let research_child = group_reply.group.as_ref().and_then(|g| {
-            g.children
-                .iter()
-                .find(|c| {
-                    c.activity.as_ref().map(|a| a.activity_id) == Some(WEATHER_RESEARCH_ACTIVITY_ID)
-                })
+            g.children.iter().find(|c| {
+                c.activity.as_ref().map(|a| a.activity_id) == Some(WEATHER_RESEARCH_ACTIVITY_ID)
+            })
         });
         let track = research_child
             .and_then(|c| c.weather_research.as_ref())
             .and_then(|w| w.track.as_ref())
-            .ok_or_else(|| business_error("WEATHER_RESEARCH_UNAVAILABLE", "服务端未返回气象研究数据"))?;
-        let node = track
-            .nodes
-            .iter()
-            .find(|n| n.node_id == node_id)
-            .ok_or_else(|| business_error("INVALID_WEATHER_RESEARCH_NODE", "气象研究节点不存在"))?;
+            .ok_or_else(|| {
+                business_error("WEATHER_RESEARCH_UNAVAILABLE", "服务端未返回气象研究数据")
+            })?;
+        let node =
+            track.nodes.iter().find(|n| n.node_id == node_id).ok_or_else(|| {
+                business_error("INVALID_WEATHER_RESEARCH_NODE", "气象研究节点不存在")
+            })?;
         if node.status == 4 || node.claimed {
-            return Err(business_error("WEATHER_RESEARCH_ALREADY_COMPLETED", "该气象研究节点已经完成"));
+            return Err(business_error(
+                "WEATHER_RESEARCH_ALREADY_COMPLETED",
+                "该气象研究节点已经完成",
+            ));
         }
         if node.status != 2 {
             return Err(business_error("WEATHER_RESEARCH_LOCKED", "请先完成前置气象研究节点"));
@@ -1255,8 +1268,7 @@ impl WeatherActivityService {
             operate_type: ADVANCE_RESEARCH_OPERATE_TYPE,
             weather_research_operate: Some(WeatherResearchOperateParams { node_id }),
         };
-        let body =
-            self.gateway.request(ACTIVITY_SERVICE, "Operate", &req.encode_to_vec()).await?;
+        let body = self.gateway.request(ACTIVITY_SERVICE, "Operate", &req.encode_to_vec()).await?;
         let reply = ActivityOperateReply::decode(&body[..])?;
         let rewards =
             if reward.item_id > 0 { vec![item_dto(reward.item_id, reward.count)] } else { vec![] };
@@ -1328,7 +1340,9 @@ mod tests {
 
     #[test]
     fn activity_rules_parses_tips_txt() {
-        let extra = r#"{"tips":{"title":"玩法说明","txt":["第一段<br/>说明","第二段 <b>加粗</b>"]}}"#.as_bytes();
+        let extra =
+            r#"{"tips":{"title":"玩法说明","txt":["第一段<br/>说明","第二段 <b>加粗</b>"]}}"#
+                .as_bytes();
         let rules = activity_rules(extra);
         assert_eq!(rules["title"], "玩法说明");
         let paragraphs = rules["paragraphs"].as_array().unwrap();
@@ -1346,7 +1360,7 @@ mod tests {
     #[test]
     fn cloud_eligible_requires_growing_plant_without_cloud() {
         use crate::proto::generated::gamepb::plantpb::{
-            LandInfo, PlantInteractionUseInfo, PlantInfo, PlantPhaseInfo,
+            LandInfo, PlantInfo, PlantInteractionUseInfo, PlantPhaseInfo,
         };
         let phases = |phase: i32| {
             vec![PlantPhaseInfo {

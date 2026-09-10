@@ -52,9 +52,7 @@ fn item_dto(item: &IllustratedItem) -> serde_json::Value {
         .attributes
         .iter()
         .filter(|a| a.r#type != 0 || a.value != 0)
-        .map(|a| {
-            serde_json::json!({ "type": a.r#type, "param": a.param, "value": a.value })
-        })
+        .map(|a| serde_json::json!({ "type": a.r#type, "param": a.param, "value": a.value }))
         .collect();
     serde_json::json!({
         "seedId": seed_id,
@@ -92,14 +90,17 @@ impl IllustratedService {
     async fn get_list(&self, kind: i32) -> Result<GetIllustratedListV2Reply> {
         // 对齐抓包：refresh=false 显式编码（field 1 = 0）
         let req = GetIllustratedListV2Request { refresh: false, r#type: kind };
-        let body = self.gateway.request(SERVICE, "GetIllustratedListV2", &req.encode_to_vec()).await?;
+        let body =
+            self.gateway.request(SERVICE, "GetIllustratedListV2", &req.encode_to_vec()).await?;
         Ok(GetIllustratedListV2Reply::decode(&body[..])?)
     }
 
     async fn get_levels(&self, kind: i32) -> Result<GetIllustratedLevelListV2Reply> {
         let req = GetIllustratedLevelListV2Request { r#type: kind };
-        let body =
-            self.gateway.request(SERVICE, "GetIllustratedLevelListV2", &req.encode_to_vec()).await?;
+        let body = self
+            .gateway
+            .request(SERVICE, "GetIllustratedLevelListV2", &req.encode_to_vec())
+            .await?;
         Ok(GetIllustratedLevelListV2Reply::decode(&body[..])?)
     }
 
@@ -155,8 +156,7 @@ impl IllustratedService {
         let (crop_list, mutant_list) = tokio::join!(self.get_list(1), self.get_list(2));
         let crop_list = crop_list?;
         let mutant_list = mutant_list?;
-        let (crop_levels, mutant_levels) =
-            tokio::join!(self.get_levels(1), self.get_levels(2));
+        let (crop_levels, mutant_levels) = tokio::join!(self.get_levels(1), self.get_levels(2));
         let crop_levels = crop_levels?;
         let mutant_levels = mutant_levels?;
         Ok(serde_json::json!({

@@ -104,7 +104,7 @@ registerShortcut();
     <NInputGroup>
       <NInput v-model:value="keyword" clearable :placeholder="$t('common.keywordSearch')" @input="handleSearch">
         <template #prefix>
-          <icon-uil-search class="text-15px text-#c2c2c2" />
+          <IconUilSearch class="text-15px text-#c2c2c2" />
         </template>
       </NInput>
       <NButton v-if="isMobile" type="primary" ghost @click="handleClose">{{ $t('common.cancel') }}</NButton>

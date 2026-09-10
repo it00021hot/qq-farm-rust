@@ -163,7 +163,7 @@ pub fn build_activity_directory(
             let mut gameplay_keys = Vec::new();
             let mut targets = Vec::new();
             for m in &matches {
-                if !gameplay_keys.iter().any(|k| *k == m.gameplay_key) {
+                if !gameplay_keys.contains(&m.gameplay_key) {
                     gameplay_keys.push(m.gameplay_key);
                 }
                 targets.push(m.detail_target);

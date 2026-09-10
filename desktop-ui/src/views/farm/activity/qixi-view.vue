@@ -79,14 +79,14 @@ const sachetBalance = computed(() => {
 
 const stages = computed(() => props.activity?.bridge?.stages || []);
 const ruleParagraphs = computed(() => {
-  const rules = props.activity?.rules as { paragraphs?: unknown; tips?: { txt?: unknown }; lines?: unknown } | undefined;
+  const rules = props.activity?.rules as
+    | { paragraphs?: unknown; tips?: { txt?: unknown }; lines?: unknown }
+    | undefined;
   if (!rules) return [] as string[];
   const fromParagraphs = Array.isArray(rules.paragraphs) ? rules.paragraphs : [];
   const fromTips = Array.isArray(rules.tips?.txt) ? rules.tips.txt : [];
   const fromLines = Array.isArray(rules.lines) ? rules.lines : [];
-  return [...fromParagraphs, ...fromTips, ...fromLines]
-    .map(line => String(line || '').trim())
-    .filter(Boolean);
+  return [...fromParagraphs, ...fromTips, ...fromLines].map(line => String(line || '').trim()).filter(Boolean);
 });
 const ruleTitle = computed(
   () => String(props.activity?.rules?.title || '').trim() || $t('page.farm.activity.qixiRules')
@@ -124,9 +124,7 @@ watch(sachetBalance, balance => {
 });
 
 function friendName(friend: Api.Farm.Friend) {
-  return (
-    String(friend.nickname || friend.name || '').trim() || $t('page.farm.activity.qixiFriendFallback')
-  );
+  return String(friend.nickname || friend.name || '').trim() || $t('page.farm.activity.qixiFriendFallback');
 }
 
 function friendAvatar(friend: Api.Farm.Friend) {
@@ -161,6 +159,10 @@ function setGiftCount(value: unknown) {
   giftCount.value = Math.max(1, Math.min(sachetBalance.value || 1, next));
 }
 
+function onGiftCountInput(event: Event) {
+  setGiftCount((event.target as HTMLInputElement | null)?.value);
+}
+
 function submitGift() {
   if (giftDisabled.value || !selectedFriend.value) return;
   emit('gift', {
@@ -178,16 +180,24 @@ function markAvatarFailed(gid: string | number) {
   <div class="flex-col gap-16px">
     <div class="grid gap-8px sm:grid-cols-2 xl:grid-cols-4">
       <div class="flex items-center gap-10px rounded-8px bg-gray-50 px-12px py-10px dark:bg-gray-800">
-        <img v-if="itemImage(activity.feather)" :src="itemImage(activity.feather)" class="h-36px w-36px object-contain" />
+        <img
+          v-if="itemImage(activity.feather)"
+          :src="itemImage(activity.feather)"
+          class="h-36px w-36px object-contain"
+        />
         <div>
-          <div class="text-12px text-gray-500">{{ itemLabel(activity.feather, $t('page.farm.activity.qixiFeather')) }}</div>
+          <div class="text-12px text-gray-500">
+            {{ itemLabel(activity.feather, $t('page.farm.activity.qixiFeather')) }}
+          </div>
           <div class="text-16px font-semibold">{{ balanceText(activity.balances?.feather) }}</div>
         </div>
       </div>
       <div class="flex items-center gap-10px rounded-8px bg-gray-50 px-12px py-10px dark:bg-gray-800">
         <img v-if="itemImage(activity.sachet)" :src="itemImage(activity.sachet)" class="h-36px w-36px object-contain" />
         <div>
-          <div class="text-12px text-gray-500">{{ itemLabel(activity.sachet, $t('page.farm.activity.qixiSachet')) }}</div>
+          <div class="text-12px text-gray-500">
+            {{ itemLabel(activity.sachet, $t('page.farm.activity.qixiSachet')) }}
+          </div>
           <div class="text-16px font-semibold">{{ balanceText(activity.balances?.sachet) }}</div>
         </div>
       </div>
@@ -234,7 +244,13 @@ function markAvatarFailed(gid: string | number) {
           v-for="stage in stages"
           :key="`track-${stage.id || stage.stage}`"
           class="h-8px rounded-4px"
-          :class="stage.completed || stage.claimed ? 'bg-primary' : stage.current ? 'bg-primary/40' : 'bg-gray-200 dark:bg-gray-700'"
+          :class="
+            stage.completed || stage.claimed
+              ? 'bg-primary'
+              : stage.current
+                ? 'bg-primary/40'
+                : 'bg-gray-200 dark:bg-gray-700'
+          "
         />
       </div>
 
@@ -247,18 +263,30 @@ function markAvatarFailed(gid: string | number) {
           :class="stage.current ? 'border-primary' : 'border-gray-200'"
         >
           <div class="mb-10px flex items-center justify-between gap-8px">
-            <span class="text-13px font-medium">{{ $t('page.farm.activity.qixiStage', { stage: stage.stage || 0 }) }}</span>
-            <NTag size="tiny" :type="stage.claimable ? 'error' : stage.current ? 'warning' : 'default'" :bordered="false">
+            <span class="text-13px font-medium">
+              {{ $t('page.farm.activity.qixiStage', { stage: stage.stage || 0 }) }}
+            </span>
+            <NTag
+              size="tiny"
+              :type="stage.claimable ? 'error' : stage.current ? 'warning' : 'default'"
+              :bordered="false"
+            >
               {{ stageState(stage) }}
             </NTag>
           </div>
           <div class="mb-10px flex items-center gap-8px text-12px text-gray-500">
             <img v-if="itemImage(stage.cost)" :src="itemImage(stage.cost)" class="h-24px w-24px object-contain" />
-            <span>{{ $t('page.farm.activity.qixiNeed') }} {{ itemLabel(stage.cost, $t('page.farm.activity.qixiFeather')) }}</span>
+            <span>
+              {{ $t('page.farm.activity.qixiNeed') }} {{ itemLabel(stage.cost, $t('page.farm.activity.qixiFeather')) }}
+            </span>
             <strong class="ml-auto text-13px text-[var(--n-text-color)]">{{ stage.cost?.count || 0 }}</strong>
           </div>
           <div class="flex-col gap-6px">
-            <div v-for="reward in stage.rewards || []" :key="String(reward.id || reward.name)" class="flex items-center gap-8px text-12px">
+            <div
+              v-for="reward in stage.rewards || []"
+              :key="String(reward.id || reward.name)"
+              class="flex items-center gap-8px text-12px"
+            >
               <img v-if="itemImage(reward)" :src="itemImage(reward)" class="h-24px w-24px object-contain" />
               <span class="min-w-0 flex-1 truncate">{{ itemLabel(reward) }}</span>
               <span>×{{ reward.count || 0 }}</span>
@@ -274,12 +302,17 @@ function markAvatarFailed(gid: string | number) {
           <div class="text-13px font-medium">{{ $t('page.farm.activity.qixiGift') }}</div>
           <NButton size="small" :loading="friendsLoading" @click="emit('refreshFriends')">
             <template #icon>
-              <icon-ic-round-refresh class="text-icon" />
+              <IconIcRoundRefresh class="text-icon" />
             </template>
             {{ $t('page.farm.friends.refreshList') }}
           </NButton>
         </div>
-        <NInput v-model:value="search" size="small" clearable :placeholder="$t('page.farm.activity.qixiSearchFriend')" />
+        <NInput
+          v-model:value="search"
+          size="small"
+          clearable
+          :placeholder="$t('page.farm.activity.qixiSearchFriend')"
+        />
         <div class="mt-10px max-h-320px overflow-auto">
           <NEmpty
             v-if="!filteredFriends.length && !friendsLoading"
@@ -318,14 +351,22 @@ function markAvatarFailed(gid: string | number) {
         <div v-if="selectedFriend" class="mb-12px">
           <div class="text-12px text-gray-500">{{ $t('page.farm.activity.qixiGiftTo') }}</div>
           <div class="mt-4px truncate text-15px font-medium">{{ friendName(selectedFriend) }}</div>
-          <NTag v-if="selectedFriend.level" size="tiny" :bordered="false" class="mt-6px">Lv{{ selectedFriend.level }}</NTag>
+          <NTag v-if="selectedFriend.level" size="tiny" :bordered="false" class="mt-6px">
+            Lv{{ selectedFriend.level }}
+          </NTag>
         </div>
         <div v-else class="mb-12px text-13px text-gray-500">{{ $t('page.farm.activity.qixiSelectFriend') }}</div>
 
         <div class="mb-12px flex items-center gap-10px">
-          <img v-if="itemImage(activity.sachet)" :src="itemImage(activity.sachet)" class="h-40px w-40px object-contain" />
+          <img
+            v-if="itemImage(activity.sachet)"
+            :src="itemImage(activity.sachet)"
+            class="h-40px w-40px object-contain"
+          />
           <div>
-            <div class="text-12px text-gray-500">{{ itemLabel(activity.sachet, $t('page.farm.activity.qixiSachet')) }}</div>
+            <div class="text-12px text-gray-500">
+              {{ itemLabel(activity.sachet, $t('page.farm.activity.qixiSachet')) }}
+            </div>
             <div class="text-13px font-medium">
               {{ $t('page.farm.activity.qixiAvailable', { count: balanceText(activity.balances?.sachet) }) }}
             </div>
@@ -333,7 +374,9 @@ function markAvatarFailed(gid: string | number) {
         </div>
 
         <div class="mb-12px flex items-center gap-6px">
-          <NButton size="small" :disabled="giftCount <= 1 || pendingGift" @click="setGiftCount(giftCount - 1)">−</NButton>
+          <NButton size="small" :disabled="giftCount <= 1 || pendingGift" @click="setGiftCount(giftCount - 1)">
+            −
+          </NButton>
           <input
             class="h-32px w-72px rounded-6px border border-gray-300 bg-transparent text-center text-14px dark:border-gray-600"
             :value="giftCount"
@@ -341,7 +384,7 @@ function markAvatarFailed(gid: string | number) {
             min="1"
             :max="Math.max(1, sachetBalance)"
             :disabled="pendingGift"
-            @input="setGiftCount(($event.target as HTMLInputElement).value)"
+            @input="onGiftCountInput"
           />
           <NButton
             size="small"
@@ -350,7 +393,11 @@ function markAvatarFailed(gid: string | number) {
           >
             +
           </NButton>
-          <NButton size="small" :disabled="sachetBalance <= 0 || giftCount >= sachetBalance || pendingGift" @click="setGiftCount(sachetBalance)">
+          <NButton
+            size="small"
+            :disabled="sachetBalance <= 0 || giftCount >= sachetBalance || pendingGift"
+            @click="setGiftCount(sachetBalance)"
+          >
             {{ $t('page.farm.activity.qixiMax') }}
           </NButton>
         </div>

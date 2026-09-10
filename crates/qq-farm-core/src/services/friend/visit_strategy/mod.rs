@@ -269,7 +269,7 @@ mod tests {
     #[test]
     fn blacklist_add_and_remove() {
         let aid = "test-bl-add-remove";
-        let _ = crate::models::store::account_config::remove_account_config(aid);
+        crate::models::store::account_config::remove_account_config(aid);
         add_friend_to_blacklist(aid, 100, "alice", "test");
         assert!(is_in_blacklist(aid, 100));
         assert_eq!(blacklist_size(aid), 1);
@@ -277,7 +277,7 @@ mod tests {
         assert_eq!(blacklist_size(aid), 1);
         assert!(remove_from_blacklist(aid, 100));
         assert!(!is_in_blacklist(aid, 100));
-        let _ = crate::models::store::account_config::remove_account_config(aid);
+        crate::models::store::account_config::remove_account_config(aid);
     }
 
     #[test]
@@ -296,7 +296,7 @@ mod tests {
     #[test]
     fn handle_friend_enter_error_classifies() {
         let aid = "test-bl-enter";
-        let _ = crate::models::store::account_config::remove_account_config(aid);
+        crate::models::store::account_config::remove_account_config(aid);
         let k = handle_friend_enter_error(aid, 200, "bob", "code=1002003");
         assert_eq!(k, FriendEnterErrorKind::Blacklist);
         assert!(is_in_blacklist(aid, 200));
@@ -305,7 +305,7 @@ mod tests {
         assert_eq!(k2, FriendEnterErrorKind::InvalidRemoved);
         let k3 = handle_friend_enter_error(aid, 400, "dave", "连接未打开");
         assert_eq!(k3, FriendEnterErrorKind::Error);
-        let _ = crate::models::store::account_config::remove_account_config(aid);
+        crate::models::store::account_config::remove_account_config(aid);
     }
 
     #[test]
@@ -394,9 +394,9 @@ mod tests {
         let a1 = "vs_plant_bl_acc1";
         let a2 = "vs_plant_bl_acc2";
         let a3 = "vs_plant_bl_acc3";
-        let _ = crate::models::store::account_config::remove_account_config(a1);
-        let _ = crate::models::store::account_config::remove_account_config(a2);
-        let _ = crate::models::store::account_config::remove_account_config(a3);
+        crate::models::store::account_config::remove_account_config(a1);
+        crate::models::store::account_config::remove_account_config(a2);
+        crate::models::store::account_config::remove_account_config(a3);
         set_plant_blacklist(a1, vec![100, 200]);
         set_plant_blacklist(a2, vec![300]);
         assert_eq!(get_plant_blacklist(a1), vec![100, 200]);
@@ -405,8 +405,8 @@ mod tests {
             get_plant_blacklist(a3),
             crate::models::store::normalize::default_account_config().plant_blacklist
         );
-        let _ = crate::models::store::account_config::remove_account_config(a1);
-        let _ = crate::models::store::account_config::remove_account_config(a2);
+        crate::models::store::account_config::remove_account_config(a1);
+        crate::models::store::account_config::remove_account_config(a2);
     }
 
     #[test]
@@ -414,16 +414,16 @@ mod tests {
         let a1 = "vs_friend_bl_acc1";
         let a2 = "vs_friend_bl_acc2";
         let a3 = "vs_friend_bl_acc3";
-        let _ = crate::models::store::account_config::remove_account_config(a1);
-        let _ = crate::models::store::account_config::remove_account_config(a2);
-        let _ = crate::models::store::account_config::remove_account_config(a3);
+        crate::models::store::account_config::remove_account_config(a1);
+        crate::models::store::account_config::remove_account_config(a2);
+        crate::models::store::account_config::remove_account_config(a3);
         set_account_friend_blacklist(a1, vec![11, 22]);
         set_account_friend_blacklist(a2, vec![33]);
         assert_eq!(get_account_friend_blacklist(a1), vec![11, 22]);
         assert_eq!(get_account_friend_blacklist(a2), vec![33]);
         assert_eq!(get_account_friend_blacklist(a3), Vec::<i64>::new());
-        let _ = crate::models::store::account_config::remove_account_config(a1);
-        let _ = crate::models::store::account_config::remove_account_config(a2);
+        crate::models::store::account_config::remove_account_config(a1);
+        crate::models::store::account_config::remove_account_config(a2);
     }
 
     #[test]

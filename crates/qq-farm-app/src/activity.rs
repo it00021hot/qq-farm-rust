@@ -160,3 +160,16 @@ pub async fn claim_charity_daily_gift(ctx: &AppContext, account_id: &str) -> App
     let loop_ = require_worker_loop(ctx, account_id)?;
     loop_.activity_center().claim_charity_red_flower_daily_gift().await.map_err(AppError::from_core)
 }
+
+pub async fn claim_charity_progress_reward(
+    ctx: &AppContext,
+    account_id: &str,
+    target: &str,
+) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    loop_
+        .activity_center()
+        .claim_charity_red_flower_progress_reward(target)
+        .await
+        .map_err(AppError::from_core)
+}

@@ -1,11 +1,11 @@
 //! QQ Bot 扫码绑定编排。
 
 use qq_farm_core::models::store::global_config::{
-    apply_qq_bot_binding, clear_qq_bot_binding, effective_qq_bot_credentials, gateway_qq_bot_config,
-    get_offline_reminder, get_user_offline_reminder, QqBotBinding,
+    apply_qq_bot_binding, clear_qq_bot_binding, effective_qq_bot_credentials,
+    gateway_qq_bot_config, get_offline_reminder, get_user_offline_reminder, QqBotBinding,
 };
-use qq_farm_core::services::qrlogin::qr_png_data_url;
 use qq_farm_core::services::qq_bot::{BindPollResult, BindStartResult};
+use qq_farm_core::services::qrlogin::qr_png_data_url;
 use serde_json::{json, Value};
 
 use crate::error::{AppError, AppResult};
@@ -21,15 +21,10 @@ pub fn start_qq_bot_bind(ctx: &AppContext, username: &str) -> AppResult<BindStar
     if !credentials.is_complete() {
         return Err(AppError::BadRequest("请先填写 QQ 机器人 AppID 和 AppSecret".into()));
     }
-    ctx.engine
-        .qq_bot()
-        .reconcile_background(gateway_qq_bot_config());
+    ctx.engine.qq_bot().reconcile_background(gateway_qq_bot_config());
     let invite_url = credentials.invite_url();
-    let qr_data_url = if invite_url.is_empty() {
-        String::new()
-    } else {
-        qr_png_data_url(&invite_url)
-    };
+    let qr_data_url =
+        if invite_url.is_empty() { String::new() } else { qr_png_data_url(&invite_url) };
     Ok(ctx.engine.qq_bot().bind_sessions().start_session(username, &invite_url, &qr_data_url))
 }
 
@@ -56,7 +51,7 @@ pub fn qq_bot_bind_status(username: Option<&str>) -> Value {
         .filter(|u| !u.is_empty())
         .and_then(get_user_offline_reminder)
         .unwrap_or_else(get_offline_reminder);
-    let binding = reminder.qq_bot_binding.clone();
+    let binding = reminder.qq_bot_binding;
     json!({
         "credentialsConfigured": credentials.is_complete(),
         "bound": binding.is_bound(),

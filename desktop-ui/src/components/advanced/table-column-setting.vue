@@ -64,7 +64,7 @@ function toggleSelectAll(checked: boolean) {
     <template #trigger>
       <NButton size="small">
         <template #icon>
-          <icon-ant-design-setting-outlined class="text-icon" />
+          <IconAntDesignSettingOutlined class="text-icon" />
         </template>
         {{ $t('common.columnSetting') }}
       </NButton>
@@ -90,7 +90,7 @@ function toggleSelectAll(checked: boolean) {
           :class="{ hidden: !item.visible }"
         >
           <div class="h-full flex-y-center flex-1 rd-4px hover:(bg-primary bg-opacity-20)">
-            <icon-mdi-drag class="mr-8px h-full cursor-move text-icon" />
+            <IconMdiDrag class="mr-8px h-full cursor-move text-icon" />
             <NCheckbox v-model:checked="item.checked" class="none_draggable flex-1">
               <template v-if="typeof item.title === 'function'">
                 <component :is="item.title" />
@@ -104,9 +104,9 @@ function toggleSelectAll(checked: boolean) {
             :tooltip-content="$t(tooltipRecord[item.fixed!])"
             @click="handleFixed(item)"
           >
-            <icon-octicon-pin-16 v-if="item.fixed === 'unFixed'" />
-            <icon-octicon-pin-16 v-else-if="item.fixed === 'left'" class="rotate-270" />
-            <icon-octicon-pin-slash-16 v-else />
+            <IconOcticonPin16 v-if="item.fixed === 'unFixed'" />
+            <IconOcticonPin16 v-else-if="item.fixed === 'left'" class="rotate-270" />
+            <IconOcticonPinSlash16 v-else />
           </ButtonIcon>
         </div>
       </VueDraggable>

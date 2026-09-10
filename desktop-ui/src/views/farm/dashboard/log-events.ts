@@ -77,15 +77,12 @@ export function shouldShowEventChip(tag?: string | null, event?: string | null):
 export function humanizeLogMessage(message?: string | null): string {
   let out = String(message || '');
   if (!out) return '';
-  out = out.replace(
-    /\(\s*source=([a-z0-9_]+)\s*,\s*phase=([a-z0-9_]+)\s*\)/gi,
-    (_m, source: string, phase: string) => {
-      const reason = EVENT_LABELS[source] || source;
-      if (phase === 'online') return `（${reason}）`;
-      const phaseLabel = PHASE_LABELS[phase] || phase;
-      return `（${reason}，${phaseLabel}阶段）`;
-    }
-  );
+  out = out.replace(/\(\s*source=([a-z0-9_]+)\s*,\s*phase=([a-z0-9_]+)\s*\)/gi, (_m, source: string, phase: string) => {
+    const reason = EVENT_LABELS[source] || source;
+    if (phase === 'online') return `（${reason}）`;
+    const phaseLabel = PHASE_LABELS[phase] || phase;
+    return `（${reason}，${phaseLabel}阶段）`;
+  });
   out = out.replace(/\b(source|phase)=([a-z0-9_]+)/gi, (_m, key: string, val: string) => {
     const mapped = EVENT_LABELS[val] || PHASE_LABELS[val] || val;
     return String(key).toLowerCase() === 'phase' ? `${mapped}阶段` : mapped;
@@ -98,9 +95,7 @@ export function humanizeLogMessage(message?: string | null): string {
 
 export function logText(payload: Record<string, unknown>): string {
   const raw =
-    (typeof payload.message === 'string' && payload.message) ||
-    (typeof payload.msg === 'string' && payload.msg) ||
-    '';
+    (typeof payload.message === 'string' && payload.message) || (typeof payload.msg === 'string' && payload.msg) || '';
   return humanizeLogMessage(raw);
 }
 
@@ -115,7 +110,11 @@ export const LOG_EVENT_FILTER_OPTIONS: Array<{ label: string; value: string }> =
     .map(([value, label]) => ({ label, value }))
 ];
 
-export function isHiddenLogEvent(eventKey?: string | null, eventLabel?: string | null, message?: string | null): boolean {
+export function isHiddenLogEvent(
+  eventKey?: string | null,
+  eventLabel?: string | null,
+  _message?: string | null
+): boolean {
   const key = String(eventKey || '').trim();
   if (key && HIDDEN_LOG_EVENT_KEYS.has(key)) return true;
   const label = String(eventLabel || '').trim();

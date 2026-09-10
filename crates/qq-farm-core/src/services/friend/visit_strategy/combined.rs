@@ -59,8 +59,8 @@ pub async fn visit_friend_combined(
     }
     let protect_dog_bypass_enabled =
         is_automation_on_for(account_id, "friend_help_protect_dog_ignore_exp_limit");
-    let exp_limit_reached = stop_when_exp_limit
-        && help_auto_disabled.load(std::sync::atomic::Ordering::Acquire);
+    let exp_limit_reached =
+        stop_when_exp_limit && help_auto_disabled.load(std::sync::atomic::Ordering::Acquire);
     // 经验满之后唯一还值得帮忙的对象是挂着护主犬的好友；护主犬只能从 Enter 回包
     // 读到，所以这里只查当天缓存，不逐个进农场试探（bot visit-strategy.ts:760-768）。
     let help_blocked_by_exp_limit = exp_limit_reached

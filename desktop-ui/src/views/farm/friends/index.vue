@@ -2,7 +2,6 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import InteractionItemsPanel from '../personal/InteractionItemsPanel.vue';
 import LandCountdown from '../shared/LandCountdown.vue';
-import { useManagedInterval } from '@/hooks/common/use-managed-interval';
 import {
   NAvatar,
   NButton,
@@ -73,7 +72,6 @@ const friendLands = ref<Record<number, Api.Farm.LandRow[]>>({});
 const friendLandsLoading = ref<Record<number, boolean>>({});
 const avatarErrorKeys = ref<Set<number>>(new Set());
 const interactAvatarErrors = ref<Set<string>>(new Set());
-
 
 const interactFilters: { key: 'all' | 'steal' | 'help' | 'bad'; labelKey: App.I18n.I18nKey }[] = [
   { key: 'all', labelKey: 'page.farm.friends.filterAll' },
@@ -151,9 +149,7 @@ const filteredFriends = computed(() => {
 
 const normalFriends = computed(() => filteredFriends.value.filter(friend => !isBlacklisted(friend.gid)));
 
-const friendTotalPages = computed(
-  () => Math.ceil(normalFriends.value.length / FRIEND_PAGE_SIZE) || 1
-);
+const friendTotalPages = computed(() => Math.ceil(normalFriends.value.length / FRIEND_PAGE_SIZE) || 1);
 
 const pagedNormalFriends = computed(() => {
   const start = (friendPage.value - 1) * FRIEND_PAGE_SIZE;
@@ -501,21 +497,6 @@ function landImageSrc(land: Api.Farm.LandRow) {
   return resolveCatalogImage(land.seedImage);
 }
 
-function formatDuration(sec: number) {
-  if (sec <= 0) return '';
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  const s = sec % 60;
-  return `${h > 0 ? `${h}:` : ''}${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-}
-
-function growProgress(land: Api.Farm.LandRow) {
-  const mature = Number(land.matureInSec || 0);
-  const total = Number(land.totalGrowTime || 0);
-  if (total <= 0) return 0;
-  return Math.max(0, Math.min(100, Math.round(((total - mature) / total) * 100)));
-}
-
 function displayFriendLands(gid: number) {
   return visibleLands(friendLands.value[gid] || []);
 }
@@ -586,8 +567,7 @@ function formatInteractTime(timestamp?: number) {
 // 倒计时由 LandCountdown 共享时钟渲染，不再整表重建
 function startTick() {}
 
-function stopTick() {
-}
+function stopTick() {}
 
 watch(activeTab, tab => {
   if (tab === 'visitors') void loadInteractRecords();
@@ -662,7 +642,13 @@ useFarmWs({
       return;
     }
 
-    if (type === 'log' || type === 'log:new' || type === 'account_log' || type === 'account-log:new' || type === 'worker_log') {
+    if (
+      type === 'log' ||
+      type === 'log:new' ||
+      type === 'account_log' ||
+      type === 'account-log:new' ||
+      type === 'worker_log'
+    ) {
       const msg = String(body.message || '');
       const event = String(body.event || '');
       const gid = Number(body.friendGid || body.targetGid || 0);
@@ -829,12 +815,7 @@ onUnmounted(() => {
                     </NButton>
                     <NPopconfirm @positive-click="runFriendOp(friend, 'bad')">
                       <template #trigger>
-                        <NButton
-                          size="small"
-                          type="warning"
-                          ghost
-                          :loading="opLoadingKey === opKey(friend.gid, 'bad')"
-                        >
+                        <NButton size="small" type="warning" ghost :loading="opLoadingKey === opKey(friend.gid, 'bad')">
                           {{ $t('page.farm.friends.bad') }}
                         </NButton>
                       </template>
@@ -891,7 +872,8 @@ onUnmounted(() => {
                       <div
                         v-for="land in displayFriendLands(friend.gid)"
                         :key="land.id"
-                        :class="[landCardClass(land, { compact: true }), 'cv-auto']"
+                        class="cv-auto"
+                        :class="[landCardClass(land, { compact: true })]"
                         :style="landGridStyle(land)"
                       >
                         <div class="flex-y-center justify-between gap-4px">
@@ -912,7 +894,12 @@ onUnmounted(() => {
                         <div class="truncate text-center text-12px font-medium" :title="land.plantName">
                           {{ land.plantName || '-' }}
                         </div>
-                        <LandCountdown :at="land.matureAt || 0" :total="land.totalGrowTime || 0" :level="land.level" :phase="land.phaseName" />
+                        <LandCountdown
+                          :at="land.matureAt || 0"
+                          :total="land.totalGrowTime || 0"
+                          :level="land.level"
+                          :phase="land.phaseName"
+                        />
                         <div class="flex-center flex-wrap gap-4px">
                           <span
                             v-if="soilLabel(land.level)"
@@ -939,10 +926,7 @@ onUnmounted(() => {
                   </NSpin>
                 </div>
               </div>
-              <div
-                v-if="friendTotalPages > 1"
-                class="mt-4px flex flex-wrap items-center justify-center gap-12px"
-              >
+              <div v-if="friendTotalPages > 1" class="mt-4px flex flex-wrap items-center justify-center gap-12px">
                 <NPagination v-model:page="friendPage" :page-count="friendTotalPages" size="small" :page-slot="5" />
               </div>
             </div>

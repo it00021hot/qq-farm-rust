@@ -83,9 +83,9 @@ const activeTab = ref<'strategy' | 'automation' | 'offline' | 'system'>('strateg
 
 const systemConfigLoading = ref(false);
 const systemConfigSaving = ref(false);
-const devicePresets = ref<Array<{ id: string; name: string; description?: string; deviceInfo?: Record<string, unknown> }>>(
-  []
-);
+const devicePresets = ref<
+  Array<{ id: string; name: string; description?: string; deviceInfo?: Record<string, unknown> }>
+>([]);
 const selectedPresetId = ref('');
 const defaultSystemConfig = ref<SystemConfigPayload>(createDefaultSystemConfig());
 const localSystemConfig = ref<SystemConfigPayload>(createDefaultSystemConfig());
@@ -798,7 +798,7 @@ function applyDevicePreset(presetId: string) {
   if (!preset) return;
   const deviceInfo = {
     ...createDefaultSystemConfig().deviceInfo,
-    ...(preset.deviceInfo || {})
+    ...preset.deviceInfo
   } as SystemConfigPayload['deviceInfo'];
   localSystemConfig.value = {
     ...localSystemConfig.value,
@@ -877,7 +877,7 @@ async function pollQqBotBindOnce() {
   if (!qqBotBindSessionId.value) return;
   const { error, data } = await fetchPollQqBotBind(qqBotBindSessionId.value);
   if (error || !data) return;
-    if (data.status === 'bound' && data.binding?.userOpenid) {
+  if (data.status === 'bound' && data.binding?.userOpenid) {
     stopQqBotBindPolling();
     offline.provider = 'qq_bot';
     offline.qqBotBinding = { ...data.binding };
@@ -886,8 +886,8 @@ async function pollQqBotBindOnce() {
     qqBotBindSessionId.value = '';
     qqBotBindQrDataUrl.value = '';
     window.$message?.success($t('page.farm.settings.qqBotBindSuccess'));
-    const { error, data: reminder } = await fetchGetOfflineReminder();
-    if (!error && reminder) applyOffline(reminder);
+    const { error: reminderError, data: reminder } = await fetchGetOfflineReminder();
+    if (!reminderError && reminder) applyOffline(reminder);
     await loadQqBotBindStatus();
     return;
   }
@@ -990,9 +990,7 @@ const dingTalkReady = computed(
 );
 const offlineTestDisabled = computed(() => {
   if (offline.provider === 'ding_talk') return !dingTalkReady.value;
-  return (
-    offline.provider !== 'qq_bot' || (!qqBotBindStatus.bound && !offline.qqBotBinding.userOpenid)
-  );
+  return offline.provider !== 'qq_bot' || (!qqBotBindStatus.bound && !offline.qqBotBinding.userOpenid);
 });
 
 async function handleSaveOffline() {
@@ -1318,12 +1316,7 @@ onUnmounted(() => {
           </NForm>
 
           <div class="mt-16px flex justify-end border-t border-[var(--n-border-color)] pt-16px">
-            <NButton
-              type="primary"
-              size="small"
-              :loading="strategySaving || loading"
-              @click="handleSaveStrategy"
-            >
+            <NButton type="primary" size="small" :loading="strategySaving || loading" @click="handleSaveStrategy">
               {{ $t('page.farm.settings.saveStrategy') }}
             </NButton>
           </div>
@@ -1575,12 +1568,7 @@ onUnmounted(() => {
           </div>
 
           <div class="mt-16px flex justify-end border-t border-[var(--n-border-color)] pt-16px">
-            <NButton
-              type="primary"
-              size="small"
-              :loading="automationSaving || loading"
-              @click="handleSaveAutomation"
-            >
+            <NButton type="primary" size="small" :loading="automationSaving || loading" @click="handleSaveAutomation">
               {{ $t('page.farm.settings.saveAutomation') }}
             </NButton>
           </div>
@@ -1595,10 +1583,7 @@ onUnmounted(() => {
               <NFormItem :label="$t('page.farm.settings.provider')">
                 <div class="flex w-full gap-8px">
                   <NSelect v-model:value="offline.provider" class="flex-1" :options="providerOptions" />
-                  <NButton
-                    :disabled="!currentProviderDocUrl"
-                    @click="openProviderDocs"
-                  >
+                  <NButton :disabled="!currentProviderDocUrl" @click="openProviderDocs">
                     {{ $t('page.farm.settings.botDocs') }}
                   </NButton>
                 </div>
@@ -1608,11 +1593,7 @@ onUnmounted(() => {
                   <NInput v-model:value="offline.qqBot.appId" />
                 </NFormItem>
                 <NFormItem :label="$t('page.farm.settings.qqBotClientSecret')">
-                  <NInput
-                    v-model:value="offline.qqBot.clientSecret"
-                    type="password"
-                    show-password-on="click"
-                  />
+                  <NInput v-model:value="offline.qqBot.clientSecret" type="password" show-password-on="click" />
                 </NFormItem>
                 <NText depth="3" class="text-12px">{{ $t('page.farm.settings.qqBotHint') }}</NText>
                 <NFormItem :label="$t('page.farm.settings.qqBotBindStatus')">
@@ -1624,7 +1605,11 @@ onUnmounted(() => {
                       {{ offline.qqBotBinding.nickname }}
                     </NText>
                     <div v-if="qqBotBindQrDataUrl" class="flex flex-col items-start gap-8px">
-                      <img :src="qqBotBindQrDataUrl" alt="qq-bot-bind-qr" class="h-180px w-180px rounded-8px border border-[var(--n-border-color)]" />
+                      <img
+                        :src="qqBotBindQrDataUrl"
+                        alt="qq-bot-bind-qr"
+                        class="h-180px w-180px rounded-8px border border-[var(--n-border-color)]"
+                      />
                       <NText depth="3" class="text-12px">{{ $t('page.farm.settings.qqBotBindScanHint') }}</NText>
                     </div>
                     <NText v-else-if="qqBotBindPolling" depth="3" class="text-12px">
@@ -1637,12 +1622,13 @@ onUnmounted(() => {
                         :disabled="!qqBotCredentialsReady || qqBotBindPolling"
                         @click="handleStartQqBotBind"
                       >
-                        {{ qqBotBindPolling ? $t('page.farm.settings.qqBotBindWaiting') : $t('page.farm.settings.qqBotBindStart') }}
+                        {{
+                          qqBotBindPolling
+                            ? $t('page.farm.settings.qqBotBindWaiting')
+                            : $t('page.farm.settings.qqBotBindStart')
+                        }}
                       </NButton>
-                      <NButton
-                        :disabled="!qqBotBindStatus.botInviteUrl"
-                        @click="openBotInvite"
-                      >
+                      <NButton :disabled="!qqBotBindStatus.botInviteUrl" @click="openBotInvite">
                         {{ $t('page.farm.settings.qqBotOpenBot') }}
                       </NButton>
                       <NButton
@@ -1735,11 +1721,7 @@ onUnmounted(() => {
 
                 <div class="grid gap-16px md:grid-cols-2">
                   <NFormItem :label="$t('page.farm.settings.timeZone')">
-                    <NSelect
-                      v-model:value="localSystemConfig.timeZone"
-                      class="w-full"
-                      :options="timeZoneOptions"
-                    />
+                    <NSelect v-model:value="localSystemConfig.timeZone" class="w-full" :options="timeZoneOptions" />
                   </NFormItem>
 
                   <NFormItem :label="$t('page.farm.settings.platform')">

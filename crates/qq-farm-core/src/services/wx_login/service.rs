@@ -408,23 +408,23 @@ impl WxLoginService {
         if current.buffer_consumed {
             current = self.refresh_credentials_and_buffer(&current).await?;
         }
-        let code = match native_protocol::get_native_wx_login_code(&current.login_buffer, app_id).await
-        {
-            Ok(code) => code,
-            Err(first) => {
-                tracing::warn!("login code mint failed, re-issuing login buffer: {first}");
-                let can_reissue = !current.refresh_token.trim().is_empty()
-                    || (!current.openid.trim().is_empty()
-                        && !current.access_token.trim().is_empty());
-                if !can_reissue {
-                    return Err(map_native_mint_err(first));
+        let code =
+            match native_protocol::get_native_wx_login_code(&current.login_buffer, app_id).await {
+                Ok(code) => code,
+                Err(first) => {
+                    tracing::warn!("login code mint failed, re-issuing login buffer: {first}");
+                    let can_reissue = !current.refresh_token.trim().is_empty()
+                        || (!current.openid.trim().is_empty()
+                            && !current.access_token.trim().is_empty());
+                    if !can_reissue {
+                        return Err(map_native_mint_err(first));
+                    }
+                    current = self.refresh_credentials_and_buffer(&current).await?;
+                    native_protocol::get_native_wx_login_code(&current.login_buffer, app_id)
+                        .await
+                        .map_err(map_native_mint_err)?
                 }
-                current = self.refresh_credentials_and_buffer(&current).await?;
-                native_protocol::get_native_wx_login_code(&current.login_buffer, app_id)
-                    .await
-                    .map_err(map_native_mint_err)?
-            }
-        };
+            };
         current.buffer_consumed = true;
         Ok((code, current))
     }
@@ -537,7 +537,7 @@ impl WxLoginService {
 
             // 对齐 TS：非 3xx、或 4xx/5xx、或没有 location，则读取 body 并返回。
             // 只有「3xx 且有 location」才会跟随重定向。
-            if status < 300 || status >= 400 || location.is_none() {
+            if !(300..400).contains(&status) || location.is_none() {
                 let bytes = resp.bytes().await.map_err(|e| e.to_string())?.to_vec();
                 return Ok(HttpResult { status, body: bytes, headers: headers_snapshot });
             }
@@ -842,9 +842,9 @@ fn now_ms_string() -> String {
 }
 
 fn random_int(min: i64, max: i64) -> i64 {
-    use rand::Rng;
-    let mut rng = rand::thread_rng();
-    rng.gen_range(min..max)
+    use rand::RngExt;
+    let mut rng = rand::rng();
+    rng.random_range(min..max)
 }
 
 fn md5_hex(data: &[u8]) -> String {
@@ -888,8 +888,8 @@ pub fn md5(input: &[u8]) -> [u8; 16] {
 
     for chunk in msg.chunks(64) {
         let mut w = [0u32; 16];
-        for (i, b) in chunk.chunks_exact(4).enumerate() {
-            w[i] = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+        for (i, b) in chunk.as_chunks::<4>().0.iter().enumerate() {
+            w[i] = u32::from_le_bytes(*b);
         }
         let (mut a, mut b, mut c, mut d) = (h0, h1, h2, h3);
         for i in 0..64 {

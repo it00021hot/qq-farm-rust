@@ -1,17 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import {
-  NButton,
-  NCard,
-  NEmpty,
-  NInput,
-  NInputNumber,
-  NList,
-  NListItem,
-  NSelect,
-  NSpace,
-  NTag
-} from 'naive-ui';
+import { NButton, NCard, NEmpty, NInput, NInputNumber, NList, NListItem, NSelect, NSpace, NTag } from 'naive-ui';
 import { useFarmAccountStore } from '@/store/modules/farm-account';
 import {
   fetchGetFarmInteractionItems,
@@ -54,8 +43,7 @@ async function load() {
   if (!farmAccountStore.currentAccountId) return;
   loading.value = true;
   try {
-    const fetcher =
-      props.mode === 'self' ? fetchGetFarmInteractionItems : fetchGetFriendInteractionItems;
+    const fetcher = props.mode === 'self' ? fetchGetFarmInteractionItems : fetchGetFriendInteractionItems;
     const { data, error } = await fetcher(farmAccountStore.currentAccountId);
     if (!error) {
       items.value = data?.items ?? [];
@@ -145,12 +133,7 @@ void load();
       </NList>
 
       <NSpace align="center">
-        <NSelect
-          v-model:value="selectedItemId"
-          :options="itemOptions"
-          size="small"
-          class="w-180px"
-        />
+        <NSelect v-model:value="selectedItemId" :options="itemOptions" size="small" class="w-180px" />
         <NInputNumber
           v-if="mode === 'friend'"
           v-model:value="friendGidInput"

@@ -100,7 +100,12 @@ async function claimGifts() {
 
 const logColumns: DataTableColumns<any> = [
   { title: $t('page.farm.personal.pet.logFriend'), key: 'friendName', width: 140 },
-  { title: $t('page.farm.personal.pet.logTime'), key: 'timestamp', width: 170, render: (row: any) => new Date(Number(row.timestamp) * 1000).toLocaleString() },
+  {
+    title: $t('page.farm.personal.pet.logTime'),
+    key: 'timestamp',
+    width: 170,
+    render: (row: any) => new Date(Number(row.timestamp) * 1000).toLocaleString()
+  },
   { title: $t('page.farm.personal.pet.logStolen'), key: 'stolenCount', width: 90 },
   { title: $t('page.farm.personal.pet.logProtected'), key: 'protectedGold', width: 110 }
 ];
@@ -154,7 +159,13 @@ void load();
               <div class="flex items-center gap-8px">
                 <span class="font-medium">{{ dog.name }}</span>
                 <NTag size="small" :type="dog.active ? 'success' : 'default'">
-                  {{ dog.active ? $t('page.farm.personal.pet.onDuty') : dog.owned ? $t('page.farm.personal.pet.owned') : $t('page.farm.personal.pet.locked') }}
+                  {{
+                    dog.active
+                      ? $t('page.farm.personal.pet.onDuty')
+                      : dog.owned
+                        ? $t('page.farm.personal.pet.owned')
+                        : $t('page.farm.personal.pet.locked')
+                  }}
                 </NTag>
                 <NTag size="small" :bordered="false">{{ dog.rarityLabel }}</NTag>
                 <NTooltip trigger="hover">
@@ -164,12 +175,7 @@ void load();
                   {{ dog.skillDescription }}
                 </NTooltip>
               </div>
-              <NButton
-                v-if="dog.owned && !dog.active"
-                size="tiny"
-                type="primary"
-                @click="deploy(dog.id)"
-              >
+              <NButton v-if="dog.owned && !dog.active" size="tiny" type="primary" @click="deploy(dog.id)">
                 {{ $t('page.farm.personal.pet.deploy') }}
               </NButton>
             </div>
@@ -177,12 +183,7 @@ void load();
         </NList>
 
         <div class="mt-8px flex items-center gap-8px">
-          <NButton
-            v-if="info.activeDogId"
-            size="small"
-            type="warning"
-            @click="withdraw"
-          >
+          <NButton v-if="info.activeDogId" size="small" type="warning" @click="withdraw">
             {{ $t('page.farm.personal.pet.withdraw') }}
           </NButton>
         </div>

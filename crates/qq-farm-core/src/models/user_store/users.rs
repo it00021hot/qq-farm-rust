@@ -3,9 +3,9 @@
 //! 面板鉴权不再依赖卡密；历史卡密数据结构保留以兼容旧 users.json。
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use rand::Rng;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 
 use crate::config::paths::{ensure_data_dir, get_data_file};
@@ -94,7 +94,7 @@ static USERS: once_cell::sync::Lazy<parking_lot::RwLock<Vec<User>>> =
 static CARDS: once_cell::sync::Lazy<parking_lot::RwLock<Vec<Card>>> =
     once_cell::sync::Lazy::new(|| parking_lot::RwLock::new(Vec::new()));
 
-fn read_json_or_default<T: serde::de::DeserializeOwned + Default>(path: &PathBuf) -> T {
+fn read_json_or_default<T: serde::de::DeserializeOwned + Default>(path: &Path) -> T {
     let raw = match fs::read_to_string(path) {
         Ok(r) => r,
         Err(_) => return T::default(),
@@ -102,12 +102,12 @@ fn read_json_or_default<T: serde::de::DeserializeOwned + Default>(path: &PathBuf
     serde_json::from_str(&raw).unwrap_or_default()
 }
 
-fn write_json_atomic<T: serde::Serialize>(path: &PathBuf, value: &T) {
+fn write_json_atomic<T: serde::Serialize>(path: &Path, value: &T) {
     let _ = ensure_data_dir();
     if let Ok(body) = serde_json::to_string_pretty(value) {
         let tmp = path.with_extension("json.tmp");
-        let path = path.clone();
-        let _ = crate::infra::spawn_blocking(move || {
+        let path = path.to_path_buf();
+        crate::infra::spawn_blocking(move || {
             let _ = fs::write(&tmp, &body);
             let _ = fs::rename(&tmp, &path);
         });
@@ -563,16 +563,15 @@ pub fn edit_user(old_username: &str, updates: EditUpdates) -> EditResult {
             user.card = Some(UserCard::default());
         }
         let uc = user.card.as_mut().unwrap();
-        if exp.is_none() {
-            uc.days = 0;
-            uc.expires_at = None;
-        } else {
-            let expires_at = exp.unwrap();
+        if let Some(expires_at) = exp {
             uc.expires_at = Some(expires_at);
             let now_ms = crate::utils::time::now_ms();
             let diff_ms = expires_at - now_ms;
             let diff_days = if diff_ms > 0 { (diff_ms + 86_400_000 - 1) / 86_400_000 } else { 0 };
             uc.days = diff_days;
+        } else {
+            uc.days = 0;
+            uc.expires_at = None;
         }
     }
 
@@ -668,9 +667,9 @@ pub fn create_card_with_code(code: &str, description: &str, days: i64, card_type
 }
 
 fn generate_card_code() -> String {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     (0..CARD_CODE_LENGTH)
-        .map(|_| CARD_CODE_CHARS[rng.gen_range(0..CARD_CODE_CHARS.len())] as char)
+        .map(|_| CARD_CODE_CHARS[rng.random_range(0..CARD_CODE_CHARS.len())] as char)
         .collect()
 }
 
@@ -792,6 +791,7 @@ mod tests {
 
     #[test]
     #[serial(user_store)]
+    #[serial(farm_data_dir)]
     fn register_user_validates_username() {
         reset();
         let r = register_user("ab", "pass1234");
@@ -801,6 +801,7 @@ mod tests {
 
     #[test]
     #[serial(user_store)]
+    #[serial(farm_data_dir)]
     fn register_user_validates_username_chars() {
         reset();
         let r = register_user("ab-cd", "pass1234");
@@ -809,6 +810,7 @@ mod tests {
 
     #[test]
     #[serial(user_store)]
+    #[serial(farm_data_dir)]
     fn register_user_success() {
         reset();
         let r = register_user("alice", "Pass1234");
@@ -820,6 +822,7 @@ mod tests {
 
     #[test]
     #[serial(user_store)]
+    #[serial(farm_data_dir)]
     fn register_user_duplicate_name() {
         reset();
         register_user("alice", "Pass1234").ok();
@@ -829,6 +832,7 @@ mod tests {
 
     #[test]
     #[serial(user_store)]
+    #[serial(farm_data_dir)]
     fn validate_user_wrong_password() {
         reset();
         register_user("alice", "Pass1234").ok();
@@ -838,6 +842,7 @@ mod tests {
 
     #[test]
     #[serial(user_store)]
+    #[serial(farm_data_dir)]
     fn validate_user_success() {
         reset();
         register_user("alice", "Pass1234").ok();
@@ -848,6 +853,7 @@ mod tests {
 
     #[test]
     #[serial(user_store)]
+    #[serial(farm_data_dir)]
     fn renew_user_quota() {
         reset();
         register_user("alice", "Pass1234").ok();
@@ -859,6 +865,7 @@ mod tests {
 
     #[test]
     #[serial(user_store)]
+    #[serial(farm_data_dir)]
     fn renew_user_time_extends() {
         reset();
         register_user("alice", "Pass1234").ok();
@@ -871,6 +878,7 @@ mod tests {
 
     #[test]
     #[serial(user_store)]
+    #[serial(farm_data_dir)]
     fn renew_user_time_permanent() {
         reset();
         register_user("alice", "Pass1234").ok();
@@ -885,6 +893,7 @@ mod tests {
 
     #[test]
     #[serial(user_store)]
+    #[serial(farm_data_dir)]
     fn test_delete_user() {
         reset();
         register_user("alice", "Pass1234").ok();
@@ -896,6 +905,7 @@ mod tests {
 
     #[test]
     #[serial(user_store)]
+    #[serial(farm_data_dir)]
     fn test_change_password() {
         reset();
         register_user("alice", "Pass1234").ok();
@@ -910,6 +920,7 @@ mod tests {
 
     #[test]
     #[serial(user_store)]
+    #[serial(farm_data_dir)]
     fn create_and_delete_card() {
         reset();
         let c = create_card("test", 30, "time");
@@ -921,6 +932,7 @@ mod tests {
 
     #[test]
     #[serial(user_store)]
+    #[serial(farm_data_dir)]
     fn create_cards_batch_limit() {
         reset();
         let cards = create_cards_batch("batch", 7, 50, "time");
@@ -930,6 +942,7 @@ mod tests {
 
     #[test]
     #[serial(user_store)]
+    #[serial(farm_data_dir)]
     fn update_card_fields() {
         reset();
         let c = create_card("test", 30, "time");
@@ -942,6 +955,7 @@ mod tests {
 
     #[test]
     #[serial(user_store)]
+    #[serial(farm_data_dir)]
     fn test_delete_cards_batch() {
         reset();
         let c1 = create_card("a", 30, "time");

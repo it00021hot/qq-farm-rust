@@ -191,7 +191,9 @@ pub async fn test_offline_reminder(
         };
     }
     if merged.provider != NotificationProvider::QqBot {
-        return Ok(json!({ "ok": false, "code": "not_configured", "msg": "未启用 QQ 官方机器人通知" }));
+        return Ok(
+            json!({ "ok": false, "code": "not_configured", "msg": "未启用 QQ 官方机器人通知" }),
+        );
     }
     let Some(send_config) = merged.send_config() else {
         return Ok(json!({ "ok": false, "code": "not_bound", "msg": "请先扫码绑定 QQ 通知" }));

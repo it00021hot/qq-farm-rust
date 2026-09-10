@@ -50,7 +50,10 @@ pub fn aggregate_deltas(deltas: &[ItemChgLite], positive_only: bool) -> Vec<Gain
         }
         *acc.entry(chg.id).or_insert(0) += chg.delta;
     }
-    acc.into_iter().filter(|(_, delta)| *delta != 0).map(|(id, delta)| GainEntry { id, delta }).collect()
+    acc.into_iter()
+        .filter(|(_, delta)| *delta != 0)
+        .map(|(id, delta)| GainEntry { id, delta })
+        .collect()
 }
 
 /// 物品显示名：货币走固定文案，果实用作物名，其余用 ItemInfo；都没有回退 `物品#id`。
@@ -69,7 +72,10 @@ pub fn gain_display_name(id: i64) -> String {
                     return name;
                 }
             }
-            gc.get_item_by_id(id).map(|it| it.name).filter(|n| !n.is_empty()).unwrap_or_else(|| format!("物品#{id}"))
+            gc.get_item_by_id(id)
+                .map(|it| it.name)
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| format!("物品#{id}"))
         }
     }
 }
@@ -114,13 +120,21 @@ mod tests {
         let all = aggregate_deltas(&deltas, false);
         assert_eq!(
             all,
-            vec![GainEntry { id: 1, delta: 100 }, GainEntry { id: 3, delta: -2 }, GainEntry { id: 9, delta: 12 }]
+            vec![
+                GainEntry { id: 1, delta: 100 },
+                GainEntry { id: 3, delta: -2 },
+                GainEntry { id: 9, delta: 12 }
+            ]
         );
         // positive_only 逐条过滤再求和：+2 保留，负数不参与
         let pos = aggregate_deltas(&deltas, true);
         assert_eq!(
             pos,
-            vec![GainEntry { id: 1, delta: 100 }, GainEntry { id: 4, delta: 2 }, GainEntry { id: 9, delta: 12 }]
+            vec![
+                GainEntry { id: 1, delta: 100 },
+                GainEntry { id: 4, delta: 2 },
+                GainEntry { id: 9, delta: 12 }
+            ]
         );
     }
 

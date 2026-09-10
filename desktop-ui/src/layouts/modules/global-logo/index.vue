@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import { $t } from '@/locales';
-
 defineOptions({
   name: 'GlobalLogo'
 });

@@ -123,10 +123,10 @@ pub struct WxCodeResult {
 
 fn now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
 }
 
-fn status_name(s: ScanStatus) -> &'static str {
+const fn status_name(s: ScanStatus) -> &'static str {
     match s {
         ScanStatus::Waiting => "waiting",
         ScanStatus::Scanned => "scanned",
@@ -253,7 +253,7 @@ pub async fn detect_quick_session_for(
     hub.service.detect_desktop_wechat(None).await.map_err(map_wx_auth_user_err)
 }
 
-/// 桌面进程调用本机微信 authorize，返回 redirect_url（仍须 confirm）。
+/// 桌面进程调用本机微信 authorize，返回 `redirect_url（仍须` confirm）。
 pub async fn authorize_quick_session(
     hub: &WxLoginHub,
     session_id: &str,
@@ -281,7 +281,7 @@ pub async fn authorize_quick_session_for(
     Ok(result.redirect_url)
 }
 
-/// 确认本机微信 fast_login 回调并完成换票。
+/// 确认本机微信 `fast_login` 回调并完成换票。
 pub async fn confirm_quick_session(
     hub: &WxLoginHub,
     session_id: &str,
@@ -332,7 +332,7 @@ pub async fn poll_status_for(
 ) -> AppResult<WxStatusResult> {
     let task = find_task(hub, task_id, owner)?;
     let mut session = task.session.lock().await;
-    let status = hub.service.poll(&mut *session).await.map_err(AppError::Internal)?;
+    let status = hub.service.poll(&mut session).await.map_err(AppError::Internal)?;
     let result = WxStatusResult {
         task_id: task_id.to_string(),
         app_id: task.app_id.clone(),
@@ -346,7 +346,7 @@ pub async fn poll_status_for(
     Ok(result)
 }
 
-/// 确认授权（建立 login_buffer）。
+/// 确认授权（建立 `login_buffer`）。
 pub async fn confirm(hub: &WxLoginHub, task_id: &str) -> AppResult<WxStatusResult> {
     confirm_for(hub, task_id, None).await
 }
@@ -358,7 +358,7 @@ pub async fn confirm_for(
 ) -> AppResult<WxStatusResult> {
     let task = find_task(hub, task_id, owner)?;
     let mut session = task.session.lock().await;
-    hub.service.confirm(&mut *session).await.map_err(AppError::Internal)?;
+    hub.service.confirm(&mut session).await.map_err(AppError::Internal)?;
     drop(session);
     task.created_at.store(now_ms(), Ordering::Relaxed);
     Ok(WxStatusResult {
@@ -401,7 +401,7 @@ pub async fn issue_code_for(
     let (code, updated) =
         hub.service.mint_gateway_code(&creds, &app_id).await.map_err(map_wx_auth_err)?;
     if !updated.login_buffer.is_empty() {
-        store_pending_auth(&hub, &code, WxAuth::from(updated));
+        store_pending_auth(hub, &code, WxAuth::from(updated));
     }
     destroy_task(hub, task_id);
     Ok(WxCodeResult { openid, app_id, code })
@@ -449,7 +449,7 @@ pub fn destroy_task_for(hub: &WxLoginHub, task_id: &str, owner: Option<&str>) {
     let removed = hub.tasks.lock().remove(task_id);
     if let Some(t) = removed {
         if let Ok(mut session) = t.session.try_lock() {
-            hub.service.destroy(&mut *session);
+            hub.service.destroy(&mut session);
         }
     }
 }

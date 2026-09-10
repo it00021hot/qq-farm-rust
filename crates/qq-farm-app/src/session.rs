@@ -20,7 +20,7 @@ impl AppContext {
     }
 
     #[must_use]
-    pub fn with_wx_login(engine: Arc<RuntimeEngine>, wx_login: Arc<WxLoginHub>) -> Self {
+    pub const fn with_wx_login(engine: Arc<RuntimeEngine>, wx_login: Arc<WxLoginHub>) -> Self {
         Self { engine, wx_login }
     }
 }

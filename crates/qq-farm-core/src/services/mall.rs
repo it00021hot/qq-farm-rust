@@ -62,7 +62,7 @@ impl MallFertilizerKind {
     /// 从字符串解析类型（`"normal"` -> `Normal`，其他 -> `Organic`）
     /// 1:1 对齐原 TS 行为
     #[must_use]
-    pub fn from_str(s: &str) -> Self {
+    pub fn from_name(s: &str) -> Self {
         if s == "normal" {
             Self::Normal
         } else {
@@ -506,9 +506,9 @@ mod tests {
     fn fertilizer_kind_strings() {
         assert_eq!(MallFertilizerKind::Organic.as_str(), "organic");
         assert_eq!(MallFertilizerKind::Normal.as_str(), "normal");
-        assert_eq!(MallFertilizerKind::from_str("organic"), MallFertilizerKind::Organic);
-        assert_eq!(MallFertilizerKind::from_str("normal"), MallFertilizerKind::Normal);
-        assert_eq!(MallFertilizerKind::from_str("other"), MallFertilizerKind::Organic);
+        assert_eq!(MallFertilizerKind::from_name("organic"), MallFertilizerKind::Organic);
+        assert_eq!(MallFertilizerKind::from_name("normal"), MallFertilizerKind::Normal);
+        assert_eq!(MallFertilizerKind::from_name("other"), MallFertilizerKind::Organic);
     }
 
     #[test]
@@ -552,9 +552,10 @@ mod tests {
 
     #[test]
     fn find_fertilizer_goods_organic() {
-        let mut list = vec![];
-        list.push(MallGoods { goods_id: 9999, ..Default::default() });
-        list.push(MallGoods { goods_id: ORGANIC_FERTILIZER_MALL_GOODS_ID, ..Default::default() });
+        let list = vec![
+            MallGoods { goods_id: 9999, ..Default::default() },
+            MallGoods { goods_id: ORGANIC_FERTILIZER_MALL_GOODS_ID, ..Default::default() },
+        ];
         let found = find_fertilizer_mall_goods(&list, MallFertilizerKind::Organic);
         assert!(found.is_some());
         assert_eq!(found.unwrap().goods_id, ORGANIC_FERTILIZER_MALL_GOODS_ID);
@@ -562,8 +563,8 @@ mod tests {
 
     #[test]
     fn find_fertilizer_goods_normal() {
-        let mut list = vec![];
-        list.push(MallGoods { goods_id: INORGANIC_FERTILIZER_MALL_GOODS_ID, ..Default::default() });
+        let list =
+            vec![MallGoods { goods_id: INORGANIC_FERTILIZER_MALL_GOODS_ID, ..Default::default() }];
         let found = find_fertilizer_mall_goods(&list, MallFertilizerKind::Normal);
         assert!(found.is_some());
     }

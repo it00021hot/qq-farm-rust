@@ -53,18 +53,14 @@ async fn run_check(app: AppHandle, show_up_to_date: bool, timeout: Duration) {
 async fn check_inner(app: &AppHandle) -> Result<Option<String>, String> {
     let updater = app.updater().map_err(|e| e.to_string())?;
     match updater.check().await {
-        Ok(Some(update)) => Ok(Some(update.version.clone())),
+        Ok(Some(update)) => Ok(Some(update.version)),
         Ok(None) => Ok(None),
         Err(e) => Err(e.to_string()),
     }
 }
 
 async fn prompt_and_install(app: AppHandle, version: String) {
-    let go = confirm_update(
-        &app,
-        format!("发现新版本 {version}，是否立即更新？"),
-    )
-    .await;
+    let go = confirm_update(&app, format!("发现新版本 {version}，是否立即更新？")).await;
     if !go {
         return;
     }
@@ -96,7 +92,7 @@ async fn prompt_and_install(app: AppHandle, version: String) {
     app.restart();
 }
 
-/// NSAlert / Win32 对话框必须在 UI 主线程；后台 Tokio 任务里 `blocking_show` 会卡死或崩。
+/// `NSAlert` / Win32 对话框必须在 UI 主线程；后台 Tokio 任务里 `blocking_show` 会卡死或崩。
 async fn show_info(app: &AppHandle, message: impl Into<String>) {
     let message = message.into();
     let app = app.clone();

@@ -33,7 +33,9 @@ fn is_friend_interaction_metadata(info: &ItemCfg) -> bool {
     if info.can_use.unwrap_or(0) <= 0 {
         return false;
     }
-    if info.interaction_type.as_deref().unwrap_or("").trim().to_lowercase() != SPECIAL_INTERACTION_TYPE {
+    if info.interaction_type.as_deref().unwrap_or("").trim().to_lowercase()
+        != SPECIAL_INTERACTION_TYPE
+    {
         return false;
     }
     if [301101i64, 301102, 301103].contains(&info.id) {
@@ -88,17 +90,9 @@ fn eligible_stacks(bag_items: &[BagItemLite], item_id: i64, info: &ItemCfg) -> V
 
 fn item_dto(info: &ItemCfg, stacks: &[UsableStack]) -> serde_json::Value {
     let count: i64 = stacks.iter().map(|s| s.remaining).sum();
-    let sale_condition_satisfied_count: i64 = stacks
-        .iter()
-        .filter(|s| s.sale_condition_satisfied)
-        .map(|s| s.remaining)
-        .sum();
-    let nearest_expire = stacks
-        .iter()
-        .map(|s| s.expire_time)
-        .filter(|t| *t > 0)
-        .min()
-        .unwrap_or(0);
+    let sale_condition_satisfied_count: i64 =
+        stacks.iter().filter(|s| s.sale_condition_satisfied).map(|s| s.remaining).sum();
+    let nearest_expire = stacks.iter().map(|s| s.expire_time).filter(|t| *t > 0).min().unwrap_or(0);
     let gc = global_game_config();
     serde_json::json!({
         "id": info.id.to_string(),
@@ -127,11 +121,8 @@ async fn collect_inventory(gateway: &Arc<Gateway>) -> Result<Inventory> {
     let bag_items = get_bag_items(&bag);
     let gc = global_game_config();
 
-    let mut item_ids: Vec<i64> = bag_items
-        .iter()
-        .filter(|s| s.id > 0 && s.count > 0)
-        .map(|s| s.id)
-        .collect();
+    let mut item_ids: Vec<i64> =
+        bag_items.iter().filter(|s| s.id > 0 && s.count > 0).map(|s| s.id).collect();
     item_ids.sort_unstable();
     item_ids.dedup();
 
@@ -153,9 +144,12 @@ async fn collect_inventory(gateway: &Arc<Gateway>) -> Result<Inventory> {
         let ca = a["count"].as_i64().unwrap_or(0);
         let cb = b["count"].as_i64().unwrap_or(0);
         cb.cmp(&ca).then(
-            a["itemId"].as_str().unwrap_or("0").parse::<i64>().unwrap_or(0).cmp(
-                &b["itemId"].as_str().unwrap_or("0").parse::<i64>().unwrap_or(0),
-            ),
+            a["itemId"]
+                .as_str()
+                .unwrap_or("0")
+                .parse::<i64>()
+                .unwrap_or(0)
+                .cmp(&b["itemId"].as_str().unwrap_or("0").parse::<i64>().unwrap_or(0)),
         )
     });
     Ok(out)
@@ -212,9 +206,7 @@ fn build_target_land_map(lands: &[LandInfo]) -> std::collections::HashMap<i64, &
         if land.master_land_id > 0 {
             continue;
         }
-        if land.plant.as_ref().map(|p| p.id).unwrap_or(0) > 0
-            && !seen_master.insert(land.id)
-        {
+        if land.plant.as_ref().map(|p| p.id).unwrap_or(0) > 0 && !seen_master.insert(land.id) {
             continue;
         }
         targets.insert(land.id, land);
@@ -257,7 +249,12 @@ fn land_detail_json(land: &LandInfo) -> serde_json::Value {
 }
 
 /// 回包确认的互动效果：优先解析 PlantInfo.interaction_uses，兜底单条 use-reply 记录
-fn confirmed_effects(reply_land: Option<&LandInfo>, item_id: i64, land_id: i64, item_name: &str) -> Vec<serde_json::Value> {
+fn confirmed_effects(
+    reply_land: Option<&LandInfo>,
+    item_id: i64,
+    land_id: i64,
+    item_name: &str,
+) -> Vec<serde_json::Value> {
     let mut out = Vec::new();
     if let Some(land) = reply_land {
         if let Some(plant) = land.plant.as_ref() {
@@ -298,7 +295,7 @@ async fn run_interaction_batch(
     gateway: &Arc<Gateway>,
     item_id: i64,
     item_name: &str,
-    stacks: &mut Vec<UsableStack>,
+    stacks: &mut [UsableStack],
     host_gid: i64,
     lands: &[LandInfo],
     land_ids: &[i64],
@@ -331,7 +328,15 @@ async fn run_interaction_batch(
             continue;
         };
         let uid = stack.uid;
-        match send_targeted_use(gateway, item_id, &UsableStack { uid, remaining: 1, expire_time: 0, sale_condition_satisfied: false }, host_gid, land_id).await {
+        match send_targeted_use(
+            gateway,
+            item_id,
+            &UsableStack { uid, remaining: 1, expire_time: 0, sale_condition_satisfied: false },
+            host_gid,
+            land_id,
+        )
+        .await
+        {
             Ok(reply) => {
                 stack.remaining -= 1;
                 let updated = reply.land.as_ref().map(land_detail_json);
@@ -346,13 +351,19 @@ async fn run_interaction_batch(
                 });
             }
             Err(err) => {
-                let code = if let Error::Network(crate::network::error::NetworkError::Gateway { code, .. }) = &err {
+                let code = if let Error::Network(crate::network::error::NetworkError::Gateway {
+                    code,
+                    ..
+                }) = &err
+                {
                     code.to_string()
                 } else {
                     "FRIEND_INTERACTION_USE_FAILED".to_string()
                 };
                 let message = match code.as_str() {
-                    "1001065" => format!("该地块当前不符合{item_name}的使用条件，作物品级或状态可能已变化"),
+                    "1001065" => {
+                        format!("该地块当前不符合{item_name}的使用条件，作物品级或状态可能已变化")
+                    }
                     "1003008" => format!("该农场当前已达到{item_name}的使用限制"),
                     _ => format!("服务器未接受该地块的{item_name}使用请求: {err}"),
                 };
@@ -426,8 +437,16 @@ pub async fn use_friend_interaction_item_batch(
             return Err(Error::Business("进入的好友农场与所选 GID 不一致".into()));
         }
         let lands = enter.lands.clone();
-        run_interaction_batch(gateway, item_id, &item_name, &mut stacks, friend_gid, &lands, &land_ids)
-            .await
+        run_interaction_batch(
+            gateway,
+            item_id,
+            &item_name,
+            &mut stacks,
+            friend_gid,
+            &lands,
+            &land_ids,
+        )
+        .await
     };
     // Leave 失败不影响结果
     let _ = friend_api.leave_farm(friend_gid).await;
@@ -438,7 +457,17 @@ pub async fn use_friend_interaction_item_batch(
         .map(|b| if b.remark.is_empty() { b.name.clone() } else { b.remark.clone() })
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| format!("GID:{friend_gid}"));
-    finish_batch_response(gateway, attempts, friend_gid, &owner_name, item_id, &item_name, &land_ids, false).await
+    finish_batch_response(
+        gateway,
+        attempts,
+        friend_gid,
+        &owner_name,
+        item_id,
+        &item_name,
+        &land_ids,
+        false,
+    )
+    .await
 }
 
 /// 在自己农场批量使用互动道具（仅 SELF_USABLE 白名单）
@@ -465,13 +494,34 @@ pub async fn use_self_interaction_item_batch(
     let farm_api = crate::services::farm::api::Api::new(gateway.clone());
     let reply = farm_api.get_all_lands(host_gid).await?;
     let lands = reply.lands.clone();
-    let attempts =
-        run_interaction_batch(gateway, item_id, &item_name, &mut stacks, host_gid, &lands, &land_ids)
-            .await;
-    finish_batch_response(gateway, attempts, host_gid, "我的农场", item_id, &item_name, &land_ids, true).await
+    let attempts = run_interaction_batch(
+        gateway,
+        item_id,
+        &item_name,
+        &mut stacks,
+        host_gid,
+        &lands,
+        &land_ids,
+    )
+    .await;
+    finish_batch_response(
+        gateway,
+        attempts,
+        host_gid,
+        "我的农场",
+        item_id,
+        &item_name,
+        &land_ids,
+        true,
+    )
+    .await
 }
 
-async fn resolve_usable_stocks(gateway: &Arc<Gateway>, item_id: i64, land_count: usize) -> Result<Vec<UsableStack>> {
+async fn resolve_usable_stocks(
+    gateway: &Arc<Gateway>,
+    item_id: i64,
+    land_count: usize,
+) -> Result<Vec<UsableStack>> {
     let inv = collect_inventory(gateway).await?;
     let stacks = inv.stacks_by_item_id.get(&item_id).cloned().unwrap_or_default();
     let available: i64 = stacks.iter().map(|s| s.remaining).sum();
@@ -504,9 +554,14 @@ async fn finish_batch_response(
         get_friend_interaction_items(gateway).await?
     };
     let updated_lands: Vec<_> = succeeded.iter().filter_map(|a| a.updated_land.clone()).collect();
-    let interaction_effects: Vec<_> = succeeded.iter().flat_map(|a| a.interaction_effects.clone()).collect();
+    let interaction_effects: Vec<_> =
+        succeeded.iter().flat_map(|a| a.interaction_effects.clone()).collect();
     let message = if !failed.is_empty() {
-        format!("已在{owner_name}的农场按顺序使用 {} 个{item_name}，跳过 {} 块地", succeeded.len(), failed.len())
+        format!(
+            "已在{owner_name}的农场按顺序使用 {} 个{item_name}，跳过 {} 块地",
+            succeeded.len(),
+            failed.len()
+        )
     } else {
         format!("已在{owner_name}的农场按顺序使用 {} 个{item_name}", succeeded.len())
     };
@@ -591,9 +646,30 @@ mod tests {
     fn stacks_sorted_by_expire_time() {
         let info = interaction_item(301103, "");
         let bag = vec![
-            BagItemLite { id: 301103, count: 2, uid: 1, expire_time: 0, mutant_types: vec![], locked: false, },
-            BagItemLite { id: 301103, count: 1, uid: 2, expire_time: 100, mutant_types: vec![], locked: false, },
-            BagItemLite { id: 301103, count: 3, uid: 3, expire_time: 50, mutant_types: vec![], locked: false, },
+            BagItemLite {
+                id: 301103,
+                count: 2,
+                uid: 1,
+                expire_time: 0,
+                mutant_types: vec![],
+                locked: false,
+            },
+            BagItemLite {
+                id: 301103,
+                count: 1,
+                uid: 2,
+                expire_time: 100,
+                mutant_types: vec![],
+                locked: false,
+            },
+            BagItemLite {
+                id: 301103,
+                count: 3,
+                uid: 3,
+                expire_time: 50,
+                mutant_types: vec![],
+                locked: false,
+            },
         ];
         let stacks = eligible_stacks(&bag, 301103, &info);
         let uids: Vec<i64> = stacks.iter().map(|s| s.uid).collect();

@@ -50,6 +50,11 @@ impl HelpFarmOutcome {
     }
 }
 
+type BadLimitCheck = Arc<dyn Fn() -> bool + Send + Sync>;
+type BadRemaining = Arc<dyn Fn() -> i64 + Send + Sync>;
+type BadLimitMarker = Arc<dyn Fn(&str) + Send + Sync>;
+type FriendListCache = Option<(Instant, Vec<GameFriend>)>;
+
 /// 好友 API 客户端
 #[derive(Clone)]
 pub struct FriendApi {
@@ -58,12 +63,12 @@ pub struct FriendApi {
     on_operation_limits_update:
         Arc<parking_lot::Mutex<Option<crate::services::farm::api::OperationLimitsCallback>>>,
     /// 捣乱日限门控（对齐 TS schedulerRef）
-    bad_is_limit_reached: Arc<parking_lot::Mutex<Option<Arc<dyn Fn() -> bool + Send + Sync>>>>,
-    bad_remaining: Arc<parking_lot::Mutex<Option<Arc<dyn Fn() -> i64 + Send + Sync>>>>,
-    bad_mark_limit: Arc<parking_lot::Mutex<Option<Arc<dyn Fn(&str) + Send + Sync>>>>,
+    bad_is_limit_reached: Arc<parking_lot::Mutex<Option<BadLimitCheck>>>,
+    bad_remaining: Arc<parking_lot::Mutex<Option<BadRemaining>>>,
+    bad_mark_limit: Arc<parking_lot::Mutex<Option<BadLimitMarker>>>,
     /// FriendService 串行（对齐 TS rate-limiter maxConcurrent=1）
     rpc_gate: Arc<AsyncMutex<()>>,
-    last_list: Arc<parking_lot::Mutex<Option<(Instant, Vec<GameFriend>)>>>,
+    last_list: Arc<parking_lot::Mutex<FriendListCache>>,
     /// 最近一次列表拉取失败时间（冷却用）
     last_list_failed_at: Arc<parking_lot::Mutex<Option<Instant>>>,
 }
@@ -168,7 +173,9 @@ impl FriendApi {
             }
         }
         if let Some(failed_at) = *self.last_list_failed_at.lock() {
-            if failed_at.elapsed() < Duration::from_millis(crate::constants::FRIEND_LIST_FAIL_COOLDOWN_MS) {
+            if failed_at.elapsed()
+                < Duration::from_millis(crate::constants::FRIEND_LIST_FAIL_COOLDOWN_MS)
+            {
                 if let Some((_, friends)) = self.last_list.lock().as_ref() {
                     tracing::debug!("好友列表拉取失败冷却中，回退陈旧缓存");
                     return Ok(friends.clone());
@@ -244,7 +251,7 @@ impl FriendApi {
         let Some(friend) = list.iter_mut().find(|f| f.gid == gid) else {
             return;
         };
-        let mut plant = friend.plant.clone().unwrap_or_default();
+        let mut plant = friend.plant.unwrap_or_default();
         plant.steal_plant_num = steal_num;
         plant.dry_num = dry_num;
         plant.weed_num = weed_num;
@@ -502,11 +509,7 @@ impl FriendApi {
         let resp = self.gateway.request("gamepb.visitpb.VisitService", "Enter", &body).await?;
         let reply = EnterReply::decode(&*resp).map_err(Error::from)?;
         let account_id = self.account_id.lock().clone();
-        let account_id = if account_id.is_empty() {
-            String::from("default")
-        } else {
-            account_id
-        };
+        let account_id = if account_id.is_empty() { String::from("default") } else { account_id };
         crate::services::friend::pet_cache::record_friend_dog_from_enter_reply(
             &account_id,
             host_gid,
@@ -539,9 +542,14 @@ impl FriendApi {
         if target.is_empty() {
             return Ok(HelpFarmOutcome::noop());
         }
-        let body =
-            FarmingRequest { land_ids: target, host_gid, field_3: 0, field_4: 2, social_event_item_ids: Vec::new() }
-                .encode_to_vec();
+        let body = FarmingRequest {
+            land_ids: target,
+            host_gid,
+            field_3: 0,
+            field_4: 2,
+            social_event_item_ids: Vec::new(),
+        }
+        .encode_to_vec();
         let resp = match self.gateway.request("gamepb.plantpb.PlantService", "Farming", &body).await
         {
             Ok(r) => r,
@@ -562,13 +570,13 @@ impl FriendApi {
         self.fire_operation_limits(reply.operation_limits);
         // 帮忙掉落同气连枝礼包（results[].reward.id=101351）→ 自动领取
         // 对齐 node：friend/api.helpFarming 内统计 getFarmingSkillGiftCount 后 emit。
-        let gift_count = crate::services::dog_skill_gifts::DogSkillGiftService::farming_skill_gift_count(
-            &reply.results,
-        );
-        if gift_count > 0 {
-            let gift = crate::services::dog_skill_gifts::DogSkillGiftService::new(
-                self.gateway.clone(),
+        let gift_count =
+            crate::services::dog_skill_gifts::DogSkillGiftService::farming_skill_gift_count(
+                &reply.results,
             );
+        if gift_count > 0 {
+            let gift =
+                crate::services::dog_skill_gifts::DogSkillGiftService::new(self.gateway.clone());
             tokio::spawn(async move {
                 let _ = gift.check_and_claim(gift_count).await;
             });

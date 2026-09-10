@@ -20,12 +20,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use aes::cipher::consts::U12;
 use aes::Aes192;
-use aes_gcm::aead::generic_array::typenum::U12;
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes128Gcm, Aes256Gcm, AesGcm, Nonce};
 use hmac::{Hmac, Mac};
-use p256::elliptic_curve::sec1::ToEncodedPoint;
+use p256::elliptic_curve::{sec1::ToSec1Point, Generate};
 use sha2::{Digest, Sha256};
 
 /// Hybrid ECDH 使用 AES-192-GCM（TS `aes-${key.length*8}-gcm`，key 取 24 字节）。
@@ -189,7 +189,7 @@ type HmacSha256 = Hmac<Sha256>;
 /// HMAC-SHA256
 #[must_use]
 pub fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
-    let mut mac = <HmacSha256 as Mac>::new_from_slice(key).expect("HMAC key");
+    let mut mac = <HmacSha256 as hmac::KeyInit>::new_from_slice(key).expect("HMAC key");
     mac.update(data);
     let result = mac.finalize().into_bytes();
     let mut out = [0u8; 32];
@@ -282,7 +282,7 @@ fn gcm_mmtls<C: KeyInit + Aead>(
     let Ok(cipher) = C::new_from_slice(key) else {
         return vec![];
     };
-    let nonce = Nonce::from_slice(nonce);
+    let Ok(nonce) = <&Nonce<_>>::try_from(nonce) else { return vec![] };
     let payload = aes_gcm::aead::Payload { msg: data, aad };
     if decrypt {
         if data.len() < 16 {
@@ -353,7 +353,7 @@ fn gcm_simple_cipher<C: KeyInit + Aead>(
     let Ok(cipher) = C::new_from_slice(key) else {
         return vec![];
     };
-    let nonce = Nonce::from_slice(iv);
+    let Ok(nonce) = <&Nonce<_>>::try_from(iv) else { return vec![] };
     let payload = aes_gcm::aead::Payload { msg: data, aad };
     if decrypt {
         cipher.decrypt(nonce, payload).unwrap_or_default()
@@ -639,9 +639,9 @@ pub struct EcdhKeyPair {
 
 impl EcdhKeyPair {
     pub fn generate() -> Result<Self, String> {
-        let mut rng = rand::thread_rng();
-        let sk = p256::SecretKey::random(&mut rng);
-        let pk_bytes = sk.public_key().to_encoded_point(false).as_bytes().to_vec();
+        let mut rng = rand::rng();
+        let sk = p256::SecretKey::generate_from_rng(&mut rng);
+        let pk_bytes = sk.public_key().to_sec1_point(false).as_bytes().to_vec();
         Ok(Self { secret_key: sk, public_bytes: pk_bytes })
     }
 
@@ -659,7 +659,6 @@ impl EcdhKeyPair {
 // =====================================================================
 
 /// 构造 manual auth 请求（1:1 对齐原 TS `manualRequest`）
-#[must_use]
 pub fn manual_request(buffer_b64: &str, app: &[u8]) -> Result<ManualRequest, String> {
     let raw = base64_decode(buffer_b64).map_err(|e| format!("base64 decode: {e}"))?;
     let fields = pbf(&raw);
@@ -695,7 +694,7 @@ pub struct ManualRequest {
 pub fn hybrid(plain: &[u8]) -> Result<HybridResult, String> {
     let a = EcdhKeyPair::generate()?;
     let server_pub = server_pub_key()?;
-    let server_pub_bytes = server_pub.to_encoded_point(false).as_bytes().to_vec();
+    let server_pub_bytes = server_pub.to_sec1_point(false).as_bytes().to_vec();
     let shared = a.shared_secret(&server_pub_bytes)?;
     let secret_hash = sha256(&shared);
     let h1_label = b"1";
@@ -1726,15 +1725,13 @@ async fn fetch_httpdns_targets(kind: &str) -> Vec<Target> {
 // =====================================================================
 
 fn random_bytes(n: usize) -> Vec<u8> {
-    use rand::RngCore;
-    let mut rng = rand::thread_rng();
     let mut out = vec![0u8; n];
-    rng.fill_bytes(&mut out);
+    rand::fill(&mut out);
     out
 }
 
 fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err("odd hex length".to_string());
     }
     let mut out = Vec::with_capacity(s.len() / 2);
@@ -2294,10 +2291,7 @@ mod tests {
     #[test]
     fn golden_lz4_literal_and_roundtrip() {
         assert_eq!(hex(&lz4_literal(b"hello")), "5068656c6c6f");
-        assert_eq!(
-            hex(&lz4_literal(&vec![b'A'; 20])),
-            "f0054141414141414141414141414141414141414141"
-        );
+        assert_eq!(hex(&lz4_literal(&[b'A'; 20])), "f0054141414141414141414141414141414141414141");
         let lit = lz4_literal(b"the quick brown fox");
         assert_eq!(hex(&lz4(&lit).unwrap()), "74686520717569636b2062726f776e20666f78");
     }
@@ -2335,7 +2329,7 @@ mod tests {
         let sk = p256::SecretKey::from_slice(&priv_bytes).expect("priv 1");
         let pair = EcdhKeyPair {
             secret_key: sk.clone(),
-            public_bytes: sk.public_key().to_encoded_point(false).as_bytes().to_vec(),
+            public_bytes: sk.public_key().to_sec1_point(false).as_bytes().to_vec(),
         };
         assert_eq!(
             hex(&pair.public_bytes),
@@ -2374,7 +2368,7 @@ mod tests {
     fn lz4_long_literal_then_rle_backref() {
         // token 0xF6: literal 20 (=15+5) + match 10, offset=1 → 30 个 'A'
         let mut encoded = vec![0xF6, 0x05];
-        encoded.extend(std::iter::repeat(b'A').take(20));
+        encoded.extend(std::iter::repeat_n(b'A', 20));
         encoded.extend([0x01, 0x00]);
         assert_eq!(lz4(&encoded).unwrap(), vec![b'A'; 30]);
     }

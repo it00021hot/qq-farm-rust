@@ -4,8 +4,8 @@ import { fileURLToPath } from 'node:url';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin, PreviewServer, ViteDevServer } from 'vite';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const desktopUiRoot = path.resolve(__dirname, '../..');
+const currentDir = path.dirname(fileURLToPath(import.meta.url));
+const desktopUiRoot = path.resolve(currentDir, '../..');
 const workspaceRoot = path.resolve(desktopUiRoot, '..');
 
 /** Align with `qq_farm_core::config::paths::game_config_static_dir`. */

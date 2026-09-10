@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { NButton, NCard, NCheckbox, NEmpty, NPopconfirm, NSpace, NSpin, NTag, useMessage } from 'naive-ui';
 import { fetchGetFarmBag, fetchSellFarmBag, fetchUseFarmBag } from '@/service/api';
 import {
@@ -23,7 +23,16 @@ const props = defineProps<{
 
 type CategoryValue = 'all' | 'fruit' | 'seed' | 'tool' | 'other';
 
-const HIDDEN_IDS = new Set([1, 1001, COUPON_ITEM_ID, 1101, NORMAL_FERTILIZER_ID, ORGANIC_FERTILIZER_ID, COLLECTION_NORMAL_ID, COLLECTION_RARE_ID]);
+const HIDDEN_IDS = new Set([
+  1,
+  1001,
+  COUPON_ITEM_ID,
+  1101,
+  NORMAL_FERTILIZER_ID,
+  ORGANIC_FERTILIZER_ID,
+  COLLECTION_NORMAL_ID,
+  COLLECTION_RARE_ID
+]);
 
 const farmAccountStore = useFarmAccountStore();
 const message = useMessage();
@@ -336,7 +345,10 @@ defineExpose({ refresh: loadBag });
               {{ canSell(item) ? '可出售' : item.sellStatus === 'conditional' ? '条件出售' : '不可出售' }}
             </span>
           </div>
-          <div v-if="(item.mutantEffects || []).length" class="mt-2px text-center text-11px text-amber-600 dark:text-amber-400">
+          <div
+            v-if="(item.mutantEffects || []).length"
+            class="mt-2px text-center text-11px text-amber-600 dark:text-amber-400"
+          >
             变异: {{ (item.mutantEffects || []).join('+') }}
           </div>
           <div class="mt-4px text-center text-14px font-medium">

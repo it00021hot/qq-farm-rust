@@ -125,10 +125,10 @@ pub fn farm_get_logs(
     limit: Option<usize>,
 ) -> IpcResult<Vec<qq_farm_core::runtime::runtime_state::LogEntry>> {
     let id = account_id.unwrap_or_default();
-    if !id.is_empty() {
-        ensure(&state, &id)?;
-    } else {
+    if id.is_empty() {
         let _ = &state.acl;
+    } else {
+        ensure(&state, &id)?;
     }
     let lim = limit.unwrap_or(200);
     let opt = if id.is_empty() { None } else { Some(id.as_str()) };
@@ -142,10 +142,10 @@ pub fn farm_clear_logs(
     account_id: Option<String>,
 ) -> IpcResult<()> {
     let id = account_id.unwrap_or_default();
-    if !id.is_empty() {
-        ensure(&state, &id)?;
-    } else {
+    if id.is_empty() {
         let _ = &state.acl;
+    } else {
+        ensure(&state, &id)?;
     }
     let opt = if id.is_empty() { None } else { Some(id.as_str()) };
     farm::clear_global_logs(&state.app, opt);

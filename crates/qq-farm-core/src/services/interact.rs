@@ -123,7 +123,7 @@ impl InteractService {
                 &prost::Message::encode_to_vec(&req),
             )
             .await?;
-        Ok(GetInteractInfoReply::decode(&body)?)
+        GetInteractInfoReply::decode(&body)
     }
 
     /// GetInteractSummary RPC
@@ -137,7 +137,7 @@ impl InteractService {
                 &prost::Message::encode_to_vec(&req),
             )
             .await?;
-        Ok(GetInteractSummaryReply::decode(&body)?)
+        GetInteractSummaryReply::decode(&body)
     }
 
     async fn fetch_reply(&self) -> Result<InteractRecordsReply> {
@@ -147,7 +147,7 @@ impl InteractService {
         let mut errors = Vec::new();
         for &(service, method) in RPC_CANDIDATES {
             match self.gateway.request(service, method, &req_body).await {
-                Ok(body) => return Ok(InteractRecordsReply::decode(&body)?),
+                Ok(body) => return InteractRecordsReply::decode(&body),
                 Err(e) => {
                     let retry = matches!(
                         e,

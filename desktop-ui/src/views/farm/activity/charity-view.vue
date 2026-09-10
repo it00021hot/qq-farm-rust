@@ -16,6 +16,8 @@ export type CharityProgressReward = {
   reward?: CharityReward;
   statusCode?: string;
   reached?: boolean;
+  claimed?: boolean;
+  claimable?: boolean;
   claimSupported?: boolean;
 };
 
@@ -40,6 +42,7 @@ export type CharityActivity = {
   dailyGift?: {
     statusCode?: string;
     claimed?: boolean;
+    harvestedToday?: boolean;
     reward?: CharityReward;
     publicFund?: { date?: string; statusCode?: string } | null;
   };
@@ -72,12 +75,14 @@ const props = defineProps<{
   pendingSeeds: boolean;
   pendingDonate: boolean;
   pendingGift: boolean;
+  pendingProgress: boolean;
 }>();
 
 const emit = defineEmits<{
   claimSeeds: [];
   donateLove: [];
   claimDailyGift: [];
+  claimProgress: [target: string];
 }>();
 
 const confirmingDonate = ref(false);
@@ -103,9 +108,7 @@ const ruleParagraphs = computed(() => {
   const fromParagraphs = Array.isArray(rules.paragraphs) ? rules.paragraphs : [];
   const fromTips = Array.isArray(rules.tips?.txt) ? rules.tips.txt : [];
   const fromLines = Array.isArray(rules.lines) ? rules.lines : [];
-  return [...fromParagraphs, ...fromTips, ...fromLines]
-    .map(line => String(line || '').trim())
-    .filter(Boolean);
+  return [...fromParagraphs, ...fromTips, ...fromLines].map(line => String(line || '').trim()).filter(Boolean);
 });
 const ruleTitle = computed(
   () => String(props.activity?.rules?.title || '').trim() || $t('page.farm.activity.charityRules')
@@ -134,17 +137,13 @@ function donate() {
 function seedsButtonLabel() {
   if (props.pendingSeeds) return $t('page.farm.activity.claiming');
   if (props.activity?.seedReward?.claimed) return $t('page.farm.activity.charitySeedsClaimed');
-  return canClaimSeeds.value
-    ? $t('page.farm.activity.charityClaimSeeds')
-    : $t('page.farm.activity.claimUnavailable');
+  return canClaimSeeds.value ? $t('page.farm.activity.charityClaimSeeds') : $t('page.farm.activity.claimUnavailable');
 }
 
 function giftButtonLabel() {
   if (props.pendingGift) return $t('page.farm.activity.claiming');
   if (props.activity?.dailyGift?.claimed) return $t('page.farm.activity.charityGiftClaimed');
-  return canClaimGift.value
-    ? $t('page.farm.activity.charityClaimGift')
-    : $t('page.farm.activity.claimUnavailable');
+  return canClaimGift.value ? $t('page.farm.activity.charityClaimGift') : $t('page.farm.activity.claimUnavailable');
 }
 </script>
 
@@ -154,7 +153,9 @@ function giftButtonLabel() {
       <div class="flex items-center gap-10px rounded-8px bg-gray-50 px-12px py-10px dark:bg-gray-800">
         <img v-if="itemImage(activity.love)" :src="itemImage(activity.love)" class="h-36px w-36px object-contain" />
         <div>
-          <div class="text-12px text-gray-500">{{ itemLabel(activity.love, $t('page.farm.activity.charityLove')) }}</div>
+          <div class="text-12px text-gray-500">
+            {{ itemLabel(activity.love, $t('page.farm.activity.charityLove')) }}
+          </div>
           <div class="text-16px font-semibold">{{ activity.loveBalance || '0' }}</div>
         </div>
       </div>
@@ -174,8 +175,17 @@ function giftButtonLabel() {
           <div class="text-12px text-gray-500">{{ $t('page.farm.activity.charitySettlement') }}</div>
           <div class="text-16px font-semibold">
             {{ activity.settlement?.requiredLove || '0' }}
-            <NTag size="tiny" :type="activity.settlement?.eligible ? 'success' : 'default'" :bordered="false" class="ml-4px">
-              {{ activity.settlement?.eligible ? $t('page.farm.activity.charityEligible') : $t('page.farm.activity.charityNotYet') }}
+            <NTag
+              size="tiny"
+              :type="activity.settlement?.eligible ? 'success' : 'default'"
+              :bordered="false"
+              class="ml-4px"
+            >
+              {{
+                activity.settlement?.eligible
+                  ? $t('page.farm.activity.charityEligible')
+                  : $t('page.farm.activity.charityNotYet')
+              }}
             </NTag>
           </div>
         </div>
@@ -242,7 +252,14 @@ function giftButtonLabel() {
           <NButton size="small" class="flex-1" :disabled="pendingDonate" @click="confirmingDonate = false">
             {{ $t('common.cancel') }}
           </NButton>
-          <NButton size="small" type="error" class="flex-1" :loading="pendingDonate" :disabled="!canDonate" @click="donate()">
+          <NButton
+            size="small"
+            type="error"
+            class="flex-1"
+            :loading="pendingDonate"
+            :disabled="!canDonate"
+            @click="donate()"
+          >
             {{ $t('page.farm.activity.charityDonateConfirm') }}
           </NButton>
         </div>
@@ -253,7 +270,9 @@ function giftButtonLabel() {
           :disabled="!canDonate"
           @click="donate()"
         >
-          {{ confirmingDonate ? $t('page.farm.activity.charityDonateConfirm') : $t('page.farm.activity.charityDonateAll') }}
+          {{
+            confirmingDonate ? $t('page.farm.activity.charityDonateConfirm') : $t('page.farm.activity.charityDonateAll')
+          }}
         </NButton>
       </div>
 
@@ -284,16 +303,43 @@ function giftButtonLabel() {
           v-for="(reward, index) in progressRewards"
           :key="String(reward.target || index)"
           class="flex items-center gap-10px rounded-8px border px-12px py-10px dark:border-gray-700"
-          :class="reward.reached ? 'border-primary' : 'border-gray-200'"
+          :class="reward.claimable || reward.claimed ? 'border-primary' : 'border-gray-200'"
         >
           <NTag size="tiny" :type="reward.reached ? 'success' : 'default'" :bordered="false">
-            {{ reward.reached ? $t('page.farm.activity.charityReached') : $t('page.farm.activity.charityTarget', { count: reward.target || '0' }) }}
+            {{
+              reward.reached
+                ? $t('page.farm.activity.charityReached')
+                : $t('page.farm.activity.charityTarget', { count: reward.target || '0' })
+            }}
           </NTag>
           <div class="flex min-w-0 flex-1 items-center gap-6px text-12px">
             <img v-if="itemImage(reward.reward)" :src="itemImage(reward.reward)" class="h-24px w-24px object-contain" />
             <span class="min-w-0 flex-1 truncate">{{ itemLabel(reward.reward) }}</span>
             <span v-if="reward.reward?.count">×{{ reward.reward.count }}</span>
           </div>
+          <NButton
+            v-if="reward.claimSupported && reward.claimable"
+            size="small"
+            type="primary"
+            :loading="pendingProgress"
+            :disabled="pendingProgress"
+            @click="emit('claimProgress', String(reward.target || ''))"
+          >
+            {{
+              pendingProgress
+                ? $t('page.farm.activity.charityProgressClaiming')
+                : $t('page.farm.activity.charityClaimProgress')
+            }}
+          </NButton>
+          <small v-else class="whitespace-nowrap text-12px text-gray-500">
+            {{
+              reward.claimed
+                ? $t('page.farm.activity.charityProgressClaimed')
+                : reward.reached
+                  ? $t('page.farm.activity.charityProgressReached')
+                  : ''
+            }}
+          </small>
         </div>
       </div>
     </div>

@@ -30,10 +30,12 @@ use serde::{Deserialize, Serialize};
 /// 种植策略（从原 TS `PlantingStrategy` 1:1 翻译）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum PlantingStrategy {
     /// 偏好种子（按 preferred_seed_id）
     Preferred,
     /// 按当前等级选
+    #[default]
     Level,
     /// 最大经验
     MaxExp,
@@ -50,15 +52,10 @@ pub enum PlantingStrategy {
 /// 背包种子兜底策略（不能是 `BagPriority`）
 pub type BagSeedFallbackStrategy = PlantingStrategy;
 
-impl Default for PlantingStrategy {
-    fn default() -> Self {
-        Self::Level
-    }
-}
-
 /// 施肥模式
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum FertilizerMode {
     /// 普通 + 有机肥都施
     Both,
@@ -69,13 +66,8 @@ pub enum FertilizerMode {
     /// 智能：根据剩余成熟时间施肥
     Smart,
     /// 不施肥
+    #[default]
     None,
-}
-
-impl Default for FertilizerMode {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 /// 施肥土地类型筛选
@@ -129,8 +121,10 @@ impl FertilizerLandType {
 /// 土地颜色等级
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum LandType {
     /// 普通
+    #[default]
     Normal,
     /// 金
     Gold,
@@ -141,12 +135,6 @@ pub enum LandType {
     /// 紫金
     #[serde(rename = "purple-gold")]
     PurpleGold,
-}
-
-impl Default for LandType {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 impl LandType {
@@ -179,8 +167,10 @@ impl LandType {
 /// 植物阶段（生长周期）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum PlantPhase {
     /// 空闲（未种）
+    #[default]
     Empty,
     /// 种子期
     Seed,
@@ -194,12 +184,6 @@ pub enum PlantPhase {
     Harvestable,
     /// 枯萎
     Withered,
-}
-
-impl Default for PlantPhase {
-    fn default() -> Self {
-        Self::Empty
-    }
 }
 
 /// 单块土地运行时数据（UI 形态）
@@ -468,18 +452,12 @@ pub struct UIConfig {
 ///
 /// 1:1 对应原 TS `getConfigSnapshot()` 的返回类型。
 /// 序列化时 `ui` 字段默认不输出（如 runtime_state 中 `obj.remove("ui")`）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AccountConfigSnapshot {
     #[serde(flatten)]
     pub config: AccountConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ui: Option<UIConfig>,
-}
-
-impl Default for AccountConfigSnapshot {
-    fn default() -> Self {
-        Self { config: AccountConfig::default(), ui: None }
-    }
 }
 
 // =====================================================================

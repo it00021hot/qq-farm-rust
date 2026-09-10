@@ -43,6 +43,8 @@ use crate::network::gateway::Gateway;
 use crate::runtime::events::WorkerEvent;
 use crate::runtime::scheduler::Scheduler;
 use crate::services::activity_center::ActivityCenterService;
+
+type HeartbeatTimeoutCallback = dyn Fn(String) + Send + Sync;
 use crate::services::automation;
 use crate::services::email::EmailService;
 use crate::services::farm::scheduler::FarmService;
@@ -127,7 +129,7 @@ pub struct WorkerLoop {
     /// heartbeat miss 计数
     heartbeat_miss_count: Arc<Mutex<u32>>,
     /// 心跳超时回调
-    on_heartbeat_timeout: Arc<Mutex<Option<Box<dyn Fn(String) + Send + Sync>>>>,
+    on_heartbeat_timeout: Arc<Mutex<Option<Box<HeartbeatTimeoutCallback>>>>,
     farm_tick_running: AtomicBool,
     /// 统一好友 tick（帮助 + 偷菜 + 捣乱）防重入
     friend_tick_running: AtomicBool,
@@ -428,10 +430,7 @@ impl WorkerLoop {
         // 统一好友 tick 的间隔 = help/steal 两组中较快一组（旧账号迁移对齐 bot，
         // 不改存储格式，读取处直接取 min）
         let (min_sec, max_sec) = match kind {
-            "friend" => (
-                i.help_min.min(i.steal_min),
-                i.help_max.min(i.steal_max),
-            ),
+            "friend" => (i.help_min.min(i.steal_min), i.help_max.min(i.steal_max)),
             _ => (i.farm_min, i.farm_max),
         };
         let min_ms = (min_sec.max(1) as u64).saturating_mul(1000);
@@ -654,9 +653,7 @@ impl WorkerLoop {
             let wl = Arc::clone(self);
             let is_running = Arc::new(move || wl.login_ready() && !wl.shutdown_started());
             crate::services::friend::pet_sync::spawn_friend_pet_sync(
-                &friend,
-                account_id,
-                is_running,
+                &friend, account_id, is_running,
             );
         }
         self.sync_status();
@@ -790,7 +787,6 @@ impl WorkerLoop {
                 })
             }),
         );
-
 
         // 每日跨日检查
         let this = Arc::clone(self);
@@ -1097,9 +1093,13 @@ impl WorkerLoop {
         // 克隆去重状态，避免 guard 跨 await（Future 需要 Send）
         let mut state = self.mystery_auto_state.lock().clone();
         let account_id = self.account.id.clone();
-        let outcome =
-            crate::services::mystery_shop_auto::check_tick(&commerce, &automation, &mut state, &account_id)
-                .await;
+        let outcome = crate::services::mystery_shop_auto::check_tick(
+            &commerce,
+            &automation,
+            &mut state,
+            &account_id,
+        )
+        .await;
         *self.mystery_auto_state.lock() = state;
         if let Some((title, content)) = outcome.push {
             // 推送走 worker 事件总线（面板通知 + relogin_reminder 通知链路）
@@ -1215,8 +1215,7 @@ impl WorkerLoop {
         }
         if !self.auto_on("friend") {
             let (min_ms, max_ms) = self.interval_range_ms("friend");
-            self.next_runs.lock().friend_at =
-                now_ms() + random_interval_ms(min_ms, max_ms) as i64;
+            self.next_runs.lock().friend_at = now_ms() + random_interval_ms(min_ms, max_ms) as i64;
             return;
         }
         if self.friend_tick_running.swap(true, Ordering::AcqRel) {
@@ -1660,7 +1659,13 @@ mod tests {
         // 巨型回包下载中：有在途请求 → 不杀
         assert!(!heartbeat_should_force_disconnect(3, max, 60_000, stale, 2));
         // 保护窗封顶：静默超过 2 分钟，即使有在途也判死
-        assert!(heartbeat_should_force_disconnect(3, max, PENDING_DEFER_MAX_SILENCE_MS + 1, stale, 5));
+        assert!(heartbeat_should_force_disconnect(
+            3,
+            max,
+            PENDING_DEFER_MAX_SILENCE_MS + 1,
+            stale,
+            5
+        ));
         assert!(!heartbeat_should_force_disconnect(3, max, PENDING_DEFER_MAX_SILENCE_MS, stale, 5));
     }
 

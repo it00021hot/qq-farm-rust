@@ -184,10 +184,10 @@ pub fn init() {
 }
 
 fn install_tracing_subscriber() {
+    use tracing_appender::non_blocking;
     use tracing_subscriber::fmt::writer::MakeWriterExt;
     use tracing_subscriber::prelude::*;
     use tracing_subscriber::EnvFilter;
-    use tracing_appender::non_blocking;
 
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let dir = ensure_log_dir();
@@ -214,11 +214,8 @@ fn install_tracing_subscriber() {
         .with_thread_names(true)
         .with_writer(file_writer);
 
-    let result = tracing_subscriber::registry()
-        .with(filter)
-        .with(stderr_layer)
-        .with(file_layer)
-        .try_init();
+    let result =
+        tracing_subscriber::registry().with(filter).with(stderr_layer).with(file_layer).try_init();
     if let Err(e) = result {
         eprintln!("tracing subscriber already set: {e}");
     }
@@ -267,7 +264,10 @@ fn record_panic_raw(body: &str) {
     let dir = ensure_log_dir();
     let stamp = chrono_like_now_compact();
     write_to_path(&dir.join(format!("panic-{stamp}.log")), body);
-    append_fallback_log("error", &format!("{{\"level\":\"error\",\"message\":{}}}\n", json_escape(body)));
+    append_fallback_log(
+        "error",
+        &format!("{{\"level\":\"error\",\"message\":{}}}\n", json_escape(body)),
+    );
 }
 
 fn chrono_like_now_compact() -> String {
@@ -365,18 +365,14 @@ fn append_fallback_log(level: &str, line: &str) {
     crate::infra::spawn_blocking(move || {
         let _guard = log_append_lock().lock();
         let dir = ensure_log_dir();
-        if let Ok(mut combined) = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(dir.join("combined.log"))
+        if let Ok(mut combined) =
+            fs::OpenOptions::new().create(true).append(true).open(dir.join("combined.log"))
         {
             let _ = combined.write_all(line.as_bytes());
         }
         if level == "error" {
-            if let Ok(mut err) = fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(dir.join("error.log"))
+            if let Ok(mut err) =
+                fs::OpenOptions::new().create(true).append(true).open(dir.join("error.log"))
             {
                 let _ = err.write_all(line.as_bytes());
             }
@@ -523,8 +519,8 @@ mod tests {
     /// 各写 200 行，必须在 3 秒内全部完成（如果卡死就会超时）。
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn non_blocking_log_under_concurrent_writes() {
-        use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
         use std::time::{Duration, Instant};
 
         let counter = Arc::new(AtomicUsize::new(0));
@@ -543,7 +539,9 @@ mod tests {
         }
         // 整体跑完不能超过 3 秒（之前 bug 时单线程跑都会卡死）
         let result = tokio::time::timeout(Duration::from_secs(3), async {
-            for h in handles { h.await.unwrap(); }
+            for h in handles {
+                h.await.unwrap();
+            }
         })
         .await;
         assert!(result.is_ok(), "并发写日志超过 3s 未完成（仍然阻塞）");

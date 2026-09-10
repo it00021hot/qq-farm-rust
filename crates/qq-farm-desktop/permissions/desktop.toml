@@ -74,6 +74,7 @@ commands.allow = [
   "activity_claim_charity_seeds",
   "activity_donate_charity_love",
   "activity_claim_charity_daily_gift",
+  "activity_claim_charity_progress_reward",
   "commerce_mall_catalog",
   "commerce_mall_purchase",
   "commerce_mystery_shop",

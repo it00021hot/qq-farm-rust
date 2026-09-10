@@ -346,9 +346,7 @@ impl FarmService {
         }
         let n = ids.len();
         if !ids.is_empty() || !social_event_item_ids.is_empty() {
-            self.api
-                .farming_with_social_events(ids, gid, social_event_item_ids)
-                .await?;
+            self.api.farming_with_social_events(ids, gid, social_event_item_ids).await?;
         }
         Ok(n)
     }
@@ -573,7 +571,7 @@ impl FarmService {
         let mut post_growing: Vec<i64> = Vec::new();
         if !harvested_land_ids.is_empty() {
             // 对齐 bot farm/scheduler.ts: randomDelay(1000,1500)
-                crate::utils::random::random_delay(1000, 1500).await;
+            crate::utils::random::random_delay(1000, 1500).await;
             let first = classify_harvested_lands_by_map(
                 &harvested_land_ids,
                 &build_land_map(&harvest_lands),
@@ -879,6 +877,20 @@ pub struct FertilizeOpResult {
 }
 
 #[cfg(test)]
+pub struct NoopEncryptor;
+
+#[cfg(test)]
+impl crate::network::encryptor::Encryptor for NoopEncryptor {
+    fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>> {
+        Ok(plaintext.to_vec())
+    }
+
+    fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
+        Ok(ciphertext.to_vec())
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -980,16 +992,5 @@ mod tests {
         // 编译期保证：FarmService 必须有这些 op 方法
         let _svc = make_service();
         let _: fn(&FarmService) -> _ = |s| s.subscribe(); // 占位
-    }
-}
-
-// NoopEncryptor for test
-pub struct NoopEncryptor;
-impl crate::network::encryptor::Encryptor for NoopEncryptor {
-    fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>> {
-        Ok(plaintext.to_vec())
-    }
-    fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
-        Ok(ciphertext.to_vec())
     }
 }

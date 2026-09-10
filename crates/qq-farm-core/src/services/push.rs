@@ -5,7 +5,7 @@
 //! endpoint 必须是 `https://oapi.dingtalk.com/robot/send?access_token=...`，
 //! 或直接提交裸 access_token。
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 
 const DINGTALK_WEBHOOK_PREFIX: &str = "https://oapi.dingtalk.com/robot/send?access_token=";
@@ -66,11 +66,8 @@ pub async fn send_dingtalk(
     content: &str,
 ) -> Result<(), String> {
     let url = build_dingtalk_webhook(endpoint, token, secret)?;
-    let text = if title.trim().is_empty() {
-        content.to_string()
-    } else {
-        format!("{title}\n{content}")
-    };
+    let text =
+        if title.trim().is_empty() { content.to_string() } else { format!("{title}\n{content}") };
     let client = reqwest::Client::new();
     let resp = client
         .post(&url)
@@ -111,11 +108,8 @@ mod tests {
 
     #[test]
     fn build_webhook_signs_when_secret_present() {
-        let url =
-            build_dingtalk_webhook("", "tok", "SEC123").expect("url");
-        assert!(url.starts_with(
-            "https://oapi.dingtalk.com/robot/send?access_token=tok&timestamp="
-        ));
+        let url = build_dingtalk_webhook("", "tok", "SEC123").expect("url");
+        assert!(url.starts_with("https://oapi.dingtalk.com/robot/send?access_token=tok&timestamp="));
         assert!(url.contains("&sign="), "signed url must contain sign: {url}");
     }
 

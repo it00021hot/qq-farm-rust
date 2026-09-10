@@ -86,9 +86,9 @@ fn qixi_dew_extended_status<'a>(
     if !mutant_ids.contains(&QIXI_MUTANT_CONFIG_ID) {
         return None;
     }
-    plant_extended_statuses(plant).iter().find(|status| {
-        QIXI_DEW_HISTORY_CODES.contains(&status.value_1) && status.value_2 == 1
-    })
+    plant_extended_statuses(plant)
+        .iter()
+        .find(|status| QIXI_DEW_HISTORY_CODES.contains(&status.value_1) && status.value_2 == 1)
 }
 
 /// 农场主是否有待清理的地块级互动道具（uses + targets 实时记录）
@@ -112,7 +112,10 @@ fn interaction_item_metadata(item_id: i64) -> (String, i64) {
 /// 合并 uses + targets + 七夕灵露兜底的互动效果展示列表（对齐 bot
 /// `getPlantInteractionEffects`；target 按 `itemId:hostGid:usedAt:landId` 去重）。
 #[must_use]
-pub fn get_plant_interaction_effects(plant: &PlantInfo, mutant_ids: &[i64]) -> Vec<serde_json::Value> {
+pub fn get_plant_interaction_effects(
+    plant: &PlantInfo,
+    mutant_ids: &[i64],
+) -> Vec<serde_json::Value> {
     let uses: &[PlantInteractionUseInfo] = &plant.interaction_uses;
     let targets: &[PlantInteractionTargetInfo] = &plant.interaction_targets;
     let mut effects: Vec<serde_json::Value> = Vec::new();
@@ -164,8 +167,10 @@ pub fn get_plant_interaction_effects(plant: &PlantInfo, mutant_ids: &[i64]) -> V
         } else {
             for target in matching {
                 let land_id = target.land_id;
-                let host_gid = if target.host_gid != 0 { target.host_gid } else { use_entry.host_gid };
-                let used_at = if target.timestamp != 0 { target.timestamp } else { use_entry.timestamp };
+                let host_gid =
+                    if target.host_gid != 0 { target.host_gid } else { use_entry.host_gid };
+                let used_at =
+                    if target.timestamp != 0 { target.timestamp } else { use_entry.timestamp };
                 let key = format!("{item_id}:{host_gid}:{used_at}:{land_id}");
                 if !used_target_keys.insert(key) {
                     continue;
@@ -319,7 +324,7 @@ impl PlantPhase {
     pub fn from_i32(phase: i32) -> Self {
         match phase {
             2 => Self::Sprout,
-            3 | 4 | 5 => Self::Growing,
+            3..=5 => Self::Growing,
             6 => Self::Ripe,
             7 => Self::Dead,
             // 0 UNKNOWN / 1 SEED / 其它未知 → Seed
@@ -1209,7 +1214,7 @@ pub fn build_lands_panel_dto(lands: &[LandInfo], kind: LandDetailKind) -> Vec<se
             plant_name =
                 if plant.name.is_empty() { "未知".to_string() } else { plant.name.clone() };
         }
-        let display_seed_image = (|| -> String {
+        let display_seed_image = {
             let seed = gc.get_plant_by_id(display_plant_id).and_then(|p| p.seed_id).unwrap_or(0);
             let sid = if seed > 0 { seed } else { 0 };
             if sid > 0 {
@@ -1217,7 +1222,7 @@ pub fn build_lands_panel_dto(lands: &[LandInfo], kind: LandDetailKind) -> Vec<se
             } else {
                 String::new()
             }
-        })();
+        };
         let interaction_effects = get_plant_interaction_effects(plant, &mutant_config_ids);
         let protocol_field_40: Vec<serde_json::Value> = plant
             .field_40

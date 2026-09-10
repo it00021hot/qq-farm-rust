@@ -55,7 +55,7 @@ impl EmailService {
                 &prost::Message::encode_to_vec(&req),
             )
             .await?;
-        Ok(GetEmailListReply::decode(&body)?)
+        GetEmailListReply::decode(&body)
     }
 
     /// 单封领取
@@ -69,7 +69,7 @@ impl EmailService {
                 &prost::Message::encode_to_vec(&req),
             )
             .await?;
-        Ok(ClaimEmailReply::decode(&body)?)
+        ClaimEmailReply::decode(&body)
     }
 
     /// 批量领取
@@ -87,7 +87,7 @@ impl EmailService {
                 &prost::Message::encode_to_vec(&req),
             )
             .await?;
-        Ok(BatchClaimEmailReply::decode(&body)?)
+        BatchClaimEmailReply::decode(&body)
     }
 
     /// 批量删除
@@ -105,7 +105,7 @@ impl EmailService {
                 &prost::Message::encode_to_vec(&req),
             )
             .await?;
-        Ok(BatchDeleteEmailReply::decode(&body)?)
+        BatchDeleteEmailReply::decode(&body)
     }
 
     /// 检查并领取每日邮箱奖励

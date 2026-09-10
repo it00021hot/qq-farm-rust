@@ -27,8 +27,8 @@ use tokio_util::sync::CancellationToken;
 use crate::error::Error;
 use crate::network::error::NetworkError;
 use crate::services::friend::pet_cache::{
-    drop_stale_entries, get_friend_dog_state, get_friend_pet_cache_stats,
-    is_full_sync_done_today, mark_full_sync_done, FriendDogState,
+    drop_stale_entries, get_friend_dog_state, get_friend_pet_cache_stats, is_full_sync_done_today,
+    mark_full_sync_done, FriendDogState,
 };
 use crate::services::friend::scheduler::FriendService;
 
@@ -117,11 +117,9 @@ pub fn plan_next_sync_pacing(
             quota: QUOTA_BASE,
             escalate_quota: false,
         },
-        SyncRoundOutcome::GatewayBusy => SyncPacing {
-            next_delay_ms: BUSY_COOLDOWN_MS,
-            quota: QUOTA_BASE,
-            escalate_quota: false,
-        },
+        SyncRoundOutcome::GatewayBusy => {
+            SyncPacing { next_delay_ms: BUSY_COOLDOWN_MS, quota: QUOTA_BASE, escalate_quota: false }
+        }
         SyncRoundOutcome::CleanRun { deferred } if deferred > 0 => SyncPacing {
             next_delay_ms: FAST_INTERVAL_MS,
             quota: if quota_ceiling_for_day {
@@ -131,7 +129,8 @@ pub fn plan_next_sync_pacing(
             },
             escalate_quota: !quota_ceiling_for_day,
         },
-        SyncRoundOutcome::CleanRun { .. } | SyncRoundOutcome::Done
+        SyncRoundOutcome::CleanRun { .. }
+        | SyncRoundOutcome::Done
         | SyncRoundOutcome::Fresh
         | SyncRoundOutcome::Skipped
         | SyncRoundOutcome::Error => SyncPacing {
@@ -232,7 +231,11 @@ pub fn collect_pending_friends(
             continue;
         }
         let name = if friend.remark.is_empty() {
-            if friend.name.is_empty() { format!("GID:{gid}") } else { friend.name.clone() }
+            if friend.name.is_empty() {
+                format!("GID:{gid}")
+            } else {
+                friend.name.clone()
+            }
         } else {
             friend.remark.clone()
         };
@@ -270,7 +273,10 @@ pub fn spawn_friend_pet_sync(
     let service = Arc::clone(service);
     crate::runtime::safe_spawn::spawn_logged("friend_pet_sync", async move {
         // 补数据任务标记为后台 RPC 班次：只在网关有空闲时占用共享槽
-        crate::network::gateway::background_scope(run_sync_chain(service, account_id, is_running, token)).await;
+        crate::network::gateway::background_scope(run_sync_chain(
+            service, account_id, is_running, token,
+        ))
+        .await;
     });
 }
 
@@ -344,8 +350,7 @@ async fn run_one_round(
         return SyncRoundOutcome::Done;
     }
     // 安静时段不进好友农场，与统一巡查保持一致
-    if crate::services::friend::visit_strategy::in_friend_quiet_hours_for(Some(account_id), None)
-    {
+    if crate::services::friend::visit_strategy::in_friend_quiet_hours_for(Some(account_id), None) {
         return SyncRoundOutcome::Skipped;
     }
     if !is_running() || service.host_gid() == 0 {
@@ -507,7 +512,8 @@ mod tests {
 
     #[test]
     fn pacing_clean_run_with_deferred_escalates() {
-        let p = plan_next_sync_pacing(SyncRoundOutcome::CleanRun { deferred: 30 }, QUOTA_BASE, false);
+        let p =
+            plan_next_sync_pacing(SyncRoundOutcome::CleanRun { deferred: 30 }, QUOTA_BASE, false);
         assert_eq!(p.next_delay_ms, FAST_INTERVAL_MS);
         assert_eq!(p.quota, QUOTA_BASE + QUOTA_STEP);
         assert!(p.escalate_quota);

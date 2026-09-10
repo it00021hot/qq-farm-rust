@@ -1,4 +1,4 @@
-//! 桌面进程状态：内嵌 `AppContext` + LocalOwner ACL。
+//! 桌面进程状态：内嵌 `AppContext` + `LocalOwner` ACL。
 
 use std::sync::Arc;
 
@@ -14,7 +14,7 @@ pub struct DesktopState {
 
 impl DesktopState {
     #[must_use]
-    pub fn new(app: Arc<AppContext>) -> Self {
+    pub const fn new(app: Arc<AppContext>) -> Self {
         Self { app, acl: AclPolicy::LocalOwner }
     }
 }

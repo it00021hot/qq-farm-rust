@@ -91,7 +91,7 @@ impl PanelStatus {
             account_id: account_id.to_string(),
             running,
             online: connected,
-            run_status: if running { 1 } else { 0 },
+            run_status: i64::from(running),
             nick,
             avatar,
             level: raw
@@ -130,7 +130,7 @@ impl PanelStatus {
     }
 }
 
-/// 地块行（对齐 land_analysis 面板 JSON）。
+/// 地块行（对齐 `land_analysis` 面板 JSON）。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct LandRow {

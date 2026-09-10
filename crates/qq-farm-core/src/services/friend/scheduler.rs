@@ -491,9 +491,8 @@ impl FriendService {
         if !crate::services::automation::is_automation_on_for(account_id, "friend_auto_accept") {
             return;
         }
-        let cfg = crate::models::store::account_config::get_account_config_snapshot(Some(
-            account_id,
-        ));
+        let cfg =
+            crate::models::store::account_config::get_account_config_snapshot(Some(account_id));
         let check_ratio =
             cfg.auto_accept_harvest_steal_enabled && cfg.auto_accept_harvest_steal_harvest > 0;
         let blacklist: std::collections::HashSet<i64> =
@@ -505,8 +504,7 @@ impl FriendService {
             if *gid <= 0 {
                 continue;
             }
-            let display_name =
-                if name.is_empty() { format!("GID:{gid}") } else { name.clone() };
+            let display_name = if name.is_empty() { format!("GID:{gid}") } else { name.clone() };
             if blacklist.contains(gid) {
                 to_reject.push((*gid, display_name, "已在本地黑名单".to_string()));
                 continue;
@@ -547,9 +545,7 @@ impl FriendService {
                         to_reject.push((
                             *gid,
                             display_name,
-                            format!(
-                                "收偷比 {harvest}:{steal} 低于 {harvest_part}:{steal_part}"
-                            ),
+                            format!("收偷比 {harvest}:{steal} 低于 {harvest_part}:{steal_part}"),
                         ));
                     }
                 }
@@ -629,9 +625,7 @@ impl FriendService {
         let acc = self.account_id.lock().clone();
         let names: Vec<String> = apps
             .iter()
-            .map(|(gid, name, _)| {
-                if name.is_empty() { format!("GID:{gid}") } else { name.clone() }
-            })
+            .map(|(gid, name, _)| if name.is_empty() { format!("GID:{gid}") } else { name.clone() })
             .collect();
         crate::services::panel_log::log(
             &acc,
@@ -708,10 +702,8 @@ impl FriendService {
 
         // 开关快照（对齐 bot scheduler.ts:287-301）：偷/帮/捣乱全关时
         // 连 GetAll 都不发，直接收工
-        let stop_when_exp_limit = crate::services::automation::is_automation_on_for(
-            account_id,
-            "friend_help_exp_limit",
-        );
+        let stop_when_exp_limit =
+            crate::services::automation::is_automation_on_for(account_id, "friend_help_exp_limit");
         let protect_bypass_enabled = crate::services::automation::is_automation_on_for(
             account_id,
             "friend_help_protect_dog_ignore_exp_limit",
@@ -721,10 +713,9 @@ impl FriendService {
             crate::services::automation::is_automation_on_for(account_id, "friend_help");
         let steal_enabled =
             crate::services::automation::is_automation_on_for(account_id, "friend_steal");
-        let bad_enabled = crate::services::automation::is_automation_on_for(
-            account_id,
-            "friend_bad",
-        ) && !self.is_bad_operation_limit_reached();
+        let bad_enabled =
+            crate::services::automation::is_automation_on_for(account_id, "friend_bad")
+                && !self.is_bad_operation_limit_reached();
         if !help_enabled && !steal_enabled && !bad_enabled {
             return Ok(0);
         }
@@ -768,9 +759,7 @@ impl FriendService {
                 .collect();
 
         // 逐位归并：黑名单过滤 + 偷菜气泡修正（cleared/push_hints，rust 增强）
-        let mut plan_friends: Vec<
-            crate::services::friend::visit_strategy::PlanFriend,
-        > = Vec::new();
+        let mut plan_friends: Vec<crate::services::friend::visit_strategy::PlanFriend> = Vec::new();
         let mut seen = HashSet::new();
         let cleared: HashSet<i64> = self.steal_cleared_gids.lock().clone();
         for f in friends {
@@ -784,9 +773,7 @@ impl FriendService {
                     account_id,
                     summary.gid,
                 )
-                || crate::services::friend::visit_strategy::is_known_friend_gid_invalid(
-                    summary.gid,
-                )
+                || crate::services::friend::visit_strategy::is_known_friend_gid_invalid(summary.gid)
             {
                 continue;
             }
@@ -831,9 +818,7 @@ impl FriendService {
             bad_enabled,
             help_allowed_for_all,
             protect_bypass_enabled,
-            &|gid| {
-                crate::services::friend::pet_cache::get_friend_dog_state(account_id, gid)
-            },
+            &|gid| crate::services::friend::pet_cache::get_friend_dog_state(account_id, gid),
             bad_budget,
             crate::services::friend::visit_strategy::MAX_BAD_ONLY_VISITS_PER_ROUND,
         );
@@ -912,8 +897,7 @@ impl FriendService {
                 // 不是护主犬就别进去了（bot scheduler.ts:372-377）
                 if !protect_bypass_enabled
                     || crate::services::friend::pet_cache::get_friend_dog_state(
-                        account_id,
-                        target.gid,
+                        account_id, target.gid,
                     ) != crate::services::friend::pet_cache::FriendDogState::Protect
                 {
                     mid_round_exp_skipped += 1;
@@ -977,7 +961,9 @@ impl FriendService {
             crate::services::panel_log::log(
                 account_id,
                 "好友",
-                format!("本轮帮助经验在中途达到上限，跳过剩余 {mid_round_exp_skipped} 位非护主犬好友"),
+                format!(
+                    "本轮帮助经验在中途达到上限，跳过剩余 {mid_round_exp_skipped} 位非护主犬好友"
+                ),
                 crate::constants::PanelEvent::FriendCycle,
                 Some(serde_json::json!({
                     "module": "friend",
@@ -1142,7 +1128,7 @@ impl FriendService {
             }
         }
 
-        help_friends.sort_by(|a, b| b.1.cmp(&a.1));
+        help_friends.sort_by_key(|entry| std::cmp::Reverse(entry.1));
 
         let mut total = crate::services::friend::visit_strategy::TotalActions::default();
         let recent = self.strategy.recent_help();
@@ -1408,7 +1394,7 @@ impl FriendService {
                 bad_friends.push(summary);
             }
         }
-        bad_friends.sort_by(|a, b| b.level.cmp(&a.level));
+        bad_friends.sort_by_key(|friend| std::cmp::Reverse(friend.level));
         bad_friends.truncate(20);
 
         let recent = self.strategy.recent_help();
@@ -1813,9 +1799,10 @@ impl FriendService {
                 crate::services::friend::pet_cache::FriendDogState::Protect => {
                     ("protect", crate::services::friend::pet_cache::PROTECT_DOG_ID)
                 }
-                crate::services::friend::pet_cache::FriendDogState::Other => {
-                    ("other", crate::services::friend::pet_cache::get_friend_dog_id(&account_id, gid))
-                }
+                crate::services::friend::pet_cache::FriendDogState::Other => (
+                    "other",
+                    crate::services::friend::pet_cache::get_friend_dog_id(&account_id, gid),
+                ),
                 crate::services::friend::pet_cache::FriendDogState::Unknown => ("unknown", 0),
             };
             let Some(obj) = item.as_object_mut() else { continue };
@@ -2007,25 +1994,23 @@ impl FriendService {
                     list.iter()
                         .find(|item| item.get("gid").and_then(|v| v.as_i64()) == Some(host_gid))
                 })
-                .and_then(|item| {
-                    Some(crate::services::friend::visit_strategy::FriendPlantSummary {
-                        steal_num: Self::json_plant_steal_num(item),
-                        dry_num: item
-                            .get("plant")
-                            .and_then(|p| p.get("dryNum").or_else(|| p.get("dry_num")))
-                            .and_then(|v| v.as_i64())
-                            .unwrap_or(0),
-                        weed_num: item
-                            .get("plant")
-                            .and_then(|p| p.get("weedNum").or_else(|| p.get("weed_num")))
-                            .and_then(|v| v.as_i64())
-                            .unwrap_or(0),
-                        insect_num: item
-                            .get("plant")
-                            .and_then(|p| p.get("insectNum").or_else(|| p.get("insect_num")))
-                            .and_then(|v| v.as_i64())
-                            .unwrap_or(0),
-                    })
+                .map(|item| crate::services::friend::visit_strategy::FriendPlantSummary {
+                    steal_num: Self::json_plant_steal_num(item),
+                    dry_num: item
+                        .get("plant")
+                        .and_then(|p| p.get("dryNum").or_else(|| p.get("dry_num")))
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0),
+                    weed_num: item
+                        .get("plant")
+                        .and_then(|p| p.get("weedNum").or_else(|| p.get("weed_num")))
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0),
+                    insect_num: item
+                        .get("plant")
+                        .and_then(|p| p.get("insectNum").or_else(|| p.get("insect_num")))
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0),
                 });
             plant = crate::services::friend::visit_strategy::merge_partial_plant_summary(
                 existing.as_ref(),
@@ -2208,8 +2193,10 @@ fn persist_bad_daily_stop(account_id: &str, today: &str) -> std::io::Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
+    #[serial(farm_data_dir)]
     fn bad_daily_state_roundtrip() {
         let acc = format!("test-bad-{}", std::process::id());
         let today = beijing_date_key();

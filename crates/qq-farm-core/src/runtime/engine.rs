@@ -138,7 +138,7 @@ impl RuntimeEngine {
         let operation_keys: Vec<String> =
             DEFAULT_OPERATION_KEYS.iter().map(|s| s.to_string()).collect();
         let runtime_state =
-            Arc::new(RuntimeState::new(Arc::new(StoreAccountStoreLike::default()), operation_keys));
+            Arc::new(RuntimeState::new(Arc::new(StoreAccountStoreLike), operation_keys));
         Self::assemble_with(config, runtime_state, None)
     }
 
@@ -507,15 +507,21 @@ impl RuntimeEngine {
                         );
                         let engine2 = engine.clone();
                         crate::runtime::safe_spawn::spawn_logged("mystery_notify", async move {
-                            let payload = crate::runtime::relogin_reminder::OfflineReminderPayload {
-                                account_id,
-                                account_name,
-                                username: String::new(),
-                                reason: format!("{title}：{message}"),
-                                offline_ms: 0,
-                                kind: crate::runtime::relogin_reminder::AccountNoticeKind::Offline,
-                            };
-                            engine2.relogin_reminder().clone().trigger_offline_reminder(payload).await;
+                            let payload =
+                                crate::runtime::relogin_reminder::OfflineReminderPayload {
+                                    account_id,
+                                    account_name,
+                                    username: String::new(),
+                                    reason: format!("{title}：{message}"),
+                                    offline_ms: 0,
+                                    kind:
+                                        crate::runtime::relogin_reminder::AccountNoticeKind::Offline,
+                                };
+                            engine2
+                                .relogin_reminder()
+                                .clone()
+                                .trigger_offline_reminder(payload)
+                                .await;
                         });
                     }
                     WorkerEvent::Started { account_id, account_name } => {
@@ -1378,6 +1384,21 @@ impl ReminderLogger for StateLoggerAdapter {
     }
 }
 
+fn panel_log_tag<'a>(level: &str, module: &'a str) -> &'a str {
+    if level == "error" {
+        return "错误";
+    }
+    match module {
+        "farm" => "农场",
+        "friend" => "好友",
+        "warehouse" => "仓库",
+        "task" => "任务",
+        "system" => "系统",
+        other if !other.is_empty() => other,
+        _ => "系统",
+    }
+}
+
 // =====================================================================
 // 单元测试
 // =====================================================================
@@ -1400,7 +1421,7 @@ mod tests {
         let engine = make_engine();
         assert_eq!(engine.worker_count(), 0);
         let state = engine.runtime_state();
-        assert_eq!(state.config_revision() > 0, true);
+        assert!(state.config_revision() > 0);
     }
 
     #[test]
@@ -1600,20 +1621,5 @@ mod tests {
         assert_eq!(logs.len(), 1);
         let acc_logs = state.account_logs.lock();
         assert_eq!(acc_logs.len(), 1);
-    }
-}
-
-fn panel_log_tag<'a>(level: &str, module: &'a str) -> &'a str {
-    if level == "error" {
-        return "错误";
-    }
-    match module {
-        "farm" => "农场",
-        "friend" => "好友",
-        "warehouse" => "仓库",
-        "task" => "任务",
-        "system" => "系统",
-        other if !other.is_empty() => other,
-        _ => "系统",
     }
 }

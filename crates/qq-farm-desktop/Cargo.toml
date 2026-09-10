@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 description = "QQ 农场 Tauri v2 桌面端"
 
 [[bin]]
@@ -34,8 +38,8 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 dotenvy = { workspace = true }
 thiserror = { workspace = true }
-dirs = "5"
-tauri-plugin-opener = "2.5.4"
+dirs = "7"
+tauri-plugin-opener = "2.5.5"
 
 [lints]
 workspace = true

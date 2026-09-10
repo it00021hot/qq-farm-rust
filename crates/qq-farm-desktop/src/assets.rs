@@ -100,19 +100,20 @@ mod tests {
 
     #[test]
     fn relative_from_farmcfg_localhost_path() {
-        let req = get("farmcfg://localhost/seed_images_named/20218.png");
-        assert_eq!(relative_from_request(&req), "seed_images_named/20218.png");
+        let req = get("farmcfg://localhost/seed_images_named/seed_images/20218.png");
+        assert_eq!(relative_from_request(&req), "seed_images_named/seed_images/20218.png");
     }
 
     #[test]
     fn relative_from_windows_webview2_url() {
-        let req = get("http://farmcfg.localhost/seed_images_named/20218.png");
-        assert_eq!(relative_from_request(&req), "seed_images_named/20218.png");
+        let req = get("http://farmcfg.localhost/seed_images_named/seed_images/20218.png");
+        assert_eq!(relative_from_request(&req), "seed_images_named/seed_images/20218.png");
     }
 
     #[test]
     fn serves_vendored_seed_png() {
-        let res = handle_request(get("farmcfg://localhost/seed_images_named/20218.png"));
+        let res =
+            handle_request(get("farmcfg://localhost/seed_images_named/seed_images/20218.png"));
         assert_eq!(res.status(), StatusCode::OK);
         assert!(!res.body().is_empty());
         let ct = res.headers().get(CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("");

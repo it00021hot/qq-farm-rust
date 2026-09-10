@@ -1,4 +1,5 @@
-import CryptoJS from 'crypto-js';
+import * as CryptoES from 'crypto-es';
+import { Utf8 } from 'crypto-es';
 
 export class Crypto<T extends object> {
   /** Secret */
@@ -10,13 +11,13 @@ export class Crypto<T extends object> {
 
   encrypt(data: T): string {
     const dataString = JSON.stringify(data);
-    const encrypted = CryptoJS.AES.encrypt(dataString, this.secret);
+    const encrypted = CryptoES.AES.encrypt(dataString, this.secret);
     return encrypted.toString();
   }
 
   decrypt(encrypted: string) {
-    const decrypted = CryptoJS.AES.decrypt(encrypted, this.secret);
-    const dataString = decrypted.toString(CryptoJS.enc.Utf8);
+    const decrypted = CryptoES.AES.decrypt(encrypted, this.secret);
+    const dataString = decrypted.toString(Utf8);
     try {
       return JSON.parse(dataString) as T;
     } catch {

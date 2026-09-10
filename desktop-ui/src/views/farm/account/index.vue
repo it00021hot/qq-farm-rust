@@ -41,8 +41,10 @@ function authStatusOf(row: Api.Farm.Account): 'authorized' | 'unauthorized' | 'r
   return row.wxRescanRecommended ? 'rescanRecommended' : 'authorized';
 }
 
-const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagination } =
-  useNaivePaginatedTable<FlatResponseData<any, Api.Farm.AccountList>, Api.Farm.Account>({
+const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagination } = useNaivePaginatedTable<
+  FlatResponseData<any, Api.Farm.AccountList>,
+  Api.Farm.Account
+>({
   api: () => fetchGetFarmAccountList(searchParams.value),
   transform: response => defaultTransform(response),
   immediate: false,
@@ -128,11 +130,11 @@ const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagi
       width: 280,
       render: row => (
         <div class="flex-center gap-8px">
-          {(
+          {
             <NButton type="primary" ghost size="small" onClick={() => edit(row.id)}>
               {$t('common.edit')}
             </NButton>
-          )}
+          }
           {row.runStatus !== 1 && (
             <NButton type="success" ghost size="small" onClick={() => handleStart(row.id)}>
               {$t('page.farm.account.start')}
@@ -143,7 +145,7 @@ const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagi
               {$t('page.farm.account.stop')}
             </NButton>
           )}
-          {(
+          {
             <NPopconfirm onPositiveClick={() => handleDelete(row.id)}>
               {{
                 default: () => $t('page.farm.account.deleteConfirm'),
@@ -154,7 +156,7 @@ const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagi
                 )
               }}
             </NPopconfirm>
-          )}
+          }
         </div>
       )
     }

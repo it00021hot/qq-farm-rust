@@ -35,7 +35,7 @@ pub fn prepare_data_dir() {
     }
 }
 
-/// 安装包内把 TSDK / game_config 指到 Tauri resource dir。`tauri dev` 保持仓库根路径。
+/// 安装包内把 TSDK / `game_config` 指到 Tauri resource dir。`tauri dev` 保持仓库根路径。
 pub fn apply_bundled_resource_env(app: &AppHandle) {
     if cfg!(dev) {
         return;

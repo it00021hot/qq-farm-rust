@@ -154,8 +154,7 @@ fn put_slot(account_id: &str, slot: StatsSlot) {
 
 #[must_use]
 pub fn stats_file(account_id: &str) -> PathBuf {
-    let dir =
-        std::env::var("FARM_DATA_DIR").ok().map(PathBuf::from).unwrap_or_else(|| get_data_dir());
+    let dir = std::env::var("FARM_DATA_DIR").ok().map(PathBuf::from).unwrap_or_else(get_data_dir);
     dir.join("stats").join(format!("{account_id}.json"))
 }
 
@@ -186,7 +185,7 @@ pub fn save_persisted_stats(account_id: &str, data: &PersistedStats) {
             "{}.{pid}.{ts}.tmp",
             path.file_name().and_then(|n| n.to_str()).unwrap_or("stats.json")
         ));
-        let _ = crate::infra::spawn_blocking(move || {
+        crate::infra::spawn_blocking(move || {
             let _ = fs::write(&tmp, &body);
             let _ = fs::rename(&tmp, &path);
         });
@@ -582,9 +581,7 @@ mod tests {
     #[test]
     #[serial(stats)]
     fn operations_map_reset() {
-        let mut m = OperationsMap::default();
-        m.harvest = 5;
-        m.fertilize = 3;
+        let mut m = OperationsMap { harvest: 5, fertilize: 3, ..Default::default() };
         m.reset();
         assert_eq!(m.harvest, 0);
         assert_eq!(m.fertilize, 0);
@@ -735,7 +732,7 @@ mod tests {
         // 用临时目录避免污染 data/stats
         let temp_dir = std::env::temp_dir().join("qq-farm-stats-test");
         let prev = std::env::var("FARM_DATA_DIR").ok();
-        let _ = std::env::set_var("FARM_DATA_DIR", &temp_dir);
+        std::env::set_var("FARM_DATA_DIR", &temp_dir);
         let acc = "test-acc-save";
         let data = PersistedStats {
             date: get_today_key(),

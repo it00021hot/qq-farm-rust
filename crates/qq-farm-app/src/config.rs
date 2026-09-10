@@ -21,7 +21,7 @@ pub fn list_seeds() -> Value {
                 .unwrap_or_default();
             let mut val = serde_json::to_value(&s).unwrap_or(json!({}));
             if let Some(obj) = val.as_object_mut() {
-                obj.insert("priceId".into(), json!(sells.first().map(|p| p.0).unwrap_or(0)));
+                obj.insert("priceId".into(), json!(sells.first().map_or(0, |p| p.0)));
                 if !obj.contains_key("image") {
                     obj.insert(
                         "image".into(),
@@ -47,7 +47,7 @@ fn first_sell_pair(
     sells.first().copied().unwrap_or((0, 0))
 }
 
-/// 果实列表（item_type == 6）。
+/// `果实列表（item_type` == 6）。
 #[must_use]
 pub fn list_fruits() -> Value {
     let gc = qq_farm_core::config::game_config::global();
@@ -57,7 +57,7 @@ pub fn list_fruits() -> Value {
         .filter(|i| i.item_type == 6)
         .map(|fruit| {
             let plant = gc.get_plant_by_fruit_id(fruit.id);
-            let (price_id, price) = first_sell_pair(&gc, &fruit, true);
+            let (price_id, price) = first_sell_pair(gc, &fruit, true);
             json!({
                 "id": fruit.id,
                 "name": fruit.name,
@@ -88,7 +88,7 @@ pub fn list_items() -> Value {
         .into_iter()
         .filter(|i| i.item_type != 5 && i.item_type != 6)
         .map(|item| {
-            let (price_id, price) = first_sell_pair(&gc, &item, false);
+            let (price_id, price) = first_sell_pair(gc, &item, false);
             json!({
                 "id": item.id,
                 "type": item.item_type,

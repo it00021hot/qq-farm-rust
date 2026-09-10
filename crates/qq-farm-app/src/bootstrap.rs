@@ -15,14 +15,14 @@ use crate::session::AppContext;
 /// 加载本地持久化状态（账号、用户、全局配置等）。
 pub fn load_persisted_stores() {
     let _ = qq_farm_core::models::store::accounts::load_into_global();
-    let _ = qq_farm_core::models::user_store::auth::load_login_attempts();
-    let _ = qq_farm_core::models::user_store::auth::load_login_logs();
-    let _ = qq_farm_core::models::user_store::users::load_users();
+    let () = qq_farm_core::models::user_store::auth::load_login_attempts();
+    let () = qq_farm_core::models::user_store::auth::load_login_logs();
+    let () = qq_farm_core::models::user_store::users::load_users();
     let _ = qq_farm_core::models::store::global_config::load_global_config();
     qq_farm_core::models::user_store::init();
 }
 
-/// 从环境变量 / system_config 构造网关模板。
+/// 从环境变量 / `system_config` 构造网关模板。
 #[must_use]
 pub fn gateway_template_from_env(gateway_origin: &str) -> GatewayConfigTemplate {
     let mut gateway_template = GatewayConfigTemplate {
@@ -82,7 +82,7 @@ pub fn gateway_template_from_env(gateway_origin: &str) -> GatewayConfigTemplate 
         let ua = if rt.device_info.user_agent.is_empty() {
             DeviceInfo::windows_pc().user_agent
         } else {
-            rt.device_info.user_agent.clone()
+            rt.device_info.user_agent
         };
         gateway_template.headers.insert("User-Agent".to_string(), ua);
         gateway_template.headers.insert("Origin".to_string(), gateway_origin.to_string());
@@ -98,9 +98,10 @@ pub fn assemble_app_context(max_workers: usize, gateway_origin: &str) -> AppCont
     let engine = Arc::new(RuntimeEngine::assemble(EngineConfig {
         max_workers,
         gateway_template,
-        tsdk_wasm_path: std::env::var("TSDK_WASM_PATH")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| qq_farm_core::config::get_resource_path(&["assets", "tsdk.wasm"])),
+        tsdk_wasm_path: std::env::var("TSDK_WASM_PATH").map_or_else(
+            |_| qq_farm_core::config::get_resource_path(&["assets", "tsdk.wasm"]),
+            PathBuf::from,
+        ),
         data_root: qq_farm_core::config::get_data_dir(),
         ..Default::default()
     }));

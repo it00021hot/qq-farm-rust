@@ -78,9 +78,7 @@ pub async fn friend_interaction_items(
     account_id: String,
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
-    friend::friend_interaction_items(&state.app, &account_id)
-        .await
-        .map_err(IpcError::from)
+    friend::friend_interaction_items(&state.app, &account_id).await.map_err(IpcError::from)
 }
 
 /// 对好友农场批量使用互动道具。
@@ -105,9 +103,7 @@ pub async fn farm_interaction_items(
     account_id: String,
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
-    friend::farm_interaction_items(&state.app, &account_id)
-        .await
-        .map_err(IpcError::from)
+    friend::farm_interaction_items(&state.app, &account_id).await.map_err(IpcError::from)
 }
 
 /// 对自己农场批量使用互动道具。
@@ -131,9 +127,7 @@ pub async fn illustrated_snapshot(
     account_id: String,
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
-    friend::illustrated_snapshot(&state.app, &account_id)
-        .await
-        .map_err(IpcError::from)
+    friend::illustrated_snapshot(&state.app, &account_id).await.map_err(IpcError::from)
 }
 
 /// 游戏内删除好友（成功后加入本地黑名单）。
@@ -144,9 +138,10 @@ pub async fn friend_delete(
     gid: String,
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
-    let gid_num: i64 = gid.trim().parse().map_err(|_| {
-        IpcError::from(AppError::BadRequest("无效的好友 GID".to_string()))
-    })?;
+    let gid_num: i64 = gid
+        .trim()
+        .parse()
+        .map_err(|_| IpcError::from(AppError::BadRequest("无效的好友 GID".to_string())))?;
     qq_farm_app::friend::delete_friend(&state.app, &account_id, gid_num)
         .await
         .map_err(IpcError::from)?;

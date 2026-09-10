@@ -928,6 +928,10 @@ declare namespace App {
             charityClaimGift: string;
             charityGiftClaimed: string;
             charityProgressRewards: string;
+            charityClaimProgress: string;
+            charityProgressClaiming: string;
+            charityProgressClaimed: string;
+            charityProgressReached: string;
             charityReached: string;
             charityTarget: string;
             charityRules: string;

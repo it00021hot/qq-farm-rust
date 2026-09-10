@@ -89,7 +89,13 @@ pub fn run() {
                     let _ = window.set_size(LogicalSize::new(win_w, win_h));
                     let _ = window.set_position(LogicalPosition::new(x, y));
                     tracing::info!(
-                        win_w, win_h, x, y, mon_w_logical, mon_h_logical, scale,
+                        win_w,
+                        win_h,
+                        x,
+                        y,
+                        mon_w_logical,
+                        mon_h_logical,
+                        scale,
                         "主窗口已居中并设定尺寸"
                     );
                 } else {
@@ -159,6 +165,7 @@ pub fn run() {
             commands::activity::activity_claim_charity_seeds,
             commands::activity::activity_donate_charity_love,
             commands::activity::activity_claim_charity_daily_gift,
+            commands::activity::activity_claim_charity_progress_reward,
             // weather
             commands::weather::weather_snapshot,
             commands::weather::weather_friends,
@@ -236,11 +243,12 @@ mod acl_tests {
         let mut handler: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         for line in lib_src.lines() {
             let line = line.trim().trim_end_matches(',');
-            if let Some((path, _)) = line.split_once("::").map(|(a, b)| (a, b)) {
+            if let Some((path, _)) = line.split_once("::") {
                 // 形如 commands::activity::activity_snapshot
                 if path == "commands" {
                     if let Some(name) = line.rsplit("::").next() {
-                        if name.chars().all(|c| c.is_ascii_lowercase() || c == '_') && !name.is_empty()
+                        if name.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+                            && !name.is_empty()
                         {
                             handler.insert(name.to_string());
                         }

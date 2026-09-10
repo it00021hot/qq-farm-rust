@@ -558,10 +558,8 @@ pub fn apply_config_snapshot(
             for (k, v) in obj {
                 let Ok(seed_id) = k.parse::<i64>() else { continue };
                 let Some(arr) = v.as_array() else { continue };
-                let mut types: Vec<crate::models::types::FertilizerLandType> = arr
-                    .iter()
-                    .filter_map(|t| serde_json::from_value(t.clone()).ok())
-                    .collect();
+                let mut types: Vec<crate::models::types::FertilizerLandType> =
+                    arr.iter().filter_map(|t| serde_json::from_value(t.clone()).ok()).collect();
                 types.dedup();
                 // 空 / 勾满全部类型（5 类）等价不限制，省略该 key
                 if types.is_empty()
@@ -669,6 +667,7 @@ mod tests {
 
     #[test]
     #[serial(account_config)]
+    #[serial(farm_data_dir)]
     fn get_snapshot_no_id_returns_fallback() {
         reset();
         // FARM_ACCOUNT_ID not set
@@ -678,6 +677,7 @@ mod tests {
 
     #[test]
     #[serial(account_config)]
+    #[serial(farm_data_dir)]
     fn set_then_get_roundtrip() {
         reset();
         let mut cfg = default_account_config();
@@ -692,6 +692,7 @@ mod tests {
 
     #[test]
     #[serial(account_config)]
+    #[serial(farm_data_dir)]
     fn ensure_creates_default() {
         reset();
         let cfg = ensure_account_config("acc2").expect("ensure");
@@ -703,6 +704,7 @@ mod tests {
 
     #[test]
     #[serial(account_config)]
+    #[serial(farm_data_dir)]
     fn known_friend_gids_with_file_cache_fallback() {
         reset();
         let aid = "test_known_gids_acc";
@@ -716,10 +718,11 @@ mod tests {
 
     #[test]
     #[serial(account_config)]
+    #[serial(farm_data_dir)]
     fn add_to_blacklist_idempotent() {
         reset();
         let aid = "test_blacklist_acc";
-        let _ = remove_account_config(aid); // 先清
+        remove_account_config(aid); // 先清
         assert!(add_friend_to_blacklist(aid, 100));
         assert!(!add_friend_to_blacklist(aid, 100));
         assert!(add_friend_to_blacklist(aid, 200));
@@ -729,6 +732,7 @@ mod tests {
 
     #[test]
     #[serial(account_config)]
+    #[serial(farm_data_dir)]
     fn apply_config_snapshot_overrides_planting() {
         reset();
         let mut s = serde_json::Map::new();
@@ -742,6 +746,7 @@ mod tests {
 
     #[test]
     #[serial(account_config)]
+    #[serial(farm_data_dir)]
     fn apply_config_snapshot_clamp_intervals() {
         reset();
         let mut s = serde_json::Map::new();

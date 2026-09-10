@@ -148,7 +148,7 @@ impl WarehouseService {
         let req = BagRequest {};
         let body =
             gateway.request("gamepb.itempb.ItemService", "Bag", &req.encode_to_vec()).await?;
-        Ok(BagReply::decode(&body[..])?)
+        BagReply::decode(&body[..])
     }
 
     /// 出售物品。对齐 bot `sellItems`：不可售物品在发 RPC 前拒绝。
@@ -183,7 +183,7 @@ impl WarehouseService {
         let req = SellRequest { items: payload };
         let body =
             self.gateway.request("gamepb.itempb.ItemService", "Sell", &req.encode_to_vec()).await?;
-        Ok(SellReply::decode(&body)?)
+        SellReply::decode(&body)
     }
 
     /// 使用背包物品。对齐原 `warehouse.useItem`：`UseRequest { item: { id, count, uid } }`。
@@ -193,8 +193,8 @@ impl WarehouseService {
         let bag_items = get_bag_items(&bag);
         let candidates: Vec<BagItemLite> = bag_items
             .iter()
+            .filter(|&it| it.id == item_id && (uid <= 0 || it.uid == uid))
             .cloned()
-            .filter(|it| it.id == item_id && (uid <= 0 || it.uid == uid))
             .collect();
         let available: i64 = candidates.iter().map(|it| it.count.max(0)).sum();
         if available < count {
@@ -237,13 +237,10 @@ impl WarehouseService {
         let Some(item) = single else {
             return Err(crate::error::Error::Business(format!("背包中未找到物品 {item_id}")));
         };
-        let req = UseRequest {
-            item: Some(core_item(item_id, count, item.uid)),
-            target: None,
-        };
+        let req = UseRequest { item: Some(core_item(item_id, count, item.uid)), target: None };
         let body =
             self.gateway.request("gamepb.itempb.ItemService", "Use", &req.encode_to_vec()).await?;
-        Ok(UseReply::decode(&body)?)
+        UseReply::decode(&body)
     }
 
     /// 批量使用
@@ -255,7 +252,7 @@ impl WarehouseService {
             .gateway
             .request("gamepb.itempb.ItemService", "BatchUse", &req.encode_to_vec())
             .await?;
-        Ok(BatchUseReply::decode(&body)?)
+        BatchUseReply::decode(&body)
     }
 
     /// 自动开启化肥礼包
@@ -851,7 +848,7 @@ pub struct BagItemLite {
 impl BagItemLite {
     #[must_use]
     pub fn new(id: i64, count: i64, uid: i64) -> Self {
-        Self { id, count, uid, mutant_types: vec![], expire_time: 0, locked: false, }
+        Self { id, count, uid, mutant_types: vec![], expire_time: 0, locked: false }
     }
 }
 
@@ -1147,8 +1144,22 @@ mod tests {
     #[test]
     fn bag_detail_splits_by_uid_not_item_id() {
         let detail = build_bag_detail_from_items(&[
-            BagItemLite { id: 41221, count: 2, uid: 100, mutant_types: vec![1], expire_time: 0, locked: false, },
-            BagItemLite { id: 41221, count: 3, uid: 200, mutant_types: vec![], expire_time: 0, locked: false, },
+            BagItemLite {
+                id: 41221,
+                count: 2,
+                uid: 100,
+                mutant_types: vec![1],
+                expire_time: 0,
+                locked: false,
+            },
+            BagItemLite {
+                id: 41221,
+                count: 3,
+                uid: 200,
+                mutant_types: vec![],
+                expire_time: 0,
+                locked: false,
+            },
             BagItemLite::new(1011, 3600, 0),
         ]);
         assert_eq!(detail.items.len(), 3);

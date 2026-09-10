@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use rand::Rng;
+use rand::RngExt;
 use tokio::time::sleep;
 
 /// 异步 sleep
@@ -29,8 +29,8 @@ pub fn random_i64(min: i64, max: i64) -> i64 {
     if max <= min {
         return min;
     }
-    let mut rng = rand::thread_rng();
-    rng.gen_range(min..=max)
+    let mut rng = rand::rng();
+    rng.random_range(min..=max)
 }
 
 /// 范围内随机 u64（含两端）
@@ -38,8 +38,8 @@ pub fn random_u64(min: u64, max: u64) -> u64 {
     if max <= min {
         return min;
     }
-    let mut rng = rand::thread_rng();
-    rng.gen_range(min..=max)
+    let mut rng = rand::rng();
+    rng.random_range(min..=max)
 }
 
 // =====================================================================
@@ -51,11 +51,11 @@ const TOKEN_ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuv
 /// 创建 gateway token（64~127 字符 + `=` 后缀，字母数字随机）
 #[must_use]
 pub fn create_gateway_token() -> String {
-    let mut rng = rand::thread_rng();
-    let length = 64 + rng.gen_range(0..64) as usize;
+    let mut rng = rand::rng();
+    let length = 64 + rng.random_range(0..64) as usize;
     let mut token = String::with_capacity(length + 1);
     for _ in 0..length {
-        let idx = rng.gen_range(0..TOKEN_ALPHABET.len());
+        let idx = rng.random_range(0..TOKEN_ALPHABET.len());
         token.push(TOKEN_ALPHABET[idx] as char);
     }
     token.push('=');

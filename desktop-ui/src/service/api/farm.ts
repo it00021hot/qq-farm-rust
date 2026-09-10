@@ -37,7 +37,7 @@ function toAccountRecord(raw: any): Api.Farm.Account {
     avatar: String(raw?.avatar ?? ''),
     username: String(raw?.username ?? ''),
     remark: String(raw?.remark ?? raw?.name ?? ''),
-    runStatus: ((raw?.running || raw?.runStatus === 1) ? 1 : 0) as Api.Farm.RunStatus,
+    runStatus: (raw?.running || raw?.runStatus === 1 ? 1 : 0) as Api.Farm.RunStatus,
     lastOnlineAt: Number(raw?.lastOnlineAt ?? raw?.updatedAt ?? raw?.updated_at ?? 0),
     status: (String(raw?.status ?? '1') === '2' ? '2' : '1') as Api.Farm.EnableStatus,
     wxAuthorized: Boolean(raw?.wxAuthorized ?? raw?.wx_authorized),
@@ -138,9 +138,7 @@ function toAutomationDetail(raw: any, accountId: number): Api.Farm.AccountAutoma
     friendQuietHours: normalizeQuietHours(raw?.friendQuietHours),
     friendBlacklist: Array.isArray(raw?.friendBlacklist) ? raw.friendBlacklist.map(Number) : [],
     plantBlacklist: Array.isArray(raw?.plantBlacklist) ? raw.plantBlacklist.map(Number) : [],
-    friendAutoAccept: Boolean(
-      raw?.automation?.friend_auto_accept ?? raw?.automation?.friendAutoAccept ?? true
-    ),
+    friendAutoAccept: Boolean(raw?.automation?.friend_auto_accept ?? raw?.automation?.friendAutoAccept ?? true),
     showManualFertilizer: Boolean(
       raw?.automation?.show_manual_fertilizer ?? raw?.automation?.showManualFertilizer ?? true
     ),
@@ -185,7 +183,10 @@ function toFriendRecord(raw: FriendSummaryDto, accountId: number): Api.Farm.Frie
     gold: Number(raw.gold ?? 0) || undefined,
     avatar: String(raw.avatar ?? raw.avatarUrl ?? raw.avatar_url ?? ''),
     petState: petState as Api.Farm.Friend['petState'],
-    pet: pet && (pet.name || pet.id) ? { id: Number(pet.id || 0), name: String(pet.name || ''), image: String(pet.image || '') } : null,
+    pet:
+      pet && (pet.name || pet.id)
+        ? { id: Number(pet.id || 0), name: String(pet.name || ''), image: String(pet.image || '') }
+        : null,
     plant: raw.plant
       ? {
           stealNum: Number(raw.plant.stealNum ?? 0),
@@ -221,9 +222,7 @@ export async function fetchGetFarmAccountList(params?: Api.Farm.AccountSearchPar
     const kw = String(params.keyword).toLowerCase();
     records = records.filter(
       (a: Api.Farm.Account) =>
-        a.name.toLowerCase().includes(kw) ||
-        a.qq.toLowerCase().includes(kw) ||
-        a.remark.toLowerCase().includes(kw)
+        a.name.toLowerCase().includes(kw) || a.qq.toLowerCase().includes(kw) || a.remark.toLowerCase().includes(kw)
     );
   }
   if (params?.platform) {
@@ -254,8 +253,7 @@ async function upsertAndPick(req: Record<string, unknown>) {
   if (res.error) return res as FlatResponseData<any, Api.Farm.Account>;
   const accounts = Array.isArray(res.data?.accounts) ? res.data.accounts.map(toAccountRecord) : [];
   const id = req.id != null ? Number(req.id) : NaN;
-  let picked =
-    Number.isFinite(id) && id > 0 ? accounts.find((a: Api.Farm.Account) => a.id === id) : undefined;
+  let picked = Number.isFinite(id) && id > 0 ? accounts.find((a: Api.Farm.Account) => a.id === id) : undefined;
   if (!picked && accounts.length) {
     picked = [...accounts].sort((a, b) => b.updatedAt - a.updatedAt || b.id - a.id)[0];
   }
@@ -429,9 +427,7 @@ export interface SystemConfigResponse {
 function normalizeSystemConfig(source: unknown, fallback: SystemConfigPayload): SystemConfigPayload {
   const row = (source && typeof source === 'object' ? source : {}) as Record<string, unknown>;
   const deviceRow =
-    row.deviceInfo && typeof row.deviceInfo === 'object'
-      ? (row.deviceInfo as Record<string, unknown>)
-      : {};
+    row.deviceInfo && typeof row.deviceInfo === 'object' ? (row.deviceInfo as Record<string, unknown>) : {};
   return {
     serverUrl: String(row.serverUrl ?? row.server_url ?? fallback.serverUrl ?? ''),
     clientVersion: String(row.clientVersion ?? row.client_version ?? fallback.clientVersion ?? ''),
@@ -443,9 +439,7 @@ function normalizeSystemConfig(source: unknown, fallback: SystemConfigPayload): 
       clientVersion: String(
         deviceRow.clientVersion ?? deviceRow.client_version ?? fallback.deviceInfo.clientVersion ?? ''
       ),
-      sysSoftware: String(
-        deviceRow.sysSoftware ?? deviceRow.sys_software ?? fallback.deviceInfo.sysSoftware ?? ''
-      ),
+      sysSoftware: String(deviceRow.sysSoftware ?? deviceRow.sys_software ?? fallback.deviceInfo.sysSoftware ?? ''),
       network: String(deviceRow.network ?? fallback.deviceInfo.network ?? 'wifi'),
       memory: String(deviceRow.memory ?? fallback.deviceInfo.memory ?? ''),
       deviceId: String(deviceRow.deviceId ?? deviceRow.device_id ?? fallback.deviceInfo.deviceId ?? ''),
@@ -526,7 +520,9 @@ function toQqBotBinding(raw: any): Api.Farm.QqBotBinding {
 function toOfflineReminder(raw: any): Api.Farm.OfflineReminder {
   const provider = String(raw?.provider ?? 'none');
   return {
-    provider: (['qq_bot', 'wechat_bot', 'ding_talk'].includes(provider) ? provider : 'none') as Api.Farm.OfflineReminder['provider'],
+    provider: (['qq_bot', 'wechat_bot', 'ding_talk'].includes(provider)
+      ? provider
+      : 'none') as Api.Farm.OfflineReminder['provider'],
     qqBot: {
       appId: String(raw?.qqBot?.appId ?? ''),
       clientSecret: String(raw?.qqBot?.clientSecret ?? '')
@@ -679,8 +675,7 @@ export async function fetchGetFarmFriendList(params?: Api.Farm.FriendSearchParam
   if (params?.keyword) {
     const kw = String(params.keyword).toLowerCase();
     records = records.filter(
-      (f: Api.Farm.Friend) =>
-        String(f.nickname).toLowerCase().includes(kw) || String(f.gid).includes(kw)
+      (f: Api.Farm.Friend) => String(f.nickname).toLowerCase().includes(kw) || String(f.gid).includes(kw)
     );
   }
   return {
@@ -791,16 +786,20 @@ export function fetchClaimFarmActivityCharityDailyGift(data: Api.Farm.ActivityCl
   return invokeFlat('activity_claim_charity_daily_gift', { accountId: aid(data.accountId) });
 }
 
+export function fetchClaimFarmActivityCharityProgressReward(data: Api.Farm.ActivityClaimParams) {
+  const body = data as any;
+  return invokeFlat('activity_claim_charity_progress_reward', {
+    accountId: aid(data.accountId),
+    target: String(body.target ?? '')
+  });
+}
+
 export async function fetchGetFarmAnalyticsDetail(params?: any) {
   const res = await invokeFlat<any>('farm_analytics', {
     sortBy: params?.sortBy ?? params?.sort ?? null
   });
   if (res.error) return res;
-  const rankings = Array.isArray(res.data)
-    ? res.data
-    : Array.isArray(res.data?.rankings)
-      ? res.data.rankings
-      : [];
+  const rankings = Array.isArray(res.data) ? res.data : Array.isArray(res.data?.rankings) ? res.data.rankings : [];
   return { data: { rankings }, error: null, response: {} as any };
 }
 
@@ -935,7 +934,6 @@ export function fetchSaveFarmSettings(accountId: number | string, snapshot: unkn
   return invokeFlat('save_settings', { accountId: aid(accountId), snapshot });
 }
 
-
 // ============ 宠物 / 同气连枝礼包 ============
 
 export function fetchGetPetInfo(accountId: number) {
@@ -1030,11 +1028,7 @@ export function fetchExchangeWeatherCollector(accountId: number) {
 }
 
 export function fetchCollectWeather(accountId: number, friendGid: string) {
-  return invokeFlat(
-    'weather_collect',
-    { accountId: aid(accountId), friendGid: String(friendGid) },
-    { silent: true }
-  );
+  return invokeFlat('weather_collect', { accountId: aid(accountId), friendGid: String(friendGid) }, { silent: true });
 }
 
 export function fetchSummonWeather(accountId: number) {

@@ -51,12 +51,30 @@ pub struct ConstellationActivityState {
     pub no_claimable_days: BTreeMap<String, NoClaimableDayObservation>,
 }
 
+/// 公益小红花进度奖励的本地领取状态。
+///
+/// 服务端在领取成功后仍可能返回 `status=1`，因此仅依赖活动快照无法区分
+/// “已达成待领取”和“已领取”。该状态按账号、活动 ID 持久化。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct CharityRedFlowerState {
+    #[serde(default, rename = "activityId")]
+    pub activity_id: String,
+    #[serde(default)]
+    pub initialized: bool,
+    #[serde(default, rename = "claimedProgressTargets")]
+    pub claimed_progress_targets: Vec<String>,
+    #[serde(default, rename = "pendingProgressTargets")]
+    pub pending_progress_targets: Vec<String>,
+}
+
 /// 状态文件
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ActivityCenterStateFile {
     pub version: i32,
     #[serde(default)]
     pub records: BTreeMap<String, ConstellationActivityState>,
+    #[serde(default, rename = "charityRecords")]
+    pub charity_records: BTreeMap<String, CharityRedFlowerState>,
 }
 
 /// 文件路径选项（测试可注入）
@@ -134,7 +152,7 @@ pub fn normalize_no_claimable_days(
             };
             let observed_at =
                 obs.get("observedAt").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
-            let server_time = normalize_id(obs.get("serverTime").and_then(|v| v.as_str()).into());
+            let server_time = normalize_id(obs.get("serverTime").and_then(|v| v.as_str()));
             if observed_at.is_empty() || server_time.is_empty() {
                 continue;
             }
@@ -292,7 +310,11 @@ pub fn get_activity_center_state_file(
 }
 
 fn empty_state_file() -> ActivityCenterStateFile {
-    ActivityCenterStateFile { version: STATE_FILE_VERSION, records: BTreeMap::new() }
+    ActivityCenterStateFile {
+        version: STATE_FILE_VERSION,
+        records: BTreeMap::new(),
+        charity_records: BTreeMap::new(),
+    }
 }
 
 pub fn normalize_state_file(value: serde_json::Value) -> ActivityCenterStateFile {
@@ -314,7 +336,25 @@ pub fn normalize_state_file(value: serde_json::Value) -> ActivityCenterStateFile
             records.insert(k.clone(), state);
         }
     }
-    ActivityCenterStateFile { version: STATE_FILE_VERSION, records }
+    let charity_records_raw = obj
+        .get("charityRecords")
+        .or_else(|| obj.get("charity_records"))
+        .cloned()
+        .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+    let charity_records = charity_records_raw
+        .as_object()
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|(key, value)| {
+                    let activity_id = key.parse::<i64>().ok().filter(|id| *id > 0)?;
+                    let normalized = normalize_charity_red_flower_state(value.clone(), activity_id);
+                    (!normalized.activity_id.is_empty()).then_some((key.clone(), normalized))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    ActivityCenterStateFile { version: STATE_FILE_VERSION, records, charity_records }
 }
 
 pub fn load_constellation_state(
@@ -323,7 +363,7 @@ pub fn load_constellation_state(
     options: &StateFileOptions,
 ) -> ConstellationActivityState {
     let file =
-        normalize_state_file(read_json_or(&get_activity_center_state_file(account_id, options)));
+        normalize_state_file(read_json_or(get_activity_center_state_file(account_id, options)));
     let key = state_record_key(identity);
     let raw = serde_json::to_value(file.records.get(&key)).unwrap_or(serde_json::Value::Null);
     normalize_constellation_state(raw, identity)
@@ -349,6 +389,130 @@ pub fn persist_constellation_state(
     merged
 }
 
+pub fn create_empty_charity_red_flower_state(activity_id: i64) -> CharityRedFlowerState {
+    CharityRedFlowerState {
+        activity_id: normalize_id(Some(&activity_id.to_string())),
+        initialized: false,
+        claimed_progress_targets: Vec::new(),
+        pending_progress_targets: Vec::new(),
+    }
+}
+
+fn json_target_strings(value: &serde_json::Value) -> Vec<String> {
+    value
+        .as_array()
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| {
+                    value
+                        .as_str()
+                        .map(str::to_string)
+                        .or_else(|| value.as_i64().map(|n| n.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub fn normalize_charity_red_flower_state(
+    value: serde_json::Value,
+    activity_id: i64,
+) -> CharityRedFlowerState {
+    let expected_activity_id = normalize_id(Some(&activity_id.to_string()));
+    let Some(obj) = value.as_object() else {
+        return create_empty_charity_red_flower_state(activity_id);
+    };
+    let actual_activity_id = obj
+        .get("activityId")
+        .or_else(|| obj.get("activity_id"))
+        .and_then(|value| {
+            value.as_str().map(str::to_string).or_else(|| value.as_i64().map(|n| n.to_string()))
+        })
+        .map(|value| normalize_id(Some(&value)))
+        .unwrap_or_default();
+    if actual_activity_id != expected_activity_id {
+        return create_empty_charity_red_flower_state(activity_id);
+    }
+    let claimed_progress_targets = normalize_node_ids(&json_target_strings(
+        obj.get("claimedProgressTargets")
+            .or_else(|| obj.get("claimed_progress_targets"))
+            .unwrap_or(&serde_json::Value::Null),
+    ));
+    let claimed: BTreeSet<String> = claimed_progress_targets.iter().cloned().collect();
+    let pending_progress_targets = normalize_node_ids(&json_target_strings(
+        obj.get("pendingProgressTargets")
+            .or_else(|| obj.get("pending_progress_targets"))
+            .unwrap_or(&serde_json::Value::Null),
+    ))
+    .into_iter()
+    .filter(|target| !claimed.contains(target))
+    .collect();
+    CharityRedFlowerState {
+        activity_id: expected_activity_id,
+        initialized: obj.get("initialized").and_then(serde_json::Value::as_bool).unwrap_or(false),
+        claimed_progress_targets,
+        pending_progress_targets,
+    }
+}
+
+pub fn merge_charity_red_flower_states(
+    activity_id: i64,
+    states: &[serde_json::Value],
+) -> CharityRedFlowerState {
+    let expected_activity_id = normalize_id(Some(&activity_id.to_string()));
+    let mut claimed = BTreeSet::new();
+    let mut pending = BTreeSet::new();
+    let mut initialized = false;
+    for state_value in states {
+        let state = normalize_charity_red_flower_state(state_value.clone(), activity_id);
+        initialized |= state.initialized;
+        claimed.extend(state.claimed_progress_targets);
+        pending.extend(state.pending_progress_targets);
+    }
+    for target in &claimed {
+        pending.remove(target);
+    }
+    CharityRedFlowerState {
+        activity_id: expected_activity_id,
+        initialized,
+        claimed_progress_targets: claimed.into_iter().collect(),
+        pending_progress_targets: pending.into_iter().collect(),
+    }
+}
+
+pub fn load_charity_red_flower_state(
+    activity_id: i64,
+    account_id: Option<&str>,
+    options: &StateFileOptions,
+) -> CharityRedFlowerState {
+    let file =
+        normalize_state_file(read_json_or(get_activity_center_state_file(account_id, options)));
+    let key = activity_id.to_string();
+    let raw =
+        serde_json::to_value(file.charity_records.get(&key)).unwrap_or(serde_json::Value::Null);
+    normalize_charity_red_flower_state(raw, activity_id)
+}
+
+pub fn persist_charity_red_flower_state(
+    state_value: serde_json::Value,
+    activity_id: i64,
+    account_id: Option<&str>,
+    options: &StateFileOptions,
+) -> CharityRedFlowerState {
+    let file_path = get_activity_center_state_file(account_id, options);
+    let mut file = normalize_state_file(read_json_or(&file_path));
+    let key = activity_id.to_string();
+    let existing =
+        serde_json::to_value(file.charity_records.get(&key)).unwrap_or(serde_json::Value::Null);
+    let merged = merge_charity_red_flower_states(activity_id, &[existing, state_value]);
+    file.charity_records.insert(key, merged.clone());
+    if let Ok(text) = serde_json::to_string_pretty(&file) {
+        let _ = write_text_file_atomic(&file_path, &text);
+    }
+    merged
+}
+
 fn json_node_id(node: &serde_json::Value) -> Option<String> {
     let value = node.get("node_id").or_else(|| node.get("nodeId")).or_else(|| node.get("id"))?;
     if let Some(s) = value.as_str() {
@@ -360,10 +524,8 @@ fn json_node_id(node: &serde_json::Value) -> Option<String> {
         }
     } else if let Some(n) = value.as_i64() {
         Some(n.to_string())
-    } else if let Some(n) = value.as_u64() {
-        Some(n.to_string())
     } else {
-        None
+        value.as_u64().map(|n| n.to_string())
     }
 }
 
@@ -420,7 +582,7 @@ pub fn state_with_no_claimable_day(
     let normalized_day = day;
     let mut day_state = create_empty_constellation_state(identity);
     if (1..=28).contains(&normalized_day) {
-        let observed = observed_at.map(String::from).unwrap_or_else(|| chrono_like_now_iso());
+        let observed = observed_at.map(String::from).unwrap_or_else(chrono_like_now_iso);
         day_state.no_claimable_days.insert(
             normalized_day.to_string(),
             NoClaimableDayObservation {
@@ -631,5 +793,28 @@ mod tests {
         });
         let merged = merge_constellation_states(&id, &[a, b]);
         assert_eq!(merged.no_claimable_days.get("3").unwrap().server_time, "200");
+    }
+
+    #[test]
+    fn charity_state_roundtrip_and_merge() {
+        let path = std::env::temp_dir().join(format!(
+            "qq-farm-charity-state-{}-{}.json",
+            std::process::id(),
+            crate::utils::time::now_ms()
+        ));
+        let options = StateFileOptions { file_path: Some(path.to_string_lossy().into_owned()) };
+        let state = serde_json::json!({
+            "activityId": "2026090901",
+            "initialized": true,
+            "claimedProgressTargets": ["30"],
+            "pendingProgressTargets": ["60"],
+        });
+        let persisted =
+            persist_charity_red_flower_state(state, 2_026_090_901, Some("test-account"), &options);
+        assert_eq!(persisted.claimed_progress_targets, vec!["30"]);
+        assert_eq!(persisted.pending_progress_targets, vec!["60"]);
+        let loaded = load_charity_red_flower_state(2_026_090_901, Some("test-account"), &options);
+        assert_eq!(loaded, persisted);
+        let _ = std::fs::remove_file(path);
     }
 }

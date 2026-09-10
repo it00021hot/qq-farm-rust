@@ -76,9 +76,8 @@ pub struct SessionToken {
 /// 生成 32 字节随机 hex token
 #[must_use]
 pub fn generate_token(length: usize) -> String {
-    use rand::RngCore;
     let mut bytes = vec![0u8; length];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::fill(&mut bytes);
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 

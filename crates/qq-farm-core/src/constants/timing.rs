@@ -101,9 +101,9 @@ pub fn wx_startup_reconnect_delay_zh() -> String {
 /// 启动重连相邻账号之间的随机间隔。
 #[must_use]
 pub fn wx_startup_reconnect_stagger_ms() -> u64 {
-    use rand::Rng;
-    rand::thread_rng()
-        .gen_range(WX_STARTUP_RECONNECT_STAGGER_MIN_MS..=WX_STARTUP_RECONNECT_STAGGER_MAX_MS)
+    use rand::RngExt;
+    rand::rng()
+        .random_range(WX_STARTUP_RECONNECT_STAGGER_MIN_MS..=WX_STARTUP_RECONNECT_STAGGER_MAX_MS)
 }
 
 /// 被踢下线的重登等待文案。
@@ -114,7 +114,7 @@ pub fn wx_kickout_reconnect_delay_zh() -> String {
 
 fn duration_ms_zh(duration_ms: u64) -> String {
     let secs = duration_ms / 1000;
-    if secs >= 60 && secs % 60 == 0 {
+    if secs >= 60 && secs.is_multiple_of(60) {
         format!("{} 分钟", secs / 60)
     } else {
         format!("{secs} 秒")

@@ -450,7 +450,8 @@ impl ReloginReminderService {
         }
         // 钉钉渠道：webhook 文本推送（二维码图片钉钉文本消息不带，仅文案提醒）
         if cfg.provider == NotificationProvider::DingTalk {
-            let (title_text, content_text) = self.notice_text(&cfg, &payload, &account_name, &account_id);
+            let (title_text, content_text) =
+                self.notice_text(&cfg, &payload, &account_name, &account_id);
             match crate::services::push::send_dingtalk(
                 &cfg.endpoint,
                 &cfg.token,
@@ -816,7 +817,9 @@ mod tests {
             .await;
             // 不完整，应该不发
             let logs = logger.logs.lock().clone();
-            assert!(logs.iter().any(|(_, m)| m.contains("触发下线通知") || m.contains("触发下线提醒")));
+            assert!(logs
+                .iter()
+                .any(|(_, m)| m.contains("触发下线通知") || m.contains("触发下线提醒")));
             assert!(!logs.iter().any(|(_, m)| m.contains("下线提醒配置: provider=")));
         });
     }
@@ -838,7 +841,9 @@ mod tests {
             })
             .await;
             let logs = logger.logs.lock().clone();
-            assert!(logs.iter().any(|(_, m)| m.contains("触发下线通知") || m.contains("触发下线提醒")));
+            assert!(logs
+                .iter()
+                .any(|(_, m)| m.contains("触发下线通知") || m.contains("触发下线提醒")));
             assert!(!logs.iter().any(|(_, m)| m.contains("下线提醒配置不完整")));
             assert!(!logs.iter().any(|(_, m)| m.contains("下线提醒配置: provider=")));
         });

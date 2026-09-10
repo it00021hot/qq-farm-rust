@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 description = "QQ 农场业务核心库（纯逻辑层）"
 
 [lints]
@@ -19,8 +23,8 @@ tokio = { workspace = true }
 tokio-util = { workspace = true, features = ["rt"] }
 async-trait = { workspace = true }
 futures = { workspace = true }
-tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "native-tls-vendored"] }
-tungstenite = "0.24"
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "native-tls-vendored"] }
+tungstenite = "0.30"
 native-tls = { version = "0.2", features = ["vendored"] }
 tokio-native-tls = "0.3"
 tokio-stream = { version = "0.1", features = ["sync"] }
@@ -72,11 +76,11 @@ aes-gcm = { workspace = true }
 lz4_flex = { workspace = true }
 p256 = { workspace = true }
 qrcode = { version = "0.14.1", features = ["image"] }
-image = { version = "0.25.6", features = ["png"] }
+image = { version = "0.25.10", features = ["png"] }
 
 [build-dependencies]
 prost-build = { workspace = true }
 
 [dev-dependencies]
-serial_test = "3"
+serial_test = "4"
 axum = { workspace = true, features = ["ws"] }

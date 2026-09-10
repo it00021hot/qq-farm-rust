@@ -1,4 +1,4 @@
 // build.rs — Tauri build hook
 fn main() {
-    tauri_build::build()
+    tauri_build::build();
 }

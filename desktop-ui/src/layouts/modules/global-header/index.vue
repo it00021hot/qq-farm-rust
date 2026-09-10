@@ -6,12 +6,7 @@ import { GLOBAL_HEADER_MENU_ID } from '@/constants/app';
 import { useAppStore } from '@/store/modules/app';
 import { useThemeStore } from '@/store/modules/theme';
 import { isTauriRuntime } from '@/service/tauri/client';
-import {
-  desktopIsFullscreen,
-  desktopStartDragging,
-  desktopToggleFullscreen,
-  isDesktopWindows
-} from '@/utils/desktop';
+import { desktopIsFullscreen, desktopStartDragging, desktopToggleFullscreen, isDesktopWindows } from '@/utils/desktop';
 import GlobalLogo from '../global-logo/index.vue';
 import GlobalBreadcrumb from '../global-breadcrumb/index.vue';
 import GlobalSearch from '../global-search/index.vue';
@@ -39,9 +34,7 @@ const webFullscreen = useFullscreen();
 const nativeFullscreen = ref(false);
 let unlistenResize: (() => void) | undefined;
 
-const isFullscreen = computed(() =>
-  isTauriRuntime() ? nativeFullscreen.value : webFullscreen.isFullscreen.value
-);
+const isFullscreen = computed(() => (isTauriRuntime() ? nativeFullscreen.value : webFullscreen.isFullscreen.value));
 
 async function syncNativeFullscreen() {
   nativeFullscreen.value = await desktopIsFullscreen();
@@ -74,9 +67,7 @@ function startWindowDrag(event: MouseEvent) {
   const target = event.target;
   if (
     !(target instanceof Element) ||
-    target.closest(
-      'a, button, input, textarea, select, [contenteditable="true"], [role="button"], .desktop-no-drag'
-    )
+    target.closest('a, button, input, textarea, select, [contenteditable="true"], [role="button"], .desktop-no-drag')
   ) {
     return;
   }

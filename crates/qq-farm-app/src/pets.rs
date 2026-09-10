@@ -11,28 +11,19 @@ use qq_farm_core::services::pets::PetService;
 /// 宠物快照（狗列表 / 狗粮 / 护主时间 / 待领礼包）。
 pub async fn pet_info(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
-    PetService::new(loop_.gateway().clone())
-        .get_pet_info()
-        .await
-        .map_err(AppError::from_core)
+    PetService::new(loop_.gateway().clone()).get_pet_info().await.map_err(AppError::from_core)
 }
 
 /// 上场宠物。
 pub async fn pet_deploy(ctx: &AppContext, account_id: &str, dog_id: i64) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
-    PetService::new(loop_.gateway().clone())
-        .deploy_dog(dog_id)
-        .await
-        .map_err(AppError::from_core)
+    PetService::new(loop_.gateway().clone()).deploy_dog(dog_id).await.map_err(AppError::from_core)
 }
 
 /// 收回宠物。
 pub async fn pet_withdraw(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
-    PetService::new(loop_.gateway().clone())
-        .withdraw_dog()
-        .await
-        .map_err(AppError::from_core)
+    PetService::new(loop_.gateway().clone()).withdraw_dog().await.map_err(AppError::from_core)
 }
 
 /// 使用狗粮。
@@ -53,10 +44,7 @@ pub async fn pet_food_use(
 /// 守护记录。
 pub async fn pet_protect_logs(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
-    PetService::new(loop_.gateway().clone())
-        .get_protect_logs()
-        .await
-        .map_err(AppError::from_core)
+    PetService::new(loop_.gateway().clone()).get_protect_logs().await.map_err(AppError::from_core)
 }
 
 /// 同气连枝礼包状态（待领数量）。

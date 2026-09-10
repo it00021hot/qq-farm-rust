@@ -566,8 +566,8 @@ impl Gateway {
         // ACE request_running CAS），合计最多 2 个并发，等价 bot 的高优先级通道
         // （MAX_HIGH_IN_FLIGHT_REQUESTS=2）。业务高峰 QueueFull 时 AntiData 不能被
         // 饿死，否则 ACE 数据流中断会被服务端踢线。
-        let bypass_rpc_slot = method.eq_ignore_ascii_case("Heartbeat")
-            || method.eq_ignore_ascii_case("AntiData");
+        let bypass_rpc_slot =
+            method.eq_ignore_ascii_case("Heartbeat") || method.eq_ignore_ascii_case("AntiData");
         let is_foreground = rpc_call_is_foreground();
         let _slot = if require_online && !bypass_rpc_slot {
             // 排队也限时（对齐 bot 超时从 sendMsgAsync 调用起算）：槽被卡死时请求
@@ -606,13 +606,7 @@ impl Gateway {
             }
         };
 
-        let ws_tx = match self
-            .inner
-            .ws_sender
-            .lock()
-            .as_ref()
-            .map(|tx| tx.clone())
-        {
+        let ws_tx = match self.inner.ws_sender.lock().as_ref().map(|tx| tx.clone()) {
             Some(tx) => tx,
             None => {
                 let _ = self.inner.requests.cancel(seq);
@@ -763,18 +757,15 @@ impl Gateway {
                     // stage 进 token provider，由下一条出站消息携带（恰好一次）。
                     // 缺这一步服务端 ACE 会话不完整，会不定时静默丢弃连接。
                     match tsdk.get_encrypted_init_info() {
-                        Ok(info) => {
-                            match self.inner.token_provider.stage_init_token(&info) {
-                                Ok(0) => {}
-                                Ok(len) => tracing::info!(
-                                    len,
-                                    "TSDK 初始化凭据已就绪，将随下一条请求发送"
-                                ),
-                                Err(e) => {
-                                    tracing::warn!(error = %e, "TSDK 初始化凭据暂存失败");
-                                }
+                        Ok(info) => match self.inner.token_provider.stage_init_token(&info) {
+                            Ok(0) => {}
+                            Ok(len) => {
+                                tracing::info!(len, "TSDK 初始化凭据已就绪，将随下一条请求发送")
                             }
-                        }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "TSDK 初始化凭据暂存失败");
+                            }
+                        },
                         Err(e) => {
                             tracing::warn!(error = %e, "TSDK get_encrypted_init_info 失败");
                         }
@@ -1041,16 +1032,22 @@ mod tests {
         }
         // 后台拿不到保留槽（排队挂起）
         assert!(
-            tokio::time::timeout(std::time::Duration::from_millis(50), gateway.acquire_rpc_slot(false))
-                .await
-                .is_err(),
+            tokio::time::timeout(
+                std::time::Duration::from_millis(50),
+                gateway.acquire_rpc_slot(false)
+            )
+            .await
+            .is_err(),
             "background must not take the foreground-reserved slot"
         );
         // 前台仍可通过保留槽立即拿到
-        let fg = tokio::time::timeout(std::time::Duration::from_millis(50), gateway.acquire_rpc_slot(true))
-            .await
-            .expect("foreground reserved slot")
-            .expect("permit");
+        let fg = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            gateway.acquire_rpc_slot(true),
+        )
+        .await
+        .expect("foreground reserved slot")
+        .expect("permit");
         drop(fg);
         drop(background);
     }
@@ -1086,9 +1083,9 @@ mod tests {
     /// 后续 load 拿到新实例，原 Arc 引用计数归零后析构（释放旧 TSDK 内存）。
     #[test]
     fn replace_encryptor_swaps_atomic_and_drops_old() {
+        use crate::network::encryptor::Encryptor;
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc as StdArc;
-        use crate::network::encryptor::Encryptor;
 
         struct TestEncryptor {
             id: usize,
@@ -1110,20 +1107,17 @@ mod tests {
 
         // 直接验证 parking_lot::RwLock<Arc<dyn Encryptor>> 的语义。
         let drops = StdArc::new(AtomicUsize::new(0));
-        let lock = parking_lot::RwLock::new(StdArc::new(TestEncryptor {
-            id: 1,
-            drops: drops.clone(),
-        }) as StdArc<dyn Encryptor>);
+        let lock =
+            parking_lot::RwLock::new(
+                StdArc::new(TestEncryptor { id: 1, drops: drops.clone() }) as StdArc<dyn Encryptor>
+            );
 
         // load 拿当前
         assert_eq!(lock.read().encrypt(b"").unwrap(), vec![1u8]);
 
         // 替换为新实例
         let old = lock.read().clone();
-        *lock.write() = StdArc::new(TestEncryptor {
-            id: 2,
-            drops: drops.clone(),
-        });
+        *lock.write() = StdArc::new(TestEncryptor { id: 2, drops: drops.clone() });
         // 旧实例还活着（我们持有了 old）
         assert_eq!(old.encrypt(b"").unwrap(), vec![1u8]);
         // 新实例 load 拿到
@@ -1135,10 +1129,7 @@ mod tests {
 
         // 再换一次
         let old2 = lock.read().clone();
-        *lock.write() = StdArc::new(TestEncryptor {
-            id: 3,
-            drops: drops.clone(),
-        });
+        *lock.write() = StdArc::new(TestEncryptor { id: 3, drops: drops.clone() });
         drop(old2);
         assert_eq!(drops.load(Ordering::Relaxed), 2);
     }

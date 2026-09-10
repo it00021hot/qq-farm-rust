@@ -3,7 +3,6 @@
 use std::collections::HashSet;
 use std::sync::Mutex as StdMutex;
 
-
 use crate::proto::generated::gamepb::plantpb::LandInfo;
 use crate::services::friend::api::FriendApi;
 
@@ -95,7 +94,7 @@ impl PlantPhase {
     pub fn from_i32(v: i32) -> Self {
         match v {
             2 => Self::Sprout,
-            3 | 4 | 5 => Self::Growing,
+            3..=5 => Self::Growing,
             6 => Self::Ripe,
             7 => Self::Dead,
             _ => Self::Seed,
@@ -589,7 +588,12 @@ pub(crate) async fn do_steal_op(
         } else {
             String::new()
         };
-        format!("一键偷取完成 {} 块{}{}", result.ok, if summary.is_empty() { String::new() } else { format!("（{summary}）") }, score_hint)
+        format!(
+            "一键偷取完成 {} 块{}{}",
+            result.ok,
+            if summary.is_empty() { String::new() } else { format!("（{summary}）") },
+            score_hint
+        )
     } else {
         "一键偷取失败或无可偷".to_string()
     };

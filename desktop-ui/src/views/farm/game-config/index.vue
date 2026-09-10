@@ -15,13 +15,7 @@ import type { FlatResponseData } from '@sa/axios';
 import { useAppStore } from '@/store/modules/app';
 import { defaultTransform, useNaivePaginatedTable } from '@/hooks/common/table';
 import { $t } from '@/locales';
-import {
-  formatGrowTime,
-  formatPrice,
-  rarityLabelMap,
-  resolveCatalogImage,
-  type GameConfigTab
-} from './shared';
+import { formatGrowTime, formatPrice, rarityLabelMap, resolveCatalogImage, type GameConfigTab } from './shared';
 import GameConfigSearch from './modules/game-config-search.vue';
 import SeedOperateDrawer from './modules/seed-operate-drawer.vue';
 import FruitOperateDrawer from './modules/fruit-operate-drawer.vue';
@@ -211,194 +205,196 @@ function renderOperate(onEdit: () => void, onDelete: () => Promise<void> | void)
   );
 }
 
-const { columns, columnChecks, data, getDataByPage, loading, mobilePagination, reloadColumns } =
-  useNaivePaginatedTable<FlatResponseData<any, CatalogList>, CatalogRow>({
-    api: () => fetchCatalogPage(),
-    transform: response => defaultTransform(response),
-    immediate: false,
-    paginationProps: {
-      pageSizes: [10, 20, 50, 100]
-    },
-    onPaginationParamsChange: params => {
-      searchParams.value.current = params.page;
-      searchParams.value.size = params.pageSize;
-    },
-    columns: () => {
-      const center = 'center' as const;
-      const selection = {
-        type: 'selection' as const,
-        align: center,
-        width: 48
-      };
+const { columns, columnChecks, data, getDataByPage, loading, mobilePagination, reloadColumns } = useNaivePaginatedTable<
+  FlatResponseData<any, CatalogList>,
+  CatalogRow
+>({
+  api: () => fetchCatalogPage(),
+  transform: response => defaultTransform(response),
+  immediate: false,
+  paginationProps: {
+    pageSizes: [10, 20, 50, 100]
+  },
+  onPaginationParamsChange: params => {
+    searchParams.value.current = params.page;
+    searchParams.value.size = params.pageSize;
+  },
+  columns: () => {
+    const center = 'center' as const;
+    const selection = {
+      type: 'selection' as const,
+      align: center,
+      width: 48
+    };
 
-      if (activeTab.value === 'seeds') {
-        return [
-          selection,
-          {
-            key: 'name',
-            title: $t('page.farm.gameConfig.seed'),
-            align: center,
-            render: (row: CatalogRow) => {
-              const seed = asSeed(row);
-              return (
-                <div class="flex-center gap-8px">
-                  {renderIcon(seed.image, '🌱', iconErrorKey(seed, 'seeds'))}
-                  <span class="font-medium">{seed.name}</span>
-                </div>
-              );
-            }
-          },
-          { key: 'seedId', title: $t('page.farm.gameConfig.seedId'), align: center },
-          {
-            key: 'requiredLevel',
-            title: $t('page.farm.gameConfig.requiredLevel'),
-            align: center,
-            render: (row: CatalogRow) => `Lv.${asSeed(row).requiredLevel}`
-          },
-          {
-            key: 'seasons',
-            title: $t('page.farm.gameConfig.seasons'),
-            align: center,
-            render: (row: CatalogRow) => (
-              <NTag size="small" type={asSeed(row).seasons === 2 ? 'info' : 'success'} bordered={false}>
-                {asSeed(row).seasons === 2 ? '双季' : '单季'}
-              </NTag>
-            )
-          },
-          {
-            key: 'growTime',
-            title: $t('page.farm.gameConfig.growTime'),
-            align: center,
-            render: (row: CatalogRow) => formatGrowTime(asSeed(row).growTime)
-          },
-          {
-            key: 'harvestCount',
-            title: $t('page.farm.gameConfig.harvestCount'),
-            align: center
-          },
-          { key: 'exp', title: $t('page.farm.gameConfig.exp'), align: center },
-          {
-            key: 'price',
-            title: $t('page.farm.gameConfig.price'),
-            align: center,
-            render: (row: CatalogRow) => formatPrice(asSeed(row).price, asSeed(row).priceId)
-          },
-          {
-            key: 'operate',
-            title: $t('common.operate'),
-            align: center,
-            render: (row: CatalogRow) => {
-              const seed = asSeed(row);
-              return renderOperate(
-                () => handleEditSeed(seed),
-                () => handleDeleteSeed(seed)
-              );
-            }
-          }
-        ];
-      }
-
-      if (activeTab.value === 'fruits') {
-        return [
-          selection,
-          {
-            key: 'name',
-            title: $t('page.farm.gameConfig.fruit'),
-            align: center,
-            render: (row: CatalogRow) => {
-              const fruit = asFruit(row);
-              return (
-                <div class="flex-center gap-8px">
-                  {renderIcon(fruit.image, '🍎', iconErrorKey(fruit, 'fruits'))}
-                  <span class="font-medium">{fruit.name}</span>
-                </div>
-              );
-            }
-          },
-          { key: 'id', title: $t('page.farm.gameConfig.fruitId'), align: center },
-          {
-            key: 'plantName',
-            title: $t('page.farm.gameConfig.plant'),
-            align: center,
-            render: (row: CatalogRow) => asFruit(row).plantName || '-'
-          },
-          {
-            key: 'rarity',
-            title: $t('page.farm.gameConfig.rarity'),
-            align: center,
-            render: (row: CatalogRow) => rarityLabelMap[asFruit(row).rarity] || asFruit(row).rarity
-          },
-          {
-            key: 'price',
-            title: $t('page.farm.gameConfig.price'),
-            align: center,
-            render: (row: CatalogRow) => formatPrice(asFruit(row).price, asFruit(row).priceId)
-          },
-          {
-            key: 'operate',
-            title: $t('common.operate'),
-            align: center,
-            render: (row: CatalogRow) => {
-              const fruit = asFruit(row);
-              return renderOperate(
-                () => handleEditFruit(fruit),
-                () => handleDeleteFruit(fruit)
-              );
-            }
-          }
-        ];
-      }
-
+    if (activeTab.value === 'seeds') {
       return [
         selection,
         {
           key: 'name',
-          title: $t('page.farm.gameConfig.item'),
+          title: $t('page.farm.gameConfig.seed'),
           align: center,
           render: (row: CatalogRow) => {
-            const item = asItem(row);
+            const seed = asSeed(row);
             return (
               <div class="flex-center gap-8px">
-                {renderIcon(item.image, '🎒', iconErrorKey(item, 'items'))}
-                <span class="font-medium">{item.name}</span>
+                {renderIcon(seed.image, '🌱', iconErrorKey(seed, 'seeds'))}
+                <span class="font-medium">{seed.name}</span>
               </div>
             );
           }
         },
-        { key: 'id', title: $t('page.farm.gameConfig.itemId'), align: center },
+        { key: 'seedId', title: $t('page.farm.gameConfig.seedId'), align: center },
         {
-          key: 'type',
-          title: $t('page.farm.gameConfig.itemType'),
+          key: 'requiredLevel',
+          title: $t('page.farm.gameConfig.requiredLevel'),
           align: center,
-          render: (row: CatalogRow) => itemTypeLabelMap.value[asItem(row).type] || asItem(row).type
+          render: (row: CatalogRow) => `Lv.${asSeed(row).requiredLevel}`
         },
         {
-          key: 'rarity',
-          title: $t('page.farm.gameConfig.rarity'),
+          key: 'seasons',
+          title: $t('page.farm.gameConfig.seasons'),
           align: center,
-          render: (row: CatalogRow) => rarityLabelMap[asItem(row).rarity] || asItem(row).rarity
+          render: (row: CatalogRow) => (
+            <NTag size="small" type={asSeed(row).seasons === 2 ? 'info' : 'success'} bordered={false}>
+              {asSeed(row).seasons === 2 ? '双季' : '单季'}
+            </NTag>
+          )
         },
+        {
+          key: 'growTime',
+          title: $t('page.farm.gameConfig.growTime'),
+          align: center,
+          render: (row: CatalogRow) => formatGrowTime(asSeed(row).growTime)
+        },
+        {
+          key: 'harvestCount',
+          title: $t('page.farm.gameConfig.harvestCount'),
+          align: center
+        },
+        { key: 'exp', title: $t('page.farm.gameConfig.exp'), align: center },
         {
           key: 'price',
           title: $t('page.farm.gameConfig.price'),
           align: center,
-          render: (row: CatalogRow) => formatPrice(asItem(row).price, asItem(row).priceId)
+          render: (row: CatalogRow) => formatPrice(asSeed(row).price, asSeed(row).priceId)
         },
         {
           key: 'operate',
           title: $t('common.operate'),
           align: center,
           render: (row: CatalogRow) => {
-            const item = asItem(row);
+            const seed = asSeed(row);
             return renderOperate(
-              () => handleEditItem(item),
-              () => handleDeleteItem(item)
+              () => handleEditSeed(seed),
+              () => handleDeleteSeed(seed)
             );
           }
         }
       ];
     }
-  });
+
+    if (activeTab.value === 'fruits') {
+      return [
+        selection,
+        {
+          key: 'name',
+          title: $t('page.farm.gameConfig.fruit'),
+          align: center,
+          render: (row: CatalogRow) => {
+            const fruit = asFruit(row);
+            return (
+              <div class="flex-center gap-8px">
+                {renderIcon(fruit.image, '🍎', iconErrorKey(fruit, 'fruits'))}
+                <span class="font-medium">{fruit.name}</span>
+              </div>
+            );
+          }
+        },
+        { key: 'id', title: $t('page.farm.gameConfig.fruitId'), align: center },
+        {
+          key: 'plantName',
+          title: $t('page.farm.gameConfig.plant'),
+          align: center,
+          render: (row: CatalogRow) => asFruit(row).plantName || '-'
+        },
+        {
+          key: 'rarity',
+          title: $t('page.farm.gameConfig.rarity'),
+          align: center,
+          render: (row: CatalogRow) => rarityLabelMap[asFruit(row).rarity] || asFruit(row).rarity
+        },
+        {
+          key: 'price',
+          title: $t('page.farm.gameConfig.price'),
+          align: center,
+          render: (row: CatalogRow) => formatPrice(asFruit(row).price, asFruit(row).priceId)
+        },
+        {
+          key: 'operate',
+          title: $t('common.operate'),
+          align: center,
+          render: (row: CatalogRow) => {
+            const fruit = asFruit(row);
+            return renderOperate(
+              () => handleEditFruit(fruit),
+              () => handleDeleteFruit(fruit)
+            );
+          }
+        }
+      ];
+    }
+
+    return [
+      selection,
+      {
+        key: 'name',
+        title: $t('page.farm.gameConfig.item'),
+        align: center,
+        render: (row: CatalogRow) => {
+          const item = asItem(row);
+          return (
+            <div class="flex-center gap-8px">
+              {renderIcon(item.image, '🎒', iconErrorKey(item, 'items'))}
+              <span class="font-medium">{item.name}</span>
+            </div>
+          );
+        }
+      },
+      { key: 'id', title: $t('page.farm.gameConfig.itemId'), align: center },
+      {
+        key: 'type',
+        title: $t('page.farm.gameConfig.itemType'),
+        align: center,
+        render: (row: CatalogRow) => itemTypeLabelMap.value[asItem(row).type] || asItem(row).type
+      },
+      {
+        key: 'rarity',
+        title: $t('page.farm.gameConfig.rarity'),
+        align: center,
+        render: (row: CatalogRow) => rarityLabelMap[asItem(row).rarity] || asItem(row).rarity
+      },
+      {
+        key: 'price',
+        title: $t('page.farm.gameConfig.price'),
+        align: center,
+        render: (row: CatalogRow) => formatPrice(asItem(row).price, asItem(row).priceId)
+      },
+      {
+        key: 'operate',
+        title: $t('common.operate'),
+        align: center,
+        render: (row: CatalogRow) => {
+          const item = asItem(row);
+          return renderOperate(
+            () => handleEditItem(item),
+            () => handleDeleteItem(item)
+          );
+        }
+      }
+    ];
+  }
+});
 
 function rowKey(row: CatalogRow) {
   if (activeTab.value === 'seeds') return asSeed(row).seedId;
@@ -406,9 +402,9 @@ function rowKey(row: CatalogRow) {
 }
 
 async function loadItemTypes() {
-  const { data, error } = await fetchGetFarmGameConfigItemTypes();
-  if (!error && data) {
-    itemTypeOptions.value = data.map((t: { label: string; value: number }) => ({
+  const { data: itemTypes, error } = await fetchGetFarmGameConfigItemTypes();
+  if (!error && itemTypes) {
+    itemTypeOptions.value = itemTypes.map((t: { label: string; value: number }) => ({
       label: t.label,
       value: t.value
     }));

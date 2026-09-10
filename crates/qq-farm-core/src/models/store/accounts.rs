@@ -304,7 +304,7 @@ pub fn load_into_global() -> std::io::Result<usize> {
 /// 同步版本 `save_to_file` 保留给初始化 / 显式同步场景。
 pub fn persist_global() {
     let data = accounts_data();
-    let _ = crate::infra::spawn_blocking(move || {
+    crate::infra::spawn_blocking(move || {
         if let Err(e) = save_to_file(&data) {
             tracing::error!(error = %e, "failed to persist accounts.json");
         }
@@ -392,7 +392,7 @@ mod tests {
         let m = get_accounts_by_user();
         assert_eq!(m.get("u1").unwrap().len(), 2);
         assert_eq!(m.get("u2").unwrap().len(), 1);
-        assert!(m.get("u3").is_none());
+        assert!(!m.contains_key("u3"));
     }
 
     #[test]
@@ -496,10 +496,7 @@ mod tests {
         // 新签发 buffer（未显式给 consumed）→ 默认未消费
         assert!(persist_yyb_credentials(
             "1",
-            YybCredentialPatch {
-                wx_login_buffer: Some("buf".into()),
-                ..Default::default()
-            }
+            YybCredentialPatch { wx_login_buffer: Some("buf".into()), ..Default::default() }
         ));
         let saved = get_accounts().into_iter().find(|a| a.id == "1").unwrap();
         assert!(!saved.wx_buffer_consumed);

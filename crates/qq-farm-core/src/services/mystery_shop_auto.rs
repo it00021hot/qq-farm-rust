@@ -140,14 +140,23 @@ pub fn decide_tick(
 
 /// 推送文案
 #[must_use]
-pub fn build_push(shop: &MysteryShopDto, arrival: bool, purchase: bool) -> Option<(String, String)> {
+pub fn build_push(
+    shop: &MysteryShopDto,
+    arrival: bool,
+    purchase: bool,
+) -> Option<(String, String)> {
     if !arrival && !purchase {
         return None;
     }
     let npc = shop.npc.as_ref()?;
-    let reward_name = if npc.reward.name.is_empty() { "神秘商品".to_string() } else { npc.reward.name.clone() };
+    let reward_name = if npc.reward.name.is_empty() {
+        "神秘商品".to_string()
+    } else {
+        npc.reward.name.clone()
+    };
     let item = format!("{reward_name} x{}", npc.reward.count);
-    let price_name = if npc.price.name.is_empty() { "货币".to_string() } else { npc.price.name.clone() };
+    let price_name =
+        if npc.price.name.is_empty() { "货币".to_string() } else { npc.price.name.clone() };
     let price = format!("{} {price_name}", with_thousands(npc.price.count));
     let diff_ms = shop.expire_time.saturating_sub(crate::utils::time::now_ms());
     let remain = if diff_ms > 0 {
@@ -178,7 +187,7 @@ fn with_thousands(v: i64) -> String {
     let bytes = raw.as_bytes();
     let len = bytes.len();
     for (i, b) in bytes.iter().enumerate() {
-        if i > 0 && (len - i) % 3 == 0 {
+        if i > 0 && (len - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(*b as char);
@@ -249,7 +258,11 @@ pub async fn check_tick(
         }
     } else if let Some(reason) = decision.skip_buy_reason {
         let npc = shop.npc.as_ref().cloned().unwrap_or_default();
-        let currency_name = if npc.price.name.is_empty() { "该货币".to_string() } else { npc.price.name.clone() };
+        let currency_name = if npc.price.name.is_empty() {
+            "该货币".to_string()
+        } else {
+            npc.price.name.clone()
+        };
         let message = match reason {
             SkipBuyReason::CurrencyNotAllowed => {
                 format!("神秘商人自动购买已跳过：未允许使用{currency_name}")
@@ -297,7 +310,13 @@ mod tests {
         a
     }
 
-    fn shop(active: bool, npc_id: i64, currency: i64, price: i64, balance: Option<i64>) -> MysteryShopDto {
+    fn shop(
+        active: bool,
+        npc_id: i64,
+        currency: i64,
+        price: i64,
+        balance: Option<i64>,
+    ) -> MysteryShopDto {
         MysteryShopDto {
             active,
             server_time: 0,
@@ -323,7 +342,11 @@ mod tests {
     #[test]
     fn inactive_shop_skips() {
         let state = MysteryShopAutoState::default();
-        let d = decide_tick(&shop(false, 1, GOLD_ITEM_ID, 100, Some(999)), &automation(|a| a.mystery_shop_auto_buy = true), &state);
+        let d = decide_tick(
+            &shop(false, 1, GOLD_ITEM_ID, 100, Some(999)),
+            &automation(|a| a.mystery_shop_auto_buy = true),
+            &state,
+        );
         assert_eq!(d.skip_reason, Some(SkipReason::Inactive));
         assert!(!d.should_buy);
     }

@@ -370,6 +370,16 @@ mod tests {
                 let _ = stream.write_all(header.as_bytes()).await;
                 let _ = stream.write_all(body.as_bytes()).await;
                 let _ = stream.flush().await;
+                // 回包后先半关闭写端、再排空读端到对端关闭。
+                // 若在接收缓冲区还有未读请求数据时直接 drop，内核会发 RST，
+                // 可能截断客户端尚未读完的响应体（并行测试负载下可复现）。
+                let _ = stream.shutdown().await;
+                loop {
+                    match stream.read(&mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                }
             }
         });
         port

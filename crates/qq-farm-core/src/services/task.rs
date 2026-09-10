@@ -295,9 +295,7 @@ impl TaskService {
         match self.claim_task_reward(task.id, use_share).await {
             Ok(reply) => {
                 let reward = get_reward_summary(&reply.items);
-                let reward_str = if reply.items.is_empty() {
-                    "无".to_string()
-                } else if reward.is_empty() {
+                let reward_str = if reply.items.is_empty() || reward.is_empty() {
                     "无".to_string()
                 } else {
                     reward
@@ -624,10 +622,8 @@ pub fn normalize_task_info(task_info: &TaskInfo) -> NormalizedTaskInfo {
 
     let mut append = |task: Task, target: &mut Vec<Task>| {
         let id = task.id;
-        if id > 0 {
-            if !seen_ids.insert(id) {
-                return;
-            }
+        if id > 0 && !seen_ids.insert(id) {
+            return;
         }
         target.push(task);
     };
@@ -743,11 +739,11 @@ fn get_date_key() -> String {
     use chrono::Datelike;
     let server_secs = crate::utils::time::get_server_time_secs();
     let bj_ms = if server_secs > 0 {
-        (server_secs as i64) * 1000 + 8 * 3600 * 1000
+        server_secs * 1000 + 8 * 3600 * 1000
     } else {
         crate::utils::time::now_ms() + 8 * 3600 * 1000
     };
-    let dt = chrono::DateTime::from_timestamp_millis(bj_ms).unwrap_or_else(|| chrono::Utc::now());
+    let dt = chrono::DateTime::from_timestamp_millis(bj_ms).unwrap_or_else(chrono::Utc::now);
     format!("{}-{:02}-{:02}", dt.year(), dt.month(), dt.day())
 }
 

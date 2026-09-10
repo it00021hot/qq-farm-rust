@@ -1,16 +1,17 @@
-//! 公益小红花 — 活动状态 + 三个写操作（对齐 bot `activity-center.ts` charity 部分）。
+//! 公益小红花 — 活动状态 + 写操作（对齐 bot `activity-center.ts` charity 部分）。
 //!
 //! - 状态查询走 `ActivityService.List`，BFS（含 children）定位 2026090901 的
 //!   `charity_red_flower`
 //! - 领种子 op=35（`claim_seed`）、捐爱心 op=36（`donate_love`，一次捐全部）、
 //!   每日公益礼包 op=38（`send_public_fund`）
-//! - 进度奖励只展示不领取（bot `claimSupported: false`）
+//! - 进度奖励 op=37（`claim_progress_reward`）
 
 use prost::Message;
 
 use crate::constants::{
-    ACTIVITY_SERVICE, CHARITY_RED_FLOWER_ACTIVITY_ID, CHARITY_RED_FLOWER_GROUP_ID,
-    CLAIM_CHARITY_DAILY_GIFT_OPERATE_TYPE, CLAIM_CHARITY_SEED_OPERATE_TYPE,
+    ACTIVITY_SERVICE, CHARITY_PROGRESS_ALREADY_CLAIMED_CODE, CHARITY_RED_FLOWER_ACTIVITY_ID,
+    CHARITY_RED_FLOWER_GROUP_ID, CLAIM_CHARITY_DAILY_GIFT_OPERATE_TYPE,
+    CLAIM_CHARITY_PROGRESS_REWARD_OPERATE_TYPE, CLAIM_CHARITY_SEED_OPERATE_TYPE,
     DONATE_CHARITY_LOVE_OPERATE_TYPE,
 };
 use crate::error::Result;
@@ -19,7 +20,12 @@ use crate::proto::generated::gamepb::activitypb::{
     CharityRedFlowerOperateRequest,
 };
 
-use super::dto::{activity_item_dto, item_dto, item_from_id, text_content};
+use crate::services::activity_center_state::{
+    load_charity_red_flower_state, merge_charity_red_flower_states,
+    persist_charity_red_flower_state, CharityRedFlowerState, StateFileOptions,
+};
+
+use super::dto::{activity_item_dto, beijing_date_key, item_dto, item_from_id, text_content};
 use super::error::{ActivityError, ActivityErrorCode};
 use super::ActivityCenterService;
 
@@ -28,7 +34,7 @@ fn charity_err(code: ActivityErrorCode, message: &str) -> ActivityError {
 }
 
 /// 在 List 回包的活动树（含 children）里定位目标活动。
-fn find_activity_data<'a>(entries: &'a [ActivityData], activity_id: i64) -> Option<&'a ActivityData> {
+fn find_activity_data(entries: &[ActivityData], activity_id: i64) -> Option<&ActivityData> {
     let mut queue: Vec<&ActivityData> = entries.iter().collect();
     while let Some(entry) = queue.pop() {
         if entry.activity.as_ref().is_some_and(|a| a.activity_id == activity_id) {
@@ -50,13 +56,27 @@ fn charity_active(begin_time: i64, end_time: i64, server_time: i64) -> bool {
 }
 
 impl ActivityCenterService {
+    #[cfg(test)]
     fn charity_dto(&self, entry: &ActivityData) -> Result<serde_json::Value> {
-        let activity =
-            entry.activity.as_ref().ok_or_else(|| {
-                charity_err(ActivityErrorCode::CharityRedFlowerUnavailable, "服务端未发现公益小红花活动状态")
-            })?;
+        self.charity_dto_with_state(entry, None)
+    }
+
+    fn charity_dto_with_state(
+        &self,
+        entry: &ActivityData,
+        progress_state: Option<&CharityRedFlowerState>,
+    ) -> Result<serde_json::Value> {
+        let activity = entry.activity.as_ref().ok_or_else(|| {
+            charity_err(
+                ActivityErrorCode::CharityRedFlowerUnavailable,
+                "服务端未发现公益小红花活动状态",
+            )
+        })?;
         let state = entry.charity_red_flower.as_ref().ok_or_else(|| {
-            charity_err(ActivityErrorCode::CharityRedFlowerUnavailable, "服务端未发现公益小红花活动状态")
+            charity_err(
+                ActivityErrorCode::CharityRedFlowerUnavailable,
+                "服务端未发现公益小红花活动状态",
+            )
         })?;
 
         let server_time = crate::utils::time::get_server_time_secs();
@@ -68,23 +88,40 @@ impl ActivityCenterService {
         let seed_status = state.seed_reward_status;
         let public_fund = state.public_fund.as_ref();
         let public_fund_status = public_fund.map(|p| p.status).unwrap_or(0);
-        let daily_gift_claimed = public_fund_status != 0
-            || public_fund.is_some_and(|p| p.date != 0 || !p.order_id.is_empty());
+        let public_fund_date = public_fund.map(|p| p.date).unwrap_or(0);
+        // public_fund 是历史记录，可能仍保留昨天的订单；只有今天的记录才算今日已领。
+        let today_key = beijing_date_key().replace('-', "");
+        let daily_gift_claimed = state.flow_status == 3
+            || (public_fund_date != 0 && public_fund_date.to_string() == today_key);
+        let daily_gift_harvested_today = state.flow_status == 2 || state.flow_status == 3;
+        let progress_state = progress_state
+            .cloned()
+            .unwrap_or_else(|| reconcile_charity_progress_state(entry, None));
+        let claimed_targets: std::collections::BTreeSet<String> =
+            progress_state.claimed_progress_targets.iter().cloned().collect();
+        let pending_targets: std::collections::BTreeSet<String> =
+            progress_state.pending_progress_targets.iter().cloned().collect();
         let progress_rewards: Vec<serde_json::Value> = state
             .progress_rewards
             .iter()
             .map(|reward| {
+                let target = reward.target.to_string();
+                let reached = donated_love >= reward.target && reward.target > 0;
+                let claimed = claimed_targets.contains(&target);
                 serde_json::json!({
-                    "target": reward.target.to_string(),
+                    "target": target,
                     "reward": activity_item_or_default(&reward.reward),
                     "statusCode": reward.status.to_string(),
-                    "reached": donated_love >= reward.target && reward.target > 0,
-                    "claimSupported": false,
+                    "reached": reached,
+                    "claimed": claimed,
+                    "claimable": reached && reward.status == 1 && !claimed && pending_targets.contains(&target),
+                    "claimSupported": true,
                 })
             })
             .collect();
         let global_reward = state.global_reward.as_ref();
-        let global_reward_target = merge_reward_target(global_reward.map(|g| g.target), state.global_target_love);
+        let global_reward_target =
+            merge_reward_target(global_reward.map(|g| g.target), state.global_target_love);
 
         let name = if activity.name.trim().is_empty() {
             "公益小红花".to_string()
@@ -114,10 +151,11 @@ impl ActivityCenterService {
             "dailyGift": {
                 "statusCode": state.daily_reward_status.to_string(),
                 "claimed": daily_gift_claimed,
+                "harvestedToday": daily_gift_harvested_today,
                 "reward": activity_item_or_default(&state.daily_reward),
-                "publicFund": if daily_gift_claimed {
+                "publicFund": if public_fund_date != 0 {
                     serde_json::json!({
-                        "date": public_fund.map(|p| p.date.to_string()).unwrap_or_else(|| "0".to_string()),
+                        "date": public_fund_date.to_string(),
                         "statusCode": public_fund_status.to_string(),
                     })
                 } else {
@@ -150,10 +188,10 @@ impl ActivityCenterService {
                     "count": love_balance,
                 },
                 "claimDailyGift": {
-                    "enabled": active && !daily_gift_claimed,
-                    "available": active && !daily_gift_claimed,
-                    "attemptable": active && !daily_gift_claimed,
-                    "availabilityKnown": false,
+                    "enabled": active && daily_gift_harvested_today && !daily_gift_claimed,
+                    "available": active && daily_gift_harvested_today && !daily_gift_claimed,
+                    "attemptable": active && daily_gift_harvested_today && !daily_gift_claimed,
+                    "availabilityKnown": true,
                 },
             },
         }))
@@ -168,11 +206,14 @@ impl ActivityCenterService {
     }
 
     /// 当前公益小红花；活动不存在时返回 `Ok(None)`（对齐 bot 返回 null）。
-    pub async fn get_current_charity_red_flower_activity(&self) -> Result<Option<serde_json::Value>> {
+    pub async fn get_current_charity_red_flower_activity(
+        &self,
+    ) -> Result<Option<serde_json::Value>> {
         let reply = self.query_charity_list().await?;
         match find_activity_data(&reply.activities, CHARITY_RED_FLOWER_ACTIVITY_ID) {
             Some(entry) if entry.charity_red_flower.is_some() => {
-                Ok(Some(self.charity_dto(entry)?))
+                let progress_state = self.resolve_charity_progress_state(entry);
+                Ok(Some(self.charity_dto_with_state(entry, Some(&progress_state))?))
             }
             _ => Ok(None),
         }
@@ -183,12 +224,11 @@ impl ActivityCenterService {
         operate_type: i64,
         request: CharityRedFlowerOperateRequest,
     ) -> Result<ActivityOperateReply> {
-        let body = self
-            .gateway
-            .request(ACTIVITY_SERVICE, "Operate", &request.encode_to_vec())
-            .await?;
+        let body =
+            self.gateway.request(ACTIVITY_SERVICE, "Operate", &request.encode_to_vec()).await?;
         let reply = ActivityOperateReply::decode(&body[..])?;
-        if reply.activity_id != CHARITY_RED_FLOWER_ACTIVITY_ID || reply.operate_type != operate_type {
+        if reply.activity_id != CHARITY_RED_FLOWER_ACTIVITY_ID || reply.operate_type != operate_type
+        {
             return Err(charity_err(
                 ActivityErrorCode::CharityResponseInvalid,
                 "公益小红花回包不匹配",
@@ -299,6 +339,17 @@ impl ActivityCenterService {
             )
             .into());
         }
+        let harvested_today = activity
+            .pointer("/dailyGift/harvestedToday")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if !harvested_today {
+            return Err(charity_err(
+                ActivityErrorCode::CharityDailyGiftNotHarvested,
+                "今天还没有收获小红花，暂时无法领取公益礼包",
+            )
+            .into());
+        }
         let active = activity.get("active").and_then(serde_json::Value::as_bool).unwrap_or(false);
         if !active {
             return Err(charity_err(
@@ -343,18 +394,222 @@ impl ActivityCenterService {
         }))
     }
 
-    /// 写操作前拉取当前活动；不存在直接报「暂未开放或已经结束」。
-    async fn require_charity_activity(&self) -> Result<serde_json::Value> {
-        self.get_current_charity_red_flower_activity()
-            .await?
+    /// 领取公益小红花个人进度奖励（op=37）。
+    pub async fn claim_charity_red_flower_progress_reward(
+        &self,
+        target: &str,
+    ) -> Result<serde_json::Value> {
+        let _guard = self.mutation_lock.lock().await;
+        let activity = self.require_charity_activity().await?;
+        let target = super::dto::positive_decimal(
+            target,
+            ActivityErrorCode::CharityProgressRewardUnavailable,
+            "target",
+        )?;
+        let target_text = target.to_string();
+        let progress = activity
+            .get("progressRewards")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|rewards| {
+                rewards.iter().find(|reward| {
+                    reward.get("target").and_then(serde_json::Value::as_str)
+                        == Some(target_text.as_str())
+                })
+            })
             .ok_or_else(|| {
                 charity_err(
-                    ActivityErrorCode::CharityRedFlowerUnavailable,
-                    "公益小红花活动暂未开放或已经结束",
+                    ActivityErrorCode::CharityProgressRewardUnavailable,
+                    "当前没有可领取的公益进度奖励",
                 )
-                .into()
-            })
+            })?;
+        if progress.get("claimed").and_then(serde_json::Value::as_bool).unwrap_or(false) {
+            return Err(charity_err(
+                ActivityErrorCode::CharityProgressRewardAlreadyClaimed,
+                "该公益进度奖励档位已经领取",
+            )
+            .into());
+        }
+        if !progress.get("claimable").and_then(serde_json::Value::as_bool).unwrap_or(false) {
+            return Err(charity_err(
+                ActivityErrorCode::CharityProgressRewardUnavailable,
+                "当前没有可领取的公益进度奖励",
+            )
+            .into());
+        }
+
+        let request = CharityRedFlowerOperateRequest {
+            activity_id: CHARITY_RED_FLOWER_ACTIVITY_ID,
+            operate_type: CLAIM_CHARITY_PROGRESS_REWARD_OPERATE_TYPE,
+            claim_progress_reward: Some(
+                crate::proto::generated::gamepb::activitypb::charity_red_flower_operate_request::ProgressRewardParams {
+                    target,
+                },
+            ),
+            ..Default::default()
+        };
+        let (reply, already_claimed) = match self
+            .operate_charity_red_flower(CLAIM_CHARITY_PROGRESS_REWARD_OPERATE_TYPE, request)
+            .await
+        {
+            Ok(reply) => (Some(reply), false),
+            Err(crate::error::Error::Network(crate::network::error::NetworkError::Gateway {
+                code,
+                ..
+            })) if code == CHARITY_PROGRESS_ALREADY_CLAIMED_CODE => (None, true),
+            Err(error) => return Err(error),
+        };
+
+        self.remember_claimed_charity_progress_target(target);
+        let mut rewards = Vec::new();
+        if let Some(result) = reply.as_ref().and_then(|r| r.charity_progress_reward_result.as_ref())
+        {
+            if let Some(reward) = result.reward.as_ref() {
+                rewards.push(item_dto_json(reward));
+            }
+        }
+        if rewards.is_empty() {
+            if let Some(reply) = reply.as_ref() {
+                rewards.extend(reply.rewards.iter().map(item_dto_json));
+            }
+        }
+        let snapshot = self.snapshot_with_shop(None).await.ok();
+        Ok(serde_json::json!({
+            "target": target_text,
+            "rewards": rewards,
+            "claimed": true,
+            "alreadyClaimed": already_claimed,
+            "message": if already_claimed {
+                format!("公益进度奖励已领取（{target_text} 份爱心）")
+            } else {
+                format!("公益进度奖励领取成功（{target_text} 份爱心）")
+            },
+            "snapshot": snapshot,
+        }))
     }
+
+    /// 写操作前拉取当前活动；不存在直接报「暂未开放或已经结束」。
+    async fn require_charity_activity(&self) -> Result<serde_json::Value> {
+        self.get_current_charity_red_flower_activity().await?.ok_or_else(|| {
+            charity_err(
+                ActivityErrorCode::CharityRedFlowerUnavailable,
+                "公益小红花活动暂未开放或已经结束",
+            )
+            .into()
+        })
+    }
+
+    fn resolve_charity_progress_state(&self, entry: &ActivityData) -> CharityRedFlowerState {
+        let account_id = self.account_id.lock().clone();
+        let memory =
+            self.last_charity_red_flower_state.lock().get(&CHARITY_RED_FLOWER_ACTIVITY_ID).cloned();
+        let file = load_charity_red_flower_state(
+            CHARITY_RED_FLOWER_ACTIVITY_ID,
+            Some(account_id.as_str()).filter(|id| !id.is_empty()),
+            &StateFileOptions::default(),
+        );
+        let merged = merge_charity_red_flower_states(
+            CHARITY_RED_FLOWER_ACTIVITY_ID,
+            &[
+                serde_json::to_value(file).unwrap_or(serde_json::Value::Null),
+                serde_json::to_value(memory).unwrap_or(serde_json::Value::Null),
+            ],
+        );
+        let reconciled = reconcile_charity_progress_state(entry, Some(&merged));
+        self.last_charity_red_flower_state
+            .lock()
+            .insert(CHARITY_RED_FLOWER_ACTIVITY_ID, reconciled.clone());
+        if !account_id.is_empty() {
+            let _ = persist_charity_red_flower_state(
+                serde_json::to_value(&reconciled).unwrap_or(serde_json::Value::Null),
+                CHARITY_RED_FLOWER_ACTIVITY_ID,
+                Some(&account_id),
+                &StateFileOptions::default(),
+            );
+        }
+        reconciled
+    }
+
+    fn remember_claimed_charity_progress_target(&self, target: i64) {
+        let account_id = self.account_id.lock().clone();
+        let memory =
+            self.last_charity_red_flower_state.lock().get(&CHARITY_RED_FLOWER_ACTIVITY_ID).cloned();
+        let file = load_charity_red_flower_state(
+            CHARITY_RED_FLOWER_ACTIVITY_ID,
+            Some(account_id.as_str()).filter(|id| !id.is_empty()),
+            &StateFileOptions::default(),
+        );
+        let claimed = CharityRedFlowerState {
+            activity_id: CHARITY_RED_FLOWER_ACTIVITY_ID.to_string(),
+            initialized: true,
+            claimed_progress_targets: vec![target.to_string()],
+            pending_progress_targets: Vec::new(),
+        };
+        let merged = merge_charity_red_flower_states(
+            CHARITY_RED_FLOWER_ACTIVITY_ID,
+            &[
+                serde_json::to_value(file).unwrap_or(serde_json::Value::Null),
+                serde_json::to_value(memory).unwrap_or(serde_json::Value::Null),
+                serde_json::to_value(claimed).unwrap_or(serde_json::Value::Null),
+            ],
+        );
+        self.last_charity_red_flower_state
+            .lock()
+            .insert(CHARITY_RED_FLOWER_ACTIVITY_ID, merged.clone());
+        if !account_id.is_empty() {
+            let _ = persist_charity_red_flower_state(
+                serde_json::to_value(&merged).unwrap_or(serde_json::Value::Null),
+                CHARITY_RED_FLOWER_ACTIVITY_ID,
+                Some(&account_id),
+                &StateFileOptions::default(),
+            );
+        }
+    }
+}
+
+/// 根据服务端快照和本地状态恢复公益进度奖励的“已领取 / 待领取”边界。
+fn reconcile_charity_progress_state(
+    entry: &ActivityData,
+    state_value: Option<&CharityRedFlowerState>,
+) -> CharityRedFlowerState {
+    let mut state = state_value.cloned().unwrap_or_else(|| {
+        crate::services::activity_center_state::create_empty_charity_red_flower_state(
+            CHARITY_RED_FLOWER_ACTIVITY_ID,
+        )
+    });
+    let Some(data) = entry.charity_red_flower.as_ref() else { return state };
+    let donated_love = data.donated_love;
+    let reached_targets: Vec<String> = data
+        .progress_rewards
+        .iter()
+        .filter(|reward| reward.status == 1 && reward.target > 0 && donated_love >= reward.target)
+        .map(|reward| reward.target.to_string())
+        .collect();
+    let mut claimed: std::collections::BTreeSet<String> =
+        state.claimed_progress_targets.into_iter().collect();
+    let mut pending: std::collections::BTreeSet<String> =
+        state.pending_progress_targets.into_iter().collect();
+    if !state.initialized {
+        if reached_targets.len() > 1 {
+            claimed.extend(reached_targets[..reached_targets.len() - 1].iter().cloned());
+        }
+        if let Some(last) = reached_targets.last() {
+            pending.insert(last.clone());
+        }
+    } else {
+        for target in reached_targets {
+            if !claimed.contains(&target) && !pending.contains(&target) {
+                pending.insert(target);
+            }
+        }
+    }
+    for target in &claimed {
+        pending.remove(target);
+    }
+    state.activity_id = CHARITY_RED_FLOWER_ACTIVITY_ID.to_string();
+    state.initialized = true;
+    state.claimed_progress_targets = claimed.into_iter().collect();
+    state.pending_progress_targets = pending.into_iter().collect();
+    state
 }
 
 fn action_enabled(activity: &serde_json::Value, key: &str) -> bool {
@@ -390,7 +645,9 @@ fn merge_reward_target(reward_target: Option<i64>, fallback: i64) -> i64 {
 mod tests {
     use super::*;
 
-    fn entry(state: crate::proto::generated::gamepb::activitypb::CharityRedFlowerData) -> ActivityData {
+    fn entry(
+        state: crate::proto::generated::gamepb::activitypb::CharityRedFlowerData,
+    ) -> ActivityData {
         use crate::proto::generated::gamepb::activitypb::ActivityContent;
         ActivityData {
             activity: Some(ActivityContent {
@@ -445,12 +702,15 @@ mod tests {
     fn dto_maps_seed_and_daily_status() {
         let svc = service();
         let dto = svc
-            .charity_dto(&entry(crate::proto::generated::gamepb::activitypb::CharityRedFlowerData {
-                love_balance: 5,
-                donated_love: 12,
-                seed_reward_status: 2,
-                ..Default::default()
-            }))
+            .charity_dto(&entry(
+                crate::proto::generated::gamepb::activitypb::CharityRedFlowerData {
+                    love_balance: 5,
+                    donated_love: 12,
+                    seed_reward_status: 2,
+                    flow_status: 2,
+                    ..Default::default()
+                },
+            ))
             .expect("dto");
         assert_eq!(dto["seedReward"]["claimable"], serde_json::json!(true));
         assert_eq!(dto["seedReward"]["claimed"], serde_json::json!(false));
@@ -467,15 +727,18 @@ mod tests {
         use crate::proto::generated::gamepb::activitypb::CharityRedFlowerPublicFund;
         let svc = service();
         let dto = svc
-            .charity_dto(&entry(crate::proto::generated::gamepb::activitypb::CharityRedFlowerData {
-                public_fund: Some(CharityRedFlowerPublicFund {
-                    date: 20_260_901,
-                    order_id: "ORDER".to_string(),
-                    status: 1,
+            .charity_dto(&entry(
+                crate::proto::generated::gamepb::activitypb::CharityRedFlowerData {
+                    public_fund: Some(CharityRedFlowerPublicFund {
+                        date: 20_260_901,
+                        order_id: "ORDER".to_string(),
+                        status: 1,
+                        ..Default::default()
+                    }),
+                    flow_status: 3,
                     ..Default::default()
-                }),
-                ..Default::default()
-            }))
+                },
+            ))
             .expect("dto");
         assert_eq!(dto["dailyGift"]["claimed"], serde_json::json!(true));
         assert_eq!(dto["dailyGift"]["publicFund"]["statusCode"], serde_json::json!("1"));
@@ -483,13 +746,77 @@ mod tests {
     }
 
     #[test]
+    fn dto_does_not_use_yesterday_public_fund_as_today_claimed() {
+        use crate::proto::generated::gamepb::activitypb::CharityRedFlowerPublicFund;
+        let svc = service();
+        let dto = svc
+            .charity_dto(&entry(
+                crate::proto::generated::gamepb::activitypb::CharityRedFlowerData {
+                    public_fund: Some(CharityRedFlowerPublicFund {
+                        date: 20_260_901,
+                        order_id: "OLD_ORDER".to_string(),
+                        status: 1,
+                        ..Default::default()
+                    }),
+                    flow_status: 1,
+                    ..Default::default()
+                },
+            ))
+            .expect("dto");
+        assert_eq!(dto["dailyGift"]["claimed"], serde_json::json!(false));
+        assert_eq!(dto["dailyGift"]["harvestedToday"], serde_json::json!(false));
+        assert_eq!(dto["actions"]["claimDailyGift"]["enabled"], serde_json::json!(false));
+    }
+
+    #[test]
+    fn dto_reconciles_charity_progress_frontier() {
+        use crate::proto::generated::gamepb::activitypb::{
+            ActivityItem, CharityRedFlowerProgressReward,
+        };
+        let svc = service();
+        let dto = svc
+            .charity_dto(&entry(
+                crate::proto::generated::gamepb::activitypb::CharityRedFlowerData {
+                    donated_love: 62,
+                    progress_rewards: vec![
+                        CharityRedFlowerProgressReward {
+                            target: 30,
+                            reward: Some(ActivityItem { item_id: 80013, count: 1 }),
+                            status: 1,
+                        },
+                        CharityRedFlowerProgressReward {
+                            target: 60,
+                            reward: Some(ActivityItem { item_id: 1002, count: 50 }),
+                            status: 1,
+                        },
+                        CharityRedFlowerProgressReward {
+                            target: 90,
+                            reward: Some(ActivityItem { item_id: 80013, count: 2 }),
+                            status: 0,
+                        },
+                    ],
+                    ..Default::default()
+                },
+            ))
+            .expect("dto");
+        let progress = dto["progressRewards"].as_array().expect("progress rewards");
+        assert_eq!(progress[0]["claimed"], serde_json::json!(true));
+        assert_eq!(progress[0]["claimable"], serde_json::json!(false));
+        assert_eq!(progress[1]["claimed"], serde_json::json!(false));
+        assert_eq!(progress[1]["claimable"], serde_json::json!(true));
+        assert_eq!(progress[2]["claimable"], serde_json::json!(false));
+    }
+
+    #[test]
     fn dto_seed_claimed_status_disables_action() {
         let svc = service();
         let dto = svc
-            .charity_dto(&entry(crate::proto::generated::gamepb::activitypb::CharityRedFlowerData {
-                seed_reward_status: 3,
-                ..Default::default()
-            }))
+            .charity_dto(&entry(
+                crate::proto::generated::gamepb::activitypb::CharityRedFlowerData {
+                    seed_reward_status: 3,
+                    ..Default::default()
+                },
+            ))
             .expect("dto");
         assert_eq!(dto["seedReward"]["claimed"], serde_json::json!(true));
         assert_eq!(dto["actions"]["claimSeeds"]["enabled"], serde_json::json!(false));
@@ -497,20 +824,24 @@ mod tests {
 
     #[test]
     fn dto_settlement_and_global_progress() {
-        use crate::proto::generated::gamepb::activitypb::{ActivityItem, CharityRedFlowerGlobalReward};
+        use crate::proto::generated::gamepb::activitypb::{
+            ActivityItem, CharityRedFlowerGlobalReward,
+        };
         let svc = service();
         let dto = svc
-            .charity_dto(&entry(crate::proto::generated::gamepb::activitypb::CharityRedFlowerData {
-                donated_love: 100,
-                settlement_required_love: 80,
-                global_donated_love: 500,
-                global_target_love: 1000,
-                global_reward: Some(CharityRedFlowerGlobalReward {
-                    target: 0,
-                    reward: Some(ActivityItem { item_id: 9, count: 1, ..Default::default() }),
-                }),
-                ..Default::default()
-            }))
+            .charity_dto(&entry(
+                crate::proto::generated::gamepb::activitypb::CharityRedFlowerData {
+                    donated_love: 100,
+                    settlement_required_love: 80,
+                    global_donated_love: 500,
+                    global_target_love: 1000,
+                    global_reward: Some(CharityRedFlowerGlobalReward {
+                        target: 0,
+                        reward: Some(ActivityItem { item_id: 9, count: 1 }),
+                    }),
+                    ..Default::default()
+                },
+            ))
             .expect("dto");
         assert_eq!(dto["settlement"]["eligible"], serde_json::json!(true));
         assert_eq!(dto["globalProgress"]["reached"], serde_json::json!(false));

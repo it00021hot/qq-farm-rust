@@ -413,8 +413,10 @@ pub async fn run_farming_with_fallback(
 /// 「护主犬无视经验上限」开关切开，且 Enter 回包 `brief_dog_info.dog_id`
 /// 是护主犬 → 本好友的帮忙无视经验上限（为「同气连枝」礼包继续帮）。
 fn protect_dog_bypass_from_reply(account_id: &str, enter_reply: &EnterReply) -> bool {
-    crate::services::automation::is_automation_on_for(account_id, "friend_help_protect_dog_ignore_exp_limit")
-        && enter_reply.brief_dog_info.as_ref().map(|d| d.dog_id) == Some(PROTECT_DOG_ID)
+    crate::services::automation::is_automation_on_for(
+        account_id,
+        "friend_help_protect_dog_ignore_exp_limit",
+    ) && enter_reply.brief_dog_info.as_ref().map(|d| d.dog_id) == Some(PROTECT_DOG_ID)
 }
 
 /// 已进场后的帮忙动作：need_weed/bug/water 合并 Farming（批量失败逐地回退）、
@@ -479,7 +481,11 @@ pub async fn perform_help_actions(
         parts.join("/")
     ));
     total_actions.farming += outcome.land_count;
-    crate::services::stats::record_operation_for(account_id, "helpFarming", outcome.land_count as i64);
+    crate::services::stats::record_operation_for(
+        account_id,
+        "helpFarming",
+        outcome.land_count as i64,
+    );
     if stop_when_exp_limit {
         if let Some(flag) = help_auto_disabled {
             tokio::time::sleep(Duration::from_millis(200)).await;
@@ -611,8 +617,8 @@ pub async fn visit_friend(
         // 对齐 bot：偷到菜后的路径不做顺手帮忙（steal_side_help 已删除）
     } else if help_enabled {
         // 对齐 bot visit-strategy.ts:809-810：Enter 回包确认护主犬 → 无视经验上限
-        let effective_stop = stop_when_exp_limit
-            && !protect_dog_bypass_from_reply(account_id, &enter_reply);
+        let effective_stop =
+            stop_when_exp_limit && !protect_dog_bypass_from_reply(account_id, &enter_reply);
         perform_help_actions(
             api,
             recent_help,

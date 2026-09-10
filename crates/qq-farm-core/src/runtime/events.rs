@@ -38,12 +38,7 @@ pub enum WorkerEvent {
         reason: String,
     },
     /// 业务通知（神秘商人到货/自动购买等，面板气泡 + 外部推送链路）
-    Notify {
-        account_id: String,
-        account_name: String,
-        title: String,
-        message: String,
-    },
+    Notify { account_id: String, account_name: String, title: String, message: String },
 }
 
 impl WorkerEvent {

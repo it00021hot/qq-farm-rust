@@ -43,7 +43,7 @@ pub fn write_cache(account_id: &str, gids: &[i64]) -> std::io::Result<()> {
     let path = cache_file(account_id);
     let tmp = path.with_extension("json.tmp");
     let body = serde_json::to_string(gids).map_err(std::io::Error::other)?;
-    let _ = crate::infra::spawn_blocking(move || -> std::io::Result<()> {
+    crate::infra::spawn_blocking(move || -> std::io::Result<()> {
         fs::write(&tmp, &body)?;
         fs::rename(&tmp, &path)?;
         Ok(())
@@ -69,6 +69,7 @@ pub fn cache_dir_exists() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn cache_file_path_ends_with_json() {
@@ -77,6 +78,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(farm_data_dir)]
     fn write_and_read_cache() {
         let aid = "test_acc_cache_42";
         // 清理
@@ -92,6 +94,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(farm_data_dir)]
     fn read_cache_empty_returns_none() {
         let aid = "test_empty_acc";
         let _ = remove_cache(aid);

@@ -53,7 +53,12 @@ pub struct BindSessionManager {
 }
 
 impl BindSessionManager {
-    pub fn start_session(&self, username: &str, bot_invite_url: &str, qr_data_url: &str) -> BindStartResult {
+    pub fn start_session(
+        &self,
+        username: &str,
+        bot_invite_url: &str,
+        qr_data_url: &str,
+    ) -> BindStartResult {
         let now = now_secs();
         let session_id = Uuid::new_v4().to_string();
         let expires_at = now + BIND_SESSION_TTL_SECS;
@@ -189,12 +194,11 @@ mod tests {
     #[test]
     fn bind_session_lifecycle() {
         let mgr = BindSessionManager::default();
-        let start = mgr.start_session("alice", "https://q.qq.com/qqbot/1", "data:image/png;base64,abc");
+        let start =
+            mgr.start_session("alice", "https://q.qq.com/qqbot/1", "data:image/png;base64,abc");
         assert_eq!(mgr.poll(&start.session_id).status, BindPollStatus::Pending);
 
-        let done = mgr
-            .complete_from_message("openid-1", "nick", "hello")
-            .expect("bound");
+        let done = mgr.complete_from_message("openid-1", "nick", "hello").expect("bound");
         assert_eq!(done.0, "alice");
         assert_eq!(done.1.user_openid, "openid-1");
 

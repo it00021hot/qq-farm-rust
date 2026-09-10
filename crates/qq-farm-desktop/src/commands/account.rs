@@ -122,7 +122,7 @@ pub async fn wx_quick_login_create(state: State<'_, DesktopState>) -> IpcResult<
     })
 }
 
-/// 探测本机微信（原生代理，不走 WebView）。
+/// 探测本机微信（原生代理，不走 `WebView`）。
 #[tauri::command]
 pub async fn wx_quick_login_detect(
     state: State<'_, DesktopState>,
@@ -140,7 +140,7 @@ pub async fn wx_quick_login_detect(
     })
 }
 
-/// 本机微信确认授权，返回 redirect_url。
+/// 本机微信确认授权，返回 `redirect_url`。
 #[tauri::command]
 pub async fn wx_quick_login_authorize(
     state: State<'_, DesktopState>,
@@ -163,7 +163,7 @@ pub async fn wx_quick_login_authorize(
     Ok(WxQuickAuthorizeDto { redirect_url })
 }
 
-/// 确认本机微信 fast_login 回调。
+/// 确认本机微信 `fast_login` 回调。
 #[tauri::command]
 pub async fn wx_quick_login_confirm(
     state: State<'_, DesktopState>,

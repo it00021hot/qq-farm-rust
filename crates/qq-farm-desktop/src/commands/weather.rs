@@ -42,10 +42,7 @@ pub async fn weather_friends_scan(
     friend_gids: Vec<String>,
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
-    let gids: Vec<i64> = friend_gids
-        .iter()
-        .filter_map(|g| g.trim().parse::<i64>().ok())
-        .collect();
+    let gids: Vec<i64> = friend_gids.iter().filter_map(|g| g.trim().parse::<i64>().ok()).collect();
     weather::scan_friends(&state.app, &account_id, &gids).await.map_err(IpcError::from)
 }
 
@@ -67,15 +64,19 @@ pub async fn weather_collect(
     friend_gid: String,
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
-    let gid: i64 = friend_gid.trim().parse().map_err(|_| {
-        IpcError::from(AppError::BadRequest("无效的好友 GID".to_string()))
-    })?;
+    let gid: i64 = friend_gid
+        .trim()
+        .parse()
+        .map_err(|_| IpcError::from(AppError::BadRequest("无效的好友 GID".to_string())))?;
     weather::collect(&state.app, &account_id, gid).await.map_err(IpcError::from)
 }
 
 /// 召唤雷雨。
 #[tauri::command]
-pub async fn weather_summon(state: State<'_, DesktopState>, account_id: String) -> IpcResult<Value> {
+pub async fn weather_summon(
+    state: State<'_, DesktopState>,
+    account_id: String,
+) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
     weather::summon(&state.app, &account_id).await.map_err(IpcError::from)
 }
@@ -88,9 +89,10 @@ pub async fn weather_mischief_frog(
     friend_gid: String,
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
-    let gid: i64 = friend_gid.trim().parse().map_err(|_| {
-        IpcError::from(AppError::BadRequest("无效的好友 GID".to_string()))
-    })?;
+    let gid: i64 = friend_gid
+        .trim()
+        .parse()
+        .map_err(|_| IpcError::from(AppError::BadRequest("无效的好友 GID".to_string())))?;
     weather::mischief_frog(&state.app, &account_id, gid).await.map_err(IpcError::from)
 }
 
@@ -103,18 +105,18 @@ pub async fn weather_mischief_cloud(
     land_id: Option<String>,
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
-    let gid: i64 = friend_gid.trim().parse().map_err(|_| {
-        IpcError::from(AppError::BadRequest("无效的好友 GID".to_string()))
-    })?;
+    let gid: i64 = friend_gid
+        .trim()
+        .parse()
+        .map_err(|_| IpcError::from(AppError::BadRequest("无效的好友 GID".to_string())))?;
     let land = match land_id.as_deref().map(str::trim) {
         None | Some("") => None,
-        Some(text) => Some(text.parse::<i64>().map_err(|_| {
-            IpcError::from(AppError::BadRequest("无效的地块 ID".to_string()))
-        })?),
+        Some(text) => Some(
+            text.parse::<i64>()
+                .map_err(|_| IpcError::from(AppError::BadRequest("无效的地块 ID".to_string())))?,
+        ),
     };
-    weather::mischief_cloud(&state.app, &account_id, gid, land)
-        .await
-        .map_err(IpcError::from)
+    weather::mischief_cloud(&state.app, &account_id, gid, land).await.map_err(IpcError::from)
 }
 
 /// 推进气象研究节点。
@@ -125,10 +127,9 @@ pub async fn weather_advance_research(
     node_id: String,
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
-    let node: i64 = node_id.trim().parse().map_err(|_| {
-        IpcError::from(AppError::BadRequest("无效的气象研究节点".to_string()))
-    })?;
-    weather::advance_research(&state.app, &account_id, node)
-        .await
-        .map_err(IpcError::from)
+    let node: i64 = node_id
+        .trim()
+        .parse()
+        .map_err(|_| IpcError::from(AppError::BadRequest("无效的气象研究节点".to_string())))?;
+    weather::advance_research(&state.app, &account_id, node).await.map_err(IpcError::from)
 }

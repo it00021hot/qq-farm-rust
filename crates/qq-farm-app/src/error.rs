@@ -1,4 +1,4 @@
-//! 应用层错误 — 从 core::Error 映射，不含 HTTP 语义。
+//! 应用层错误 — 从 `core::Error` 映射，不含 HTTP 语义。
 
 use thiserror::Error;
 

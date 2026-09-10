@@ -70,19 +70,15 @@ pub fn format_time(secs: i64) -> String {
 /// 排序方式
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum SortBy {
+    #[default]
     Exp,
     Fert,
     Gold,
     Profit,
     FertProfit,
     Level,
-}
-
-impl Default for SortBy {
-    fn default() -> Self {
-        Self::Exp
-    }
 }
 
 impl SortBy {

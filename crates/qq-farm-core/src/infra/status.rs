@@ -419,6 +419,7 @@ pub fn update_status_level_for(account_id: &str, level: i64, exp: Option<i64>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     fn reset() {
         *STATUS_BY_ACCOUNT.lock() = None;
@@ -434,6 +435,7 @@ mod tests {
         assert_eq!(s.gold, 0);
     }
 
+    #[serial(status)]
     #[test]
     fn init_status_bar_non_tty_returns_false() {
         reset();
@@ -442,6 +444,7 @@ mod tests {
         assert!(!is_enabled());
     }
 
+    #[serial(status)]
     #[test]
     fn init_status_bar_tty_enables() {
         reset();
@@ -451,11 +454,11 @@ mod tests {
         cleanup_status_bar();
     }
 
+    #[serial(status)]
     #[test]
     fn update_status_changes_only_when_diff() {
         reset();
-        let mut s = StatusData::default();
-        s.name = "alice".into();
+        let mut s = StatusData { name: "alice".into(), ..Default::default() };
         update_status(&s);
         assert_eq!(status_data().name, "alice");
 
@@ -469,6 +472,7 @@ mod tests {
         assert_eq!(status_data().gold, 100);
     }
 
+    #[serial(status)]
     #[test]
     fn set_status_platform_changes_platform() {
         reset();
@@ -478,6 +482,7 @@ mod tests {
         assert_eq!(status_data().platform, "qq");
     }
 
+    #[serial(status)]
     #[test]
     fn set_status_platform_for_isolates_accounts() {
         reset();
@@ -487,6 +492,7 @@ mod tests {
         assert_eq!(status_data_for("acc-qq").platform, "qq");
     }
 
+    #[serial(status)]
     #[test]
     fn update_status_from_login_extracts() {
         reset();
@@ -504,6 +510,7 @@ mod tests {
         assert_eq!(s.exp, 1000);
     }
 
+    #[serial(status)]
     #[test]
     fn update_status_from_login_extracts_avatar() {
         reset();
@@ -518,12 +525,11 @@ mod tests {
         assert_eq!(status_data().avatar, "https://cdn.example/a.png");
     }
 
+    #[serial(status)]
     #[test]
     fn update_status_from_login_keeps_existing_on_missing() {
         reset();
-        let mut s = StatusData::default();
-        s.name = "keep".into();
-        s.level = 5;
+        let s = StatusData { name: "keep".into(), level: 5, ..Default::default() };
         update_status(&s);
         // 只传 level
         let basic = serde_json::json!({"level": 7});
@@ -533,6 +539,7 @@ mod tests {
         assert_eq!(after.level, 7);
     }
 
+    #[serial(status)]
     #[test]
     fn test_update_status_gold() {
         reset();
@@ -540,6 +547,7 @@ mod tests {
         assert_eq!(status_data().gold, 999);
     }
 
+    #[serial(status)]
     #[test]
     fn update_status_level_with_exp() {
         reset();
@@ -549,6 +557,7 @@ mod tests {
         assert_eq!(s.exp, 5000);
     }
 
+    #[serial(status)]
     #[test]
     fn update_status_level_without_exp() {
         reset();
@@ -561,12 +570,14 @@ mod tests {
     #[test]
     fn build_line1_includes_all_fields() {
         let _ = global_game_config();
-        let mut s = StatusData::default();
-        s.name = "test".into();
-        s.level = 5;
-        s.gold = 100;
-        s.exp = 200;
-        s.platform = "qq".into();
+        let s = StatusData {
+            name: "test".into(),
+            level: 5,
+            gold: 100,
+            exp: 200,
+            platform: "qq".into(),
+            ..Default::default()
+        };
         let line = build_line1(&s);
         assert!(line.contains("test"));
         assert!(line.contains("Lv5"));
@@ -576,8 +587,7 @@ mod tests {
     #[test]
     fn build_line1_handles_wx_platform() {
         let _ = global_game_config();
-        let mut s = StatusData::default();
-        s.platform = "wx".into();
+        let s = StatusData { platform: "wx".into(), ..Default::default() };
         let line = build_line1(&s);
         assert!(line.contains("微信"));
     }
@@ -590,12 +600,14 @@ mod tests {
         assert!(!line.contains("经验"));
     }
 
+    #[serial(status)]
     #[test]
     fn cleanup_when_disabled_noop() {
         reset();
         cleanup_status_bar(); // 不应 panic
     }
 
+    #[serial(status)]
     #[test]
     fn apply_reward_deltas_adds_farming_exp() {
         reset();

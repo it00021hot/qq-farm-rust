@@ -19,14 +19,7 @@ declare namespace Desktop {
     accounts: AccountSummary[];
   }
 
-  type PlantingStrategy =
-    | 'preferred'
-    | 'level'
-    | 'max_exp'
-    | 'max_fertilizer'
-    | 'level_up'
-    | 'bag_seed'
-    | string;
+  type PlantingStrategy = 'preferred' | 'level' | 'max_exp' | 'max_fertilizer' | 'level_up' | 'bag_seed' | string;
 
   interface SettingsSummary {
     accountId: string;

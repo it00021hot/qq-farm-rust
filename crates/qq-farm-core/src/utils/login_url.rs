@@ -45,7 +45,7 @@ fn to_href(raw: &str) -> String {
         return format!("wss://{FALLBACK_GATE_HOST}/?{raw}");
     }
     // 裸 query
-    let has_query_param = raw.split(|c: char| c == '?' || c == '&').skip(1).any(|s| {
+    let has_query_param = raw.split(['?', '&']).skip(1).any(|s| {
         let lower = s.to_ascii_lowercase();
         lower.starts_with("platform=")
             || lower.starts_with("os=")

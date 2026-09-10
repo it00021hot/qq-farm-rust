@@ -16,6 +16,8 @@ use tokio::task::JoinHandle;
 /// panic 连续 N 次（默认 [`DEFAULT_PANIC_THRESHOLD`]）即触发 `on_threshold` 回调
 pub const DEFAULT_PANIC_THRESHOLD: u32 = 5;
 
+type PanicThresholdCallback = dyn Fn(&str, u32) + Send + Sync;
+
 /// 同一 label 的 panic 熔断器：连续 ≥ threshold 次 panic 后调用一次 on_threshold，
 /// 之后清零（业务侧负责完成"熔断"动作后重置）。
 #[derive(Clone)]
@@ -26,7 +28,7 @@ pub struct PanicCircuitBreaker {
 struct PanicCircuitBreakerInner {
     counts: Mutex<HashMap<String, u32>>,
     threshold: u32,
-    on_threshold: Box<dyn Fn(&str, u32) + Send + Sync>,
+    on_threshold: Box<PanicThresholdCallback>,
 }
 
 impl PanicCircuitBreaker {

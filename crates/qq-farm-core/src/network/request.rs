@@ -143,12 +143,7 @@ impl RequestManager {
     /// 列出所有 pending 请求的 method 名（诊断用：掉线时看卡住了哪些请求）
     #[must_use]
     pub fn pending_methods(&self) -> Vec<String> {
-        self.inner
-            .pending
-            .lock()
-            .values()
-            .map(|p| p.method_name.clone())
-            .collect()
+        self.inner.pending.lock().values().map(|p| p.method_name.clone()).collect()
     }
 
     /// 拒绝所有待处理请求（连接断开时调用），并唤醒等待方
@@ -230,7 +225,7 @@ mod tests {
         let mgr = RequestManager::new();
         let mut receivers = Vec::new();
         for i in 0..5 {
-            let (seq, rx) = mgr.call("svc", &format!("m{i}"));
+            let (seq, rx) = mgr.call("svc", format!("m{i}"));
             receivers.push((seq, rx));
         }
         assert_eq!(mgr.pending_count(), 5);

@@ -642,23 +642,22 @@ impl PlantingEngine {
             let mut seen = std::collections::HashSet::new();
             empty_land_ids.iter().copied().filter(|id| *id > 0 && seen.insert(*id)).collect()
         };
-        if !dead_land_ids.is_empty() {
-            if self.api.remove_plant(dead_land_ids.to_vec()).await.is_ok() {
-                crate::services::panel_log::log(
-                    account_id,
-                    "铲除",
-                    format!("清理枯株 {} 块土地", dead_land_ids.len()),
-                    crate::constants::PanelEvent::RemovePlant,
-                    Some(serde_json::json!({
-                        "module": "farm",
-                        "result": "ok",
-                        "count": dead_land_ids.len(),
-                        "landIds": dead_land_ids,
-                    })),
-                );
-                if let Ok(latest) = self.api.get_all_lands(host_gid).await {
-                    lands_to_plant = analyze_lands(&latest.lands, host_gid).empty;
-                }
+        if !dead_land_ids.is_empty() && self.api.remove_plant(dead_land_ids.to_vec()).await.is_ok()
+        {
+            crate::services::panel_log::log(
+                account_id,
+                "铲除",
+                format!("清理枯株 {} 块土地", dead_land_ids.len()),
+                crate::constants::PanelEvent::RemovePlant,
+                Some(serde_json::json!({
+                    "module": "farm",
+                    "result": "ok",
+                    "count": dead_land_ids.len(),
+                    "landIds": dead_land_ids,
+                })),
+            );
+            if let Ok(latest) = self.api.get_all_lands(host_gid).await {
+                lands_to_plant = analyze_lands(&latest.lands, host_gid).empty;
             }
         }
         if lands_to_plant.is_empty() {
@@ -727,13 +726,10 @@ impl PlantingEngine {
         account_id: &str,
     ) -> Result<BagPlantResult> {
         // 解析失败按不限制处理并 logWarn，避免整轮种不下去
-        let (restrictions, land_type_by_id) = match self
+        let (restrictions, land_type_by_id) = self
             .resolve_land_type_map_for_bag_seeds(host_gid, account_id)
             .await
-        {
-            Some(pair) => pair,
-            None => Default::default(),
-        };
+            .unwrap_or_default();
         self.plant_from_bag_seeds_ex(
             lands_to_plant,
             host_gid,
@@ -781,10 +777,7 @@ impl PlantingEngine {
         lands_to_plant: &[i64],
         host_gid: i64,
         account_id: &str,
-        restrictions: std::collections::HashMap<
-            i64,
-            Vec<crate::models::types::FertilizerLandType>,
-        >,
+        restrictions: std::collections::HashMap<i64, Vec<crate::models::types::FertilizerLandType>>,
         land_type_by_id: std::collections::HashMap<
             i64,
             crate::services::farm::land_analysis::LandType,
@@ -854,8 +847,11 @@ impl PlantingEngine {
             }
             let plant_size = seed.plant_size.max(1);
             // 受限种子只在命中类型的空地上装箱；未命中的空地留给后续种子
-            let seed_land_types =
-                if land_type_available { resolve_seed_land_types(&restrictions, seed.seed_id) } else { None };
+            let seed_land_types = if land_type_available {
+                resolve_seed_land_types(&restrictions, seed.seed_id)
+            } else {
+                None
+            };
             let allowed_target: Vec<i64> = match &seed_land_types {
                 Some(types) => {
                     let analysis_types = fertilizer_types_to_analysis(types);
@@ -1126,10 +1122,11 @@ pub struct BagSeedWithLevel {
 /// 过滤背包种子：剔除 count=0 / plant_size<1，记录等级锁定
 ///
 /// 对应原 planting.ts `plantFromBagSeeds` 内的过滤逻辑
+pub type BagSeedFilterResult =
+    (Vec<BagSeedWithLevel>, Vec<BagSeedWithLevel>, Vec<(i64, String, &'static str)>);
+
 #[must_use]
-pub fn filter_bag_seeds(
-    seeds: &[BagSeedWithLevel],
-) -> (Vec<BagSeedWithLevel>, Vec<BagSeedWithLevel>, Vec<(i64, String, &'static str)>) {
+pub fn filter_bag_seeds(seeds: &[BagSeedWithLevel]) -> BagSeedFilterResult {
     let mut skipped: Vec<(i64, String, &'static str)> = Vec::new();
     let mut level_locked: Vec<BagSeedWithLevel> = Vec::new();
     let usable: Vec<BagSeedWithLevel> = seeds

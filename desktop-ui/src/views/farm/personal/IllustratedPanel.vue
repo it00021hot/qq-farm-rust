@@ -68,15 +68,8 @@ void load();
         </NTabs>
 
         <div v-if="current" class="mb-8px flex items-center gap-12px">
-          <NProgress
-            type="line"
-            :percentage="progressPercent(current)"
-            :height="8"
-            class="flex-1"
-          />
-          <span class="text-12px text-gray-500">
-            {{ current.progress }} / {{ current.nextLevelProgress }}
-          </span>
+          <NProgress type="line" :percentage="progressPercent(current)" :height="8" class="flex-1" />
+          <span class="text-12px text-gray-500">{{ current.progress }} / {{ current.nextLevelProgress }}</span>
         </div>
 
         <div v-if="current?.currentBuffs?.length" class="mb-8px flex flex-wrap gap-6px">
@@ -111,10 +104,7 @@ void load();
             <span v-if="stars(item)" class="text-10px leading-none text-amber-500">
               {{ stars(item) }}
             </span>
-            <span
-              class="text-11px leading-tight"
-              :class="item.unlocked ? 'font-semibold' : 'text-gray-400'"
-            >
+            <span class="text-11px leading-tight" :class="item.unlocked ? 'font-semibold' : 'text-gray-400'">
               {{ item.progress ?? 0 }}点
             </span>
           </div>

@@ -29,8 +29,7 @@ pub async fn get_career_info(gateway: &Arc<Gateway>, gid: i64) -> Result<CareerI
         return Err(Error::Business("缺少有效的角色 GID".to_string()));
     }
     let body = CareerInfoGetRequest { gid }.encode_to_vec();
-    let resp =
-        gateway.request("gamepb.careerpb.CareerService", "CareerInfoGet", &body).await?;
+    let resp = gateway.request("gamepb.careerpb.CareerService", "CareerInfoGet", &body).await?;
     let reply = CareerInfoGetReply::decode(&*resp).map_err(Error::from)?;
     Ok(CareerInfo {
         gid: if reply.gid != 0 { reply.gid } else { gid },
@@ -58,13 +57,10 @@ mod tests {
 
     #[test]
     fn career_info_camel_case() {
-        let info = CareerInfo {
-            gid: 123,
-            harvest: 4567,
-            steal: 89,
-            level: 30,
-            name: "测试".to_string(),
-        };
+        let info =
+            CareerInfo {
+                gid: 123, harvest: 4567, steal: 89, level: 30, name: "测试".to_string()
+            };
         let v = serde_json::to_value(&info).expect("json");
         assert_eq!(v["harvest"], 4567);
         assert_eq!(v["steal"], 89);

@@ -32,8 +32,7 @@ impl DogSkillGiftService {
 
     pub async fn get_dog_info(&self) -> crate::error::Result<GetDogInfoReply> {
         let req = GetDogInfoRequest { host_gid: 0 };
-        let body =
-            self.gateway.request(DOG_SERVICE, "GetDogInfo", &req.encode_to_vec()).await?;
+        let body = self.gateway.request(DOG_SERVICE, "GetDogInfo", &req.encode_to_vec()).await?;
         Ok(GetDogInfoReply::decode(&body[..])?)
     }
 
@@ -120,7 +119,9 @@ impl DogSkillGiftService {
                 "宠物",
                 format!("拾取{item_name} x{claimed_count}"),
                 crate::constants::PanelEvent::DogSkillGift,
-                Some(serde_json::json!({ "module": "dog", "itemId": item_id, "count": claimed_count })),
+                Some(
+                    serde_json::json!({ "module": "dog", "itemId": item_id, "count": claimed_count }),
+                ),
             );
         }
         Ok(serde_json::json!({
@@ -146,7 +147,8 @@ mod tests {
             reward: Some(Item { id, count, ..Default::default() }),
             ..Default::default()
         };
-        let results = vec![mk(DOG_SKILL_GIFT_ITEM_ID, 1), mk(1001, 5), mk(DOG_SKILL_GIFT_ITEM_ID, 2)];
+        let results =
+            vec![mk(DOG_SKILL_GIFT_ITEM_ID, 1), mk(1001, 5), mk(DOG_SKILL_GIFT_ITEM_ID, 2)];
         assert_eq!(DogSkillGiftService::farming_skill_gift_count(&results), 3);
         assert_eq!(DogSkillGiftService::farming_skill_gift_count(&[]), 0);
     }

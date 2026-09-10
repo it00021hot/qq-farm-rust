@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
 import dayjs from 'dayjs';
 import { NAvatar, NButton, NCard, NEmpty, NGi, NGrid, NInput, NProgress, NSelect, NSpace, NSpin, NTag } from 'naive-ui';
 import {
@@ -627,8 +627,6 @@ onMounted(async () => {
     }
   }, 30000);
 });
-
-
 </script>
 
 <template>
@@ -803,11 +801,7 @@ onMounted(async () => {
           <div v-if="!filteredLogs.length" class="py-32px text-center text-gray-400">
             {{ $t('page.farm.dashboard.noEvents') }}
           </div>
-          <div
-            v-for="log in visibleLogs"
-            :key="log.id"
-            class="cv-auto mb-6px break-all"
-          >
+          <div v-for="log in visibleLogs" :key="log.id" class="cv-auto mb-6px break-all">
             <span class="mr-8px text-gray-400">[{{ log.time }}]</span>
             <span class="mr-8px rounded-full px-6px py-1px text-11px font-bold" :class="getLogTagClass(log.tag)">
               {{ log.tag }}
@@ -826,7 +820,7 @@ onMounted(async () => {
             </NButton>
           </div>
           <div v-else-if="logExpanded && filteredLogs.length > LOG_RENDER_CAP" class="mt-8px text-center">
-            <NButton size="tiny" quaternary @click="logExpanded = false"> 收起 </NButton>
+            <NButton size="tiny" quaternary @click="logExpanded = false">收起</NButton>
           </div>
         </div>
       </NCard>

@@ -83,13 +83,13 @@ const platformOptions = computed(() => translateStringOptions(farmPlatformOption
               <NSpace class="w-full" justify="end">
                 <NButton @click="reset">
                   <template #icon>
-                    <icon-ic-round-refresh class="text-icon" />
+                    <IconIcRoundRefresh class="text-icon" />
                   </template>
                   {{ $t('common.reset') }}
                 </NButton>
                 <NButton type="primary" ghost @click="search">
                   <template #icon>
-                    <icon-ic-round-search class="text-icon" />
+                    <IconIcRoundSearch class="text-icon" />
                   </template>
                   {{ $t('common.search') }}
                 </NButton>

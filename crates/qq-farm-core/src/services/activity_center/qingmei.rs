@@ -97,10 +97,8 @@ impl ActivityCenterService {
         let activity = reply.data.as_ref().and_then(|d| d.activity.as_ref());
         let brew =
             reply.data.as_ref().and_then(|d| d.qingmei_brew.as_ref()).cloned().unwrap_or_default();
-        let quote = reply
-            .qingmei_quote
-            .clone()
-            .or_else(|| reply.data.as_ref().and_then(|d| d.qingmei_quote.clone()));
+        let quote =
+            reply.qingmei_quote.or_else(|| reply.data.as_ref().and_then(|d| d.qingmei_quote));
         let daily_seed = reply.data.as_ref().and_then(|d| d.qingmei_daily_seed.as_ref());
         let current_round = brew.current_round;
         let started = brew.base_gold > 0;

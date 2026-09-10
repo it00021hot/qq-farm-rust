@@ -10,7 +10,7 @@ pub fn get_patrol_batch_size(friend_count: usize) -> usize {
     if friend_count == 0 {
         return 0;
     }
-    let n = (friend_count + 3) / 4;
+    let n = friend_count.div_ceil(4);
     n.max(1)
 }
 
@@ -40,7 +40,10 @@ pub fn select_unvisited_patrol(
 /// 只访问有可偷气泡的好友，不做零气泡探测——零气泡"进场即走"模式 bot 从不产生，
 /// 属于服务端行为识别的高危指纹。
 #[must_use]
-pub fn build_steal_patrol_targets(eligible: &[(i64, i64)], _visited: &mut HashSet<i64>) -> Vec<i64> {
+pub fn build_steal_patrol_targets(
+    eligible: &[(i64, i64)],
+    _visited: &mut HashSet<i64>,
+) -> Vec<i64> {
     let mut bubble: Vec<(i64, i64)> = Vec::new();
     for &(gid, steal) in eligible {
         if gid <= 0 {
@@ -50,7 +53,7 @@ pub fn build_steal_patrol_targets(eligible: &[(i64, i64)], _visited: &mut HashSe
             bubble.push((gid, steal));
         }
     }
-    bubble.sort_by(|a, b| b.1.cmp(&a.1));
+    bubble.sort_by_key(|entry| std::cmp::Reverse(entry.1));
     bubble.into_iter().map(|(gid, _)| gid).collect()
 }
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import {
   NButton,
   NCard,
@@ -16,6 +16,7 @@ import {
 } from 'naive-ui';
 import {
   fetchClaimFarmActivityCharityDailyGift,
+  fetchClaimFarmActivityCharityProgressReward,
   fetchClaimFarmActivityCharitySeeds,
   fetchClaimFarmActivityGreenPlum,
   fetchClaimFarmActivityPass,
@@ -366,8 +367,8 @@ const greenPlumCanSettle = computed(() => {
   return greenPlumQuotes.value.length > 0 || greenPlumFinished.value;
 });
 
-const stellarAvailable = computed(
-  () => Boolean(season.value.title || shop.value.title || constellation.value.title || solarTermList.value.length)
+const stellarAvailable = computed(() =>
+  Boolean(season.value.title || shop.value.title || constellation.value.title || solarTermList.value.length)
 );
 
 function activityTimestamp(value: unknown) {
@@ -411,7 +412,9 @@ const displayActivities = computed(() => {
     : stellarAvailable.value
       ? [
           {
-            id: String((season.value.pass as { activityId?: string } | undefined)?.activityId || season.value.id || 'stellar'),
+            id: String(
+              (season.value.pass as { activityId?: string } | undefined)?.activityId || season.value.id || 'stellar'
+            ),
             name: String(season.value.title || $t('page.farm.activity.tabTravel')),
             startTime: Number(season.value.startTime || 0),
             endTime: Number(season.value.endTime || 0),
@@ -421,7 +424,10 @@ const displayActivities = computed(() => {
           } satisfies ActivityDirectoryItem
         ]
       : [];
-  if (greenPlumActive.value && !entries.some(item => item.gameplayKey === 'greenPlum' || item.detailTarget === 'greenPlum')) {
+  if (
+    greenPlumActive.value &&
+    !entries.some(item => item.gameplayKey === 'greenPlum' || item.detailTarget === 'greenPlum')
+  ) {
     entries.push({
       id: String(greenPlum.value.activityId || greenPlum.value.brewActivityId || 'greenPlum'),
       name: String(greenPlum.value.name || $t('page.farm.activity.tabGreenPlum')),
@@ -1058,6 +1064,26 @@ async function claimCharityDailyGift() {
   }
 }
 
+async function claimCharityProgress(target: string) {
+  if (!farmAccountStore.currentAccountId || !target) return;
+  pendingKey.value = `charityProgress:${target}`;
+  try {
+    const { error, data } = await fetchClaimFarmActivityCharityProgressReward({
+      accountId: farmAccountStore.currentAccountId,
+      target
+    });
+    if (error) {
+      message.error(error.message || $t('page.farm.activity.claimFailed'));
+      return;
+    }
+    notifyClaimResult(data as Record<string, unknown>);
+    if (data) applySnapshot(data as Api.Farm.ActivitySnapshot);
+    else await loadActivities();
+  } finally {
+    pendingKey.value = null;
+  }
+}
+
 function greenPlumIngredientCount(uid: string) {
   return greenPlumIngredientCounts.value[uid] || 1;
 }
@@ -1102,7 +1128,6 @@ onMounted(async () => {
     clockNow.value = Date.now();
   }, 1000);
 });
-
 </script>
 
 <template>
@@ -1126,7 +1151,11 @@ onMounted(async () => {
         </NButton>
       </div>
       <NSpin :show="loading">
-        <NEmpty v-if="!loading && !displayActivities.length" class="py-48px" :description="$t('page.farm.activity.noActivities')" />
+        <NEmpty
+          v-if="!loading && !displayActivities.length"
+          class="py-48px"
+          :description="$t('page.farm.activity.noActivities')"
+        />
         <div v-else class="grid gap-12px md:grid-cols-2 xl:grid-cols-3">
           <button
             v-for="activity in displayActivities"
@@ -1145,7 +1174,11 @@ onMounted(async () => {
             <div class="text-16px font-medium">{{ activity.name }}</div>
             <div class="mt-6px text-12px text-gray-500">{{ formatActivityPeriod(activity) }}</div>
             <div class="mt-10px text-12px" :class="activityHasGameplay(activity) ? 'text-primary' : 'text-gray-400'">
-              {{ activityHasGameplay(activity) ? $t('page.farm.activity.viewDetail') : $t('page.farm.activity.unsupported') }}
+              {{
+                activityHasGameplay(activity)
+                  ? $t('page.farm.activity.viewDetail')
+                  : $t('page.farm.activity.unsupported')
+              }}
             </div>
           </button>
         </div>
@@ -1156,7 +1189,7 @@ onMounted(async () => {
       <div>
         <NButton size="small" secondary @click="goBackToList">
           <template #icon>
-            <icon-ic-round-arrow-back class="text-icon" />
+            <IconIcRoundArrowBack class="text-icon" />
           </template>
           {{ $t('page.farm.activity.backToList') }}
         </NButton>
@@ -1200,50 +1233,114 @@ onMounted(async () => {
 
       <NSpin :show="loading">
         <template v-if="selectedGameplay === 'stellar'">
-        <!-- 千星游记 -->
-        <NCard v-show="activeTab === 'travel'" :bordered="false" size="small" class="card-wrapper">
-          <div
-            class="mb-16px flex flex-wrap items-center gap-16px rounded-8px bg-blue-50 px-16px py-14px dark:bg-blue-900/20"
-          >
-            <div class="h-64px w-64px flex flex-col items-center justify-center rounded-full bg-blue-500 text-white">
-              <div class="text-22px font-semibold">{{ passLevel }}</div>
-              <div class="text-11px opacity-80">{{ $t('page.farm.activity.level') }}</div>
-            </div>
-            <div class="min-w-200px flex-1">
-              <div class="mb-6px text-13px font-medium">{{ $t('page.farm.activity.travelScore') }}</div>
-              <div class="mb-8px text-15px">{{ passProgress }} / {{ passProgressMax || '--' }}</div>
-              <NProgress type="line" :percentage="passPercent" :show-indicator="false" />
-            </div>
-          </div>
-
-          <div class="mb-12px flex flex-wrap items-center gap-8px text-12px text-gray-500">
-            <span>{{ $t('page.farm.activity.travelTip') }}</span>
-            <NButton v-if="passRules" size="tiny" quaternary @click="travelRulesOpen = true">
-              {{ $t('page.farm.activity.viewRules') }}
-            </NButton>
-          </div>
-
-          <NEmpty v-if="!passNodes.length" class="py-24px" :description="$t('common.noData')" />
-          <div v-else class="flex-col gap-10px">
+          <!-- 千星游记 -->
+          <NCard v-show="activeTab === 'travel'" :bordered="false" size="small" class="card-wrapper">
             <div
-              v-for="node in passNodes"
-              :key="String(node.id ?? node.level)"
-              class="flex flex-wrap items-center justify-between gap-12px rounded-8px border border-gray-200 px-12px py-10px dark:border-gray-700"
-              :class="{
-                'border-primary': node.current || node.level === passLevel,
-                'opacity-70': node.claimed
-              }"
+              class="mb-16px flex flex-wrap items-center gap-16px rounded-8px bg-blue-50 px-16px py-14px dark:bg-blue-900/20"
             >
-              <div class="flex items-center gap-12px">
-                <div
-                  class="h-44px w-44px flex flex-col items-center justify-center rounded-8px bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200"
-                >
-                  <div class="text-16px font-semibold">{{ node.level ?? '--' }}</div>
-                  <div class="text-10px">{{ $t('page.farm.activity.level') }}</div>
-                </div>
-                <div class="flex flex-wrap gap-8px">
+              <div class="h-64px w-64px flex flex-col items-center justify-center rounded-full bg-blue-500 text-white">
+                <div class="text-22px font-semibold">{{ passLevel }}</div>
+                <div class="text-11px opacity-80">{{ $t('page.farm.activity.level') }}</div>
+              </div>
+              <div class="min-w-200px flex-1">
+                <div class="mb-6px text-13px font-medium">{{ $t('page.farm.activity.travelScore') }}</div>
+                <div class="mb-8px text-15px">{{ passProgress }} / {{ passProgressMax || '--' }}</div>
+                <NProgress type="line" :percentage="passPercent" :show-indicator="false" />
+              </div>
+            </div>
+
+            <div class="mb-12px flex flex-wrap items-center gap-8px text-12px text-gray-500">
+              <span>{{ $t('page.farm.activity.travelTip') }}</span>
+              <NButton v-if="passRules" size="tiny" quaternary @click="travelRulesOpen = true">
+                {{ $t('page.farm.activity.viewRules') }}
+              </NButton>
+            </div>
+
+            <NEmpty v-if="!passNodes.length" class="py-24px" :description="$t('common.noData')" />
+            <div v-else class="flex-col gap-10px">
+              <div
+                v-for="node in passNodes"
+                :key="String(node.id ?? node.level)"
+                class="flex flex-wrap items-center justify-between gap-12px rounded-8px border border-gray-200 px-12px py-10px dark:border-gray-700"
+                :class="{
+                  'border-primary': node.current || node.level === passLevel,
+                  'opacity-70': node.claimed
+                }"
+              >
+                <div class="flex items-center gap-12px">
                   <div
-                    v-for="(reward, idx) in node.rewards || []"
+                    class="h-44px w-44px flex flex-col items-center justify-center rounded-8px bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200"
+                  >
+                    <div class="text-16px font-semibold">{{ node.level ?? '--' }}</div>
+                    <div class="text-10px">{{ $t('page.farm.activity.level') }}</div>
+                  </div>
+                  <div class="flex flex-wrap gap-8px">
+                    <div
+                      v-for="(reward, idx) in node.rewards || []"
+                      :key="String(reward.id ?? idx)"
+                      class="flex items-center gap-6px rounded-6px bg-gray-50 px-8px py-4px text-12px dark:bg-gray-800"
+                    >
+                      <img
+                        v-if="rewardImage(reward)"
+                        :src="rewardImage(reward)"
+                        class="h-24px w-24px object-contain"
+                        loading="lazy"
+                      />
+                      <span>{{ formatRewardLabel(reward) }}</span>
+                    </div>
+                  </div>
+                </div>
+                <NTag v-if="node.claimed" size="small" :bordered="false">{{ $t('page.farm.activity.claimed') }}</NTag>
+                <NTag v-else-if="node.claimable" size="small" type="success" :bordered="false">
+                  {{ $t('page.farm.activity.claimable') }}
+                </NTag>
+              </div>
+            </div>
+
+            <div class="mt-16px flex justify-center">
+              <NButton
+                type="primary"
+                :loading="pendingKey === 'pass'"
+                :disabled="!actionEnabled('claimPass') || !hasClaimablePass"
+                @click="claimPass"
+              >
+                {{ pendingKey === 'pass' ? $t('page.farm.activity.claiming') : $t('page.farm.activity.claimAll') }}
+              </NButton>
+            </div>
+          </NCard>
+
+          <!-- 观星礼录 -->
+          <NCard v-show="activeTab === 'constellation'" :bordered="false" size="small" class="card-wrapper">
+            <div v-if="constellationRules" class="mb-12px flex justify-end">
+              <NButton size="small" quaternary @click="constellationRulesOpen = true">
+                {{ $t('page.farm.activity.viewRules') }}
+              </NButton>
+            </div>
+            <NEmpty v-if="!constellationGroups.length" class="py-24px" :description="$t('common.noData')" />
+            <template v-else>
+              <div class="mb-12px flex flex-wrap gap-8px">
+                <NButton
+                  v-for="group in constellationGroups"
+                  :key="String(group.id)"
+                  size="small"
+                  :type="selectedConstellationId === group.id ? 'primary' : 'default'"
+                  secondary
+                  @click="selectedConstellationId = group.id || ''"
+                >
+                  {{ group.name || group.id }}
+                </NButton>
+              </div>
+
+              <div class="rounded-8px border border-gray-200 p-16px dark:border-gray-700">
+                <div class="mb-8px text-16px font-medium">
+                  {{ selectedConstellation?.name || selectedConstellation?.id || '-' }}
+                </div>
+                <div class="mb-12px text-12px text-gray-500">
+                  {{ constellationStateLabel(selectedConstellation) }}
+                </div>
+                <div class="mb-16px flex flex-wrap gap-8px">
+                  <div
+                    v-for="(reward, idx) in selectedConstellation?.rewards || []"
                     :key="String(reward.id ?? idx)"
                     class="flex items-center gap-6px rounded-6px bg-gray-50 px-8px py-4px text-12px dark:bg-gray-800"
                   >
@@ -1255,244 +1352,175 @@ onMounted(async () => {
                     />
                     <span>{{ formatRewardLabel(reward) }}</span>
                   </div>
+                  <span v-if="!(selectedConstellation?.rewards || []).length" class="text-12px text-gray-400">
+                    {{ $t('page.farm.activity.noRewards') }}
+                  </span>
                 </div>
+                <NButton
+                  type="primary"
+                  :loading="pendingKey === 'constellation'"
+                  :disabled="!canLightConstellation"
+                  @click="lightConstellation"
+                >
+                  {{
+                    pendingKey === 'constellation'
+                      ? $t('page.farm.activity.claiming')
+                      : $t('page.farm.activity.lightConstellation')
+                  }}
+                </NButton>
               </div>
-              <NTag v-if="node.claimed" size="small" :bordered="false">{{ $t('page.farm.activity.claimed') }}</NTag>
-              <NTag v-else-if="node.claimable" size="small" type="success" :bordered="false">
-                {{ $t('page.farm.activity.claimable') }}
-              </NTag>
+            </template>
+          </NCard>
+
+          <!-- 星砂商店 -->
+          <NCard v-show="activeTab === 'shop'" :bordered="false" size="small" class="card-wrapper">
+            <div class="mb-12px rounded-8px bg-sky-50 px-14px py-12px dark:bg-sky-900/20">
+              <div class="text-16px font-medium">
+                {{ shop.title || shop.name || $t('page.farm.activity.tabShop') }}
+              </div>
+              <div class="mt-4px text-12px text-gray-500">
+                {{ shop.description || $t('page.farm.activity.shopHint') }}
+              </div>
             </div>
-          </div>
 
-          <div class="mt-16px flex justify-center">
-            <NButton
-              type="primary"
-              :loading="pendingKey === 'pass'"
-              :disabled="!actionEnabled('claimPass') || !hasClaimablePass"
-              @click="claimPass"
-            >
-              {{ pendingKey === 'pass' ? $t('page.farm.activity.claiming') : $t('page.farm.activity.claimAll') }}
-            </NButton>
-          </div>
-        </NCard>
-
-        <!-- 观星礼录 -->
-        <NCard v-show="activeTab === 'constellation'" :bordered="false" size="small" class="card-wrapper">
-          <div v-if="constellationRules" class="mb-12px flex justify-end">
-            <NButton size="small" quaternary @click="constellationRulesOpen = true">
-              {{ $t('page.farm.activity.viewRules') }}
-            </NButton>
-          </div>
-          <NEmpty v-if="!constellationGroups.length" class="py-24px" :description="$t('common.noData')" />
-          <template v-else>
             <div class="mb-12px flex flex-wrap gap-8px">
               <NButton
-                v-for="group in constellationGroups"
-                :key="String(group.id)"
-                size="small"
-                :type="selectedConstellationId === group.id ? 'primary' : 'default'"
-                secondary
-                @click="selectedConstellationId = group.id || ''"
-              >
-                {{ group.name || group.id }}
-              </NButton>
-            </div>
-
-            <div class="rounded-8px border border-gray-200 p-16px dark:border-gray-700">
-              <div class="mb-8px text-16px font-medium">
-                {{ selectedConstellation?.name || selectedConstellation?.id || '-' }}
-              </div>
-              <div class="mb-12px text-12px text-gray-500">
-                {{ constellationStateLabel(selectedConstellation) }}
-              </div>
-              <div class="mb-16px flex flex-wrap gap-8px">
-                <div
-                  v-for="(reward, idx) in selectedConstellation?.rewards || []"
-                  :key="String(reward.id ?? idx)"
-                  class="flex items-center gap-6px rounded-6px bg-gray-50 px-8px py-4px text-12px dark:bg-gray-800"
-                >
-                  <img
-                    v-if="rewardImage(reward)"
-                    :src="rewardImage(reward)"
-                    class="h-24px w-24px object-contain"
-                    loading="lazy"
-                  />
-                  <span>{{ formatRewardLabel(reward) }}</span>
-                </div>
-                <span v-if="!(selectedConstellation?.rewards || []).length" class="text-12px text-gray-400">
-                  {{ $t('page.farm.activity.noRewards') }}
-                </span>
-              </div>
-              <NButton
-                type="primary"
-                :loading="pendingKey === 'constellation'"
-                :disabled="!canLightConstellation"
-                @click="lightConstellation"
-              >
-                {{
-                  pendingKey === 'constellation'
-                    ? $t('page.farm.activity.claiming')
-                    : $t('page.farm.activity.lightConstellation')
-                }}
-              </NButton>
-            </div>
-          </template>
-        </NCard>
-
-        <!-- 星砂商店 -->
-        <NCard v-show="activeTab === 'shop'" :bordered="false" size="small" class="card-wrapper">
-          <div class="mb-12px rounded-8px bg-sky-50 px-14px py-12px dark:bg-sky-900/20">
-            <div class="text-16px font-medium">
-              {{ shop.title || shop.name || $t('page.farm.activity.tabShop') }}
-            </div>
-            <div class="mt-4px text-12px text-gray-500">
-              {{ shop.description || $t('page.farm.activity.shopHint') }}
-            </div>
-          </div>
-
-          <div class="mb-12px flex flex-wrap gap-8px">
-            <NButton
-              size="tiny"
-              :type="shopCategory === '__all__' ? 'primary' : 'default'"
-              secondary
-              @click="shopCategory = '__all__'"
-            >
-              {{ $t('page.farm.activity.allCategories') }}
-            </NButton>
-            <NButton
-              v-for="category in shopCategories"
-              :key="String(category.id)"
-              size="tiny"
-              :type="shopCategory === category.id ? 'primary' : 'default'"
-              secondary
-              @click="shopCategory = category.id || ''"
-            >
-              {{ category.name || category.id }}
-            </NButton>
-          </div>
-
-          <NEmpty v-if="!visibleShopGoods.length" class="py-24px" :description="$t('common.noData')" />
-          <div v-else class="grid gap-12px sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            <div
-              v-for="goods in visibleShopGoods"
-              :key="String(goods.id)"
-              class="relative rounded-8px border border-gray-200 p-12px dark:border-gray-700"
-              :class="{ 'opacity-60': !!shopDisabledReason(goods) }"
-            >
-              <NTag
-                v-if="goods.owned || goods.soldOut"
                 size="tiny"
-                type="success"
-                :bordered="false"
-                class="absolute right-8px top-8px z-1"
-              >
-                {{ $t('page.farm.activity.alreadyExchanged') }}
-              </NTag>
-              <div class="mb-8px flex-center h-72px rounded-6px bg-gray-50 dark:bg-gray-800">
-                <img
-                  v-if="rewardImage(goods.item)"
-                  :src="rewardImage(goods.item)"
-                  class="max-h-56px max-w-56px object-contain"
-                  loading="lazy"
-                />
-                <span v-else class="text-24px opacity-40">🎁</span>
-              </div>
-              <div class="mb-4px truncate text-13px font-medium">
-                {{ goods.name || goods.item?.name || goods.id }}
-              </div>
-              <div class="mb-8px flex items-center gap-6px text-12px text-amber-600">
-                <img
-                  v-if="resolveCatalogImage(goods.cost?.image)"
-                  :src="resolveCatalogImage(goods.cost?.image)"
-                  class="h-16px w-16px object-contain"
-                  loading="lazy"
-                />
-                <span>{{ goods.cost?.count ?? '--' }}</span>
-              </div>
-              <NButton
-                block
-                size="small"
-                :disabled="!!shopDisabledReason(goods)"
-                @click="openExchange(goods)"
-              >
-                {{ shopDisabledReason(goods) || $t('page.farm.activity.exchange') }}
-              </NButton>
-            </div>
-          </div>
-        </NCard>
-
-        <!-- 节令小札 -->
-        <NCard v-show="activeTab === 'solar'" :bordered="false" size="small" class="card-wrapper">
-          <NEmpty v-if="!solarTermList.length" class="py-24px" :description="$t('common.noData')" />
-          <div v-else class="grid gap-16px lg:grid-cols-[140px_1fr]">
-            <div class="flex flex-col gap-8px lg:max-h-520px lg:overflow-auto">
-              <NButton
-                v-for="term in solarTermList"
-                :key="String(term.id)"
-                size="small"
-                :type="selectedSolarId === term.id ? 'primary' : 'default'"
+                :type="shopCategory === '__all__' ? 'primary' : 'default'"
                 secondary
-                @click="selectedSolarId = term.id || ''"
+                @click="shopCategory = '__all__'"
               >
-                <span>{{ term.name || term.id }}</span>
-                <NTag
-                  v-if="term.claimable || term.canClaim"
-                  size="tiny"
-                  type="error"
-                  :bordered="false"
-                  class="ml-6px"
-                  round
-                >
-                  •
-                </NTag>
+                {{ $t('page.farm.activity.allCategories') }}
+              </NButton>
+              <NButton
+                v-for="category in shopCategories"
+                :key="String(category.id)"
+                size="tiny"
+                :type="shopCategory === category.id ? 'primary' : 'default'"
+                secondary
+                @click="shopCategory = category.id || ''"
+              >
+                {{ category.name || category.id }}
               </NButton>
             </div>
 
-            <div class="rounded-8px border border-gray-200 p-16px dark:border-gray-700">
-              <div v-if="selectedSolar?.englishName" class="mb-4px text-12px tracking-2px text-gray-400">
-                {{ selectedSolar.englishName }}
-              </div>
-              <div class="mb-8px text-22px font-semibold">
-                {{ selectedSolar?.title || selectedSolar?.name || '-' }}
-              </div>
-              <div class="mb-16px whitespace-pre-line text-13px text-gray-500">
-                {{ selectedSolar?.description || solarTerms.description || '' }}
-              </div>
-              <div v-if="selectedSolar?.rewardTitle" class="mb-4px text-15px font-medium">
-                {{ selectedSolar.rewardTitle }}
-              </div>
-              <div v-if="selectedSolar?.rewardDescription" class="mb-12px text-12px text-gray-500">
-                {{ selectedSolar.rewardDescription }}
-              </div>
-              <div class="mb-16px flex flex-wrap gap-8px">
-                <div
-                  v-for="(reward, idx) in selectedSolar?.rewards || []"
-                  :key="String(reward.id ?? idx)"
-                  class="flex items-center gap-6px rounded-6px bg-gray-50 px-8px py-4px text-12px dark:bg-gray-800"
+            <NEmpty v-if="!visibleShopGoods.length" class="py-24px" :description="$t('common.noData')" />
+            <div v-else class="grid gap-12px sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              <div
+                v-for="goods in visibleShopGoods"
+                :key="String(goods.id)"
+                class="relative rounded-8px border border-gray-200 p-12px dark:border-gray-700"
+                :class="{ 'opacity-60': !!shopDisabledReason(goods) }"
+              >
+                <NTag
+                  v-if="goods.owned || goods.soldOut"
+                  size="tiny"
+                  type="success"
+                  :bordered="false"
+                  class="absolute right-8px top-8px z-1"
                 >
+                  {{ $t('page.farm.activity.alreadyExchanged') }}
+                </NTag>
+                <div class="mb-8px flex-center h-72px rounded-6px bg-gray-50 dark:bg-gray-800">
                   <img
-                    v-if="rewardImage(reward)"
-                    :src="rewardImage(reward)"
-                    class="h-24px w-24px object-contain"
+                    v-if="rewardImage(goods.item)"
+                    :src="rewardImage(goods.item)"
+                    class="max-h-56px max-w-56px object-contain"
                     loading="lazy"
                   />
-                  <span>{{ formatRewardLabel(reward) }}</span>
+                  <span v-else class="text-24px opacity-40">🎁</span>
                 </div>
-                <span v-if="!(selectedSolar?.rewards || []).length" class="text-12px text-gray-400">
-                  {{ $t('page.farm.activity.noRewards') }}
-                </span>
+                <div class="mb-4px truncate text-13px font-medium">
+                  {{ goods.name || goods.item?.name || goods.id }}
+                </div>
+                <div class="mb-8px flex items-center gap-6px text-12px text-amber-600">
+                  <img
+                    v-if="resolveCatalogImage(goods.cost?.image)"
+                    :src="resolveCatalogImage(goods.cost?.image)"
+                    class="h-16px w-16px object-contain"
+                    loading="lazy"
+                  />
+                  <span>{{ goods.cost?.count ?? '--' }}</span>
+                </div>
+                <NButton block size="small" :disabled="!!shopDisabledReason(goods)" @click="openExchange(goods)">
+                  {{ shopDisabledReason(goods) || $t('page.farm.activity.exchange') }}
+                </NButton>
               </div>
-              <NButton
-                type="primary"
-                :loading="pendingKey === 'solar'"
-                :disabled="!(selectedSolar?.claimable || selectedSolar?.canClaim) || !!selectedSolar?.claimed"
-                @click="claimSolar"
-              >
-                {{ solarButtonLabel(selectedSolar) }}
-              </NButton>
             </div>
-          </div>
-        </NCard>
+          </NCard>
+
+          <!-- 节令小札 -->
+          <NCard v-show="activeTab === 'solar'" :bordered="false" size="small" class="card-wrapper">
+            <NEmpty v-if="!solarTermList.length" class="py-24px" :description="$t('common.noData')" />
+            <div v-else class="grid gap-16px lg:grid-cols-[140px_1fr]">
+              <div class="flex flex-col gap-8px lg:max-h-520px lg:overflow-auto">
+                <NButton
+                  v-for="term in solarTermList"
+                  :key="String(term.id)"
+                  size="small"
+                  :type="selectedSolarId === term.id ? 'primary' : 'default'"
+                  secondary
+                  @click="selectedSolarId = term.id || ''"
+                >
+                  <span>{{ term.name || term.id }}</span>
+                  <NTag
+                    v-if="term.claimable || term.canClaim"
+                    size="tiny"
+                    type="error"
+                    :bordered="false"
+                    class="ml-6px"
+                    round
+                  >
+                    •
+                  </NTag>
+                </NButton>
+              </div>
+
+              <div class="rounded-8px border border-gray-200 p-16px dark:border-gray-700">
+                <div v-if="selectedSolar?.englishName" class="mb-4px text-12px tracking-2px text-gray-400">
+                  {{ selectedSolar.englishName }}
+                </div>
+                <div class="mb-8px text-22px font-semibold">
+                  {{ selectedSolar?.title || selectedSolar?.name || '-' }}
+                </div>
+                <div class="mb-16px whitespace-pre-line text-13px text-gray-500">
+                  {{ selectedSolar?.description || solarTerms.description || '' }}
+                </div>
+                <div v-if="selectedSolar?.rewardTitle" class="mb-4px text-15px font-medium">
+                  {{ selectedSolar.rewardTitle }}
+                </div>
+                <div v-if="selectedSolar?.rewardDescription" class="mb-12px text-12px text-gray-500">
+                  {{ selectedSolar.rewardDescription }}
+                </div>
+                <div class="mb-16px flex flex-wrap gap-8px">
+                  <div
+                    v-for="(reward, idx) in selectedSolar?.rewards || []"
+                    :key="String(reward.id ?? idx)"
+                    class="flex items-center gap-6px rounded-6px bg-gray-50 px-8px py-4px text-12px dark:bg-gray-800"
+                  >
+                    <img
+                      v-if="rewardImage(reward)"
+                      :src="rewardImage(reward)"
+                      class="h-24px w-24px object-contain"
+                      loading="lazy"
+                    />
+                    <span>{{ formatRewardLabel(reward) }}</span>
+                  </div>
+                  <span v-if="!(selectedSolar?.rewards || []).length" class="text-12px text-gray-400">
+                    {{ $t('page.farm.activity.noRewards') }}
+                  </span>
+                </div>
+                <NButton
+                  type="primary"
+                  :loading="pendingKey === 'solar'"
+                  :disabled="!(selectedSolar?.claimable || selectedSolar?.canClaim) || !!selectedSolar?.claimed"
+                  @click="claimSolar"
+                >
+                  {{ solarButtonLabel(selectedSolar) }}
+                </NButton>
+              </div>
+            </div>
+          </NCard>
         </template>
         <QixiView
           v-else-if="selectedGameplay === 'qixi'"
@@ -1512,9 +1540,11 @@ onMounted(async () => {
           :pending-seeds="pendingKey === 'charitySeeds'"
           :pending-donate="pendingKey === 'charityDonate'"
           :pending-gift="pendingKey === 'charityGift'"
+          :pending-progress="pendingKey?.startsWith('charityProgress:') || false"
           @claim-seeds="claimCharitySeeds"
           @donate-love="donateCharityLove"
           @claim-daily-gift="claimCharityDailyGift"
+          @claim-progress="claimCharityProgress"
         />
         <!-- 雨落成诗（天气活动） -->
         <WeatherView v-else-if="selectedGameplay === 'weather'" />
@@ -1778,10 +1808,7 @@ onMounted(async () => {
           </div>
 
           <NCollapse v-if="greenPlumRules" class="mt-16px" :default-expanded-names="['rules']">
-            <NCollapseItem
-              :title="greenPlumRules.title || $t('page.farm.activity.qixiRules')"
-              name="rules"
-            >
+            <NCollapseItem :title="greenPlumRules.title || $t('page.farm.activity.qixiRules')" name="rules">
               <p
                 v-for="(paragraph, index) in greenPlumRules.paragraphs"
                 :key="index"
@@ -1817,11 +1844,7 @@ onMounted(async () => {
       </div>
     </NModal>
 
-    <ActivityRulesDialog
-      :open="travelRulesOpen"
-      :rules="passRules"
-      @close="travelRulesOpen = false"
-    />
+    <ActivityRulesDialog :open="travelRulesOpen" :rules="passRules" @close="travelRulesOpen = false" />
     <ActivityRulesDialog
       :open="constellationRulesOpen"
       :rules="constellationRules"

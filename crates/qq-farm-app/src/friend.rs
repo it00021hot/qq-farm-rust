@@ -50,7 +50,7 @@ pub async fn friend_op(ctx: &AppContext, account_id: &str, gid: i64, op: &str) -
     let op = qq_farm_core::models::types::FriendOperation::from_str_opt(op)
         .ok_or_else(|| AppError::BadRequest(format!("unknown op: {op}")))?;
     let ret = loop_.friend().do_friend_operation(op, gid).await.map_err(AppError::from_core)?;
-    let stolen = ret.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+    let stolen = ret.get("count").and_then(serde_json::Value::as_u64).unwrap_or(0);
     if matches!(op, qq_farm_core::models::types::FriendOperation::Steal) && stolen > 0 {
         let _ = loop_.warehouse().sell_all_fruits().await;
     }
@@ -76,11 +76,9 @@ pub fn toggle_friend_blacklist(account_id: &str, gid: i64) -> Value {
 /// 好友互动道具库存。
 pub async fn friend_interaction_items(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
-    qq_farm_core::services::friend_interaction_items::get_friend_interaction_items(
-        loop_.gateway(),
-    )
-    .await
-    .map_err(AppError::from_core)
+    qq_farm_core::services::friend_interaction_items::get_friend_interaction_items(loop_.gateway())
+        .await
+        .map_err(AppError::from_core)
 }
 
 /// 对好友农场批量使用互动道具。

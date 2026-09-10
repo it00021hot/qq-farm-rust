@@ -15,9 +15,7 @@ async function handleEnter() {
 
 <template>
   <NSpace vertical :size="24">
-    <NAlert type="info" :title="$t('common.tip')">
-      {{ $t('page.login.pwdLogin.title') }} — LocalOwner
-    </NAlert>
+    <NAlert type="info" :title="$t('common.tip')">{{ $t('page.login.pwdLogin.title') }} — LocalOwner</NAlert>
     <NButton type="primary" size="large" round block :loading="authStore.loginLoading" @click="handleEnter">
       {{ $t('common.confirm') }}
     </NButton>

@@ -191,26 +191,27 @@ fn normalize_season_missing() {
 
 #[test]
 fn find_season_activity_by_type() {
-    let mut reply = GetSeasonInfoReply::default();
-    reply.season_info = Some(SeasonInfo {
-        activities: vec![
-            SeasonActivity {
-                activity_id: 1,
-                r#type: 3,
-                name: bytes::Bytes::new(),
-                begin_time: 0,
-                end_time: 0,
-            },
-            SeasonActivity {
-                activity_id: 2,
-                r#type: 13,
-                name: bytes::Bytes::new(),
-                begin_time: 0,
-                end_time: 0,
-            },
-        ],
-        ..Default::default()
-    });
+    let reply = GetSeasonInfoReply {
+        season_info: Some(SeasonInfo {
+            activities: vec![
+                SeasonActivity {
+                    activity_id: 1,
+                    r#type: 3,
+                    name: bytes::Bytes::new(),
+                    begin_time: 0,
+                    end_time: 0,
+                },
+                SeasonActivity {
+                    activity_id: 2,
+                    r#type: 13,
+                    name: bytes::Bytes::new(),
+                    begin_time: 0,
+                    end_time: 0,
+                },
+            ],
+            ..Default::default()
+        }),
+    };
     let shop = find_season_activity(&reply, SHOP_ACTIVITY_TYPE).unwrap();
     assert_eq!(shop.activity_id, 1);
     let constellation = find_season_activity(&reply, CONSTELLATION_ACTIVITY_TYPE).unwrap();
@@ -221,16 +222,18 @@ fn find_season_activity_by_type() {
 
 #[test]
 fn normalize_solar_terms_basic() {
-    let mut reply = GetSolarTermsReply::default();
-    reply.server_time = 1500;
-    reply.terms = vec![SolarTermInfo {
-        term_id: 100,
-        status: 2,
-        begin_time: 1000,
-        end_time: 2000,
-        name: bytes::Bytes::from("立春".as_bytes()),
-        rewards: vec![],
-    }];
+    let reply = GetSolarTermsReply {
+        server_time: 1500,
+        terms: vec![SolarTermInfo {
+            term_id: 100,
+            status: 2,
+            begin_time: 1000,
+            end_time: 2000,
+            name: bytes::Bytes::from("立春".as_bytes()),
+            rewards: vec![],
+        }],
+        ..Default::default()
+    };
     let dto = normalize_solar_terms(&reply);
     assert_eq!(dto.terms.len(), 1);
     assert_eq!(dto.terms[0].name, "立春");
@@ -366,7 +369,6 @@ fn pass_dto_basic() {
             node_id: 5,
             is_key_level: true,
             rewards: vec![SeasonItem { item_id: 1, count: 10 }],
-            ..Default::default()
         }],
         ..Default::default()
     };
@@ -380,7 +382,10 @@ fn pass_dto_basic() {
     assert_eq!(dto.nodes[0].rewards[0].image, "/game-config/seed_images_named/seed_images/1.png");
     let v = serde_json::to_value(&dto).unwrap();
     assert!(v.get("nodes").and_then(|n| n.as_array()).is_some());
-    assert_eq!(v["nodes"][0]["rewards"][0]["image"], "/game-config/seed_images_named/seed_images/1.png");
+    assert_eq!(
+        v["nodes"][0]["rewards"][0]["image"],
+        "/game-config/seed_images_named/seed_images/1.png"
+    );
 }
 
 #[test]

@@ -403,7 +403,7 @@ impl RuntimeState {
     /// 最近 `limit` 条，按 `ts` 升序（旧→新），对齐 Go `hub.Logs.Query`。
     #[must_use]
     pub fn take_last_n_ascending(mut logs: Vec<LogEntry>, limit: usize) -> Vec<LogEntry> {
-        logs.sort_by(|a, b| a.ts.cmp(&b.ts));
+        logs.sort_by_key(|a| a.ts);
         let limit = limit.max(1);
         if logs.len() > limit {
             let skip = logs.len() - limit;
@@ -425,10 +425,8 @@ impl RuntimeState {
         let module = filters.module.as_deref().unwrap_or("").trim();
         let event_name = filters.event.as_deref().unwrap_or("").trim();
         let is_warn = filters.is_warn;
-        let time_from_ms =
-            filters.time_from.as_deref().and_then(|s| chrono_parse(s)).unwrap_or(i64::MIN);
-        let time_to_ms =
-            filters.time_to.as_deref().and_then(|s| chrono_parse(s)).unwrap_or(i64::MAX);
+        let time_from_ms = filters.time_from.as_deref().and_then(chrono_parse).unwrap_or(i64::MIN);
+        let time_to_ms = filters.time_to.as_deref().and_then(chrono_parse).unwrap_or(i64::MAX);
 
         list.iter()
             .filter(|l| {
