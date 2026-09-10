@@ -61,12 +61,6 @@ jobs:
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
 
-      - name: Lint Rust
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Test Rust
-        run: cargo test --workspace -- --test-threads=1
-
       - name: Check frontend
         run: |
           pnpm -C desktop-ui typecheck
@@ -74,6 +68,12 @@ jobs:
           pnpm -C desktop-ui exec eslint --max-warnings 0 .
           pnpm -C desktop-ui exec oxfmt --check .
           pnpm -C desktop-ui build
+
+      - name: Lint Rust
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test Rust
+        run: cargo test --workspace -- --test-threads=1
 
   publish:
     needs: quality
