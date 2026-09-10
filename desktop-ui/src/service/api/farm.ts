@@ -325,16 +325,13 @@ export function fetchSaveQqLoginSettings(settings: {
 }
 
 export function fetchQqLoginCreateTask() {
-  return invokeFlat<{ taskId: string; status: string; qrImage: string; expiresAt?: number }>(
-    'qq_login_create_task'
-  );
+  return invokeFlat<{ taskId: string; status: string; qrImage: string; expiresAt?: number }>('qq_login_create_task');
 }
 
 export function fetchQqLoginTaskStatus(taskId: string) {
-  return invokeFlat<{ taskId: string; status: string; qrImage: string; expiresAt?: number }>(
-    'qq_login_task_status',
-    { taskId }
-  );
+  return invokeFlat<{ taskId: string; status: string; qrImage: string; expiresAt?: number }>('qq_login_task_status', {
+    taskId
+  });
 }
 
 export function fetchQqLoginMiniappCode(taskId: string) {
@@ -446,7 +443,7 @@ async function wxLocalFetch(
     return parseWxLocalResponse(text);
   } catch (error) {
     // 插件 IPC 可能抛出字符串，统一为 Error 以保留抽屉中的诊断信息。
-    throw new Error(controller.signal.aborted ? '本机微信请求超时' : formatInvokeError(error));
+    throw new Error(controller.signal.aborted ? '本机微信请求超时' : formatInvokeError(error), { cause: error });
   } finally {
     // 避免请求成功后定时器再次触发，取消插件已经释放的资源。
     clearTimeout(timer);
@@ -454,11 +451,7 @@ async function wxLocalFetch(
 }
 
 /** 本机微信探测（POST /api/check-login） */
-export function fetchWxLocalCheckLogin(
-  port: number,
-  oauth: WxLocalOauth,
-  timeoutMs = 8000
-): Promise<WxLocalPayload> {
+export function fetchWxLocalCheckLogin(port: number, oauth: WxLocalOauth, timeoutMs = 8000): Promise<WxLocalPayload> {
   return wxLocalFetch(
     port,
     '/api/check-login',

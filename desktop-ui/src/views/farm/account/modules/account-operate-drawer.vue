@@ -84,9 +84,7 @@ const qqSubmitting = ref(false);
 let qqPollTimer: ReturnType<typeof setTimeout> | undefined;
 
 // 前端调用本机微信 HTTP 插件所需的 OAuth 参数（create session 返回）
-const wxQuickOauth = ref<{ appId: string; scope: string; redirectUri: string; state: string } | null>(
-  null
-);
+const wxQuickOauth = ref<{ appId: string; scope: string; redirectUri: string; state: string } | null>(null);
 function createDefaultModel(): Model {
   return {
     code: '',
@@ -499,8 +497,7 @@ async function detectLocalWechat() {
     }
     const probes = await Promise.allSettled(ports.map(port => fetchWxLocalCheckLogin(port, oauth)));
     const errors: string[] = [];
-    let hit: { port: number; authorizeUuid: string; nickname: string; headimgurl: string } | null =
-      null;
+    let hit: { port: number; authorizeUuid: string; nickname: string; headimgurl: string } | null = null;
     for (const [index, probe] of probes.entries()) {
       const port = ports[index]!;
       if (probe.status !== 'fulfilled') {
@@ -532,9 +529,7 @@ async function detectLocalWechat() {
       nickname: hit.nickname,
       headimgurl: hit.headimgurl
     };
-    wxStatus.value = hit.nickname
-      ? `${hit.nickname} · 请在电脑微信中确认`
-      : '本机微信已就绪，请点击授权';
+    wxStatus.value = hit.nickname ? `${hit.nickname} · 请在电脑微信中确认` : '本机微信已就绪，请点击授权';
   } catch (err: any) {
     // 保留探测失败的具体原因（端口/errcode/连接错误），便于诊断
     const reason = String(err?.message || '').trim() || '未检测到本机微信';
@@ -562,22 +557,14 @@ async function authorizeLocalWechat() {
     if (!oauth) {
       throw new Error('授权会话缺少 OAuth 参数，请重新检测');
     }
-    const authorized = await fetchWxLocalAuthorize(
-      port,
-      oauth,
-      profile.authorizeUuid,
-      { x: pos.x, y: pos.y }
-    );
+    const authorized = await fetchWxLocalAuthorize(port, oauth, profile.authorizeUuid, { x: pos.x, y: pos.y });
     if (authorized.errcode !== 0) {
       const errMap: Record<number, string> = {
         10050: '已在微信中拒绝授权',
         10046: '授权已超时，请重新检测',
         10057: '当前应用仅支持扫码授权'
       };
-      throw new Error(
-        errMap[authorized.errcode]
-          || `桌面微信未返回有效授权结果（errcode=${authorized.errcode}）`
-      );
+      throw new Error(errMap[authorized.errcode] || `桌面微信未返回有效授权结果（errcode=${authorized.errcode}）`);
     }
     const redirectUrl = String(
       authorized.jsdata && typeof authorized.jsdata === 'object'
@@ -883,9 +870,7 @@ onBeforeUnmount(() => {
               >
                 微信快捷登录
               </NButton>
-              <NButton size="small" secondary @click="switchToQrLogin">
-                切换扫码登录
-              </NButton>
+              <NButton size="small" secondary @click="switchToQrLogin">切换扫码登录</NButton>
             </NSpace>
           </div>
 

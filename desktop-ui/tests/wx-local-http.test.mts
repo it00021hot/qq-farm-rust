@@ -60,10 +60,12 @@ test('string IPC failures become readable errors', async () => {
 
 test('request timeout cancels the native request', async () => {
   let cancel: ((reason: Error) => void) | undefined;
-  mockIPC((command) => {
+  mockIPC(command => {
     if (command === 'plugin:http|fetch') return 1;
     if (command === 'plugin:http|fetch_send') {
-      return new Promise((_, reject) => { cancel = reject; });
+      return new Promise((_, reject) => {
+        cancel = reject;
+      });
     }
     if (command === 'plugin:http|fetch_cancel') {
       cancel?.(new Error('Request cancelled'));
