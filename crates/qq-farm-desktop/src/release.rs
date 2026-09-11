@@ -2,6 +2,7 @@ use serde::Deserialize;
 
 use crate::commands::application::UpdateResult;
 
+#[cfg(mobile)]
 const RELEASE_API: &str = "https://api.github.com/repos/it00021hot/qq-farm-rust/releases/latest";
 const RELEASE_BASE: &str = "https://github.com/it00021hot/qq-farm-rust/releases/tag/";
 
@@ -37,6 +38,7 @@ fn parse_release(release: Release, current: &str) -> Result<UpdateResult, String
     })
 }
 
+#[cfg(mobile)]
 pub async fn check(current: &str) -> Result<UpdateResult, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
