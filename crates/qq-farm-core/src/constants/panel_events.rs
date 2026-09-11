@@ -217,6 +217,56 @@ impl fmt::Display for PanelEvent {
     }
 }
 
+/// 全量事件列表（防回归测试用：desktop-ui log-events.ts 必须为每个 key 提供中文标签）
+pub const ALL: &[PanelEvent] = &[
+    PanelEvent::FarmCycle,
+    PanelEvent::HarvestCrop,
+    PanelEvent::RemovePlant,
+    PanelEvent::PlantSeed,
+    PanelEvent::Fertilize,
+    PanelEvent::LandsNotify,
+    PanelEvent::SeedPick,
+    PanelEvent::SeedBuy,
+    PanelEvent::FertilizerBuy,
+    PanelEvent::FertilizerGiftOpen,
+    PanelEvent::CharitySettlementGiftOpen,
+    PanelEvent::FertilizerBuyTimer,
+    PanelEvent::TaskScan,
+    PanelEvent::TaskClaim,
+    PanelEvent::DailyTask,
+    PanelEvent::ActivityPoints,
+    PanelEvent::MallFreeGifts,
+    PanelEvent::DailyShare,
+    PanelEvent::VipDailyGift,
+    PanelEvent::MonthCardGift,
+    PanelEvent::IllustratedRewards,
+    PanelEvent::EmailRewards,
+    PanelEvent::SellSuccess,
+    PanelEvent::SellDone,
+    PanelEvent::UpgradeLand,
+    PanelEvent::UnlockLand,
+    PanelEvent::FriendCycle,
+    PanelEvent::VisitFriend,
+    PanelEvent::FriendScan,
+    PanelEvent::FriendRequest,
+    PanelEvent::AcceptFriendRequest,
+    PanelEvent::PendingFriendRequest,
+    PanelEvent::GetFriendList,
+    PanelEvent::FriendListApi,
+    PanelEvent::FriendPlantPatch,
+    PanelEvent::EnterFarm,
+    PanelEvent::CareFriend,
+    PanelEvent::PatrolDone,
+    PanelEvent::AvatarProbe,
+    PanelEvent::VisitorGidBackfill,
+    PanelEvent::BadActionLimit,
+    PanelEvent::HeartbeatTimeout,
+    PanelEvent::Login,
+    PanelEvent::PetOp,
+    PanelEvent::DogSkillGift,
+    PanelEvent::MysteryShopWatch,
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,5 +276,26 @@ mod tests {
         assert_eq!(PanelEvent::parse("巡田"), Some(PanelEvent::FarmCycle));
         assert_eq!(PanelEvent::parse("获取好友列表"), Some(PanelEvent::GetFriendList));
         assert_eq!(PanelEvent::FarmCycle.as_str(), "farm_cycle");
+    }
+
+    /// 前端 log-events.ts 必须为每个 PanelEvent key 提供中文标签
+    /// （2026-09-11：mystery_shop_watch 裸奔事件标签事故的防回归）
+    #[test]
+    fn every_panel_event_has_frontend_label() {
+        let ts_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../desktop-ui/src/views/farm/dashboard/log-events.ts"
+        );
+        let Ok(ts) = std::fs::read_to_string(ts_path) else {
+            // desktop-ui 不在（独立发布 core）时跳过
+            return;
+        };
+        for event in ALL {
+            let key = event.as_str();
+            assert!(
+                ts.contains(&format!("{key}:")),
+                "desktop-ui log-events.ts 缺少事件 {key} 的中文标签"
+            );
+        }
     }
 }

@@ -723,15 +723,22 @@ impl PlantingEngine {
         if organic_targets.is_empty() {
             return 0;
         }
-        let organic = self.api.fertilize_organic_loop(&organic_targets, log_ctx.account_id).await;
+        let (organic, organic_left) =
+            self.api.fertilize_organic_loop(&organic_targets, log_ctx.account_id).await;
+        // 余量文案：施肥回包自带容器剩余秒数，直接换算小时上日志（不必查背包）
+        let left_label = match organic_left {
+            Some(secs) => format!("，剩 {:.1}h", secs as f64 / 3600.0),
+            None => String::new(),
+        };
         if organic > 0 {
             if matches!(mode, FertilizerMode::Organic | FertilizerMode::Both) {
                 log_ctx.log(
                     format!(
-                        "{}：有机化肥循环施肥完成，共施 {} 次（范围: {}）",
+                        "{}：有机化肥循环施肥完成，共施 {} 次（范围: {}）{}",
                         log_ctx.reason_label,
                         organic,
-                        scope.label()
+                        scope.label(),
+                        left_label
                     ),
                     serde_json::json!({
                         "module": "farm", "result": "ok", "reason": log_ctx.reason,
@@ -740,7 +747,7 @@ impl PlantingEngine {
                 );
             } else {
                 log_ctx.log(
-                    format!("有机化肥循环施肥完成，共施{} 次", organic),
+                    format!("有机化肥循环施肥完成，共施{} 次{}", organic, left_label),
                     serde_json::json!({
                         "module": "farm", "result": "ok",
                         "type": "organic", "count": organic,
@@ -775,32 +782,41 @@ impl PlantingEngine {
             return 0;
         }
         let mut normal = 0usize;
+        let mut normal_left: Option<i64> = None;
         for (i, &land_id) in normal_targets.iter().enumerate() {
-            if self.api.fertilize(land_id, NORMAL_FERTILIZER_ID).await.is_err() {
-                break;
+            match self.api.fertilize(land_id, NORMAL_FERTILIZER_ID).await {
+                Ok(r) => normal_left = r.or(normal_left),
+                Err(_) => break,
             }
             normal += 1;
             if i + 1 < normal_targets.len() {
                 sleep(Duration::from_millis(50)).await;
             }
         }
+        // 余量文案：普通化肥回包自带容器剩余秒数（与有机一致）
+        let left_label = match normal_left {
+            Some(secs) => format!("，剩 {:.1}h", secs as f64 / 3600.0),
+            None => String::new(),
+        };
         let (msg, result_field) = if normal > 0 {
             (
                 format!(
-                    "{}：已为{}/{} 块地施普通化肥（范围: {}）",
+                    "{}：已为{}/{} 块地施普通化肥（范围: {}）{}",
                     log_ctx.reason_label,
                     normal,
                     normal_targets.len(),
-                    scope.label()
+                    scope.label(),
+                    left_label
                 ),
                 "ok",
             )
         } else {
             (
                 format!(
-                    "{}：普通化肥施肥 0/{} 块（可能化肥不足或地块不可施）",
+                    "{}：普通化肥施肥 0/{} 块（可能化肥不足或地块不可施）{}",
                     log_ctx.reason_label,
-                    normal_targets.len()
+                    normal_targets.len(),
+                    left_label
                 ),
                 "skip",
             )

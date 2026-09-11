@@ -164,6 +164,13 @@ pub struct WorkerLoop {
 /// 对齐 node `keepalive-policy.ts` MAX_HEARTBEAT_MISSES：连续 3 次心跳失败且入站静默超阈值才判死。
 const MAX_HEARTBEAT_MISS: u32 = 3;
 
+/// 事件驱动化肥补充的节流（账号 → 上次触发 ms）：施肥轮结束即检测购买，
+/// 检测成本仅一次 Bag RPC，60 秒足够保守；余量归零时最多一分钟内补上
+static LAST_EVENT_FERTILIZER_BUY_MS: std::sync::LazyLock<
+    Mutex<std::collections::HashMap<String, i64>>,
+> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+const EVENT_FERTILIZER_BUY_MIN_INTERVAL_MS: i64 = 60 * 1000;
+
 /// AtomicBool/AtomicU64
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 
@@ -518,6 +525,9 @@ impl WorkerLoop {
                                             },
                                         )
                                         .await;
+                                    drop(planting);
+                                    // 施肥后立即检测化肥余量（事件驱动补充）
+                                    this.maybe_event_fertilizer_buy().await;
                                 },
                             )
                             .await;
@@ -1137,7 +1147,49 @@ impl WorkerLoop {
             normal_count: snap.fertilizer_buy_normal_count as i32,
             normal_threshold_hours: snap.fertilizer_buy_normal_threshold_hours as f64,
         };
-        let _ = commerce.check_and_buy_fertilizer_both(opts).await;
+        let result = commerce.check_and_buy_fertilizer_both(opts).await;
+        if result.organic_bought > 0 || result.normal_bought > 0 {
+            // 购买结果进面板日志：前端据此即时刷新化肥桶（不用等手动刷/30s 轮询）
+            crate::services::panel_log::log(
+                &self.account.id,
+                "商城",
+                format!(
+                    "已自动补充化肥：有机 x{}（剩 {:.1}h）/ 普通 x{}（剩 {:.1}h）",
+                    result.organic_bought,
+                    result.organic_current_hours,
+                    result.normal_bought,
+                    result.normal_current_hours
+                ),
+                crate::constants::PanelEvent::FertilizerBuyTimer,
+                Some(serde_json::json!({
+                    "module": "farm",
+                    "result": "bought",
+                    "organic": result.organic_bought,
+                    "normal": result.normal_bought,
+                })),
+            );
+        }
+    }
+
+    /// 施肥轮结束后的事件驱动化肥补充（2026-09-11 需求：自动购买不能只靠
+    /// 定时器——容器在两次定时检查之间耗尽时，施肥会一直空转到下个周期；
+    /// 现在施肥轮结束即检测，低于阈值当场购买，下一轮施肥就能用上。
+    /// 节流 3 分钟/账号；定时器保留兜底）。
+    pub async fn maybe_event_fertilizer_buy(&self) {
+        if !self.auto_on("fertilizer_buy_organic") && !self.auto_on("fertilizer_buy_normal") {
+            return;
+        }
+        let now = crate::utils::time::now_ms();
+        {
+            let mut g = LAST_EVENT_FERTILIZER_BUY_MS.lock();
+            if let Some(last) = g.get(&self.account.id) {
+                if now - *last < EVENT_FERTILIZER_BUY_MIN_INTERVAL_MS {
+                    return;
+                }
+            }
+            g.insert(self.account.id.clone(), now);
+        }
+        self.check_fertilizer_buy_once().await;
     }
 
     /// 神秘商人监控 tick（对齐 node `checkMysteryShopTick`）
@@ -1280,6 +1332,8 @@ impl WorkerLoop {
                     if this.auto_on("fertilizer_gift") {
                         let _ = this.warehouse.auto_open_fertilizer_gift_packs().await;
                     }
+                    // 施肥轮结束即检测化肥余量（事件驱动补充，节流 3 分钟）
+                    this.maybe_event_fertilizer_buy().await;
                     this.sync_status();
                 },
             )

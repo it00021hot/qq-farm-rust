@@ -18,10 +18,10 @@ use prost::Message as _;
 use crate::error::{Error, Result};
 use crate::network::gateway::Gateway;
 use crate::proto::generated::gamepb::plantpb::{
-    AllLandsReply, AllLandsRequest, FarmingReply, FarmingRequest, FertilizeRequest, HarvestReply,
-    HarvestRequest, OperationLimit, PlantItem, PlantReply, PlantRequest, RemovePlantReply,
-    RemovePlantRequest, UnlockLandReply, UnlockLandRequest, UpgradeLandReply, UpgradeLandRequest,
-    WaterLandReply, WaterLandRequest,
+    AllLandsReply, AllLandsRequest, FarmingReply, FarmingRequest, FertilizeReply, FertilizeRequest,
+    HarvestReply, HarvestRequest, OperationLimit, PlantItem, PlantReply, PlantRequest,
+    RemovePlantReply, RemovePlantRequest, UnlockLandReply, UnlockLandRequest, UpgradeLandReply,
+    UpgradeLandRequest, WaterLandReply, WaterLandRequest,
 };
 use crate::proto::generated::gamepb::shoppb::{
     BuyGoodsReply, BuyGoodsRequest, ShopInfoReply, ShopInfoRequest,
@@ -147,30 +147,42 @@ impl Api {
     }
 
     /// 施肥（单块）
-    pub async fn fertilize(&self, land_id: i64, fertilizer_id: i64) -> Result<()> {
+    /// 单块施肥。回包 `FertilizeReply.fertilizer`（corepb.Item）的 count 即该
+    /// 肥料容器剩余秒数（与背包容器 count 同一语义，proto 注释已与 ItemNotify
+    /// 交叉验证）——返回 `Some(剩余秒)`；字段缺失返回 `None`
+    pub async fn fertilize(&self, land_id: i64, fertilizer_id: i64) -> Result<Option<i64>> {
         let body = FertilizeRequest { land_ids: vec![land_id], fertilizer_id }.encode_to_vec();
-        self.gateway.request("gamepb.plantpb.PlantService", "Fertilize", &body).await?;
-        Ok(())
+        let resp = self.gateway.request("gamepb.plantpb.PlantService", "Fertilize", &body).await?;
+        let reply = FertilizeReply::decode(&*resp).map_err(Error::from)?;
+        Ok(reply.fertilizer.map(|item| item.count))
     }
 
     /// 有机肥循环施肥（对齐 TS `fertilizeOrganicLoop`：按地块轮询直到失败或达单次上限）
     ///
     /// 上限对齐 bot：`min(MAX_ORGANIC_FERTILIZE_OPERATIONS, 地块数 * MAX_ORGANIC_FERTILIZE_ROUNDS)`。
-    pub async fn fertilize_organic_loop(&self, land_ids: &[i64], account_id: &str) -> usize {
+    /// 返回 (成功次数, 最后一次回包携带的容器剩余秒数)——剩余量直接来自施肥回包，
+    /// 无需额外查背包（2026-09-11：余量归零即耗尽信号，供事件驱动补购与面板展示）
+    pub async fn fertilize_organic_loop(
+        &self,
+        land_ids: &[i64],
+        account_id: &str,
+    ) -> (usize, Option<i64>) {
         const MAX_ORGANIC_FERTILIZE_OPERATIONS: usize = 240;
         const MAX_ORGANIC_FERTILIZE_ROUNDS: usize = 20;
 
         let ids: Vec<i64> = land_ids.iter().copied().filter(|id| *id > 0).collect();
         if ids.is_empty() {
-            return 0;
+            return (0, None);
         }
         let operation_limit =
             MAX_ORGANIC_FERTILIZE_OPERATIONS.min(ids.len() * MAX_ORGANIC_FERTILIZE_ROUNDS);
         let mut success = 0usize;
+        let mut remaining_secs: Option<i64> = None;
         let mut idx = 0usize;
         while success < operation_limit {
-            if self.fertilize(ids[idx], ORGANIC_FERTILIZER_ID).await.is_err() {
-                break;
+            match self.fertilize(ids[idx], ORGANIC_FERTILIZER_ID).await {
+                Ok(r) => remaining_secs = r.or(remaining_secs),
+                Err(_) => break,
             }
             success += 1;
             idx = (idx + 1) % ids.len();
@@ -186,7 +198,7 @@ impl Api {
                 Some(serde_json::json!({ "module": "farm", "result": "limit", "count": success })),
             );
         }
-        success
+        (success, remaining_secs)
     }
 
     /// 铲除植物

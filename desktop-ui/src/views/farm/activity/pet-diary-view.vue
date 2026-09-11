@@ -8,6 +8,7 @@ import {
   NInputNumber,
   NModal,
   NProgress,
+  NSelect,
   NSpin,
   NSwitch,
   NTabPane,
@@ -19,6 +20,7 @@ import {
   fetchGetFarmActivityPetDiary,
   fetchGetFarmActivityPetDiaryFriend,
   fetchGetFarmActivityPetDiaryRecords,
+  fetchGetFarmFriendList,
   fetchOperateFarmActivityPetDiary
 } from '@/service/api';
 import { useFarmAccountStore } from '@/store/modules/farm-account';
@@ -207,6 +209,28 @@ const friendLoading = ref(false);
 const friendTreasures = ref<Treasure[]>([]);
 const friendCharms = ref<number[]>([]);
 const friendError = ref('');
+// 好友下拉搜索：不再让用户手输裸 GID（对齐七夕/天气页的好友选择交互）
+const friendOptions = ref<{ label: string; value: string }[]>([]);
+const friendOptionsLoading = ref(false);
+
+async function loadFriendOptions() {
+  const accountId = farmAccountStore.currentAccountId;
+  if (!accountId || friendOptions.value.length || friendOptionsLoading.value) return;
+  friendOptionsLoading.value = true;
+  try {
+    const { error, data } = await fetchGetFarmFriendList({ current: 1, size: 500, accountId });
+    if (!error) {
+      friendOptions.value = (data?.records ?? [])
+        .filter(friend => Number(friend.gid) > 0)
+        .map(friend => ({
+          label: `${friend.nickname || '未命名'}（${friend.gid}）`,
+          value: String(friend.gid)
+        }));
+    }
+  } finally {
+    friendOptionsLoading.value = false;
+  }
+}
 const battleGid = ref('');
 const battleTreasureId = ref('');
 const battleChallengeId = ref('80101');
@@ -409,6 +433,7 @@ function switchLogKind(kind: 'interact' | 'plunder') {
 
 onMounted(() => {
   loadSnapshot();
+  loadFriendOptions();
 });
 </script>
 
@@ -620,7 +645,17 @@ onMounted(() => {
             <NCollapseItem title="好友夺宝" name="battle">
               <div class="flex flex-col gap-10px">
                 <div class="flex flex-wrap items-center gap-8px">
-                  <NInput v-model:value="friendGid" placeholder="好友 GID" size="small" class="w-180px" />
+                  <NSelect
+                    v-model:value="friendGid"
+                    :options="friendOptions"
+                    :loading="friendOptionsLoading"
+                    placeholder="搜索好友昵称或 GID"
+                    size="small"
+                    class="w-220px"
+                    filterable
+                    clearable
+                    tag
+                  />
                   <NButton size="small" :loading="friendLoading" @click="loadFriend()">查询好友宝藏</NButton>
                   <span class="text-12px text-gray-500">
                     今日夺宝 {{ snapshot.battleCount ?? 0 }}/{{ snapshot.battleLimit ?? 20 }}

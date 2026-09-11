@@ -35,13 +35,11 @@ import {
   fetchGetFarmSeeds,
   fetchGetOfflineReminder,
   fetchGetQqBotBindStatus,
-  fetchGetQqLoginSettings,
   fetchGetSystemConfig,
   fetchModifyFarmAutomation,
   fetchPollQqBotBind,
   fetchResetSystemConfig,
   fetchSaveOfflineReminder,
-  fetchSaveQqLoginSettings,
   fetchSetSystemConfig,
   fetchStartQqBotBind,
   fetchTestOfflineReminder,
@@ -81,52 +79,11 @@ const strategySaving = ref(false);
 const automationSaving = ref(false);
 const offlineSaving = ref(false);
 const offlineTesting = ref(false);
-const activeTab = ref<'strategy' | 'automation' | 'offline' | 'login' | 'system'>('strategy');
+const activeTab = ref<'strategy' | 'automation' | 'offline' | 'system'>('strategy');
 
-// ===== 登录设置（QQ 扫码登录 NapCat，对齐 bot LoginSettings）=====
-// rust 桌面版微信登录始终可用无开关；这里只管理 QQ 扫码（NapCat）配置
-interface QqLoginSettings {
-  qqQrLogin: boolean;
-  napCatEndpoint: string;
-  napCatSignature: string;
-}
-const loginSettings = ref<QqLoginSettings>({
-  qqQrLogin: false,
-  napCatEndpoint: '',
-  napCatSignature: ''
-});
-const loginLoading = ref(false);
-const loginSaving = ref(false);
-
-async function loadQqLoginSettings() {
-  loginLoading.value = true;
-  try {
-    const { error, data } = await fetchGetQqLoginSettings();
-    if (!error && data) {
-      loginSettings.value = {
-        qqQrLogin: Boolean(data.qqQrLogin),
-        napCatEndpoint: String(data.napCatEndpoint || ''),
-        napCatSignature: String(data.napCatSignature || '')
-      };
-    }
-  } finally {
-    loginLoading.value = false;
-  }
-}
-
-async function handleSaveLoginSettings() {
-  loginSaving.value = true;
-  try {
-    const { error } = await fetchSaveQqLoginSettings({ ...loginSettings.value });
-    if (error) {
-      window.$message?.error((error as any)?.message || '保存登录设置失败');
-    } else {
-      window.$message?.success($t('common.updateSuccess'));
-    }
-  } finally {
-    loginSaving.value = false;
-  }
-}
+// 登录设置（QQ 扫码 NapCat）页签已移除：NapCat 方式不好用不再暴露配置入口；
+// 后端 store 键与 IPC 命令保留，账号抽屉的「QQ 扫码」页签按既有 qqQrLogin
+// 开关决定展示（默认关闭即隐藏）
 
 const systemConfigLoading = ref(false);
 const systemConfigSaving = ref(false);
@@ -1164,7 +1121,7 @@ onMounted(async () => {
   if (!farmAccountStore.accounts.length) {
     await farmAccountStore.loadAccounts();
   }
-  await Promise.all([loadConfig(), loadOffline(), loadDevicePresets(), loadSystemConfig(), loadQqLoginSettings()]);
+  await Promise.all([loadConfig(), loadOffline(), loadDevicePresets(), loadSystemConfig()]);
 });
 
 onUnmounted(() => {
@@ -1734,44 +1691,6 @@ onUnmounted(() => {
               {{ $t('page.farm.settings.saveOffline') }}
             </NButton>
           </div>
-        </NCard>
-      </NTabPane>
-
-      <NTabPane name="login" tab="登录设置">
-        <NCard :bordered="false" size="small" class="card-wrapper">
-          <NSpin :show="loginLoading">
-            <NForm label-placement="left" :label-width="180">
-              <NFormItem label="QQ 扫码登录（NapCat）">
-                <NSwitch v-model:value="loginSettings.qqQrLogin" />
-              </NFormItem>
-              <NFormItem label="NapCat 接口地址">
-                <NInput
-                  v-model:value="loginSettings.napCatEndpoint"
-                  class="w-full"
-                  placeholder="例如 http://127.0.0.1:3000"
-                  :disabled="!loginSettings.qqQrLogin"
-                />
-              </NFormItem>
-              <NFormItem label="NapCat 接口签名">
-                <NInput
-                  v-model:value="loginSettings.napCatSignature"
-                  class="w-full"
-                  placeholder="NapCat 服务配置的 X-API-Signature"
-                  type="password"
-                  show-password-on="click"
-                  :disabled="!loginSettings.qqQrLogin"
-                />
-              </NFormItem>
-              <NFormItem label=" " :show-feedback="false">
-                <NButton type="primary" :loading="loginSaving" @click="handleSaveLoginSettings">
-                  {{ $t('page.farm.settings.save') }}
-                </NButton>
-              </NFormItem>
-            </NForm>
-            <NText depth="3" class="text-12px">
-              QQ 扫码登录需在外部运行 NapCat 服务并在其侧配置接口签名；添加账号时可选择「QQ 扫码」页签获取二维码。
-            </NText>
-          </NSpin>
         </NCard>
       </NTabPane>
 

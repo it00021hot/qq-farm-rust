@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import dayjs from 'dayjs';
 import { NAvatar, NButton, NCard, NEmpty, NGi, NGrid, NInput, NProgress, NSelect, NSpace, NSpin, NTag } from 'naive-ui';
 import {
@@ -157,6 +157,16 @@ const timeToLevel = computed(() => {
 
 function bagItemById(id: number) {
   return bagItems.value.find(item => Number(item.id) === id);
+}
+
+// 化肥桶推送刷新：施肥/购买日志到达时防抖拉一次背包，不用等 30s 轮询或手动刷
+let bagRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleBagRefresh() {
+  if (bagRefreshTimer) return;
+  bagRefreshTimer = setTimeout(() => {
+    bagRefreshTimer = null;
+    if (isOnline.value) void loadBag();
+  }, 2000);
 }
 
 function formatBucketTime(item?: Api.Farm.BagItem) {
@@ -585,6 +595,15 @@ const { connected, connect } = useFarmWs({
         rawTs > 0 ? rawTs : undefined,
         eventKey
       );
+      // 施肥消耗 / 商城补货都会改背包：防抖刷新化肥桶余量（2026-09-11 需求：推送更新，不手动刷）
+      const logBody = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+      if (
+        String(logBody.tag || '') === '施肥' ||
+        String(logBody.tag || '') === '商城' ||
+        formatted.message.includes('化肥')
+      ) {
+        scheduleBagRefresh();
+      }
       return;
     }
 
@@ -626,6 +645,13 @@ onMounted(async () => {
       void loadBag();
     }
   }, 30000);
+});
+
+onBeforeUnmount(() => {
+  if (bagRefreshTimer) {
+    clearTimeout(bagRefreshTimer);
+    bagRefreshTimer = null;
+  }
 });
 </script>
 

@@ -178,9 +178,15 @@ watch(friendTotalPages, total => {
 
 const stealableFriends = computed(() => normalFriends.value.filter(friend => canStealFriend(friend)));
 
-/** 宠物状态今日已确认数（other 含「没有上场狗」这一结论） */
+/** 宠物状态今日已确认数（other 含「没有上场狗」这一结论）。
+ * 分母须与同步口径一致：每日宠物同步不会去黑名单好友农场确认，
+ * 把黑名单算进总数会让进度永远不满（2026-09-11 实测 48/67 卡住的 19 个
+ * 全是黑名单/失效 GID，被同步排除却占着分母） */
+const petSyncScope = computed(() => friends.value.filter(friend => !isBlacklisted(friend.gid)));
 const petKnownCount = computed(
-  () => friends.value.filter(friend => friend.petState === 'protect' || friend.petState === 'other').length
+  () =>
+    petSyncScope.value.filter(friend => friend.petState === 'protect' || friend.petState === 'other')
+      .length
 );
 
 const blacklistFriends = computed(() => {
@@ -749,11 +755,14 @@ onUnmounted(() => {
             </NSpace>
           </div>
 
-          <div v-if="friends.length && petKnownCount < friends.length" class="mb-8px text-12px text-gray-400">
+          <div
+            v-if="petSyncScope.length && petKnownCount < petSyncScope.length"
+            class="mb-8px text-12px text-gray-400"
+          >
             {{
               $t('page.farm.friends.petSyncProgress', {
                 known: petKnownCount,
-                total: friends.length
+                total: petSyncScope.length
               })
             }}
           </div>

@@ -47,7 +47,12 @@ const EVENT_LABELS: Record<string, string> = {
   kickout: '被踢下线',
   ws_400: '登录失效',
   ws_close: '连接关闭',
-  offline_delete: '离线删除'
+  offline_delete: '离线删除',
+  // 对齐后端 PanelEvent 全量 key（panel_events.rs），新增事件必须同步补这里
+  charity_settlement_gift_open: '公益礼包',
+  pet_op: '萌宠操作',
+  dog_skill_gift: '同气连枝礼包',
+  mystery_shop_watch: '神秘商人'
 };
 
 const PHASE_LABELS: Record<string, string> = {
