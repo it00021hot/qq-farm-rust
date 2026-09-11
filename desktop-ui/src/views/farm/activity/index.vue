@@ -224,8 +224,9 @@ const greenPlum = ref<GreenPlum>({});
 const qixi = ref<Qixi>({});
 const charity = ref<CharityActivity>({});
 const directory = ref<ActivityDirectoryItem[]>([]);
-const qixiFriends = ref<Api.Farm.Friend[]>([]);
-const qixiFriendsLoading = ref(false);
+// 好友列表为七夕送礼与萌宠夺宝下拉共享：切到对应玩法时懒加载，刷新按钮强制拉取
+const activityFriends = ref<Api.Farm.Friend[]>([]);
+const activityFriendsLoading = ref(false);
 const capabilities = ref<Record<string, boolean>>({});
 const actions = ref<Record<string, Api.Farm.ActivityAction>>({});
 const clockNow = ref(Date.now());
@@ -685,7 +686,7 @@ function openActivity(activity: ActivityDirectoryItem) {
     }
   }
   selectedGameplay.value = gameplay;
-  if (gameplay === 'qixi') void loadQixiFriends();
+  if (gameplay === 'qixi' || gameplay === 'pet') void loadActivityFriends();
 }
 
 function goBackToList() {
@@ -951,12 +952,12 @@ function setGreenPlumIngredientCount(uid: string, value: unknown) {
   };
 }
 
-async function loadQixiFriends(force = false) {
+async function loadActivityFriends(force = false) {
   if (!farmAccountStore.currentAccountId) {
-    qixiFriends.value = [];
+    activityFriends.value = [];
     return;
   }
-  qixiFriendsLoading.value = true;
+  activityFriendsLoading.value = true;
   try {
     const { error, data } = await fetchGetFarmFriendList({
       current: 1,
@@ -965,10 +966,10 @@ async function loadQixiFriends(force = false) {
       force
     });
     if (!error && data) {
-      qixiFriends.value = data.records || [];
+      activityFriends.value = data.records || [];
     }
   } finally {
-    qixiFriendsLoading.value = false;
+    activityFriendsLoading.value = false;
   }
 }
 
@@ -995,7 +996,7 @@ async function giftQixiSachet(payload: { friendGid: string; count: number }) {
   if (!farmAccountStore.currentAccountId) return;
   const count = Math.trunc(Number(payload.count));
   if (!payload.friendGid || count < 1) return;
-  const friend = qixiFriends.value.find(item => String(item.gid) === String(payload.friendGid));
+  const friend = activityFriends.value.find(item => String(item.gid) === String(payload.friendGid));
   const friendName =
     String(friend?.nickname || friend?.name || '').trim() || $t('page.farm.activity.qixiFriendFallback');
   pendingKey.value = 'qixiGift';
@@ -1113,7 +1114,7 @@ watch(
 watch(
   () => selectedGameplay.value,
   gameplay => {
-    if (gameplay === 'qixi') void loadQixiFriends();
+    if (gameplay === 'qixi' || gameplay === 'pet') void loadActivityFriends();
   }
 );
 
@@ -1544,13 +1545,13 @@ onMounted(async () => {
         <QixiView
           v-else-if="selectedGameplay === 'qixi'"
           :activity="qixi"
-          :friends="qixiFriends"
-          :friends-loading="qixiFriendsLoading"
+          :friends="activityFriends"
+          :friends-loading="activityFriendsLoading"
           :pending-bridge="pendingKey === 'qixiBridge'"
           :pending-gift="pendingKey === 'qixiGift'"
           @claim-bridge="claimQixiBridge"
           @gift="giftQixiSachet"
-          @refresh-friends="loadQixiFriends(true)"
+          @refresh-friends="loadActivityFriends(true)"
         />
         <!-- 公益小红花 -->
         <CharityView
@@ -1565,8 +1566,13 @@ onMounted(async () => {
           @claim-daily-gift="claimCharityDailyGift"
           @claim-progress="claimCharityProgress"
         />
-        <!-- 萌宠成长日记（自加载视图） -->
-        <PetDiaryView v-else-if="selectedGameplay === 'pet'" />
+        <!-- 萌宠成长日记：快照自加载；好友下拉走共享懒加载列表（选中后点击才探测单个好友） -->
+        <PetDiaryView
+          v-else-if="selectedGameplay === 'pet'"
+          :friends="activityFriends"
+          :friends-loading="activityFriendsLoading"
+          @refresh-friends="loadActivityFriends(true)"
+        />
         <!-- 雨落成诗（天气活动） -->
         <WeatherView v-else-if="selectedGameplay === 'weather'" />
         <!-- 青梅 -->

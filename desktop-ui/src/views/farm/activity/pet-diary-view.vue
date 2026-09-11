@@ -20,8 +20,6 @@ import {
   fetchGetFarmActivityPetDiary,
   fetchGetFarmActivityPetDiaryFriend,
   fetchGetFarmActivityPetDiaryRecords,
-  fetchGetFarmAutomationDetail,
-  fetchGetFarmFriendList,
   fetchOperateFarmActivityPetDiary
 } from '@/service/api';
 import { useFarmAccountStore } from '@/store/modules/farm-account';
@@ -29,6 +27,15 @@ import { resolveCatalogImage } from '@/views/farm/game-config/shared';
 import dayjs from 'dayjs';
 
 defineOptions({ name: 'FarmActivityPetDiaryView' });
+
+const props = defineProps<{
+  friends: Api.Farm.Friend[];
+  friendsLoading: boolean;
+}>();
+
+const emit = defineEmits<{
+  refreshFriends: [];
+}>();
 
 type Item = {
   id?: string | number;
@@ -209,69 +216,18 @@ const friendLoading = ref(false);
 const friendTreasures = ref<Treasure[]>([]);
 const friendCharms = ref<number[]>([]);
 const friendError = ref('');
-// 好友下拉：只列「可夺宝」好友（护送中 + 有 canStart 挑战书），避免全量刷屏
-const friendOptions = ref<{ label: string; value: string }[]>([]);
-const friendOptionsLoading = ref(false);
-const friendOptionsHint = ref('');
-
-function isPlunderableTreasure(treasure: Treasure): boolean {
-  return treasure.status === 2 && (treasure.previews ?? []).some(preview => Boolean(preview.canStart));
-}
-
-async function loadFriendOptions(force = false) {
-  const accountId = farmAccountStore.currentAccountId;
-  if (!accountId || friendOptionsLoading.value) return;
-  if (!force && friendOptions.value.length) return;
-  friendOptionsLoading.value = true;
-  friendOptionsHint.value = '正在筛选可夺宝好友…';
-  try {
-    const [{ error, data }, autoRes] = await Promise.all([
-      fetchGetFarmFriendList({ current: 1, size: 500, accountId }),
-      fetchGetFarmAutomationDetail(accountId)
-    ]);
-    if (error) {
-      friendOptions.value = [];
-      friendOptionsHint.value = error.message || '好友列表加载失败';
-      return;
-    }
-    const blacklist = new Set((autoRes.data?.friendBlacklist || []).map(Number).filter(Boolean));
-    const candidates = (data?.records ?? []).filter(
-      friend => Number(friend.gid) > 0 && !blacklist.has(Number(friend.gid))
-    );
-    const plunderable: { label: string; value: string }[] = [];
-    const concurrency = 5;
-    let cursor = 0;
-    const probeAccountId = accountId;
-    async function probeWorker() {
-      while (cursor < candidates.length) {
-        const index = cursor;
-        cursor += 1;
-        const friend = candidates[index];
-        const gid = String(friend.gid);
-        try {
-          const { error: probeError, data: probe } = await fetchGetFarmActivityPetDiaryFriend(probeAccountId, gid);
-          if (probeError) continue;
-          if ((probe?.treasures ?? []).some(isPlunderableTreasure)) {
-            plunderable.push({
-              label: `${friend.nickname || '未命名'}（${gid}）`,
-              value: gid
-            });
-          }
-        } catch {
-          // 探测失败的好友跳过，tag 模式仍可手输 GID
-        }
-      }
-    }
-    await Promise.all(Array.from({ length: concurrency }, () => probeWorker()));
-    plunderable.sort((a, b) => a.label.localeCompare(b.label, 'zh'));
-    friendOptions.value = plunderable;
-    friendOptionsHint.value = plunderable.length
-      ? `可夺宝 ${plunderable.length} 人（共探测 ${candidates.length}）`
-      : `暂无可夺宝好友（已探测 ${candidates.length}）`;
-  } finally {
-    friendOptionsLoading.value = false;
-  }
-}
+// 好友下拉：直接列好友（官方小程序用气泡标记可夺宝，客户端不逐个探测；
+// 选中后点「查询好友宝藏」才对单个好友发 op=47）。历史版本在这里并发探测
+// 全量好友，几百个 op=47 触发服务端静默，所有请求超时直至账号掉线。
+const friendOptions = computed<{ label: string; value: string }[]>(() => {
+  return props.friends
+    .filter(friend => Number(friend.gid) > 0)
+    .map(friend => ({
+      label: `${friend.nickname || '未命名'}（${friend.gid}）`,
+      value: String(friend.gid)
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label, 'zh'));
+});
 const battleGid = ref('');
 const battleTreasureId = ref('');
 const battleChallengeId = ref('80101');
@@ -372,6 +328,10 @@ async function operate(action: string, params: Record<string, unknown> = {}, suc
   } finally {
     pending.value = '';
   }
+}
+
+function isPlunderableTreasure(treasure: Treasure): boolean {
+  return treasure.status === 2 && (treasure.previews ?? []).some(preview => Boolean(preview.canStart));
 }
 
 async function loadFriend() {
@@ -478,20 +438,16 @@ function switchLogKind(kind: 'interact' | 'plunder') {
 
 onMounted(() => {
   loadSnapshot();
-  loadFriendOptions(true);
 });
 
 watch(
   () => farmAccountStore.currentAccountId,
   () => {
-    friendOptions.value = [];
-    friendOptionsHint.value = '';
     friendGid.value = '';
     friendTreasures.value = [];
     friendCharms.value = [];
     friendError.value = '';
     loadSnapshot();
-    loadFriendOptions(true);
   }
 );
 </script>
@@ -707,17 +663,15 @@ watch(
                   <NSelect
                     v-model:value="friendGid"
                     :options="friendOptions"
-                    :loading="friendOptionsLoading"
-                    placeholder="搜索可夺宝好友（可手输 GID）"
+                    :loading="friendsLoading"
+                    placeholder="搜索好友（可手输 GID）"
                     size="small"
                     class="w-240px"
                     filterable
                     clearable
                     tag
                   />
-                  <NButton size="small" :loading="friendOptionsLoading" @click="loadFriendOptions(true)">
-                    刷新可夺
-                  </NButton>
+                  <NButton size="small" :loading="friendsLoading" @click="emit('refreshFriends')">刷新好友</NButton>
                   <NButton size="small" :loading="friendLoading" @click="loadFriend()">查询好友宝藏</NButton>
                   <span class="text-12px text-gray-500">
                     今日夺宝 {{ snapshot.battleCount ?? 0 }}/{{ snapshot.battleLimit ?? 20 }}
@@ -731,7 +685,6 @@ watch(
                     />
                   </span>
                 </div>
-                <div v-if="friendOptionsHint" class="text-12px text-gray-400">{{ friendOptionsHint }}</div>
                 <NEmpty v-if="friendError && !friendTreasures.length" :description="friendError" size="small" />
                 <div v-else-if="friendTreasures.length" class="flex flex-col gap-6px">
                   <div

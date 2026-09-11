@@ -1255,3 +1255,24 @@
 - 验证：`corepack pnpm typecheck` 通过
 - **实机待验**：宽屏顶栏无「更多」，点信息图标仍能打开关于与更新
 
+### 2026-09-11 — 萌宠好友夺宝去掉全量探测（大号掉线根因修复）
+
+- **现象**：大号打开萌宠「好友夺宝」下拉后全部请求超时、账号掉线。根因是
+  `pet-diary-view.vue` 在下拉加载时对全量好友（size=500 去黑名单后）以 5
+  并发逐个发 op=47 `GetFriendActivityInfo` 探测，几百个请求的突发量触发
+  服务端（ACE）静默：所有 RPC stage=pending 无回包，心跳连挂直接下线——
+  与 bot `docs/friend-pet-cache.md` 记录的「好友宠物同步早期 ~3 RPC/s 即
+  掉线」同形态，这次并发更高、死得更快
+- **修法**（对齐官方小程序行为：可夺宝好友由气泡标记，客户端不逐个探测）：
+  - 删掉探测循环，下拉直接展示好友列表（复用七夕页范式），选项由共享的
+    `activityFriends` computed 生成（`昵称（GID）`，filterable + tag 手输
+    GID 逃生口保留）；切到萌宠页时懒加载一次，刷新按钮改发
+    `refresh-friends` 强拉
+  - op=47 只保留「查询好友宝藏」点击路径：选中单个好友后才发一次请求，
+    开战动作后端本就有二次校验，不受影响
+  - `activity/index.vue`：`qixiFriends/loadQixiFriends` 泛化为
+    `activityFriends/loadActivityFriends`，七夕与萌宠共用，切页即加载
+- 验证：`corepack pnpm typecheck` 通过；纯前端改动，op=47 现仅剩单好友
+  手动查询一条调用链
+- 实机待验：大号打开萌宠页好友夺宝下拉不再触发超时/掉线；选好友→查询
+  →开战全流程可用
