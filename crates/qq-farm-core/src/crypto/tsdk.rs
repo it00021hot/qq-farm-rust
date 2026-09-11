@@ -1273,7 +1273,7 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
         "a",
         "q",
         |mut c: wasmtime::Caller<'_, HostState>, out: i32| -> WasmResult<i32> {
-            let now_local = (crate::utils::time::now_ms() / 1000) as i64;
+            let now_local = crate::utils::time::now_ms() / 1000;
             maybe_fetch_anticheat_time_offset();
             let now = (now_local + anticheat_time_offset_secs()) as u32;
             let mem = c.data().memory;
@@ -1780,7 +1780,7 @@ fn maybe_fetch_anticheat_time_offset() {
             return;
         };
         let server_secs = parsed.timestamp();
-        let local_secs = (crate::utils::time::now_ms() / 1000) as i64;
+        let local_secs = crate::utils::time::now_ms() / 1000;
         ANTICHEAT_TIME_OFFSET.store(server_secs - local_secs, Ordering::Relaxed);
         tracing::debug!(offset_secs = server_secs - local_secs, "ACE 后台校时完成");
     });
