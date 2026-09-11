@@ -57,7 +57,7 @@ pub type BagSeedFallbackStrategy = PlantingStrategy;
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 pub enum FertilizerMode {
-    /// 普通 + 有机肥都施
+    /// 桌面版：能施无机的地各 1 次，再对未成熟作物循环有机直到成熟
     Both,
     /// 仅普通肥
     Normal,
@@ -400,6 +400,7 @@ pub struct AccountConfig {
     pub fertilizer_buy_organic_threshold_hours: i64,
     pub fertilizer_buy_normal_count: i64,
     pub fertilizer_buy_normal_threshold_hours: i64,
+    /// 旧周期检测间隔。购买已改为事件驱动，字段只为兼容已存配置，运行时不再读取。
     pub fertilizer_buy_check_interval_minutes: i64,
     pub bag_seed_priority: Vec<i64>,
     pub bag_seed_fallback_strategy: BagSeedFallbackStrategy,

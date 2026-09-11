@@ -38,7 +38,7 @@ pub enum FertilizeMode {
     /// 智能（默认）—— 普通 + 有机（如果多季作物）
     #[default]
     Smart,
-    /// 有机 + 普通
+    /// 无机各 1 次 + 有机催熟（桌面版 Both，有意偏离 bot）
     Both,
     /// 仅有机
     Organic,
@@ -53,6 +53,15 @@ pub enum FertilizeMode {
 pub struct FertilizeOptions {
     pub skip_normal: bool,
     pub multi_season: bool,
+}
+
+/// Both 改由巡田末尾统一跑全场，种完后不再立刻补肥，避免同一轮打两遍。
+fn both_mode_deferred(account_id: &str) -> bool {
+    !account_id.is_empty()
+        && matches!(
+            crate::models::store::account_config::get_automation(Some(account_id)).fertilizer,
+            crate::models::types::FertilizerMode::Both
+        )
 }
 
 /// 解析单颗种子的地块限制：缺 key / 空数组 / 勾满全部类型 → None（不限制）
@@ -650,14 +659,28 @@ impl PlantingEngine {
             return Ok(FertilizeResult::default());
         }
 
-        let normal_targets = filter_ids_by_land_types(&planted, &latest_lands, &selected);
+        let normal_source = if matches!(mode, FertilizerMode::Both) {
+            crate::services::farm::land_analysis::get_normal_fertilizer_targets_from_lands(
+                &latest_lands,
+            )
+        } else {
+            planted.clone()
+        };
+        let normal_targets = filter_ids_by_land_types(&normal_source, &latest_lands, &selected);
 
         let mut result = FertililzeResultBuilder::default();
         if !options.skip_normal
             && matches!(mode, FertilizerMode::Normal | FertilizerMode::Both | FertilizerMode::Smart)
         {
-            result.normal =
-                self.fertilize_normal_step(&normal_targets, planted.len(), &log_ctx, &scope).await;
+            result.normal = self
+                .fertilize_normal_step(
+                    &normal_targets,
+                    planted.len(),
+                    &log_ctx,
+                    &scope,
+                    matches!(mode, FertilizerMode::Both),
+                )
+                .await;
         }
 
         let smart_secs =
@@ -687,8 +710,7 @@ impl PlantingEngine {
         Ok(result.build())
     }
 
-    /// 有机肥分支：organic/both 用「还能施有机肥的地」，smart 用即将成熟地
-    /// （对齐 bot `runFertilizerByConfig` 对应分支），带面板日志
+    /// 有机肥分支：organic 用「还能施有机肥的地」，Both 催熟未成熟地，smart 用即将成熟地
     async fn fertilize_organic_step(
         &self,
         mode: crate::models::types::FertilizerMode,
@@ -707,7 +729,14 @@ impl PlantingEngine {
         };
 
         let organic_targets = match mode {
-            FertilizerMode::Organic | FertilizerMode::Both => {
+            FertilizerMode::Both => {
+                let targets =
+                    crate::services::farm::land_analysis::get_immature_crop_targets_from_lands(
+                        latest_lands,
+                    );
+                filter_ids_by_land_types(&targets, latest_lands, selected)
+            }
+            FertilizerMode::Organic => {
                 let mut targets = get_organic_fertilizer_targets_from_lands(latest_lands);
                 // 对齐 bot：多季补肥时有机肥目标限定到本次多季地块
                 if multi_season && !planted.is_empty() {
@@ -723,15 +752,32 @@ impl PlantingEngine {
         if organic_targets.is_empty() {
             return 0;
         }
-        let (organic, organic_left) =
-            self.api.fertilize_organic_loop(&organic_targets, log_ctx.account_id).await;
+        let (organic, organic_left) = if matches!(mode, FertilizerMode::Both) {
+            self.api.fertilize_organic_until_mature(&organic_targets, log_ctx.account_id).await
+        } else {
+            self.api.fertilize_organic_loop(&organic_targets, log_ctx.account_id).await
+        };
         // 余量文案：施肥回包自带容器剩余秒数，直接换算小时上日志（不必查背包）
         let left_label = match organic_left {
             Some(secs) => format!("，剩 {:.1}h", secs as f64 / 3600.0),
             None => String::new(),
         };
         if organic > 0 {
-            if matches!(mode, FertilizerMode::Organic | FertilizerMode::Both) {
+            if matches!(mode, FertilizerMode::Both) {
+                log_ctx.log(
+                    format!(
+                        "{}：有机化肥催熟完成，共施 {} 次（范围: {}）{}",
+                        log_ctx.reason_label,
+                        organic,
+                        scope.label(),
+                        left_label
+                    ),
+                    serde_json::json!({
+                        "module": "farm", "result": "ok", "reason": log_ctx.reason,
+                        "type": "organic", "count": organic, "landTypes": scope.ids(),
+                    }),
+                );
+            } else if matches!(mode, FertilizerMode::Organic) {
                 log_ctx.log(
                     format!(
                         "{}：有机化肥循环施肥完成，共施 {} 次（范围: {}）{}",
@@ -758,13 +804,14 @@ impl PlantingEngine {
         organic
     }
 
-    /// 普通化肥分支：逐块施肥（遇错即停，对齐 bot `fertilize`），带面板日志
+    /// 普通化肥分支：逐块施肥。`continue_on_error` 为 Both 用——一块失败不挡住其余地。
     async fn fertilize_normal_step(
         &self,
         normal_targets: &[i64],
         planted_count: usize,
         log_ctx: &FertLogCtx<'_>,
         scope: &FertScope,
+        continue_on_error: bool,
     ) -> usize {
         if normal_targets.is_empty() {
             log_ctx.log(
@@ -785,7 +832,8 @@ impl PlantingEngine {
         let mut normal_left: Option<i64> = None;
         for (i, &land_id) in normal_targets.iter().enumerate() {
             match self.api.fertilize(land_id, NORMAL_FERTILIZER_ID).await {
-                Ok(r) => normal_left = r.or(normal_left),
+                Ok((r, _)) => normal_left = r.or(normal_left),
+                Err(_) if continue_on_error => continue,
                 Err(_) => break,
             }
             normal += 1;
@@ -916,7 +964,7 @@ impl PlantingEngine {
             }
             planted.sort_unstable();
             planted.dedup();
-            if !planted.is_empty() {
+            if !planted.is_empty() && !both_mode_deferred(account_id) {
                 let _ = self
                     .fertilize_by_config_ex(
                         &planted,
@@ -931,7 +979,7 @@ impl PlantingEngine {
 
         let shop =
             self.plant_from_shop(&lands_to_plant, host_gid, account_id, Some(strategy)).await?;
-        if !shop.planted_lands.is_empty() {
+        if !shop.planted_lands.is_empty() && !both_mode_deferred(account_id) {
             let _ = self
                 .fertilize_by_config_ex(
                     &shop.planted_lands,

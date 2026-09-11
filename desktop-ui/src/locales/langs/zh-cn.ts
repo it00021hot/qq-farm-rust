@@ -338,7 +338,7 @@ const local: App.I18n.Schema = {
           none: '不施肥',
           normal: '仅普通化肥',
           organic: '仅有机化肥',
-          both: '普通 + 有机',
+          both: '无机一次 + 有机催熟',
           smart: '普通 + 快成熟有机'
         },
         platform: {
@@ -919,12 +919,13 @@ const local: App.I18n.Schema = {
         fertilizerBuyNormalThreshold: '触发阈值 (小时)',
         fertilizerBuyCheckInterval: '检测间隔 (分钟)',
         fertilizerBuyHint:
-          '有机/无机同一套机制：施肥后立即检测余量，低于触发阈值当场补购；另有定时兜底。保存设置后会立即检测一次。双开时优先买有机化肥。',
+          '有机/无机同一套机制：施肥后立即检测余量，低于触发阈值当场补购。登录和保存设置时也会各检测一次。双开时优先买有机化肥。',
         fertilizerMultiSeason: '多季补肥',
         fertilizerLandTypes: '施肥范围',
         fertilizerLandTypesHint: '施肥前会优先按土地类型过滤，仅对命中范围的地块执行施肥策略。',
         fertilizerSmartSeconds: '快成熟判定秒数',
         fertilizerSmartSecondsHint: '距离成熟时间 ≤ 此秒数时施有机肥（默认300秒=5分钟）',
+        fertilizerBothHint: '每轮巡田：所有还能施无机肥的地各打 1 次；然后所有未成熟作物循环打有机肥直到成熟或肥料用尽。',
         skipOwnWeedBug: '巡田时跳过一键务农',
         mysteryAutoBuy: '神秘商人自动购买',
         mysteryArrivalNotify: '神秘商人到货通知',

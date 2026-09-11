@@ -176,8 +176,7 @@ const fertilizerBuy = reactive({
   organicCount: 1,
   organicThresholdHours: 10,
   normalCount: 1,
-  normalThresholdHours: 10,
-  checkIntervalMinutes: 60
+  normalThresholdHours: 10
 });
 
 const offline = reactive<Api.Farm.OfflineReminder>({
@@ -280,6 +279,7 @@ let previewRequestRevision = 0;
 const fertilizerOptions = computed(() => translateStringOptions(farmFertilizerModeOptions));
 const fertilizerLandTypeOptions = computed(() => translateStringOptions(farmFertilizerLandTypeOptions));
 const showSmartSeconds = computed(() => automation.fertilizer === 'smart');
+const showBothHint = computed(() => automation.fertilizer === 'both');
 const accountRunning = computed(() => farmAccountStore.currentAccount?.runStatus === 1);
 
 const strategyOptions = computed(() => [
@@ -654,7 +654,6 @@ function applyDetail(data: Api.Farm.AccountAutomationDetail) {
   fertilizerBuy.organicThresholdHours = data.fertilizerBuyOrganicThresholdHours ?? 10;
   fertilizerBuy.normalCount = data.fertilizerBuyNormalCount ?? 1;
   fertilizerBuy.normalThresholdHours = data.fertilizerBuyNormalThresholdHours ?? 10;
-  fertilizerBuy.checkIntervalMinutes = data.fertilizerBuyCheckIntervalMinutes ?? 60;
 }
 
 async function loadConfig() {
@@ -759,8 +758,7 @@ async function handleSaveAutomation() {
       fertilizerBuyOrganicCount: fertilizerBuy.organicCount,
       fertilizerBuyOrganicThresholdHours: fertilizerBuy.organicThresholdHours,
       fertilizerBuyNormalCount: fertilizerBuy.normalCount,
-      fertilizerBuyNormalThresholdHours: fertilizerBuy.normalThresholdHours,
-      fertilizerBuyCheckIntervalMinutes: fertilizerBuy.checkIntervalMinutes
+      fertilizerBuyNormalThresholdHours: fertilizerBuy.normalThresholdHours
     });
     if (!error) {
       window.$message?.success($t('page.farm.settings.saveAutomationSuccess'));
@@ -1534,6 +1532,9 @@ onUnmounted(() => {
             <div class="fertilizer-field">
               <div class="fertilizer-label">{{ $t('page.farm.settings.fertilizer') }}</div>
               <NSelect v-model:value="automation.fertilizer" class="max-w-320px" :options="fertilizerOptions" />
+              <NText v-if="showBothHint" depth="3" class="mt-8px text-12px">
+                {{ $t('page.farm.settings.fertilizerBothHint') }}
+              </NText>
             </div>
             <div class="auto-switch-item fertilizer-field">
               <NSwitch v-model:value="automation.fertilizer_multi_season" />

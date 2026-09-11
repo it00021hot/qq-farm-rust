@@ -158,7 +158,14 @@ function startWindowDrag(event: MouseEvent) {
         @switch="themeStore.toggleThemeScheme"
       />
       <ThemeButton v-if="!appStore.isMobile" />
-      <NDropdown trigger="click" :options="moreOptions" @select="handleMore">
+      <ButtonIcon
+        v-if="!appStore.isMobile"
+        icon="mdi:information-outline"
+        :aria-label="en ? 'About & updates' : '关于与更新'"
+        :tooltip-content="en ? 'About & updates' : '关于与更新'"
+        @click="updateVisible = true"
+      />
+      <NDropdown v-if="appStore.isMobile" trigger="click" :options="moreOptions" @select="handleMore">
         <ButtonIcon
           icon="mdi:dots-vertical"
           :aria-label="en ? 'More' : '更多'"

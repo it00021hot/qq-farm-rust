@@ -637,6 +637,49 @@ pub fn filter_ids_by_land_types(ids: &[i64], lands: &[LandInfo], types: &[LandTy
         .collect()
 }
 
+/// 当前作物是否已用过普通化肥（任一阶段 `ferts_used` 含 1011）。
+#[must_use]
+pub fn has_used_normal_fertilizer(land: &LandInfo) -> bool {
+    let Some(plant) = land.plant.as_ref() else {
+        return false;
+    };
+    plant
+        .phases
+        .iter()
+        .any(|p| p.ferts_used.get(&crate::constants::NORMAL_CONTAINER_ID).copied().unwrap_or(0) > 0)
+}
+
+/// 已解锁、有作物、未枯死、未成熟。
+#[must_use]
+pub fn is_immature_crop(land: &LandInfo) -> bool {
+    if !land.unlocked {
+        return false;
+    }
+    let Some(plant) = land.plant.as_ref() else {
+        return false;
+    };
+    if plant.phases.is_empty() {
+        return false;
+    }
+    !matches!(current_phase(land), PlantPhase::Dead | PlantPhase::Ripe)
+}
+
+/// 还能施一次普通化肥的地：未成熟且本季尚未用过 1011。
+#[must_use]
+pub fn get_normal_fertilizer_targets_from_lands(lands: &[LandInfo]) -> Vec<i64> {
+    lands
+        .iter()
+        .filter(|l| is_immature_crop(l) && !has_used_normal_fertilizer(l))
+        .map(|l| l.id)
+        .collect()
+}
+
+/// 所有未成熟作物（桌面版 Both：有机催熟目标）。
+#[must_use]
+pub fn get_immature_crop_targets_from_lands(lands: &[LandInfo]) -> Vec<i64> {
+    lands.iter().filter(|l| is_immature_crop(l)).map(|l| l.id).collect()
+}
+
 /// 对齐 TS `getOrganicFertilizerTargetsFromLands`：所有还能施有机肥的地
 #[must_use]
 pub fn get_organic_fertilizer_targets_from_lands(lands: &[LandInfo]) -> Vec<i64> {
@@ -1798,6 +1841,34 @@ mod tests {
         }
         let targets = get_organic_fertilizer_targets_from_lands(&[exhausted, fresh]);
         assert_eq!(targets, vec![1, 2]);
+    }
+
+    #[test]
+    fn normal_targets_skip_used_ripe_dead() {
+        let growing = make_land(1, true, Some(PlantPhase::Growing));
+        let mut used = make_land(2, true, Some(PlantPhase::Growing));
+        if let Some(p) = used.plant.as_mut() {
+            if let Some(phase) = p.phases.first_mut() {
+                phase.ferts_used.insert(crate::constants::NORMAL_CONTAINER_ID, 1);
+            }
+        }
+        let ripe = make_land(3, true, Some(PlantPhase::Ripe));
+        let dead = make_land(4, true, Some(PlantPhase::Dead));
+        let empty = make_land(5, true, None);
+        let targets = get_normal_fertilizer_targets_from_lands(&[growing, used, ripe, dead, empty]);
+        assert_eq!(targets, vec![1]);
+    }
+
+    #[test]
+    fn immature_targets_exclude_ripe_and_dead() {
+        let lands = [
+            make_land(1, true, Some(PlantPhase::Growing)),
+            make_land(2, true, Some(PlantPhase::Sprout)),
+            make_land(3, true, Some(PlantPhase::Ripe)),
+            make_land(4, true, Some(PlantPhase::Dead)),
+            make_land(5, true, None),
+        ];
+        assert_eq!(get_immature_crop_targets_from_lands(&lands), vec![1, 2]);
     }
 
     // ===== 多季作物阶段识别（对齐 bot farm-multi-season.test.js，PR #68）=====

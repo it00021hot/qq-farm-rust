@@ -19,7 +19,7 @@ use crate::error::{Error, Result};
 use crate::network::gateway::Gateway;
 use crate::proto::generated::gamepb::plantpb::{
     AllLandsReply, AllLandsRequest, FarmingReply, FarmingRequest, FertilizeReply, FertilizeRequest,
-    HarvestReply, HarvestRequest, OperationLimit, PlantItem, PlantReply, PlantRequest,
+    HarvestReply, HarvestRequest, LandInfo, OperationLimit, PlantItem, PlantReply, PlantRequest,
     RemovePlantReply, RemovePlantRequest, UnlockLandReply, UnlockLandRequest, UpgradeLandReply,
     UpgradeLandRequest, WaterLandReply, WaterLandRequest,
 };
@@ -34,6 +34,11 @@ pub type OperationLimitsCallback = Arc<dyn Fn(Vec<OperationLimit>) + Send + Sync
 pub const NORMAL_FERTILIZER_ID: i64 = 1011;
 /// 有机肥料 ID
 pub const ORGANIC_FERTILIZER_ID: i64 = 1012;
+
+fn land_became_ripe(lands: &[LandInfo], land_id: i64) -> bool {
+    use crate::services::farm::land_analysis::{current_phase, PlantPhase};
+    lands.iter().any(|l| l.id == land_id && current_phase(l) == PlantPhase::Ripe)
+}
 
 /// 农场 API 客户端
 #[derive(Clone)]
@@ -146,15 +151,16 @@ impl Api {
         FarmingReply::decode(&*resp).map_err(Error::from)
     }
 
-    /// 施肥（单块）
-    /// 单块施肥。回包 `FertilizeReply.fertilizer`（corepb.Item）的 count 即该
-    /// 肥料容器剩余秒数（与背包容器 count 同一语义，proto 注释已与 ItemNotify
-    /// 交叉验证）——返回 `Some(剩余秒)`；字段缺失返回 `None`
-    pub async fn fertilize(&self, land_id: i64, fertilizer_id: i64) -> Result<Option<i64>> {
+    /// 施肥（单块）。返回容器剩余秒数 + 回包土地（用于 Both 催熟时踢掉已成熟地）。
+    pub async fn fertilize(
+        &self,
+        land_id: i64,
+        fertilizer_id: i64,
+    ) -> Result<(Option<i64>, Vec<LandInfo>)> {
         let body = FertilizeRequest { land_ids: vec![land_id], fertilizer_id }.encode_to_vec();
         let resp = self.gateway.request("gamepb.plantpb.PlantService", "Fertilize", &body).await?;
         let reply = FertilizeReply::decode(&*resp).map_err(Error::from)?;
-        Ok(reply.fertilizer.map(|item| item.count))
+        Ok((reply.fertilizer.map(|item| item.count), reply.land))
     }
 
     /// 有机肥循环施肥（对齐 TS `fertilizeOrganicLoop`：按地块轮询直到失败或达单次上限）
@@ -181,7 +187,7 @@ impl Api {
         let mut idx = 0usize;
         while success < operation_limit {
             match self.fertilize(ids[idx], ORGANIC_FERTILIZER_ID).await {
-                Ok(r) => remaining_secs = r.or(remaining_secs),
+                Ok((r, _)) => remaining_secs = r.or(remaining_secs),
                 Err(_) => break,
             }
             success += 1;
@@ -194,6 +200,63 @@ impl Api {
                 account_id,
                 "施肥",
                 format!("有机肥循环达到单次上限 {operation_limit}，已停止继续请求"),
+                crate::constants::PanelEvent::Fertilize,
+                Some(serde_json::json!({ "module": "farm", "result": "limit", "count": success })),
+            );
+        }
+        (success, remaining_secs)
+    }
+
+    /// 桌面版 Both：对未成熟地循环施有机肥。某块失败或回包已成熟则踢掉，其余继续；
+    /// 肥料耗尽（剩余 0 秒）或达到与 bot 相同的单次上限后停止。
+    pub async fn fertilize_organic_until_mature(
+        &self,
+        land_ids: &[i64],
+        account_id: &str,
+    ) -> (usize, Option<i64>) {
+        const MAX_ORGANIC_FERTILIZE_OPERATIONS: usize = 240;
+        const MAX_ORGANIC_FERTILIZE_ROUNDS: usize = 20;
+
+        let mut ids: Vec<i64> = land_ids.iter().copied().filter(|id| *id > 0).collect();
+        if ids.is_empty() {
+            return (0, None);
+        }
+        let operation_limit =
+            MAX_ORGANIC_FERTILIZE_OPERATIONS.min(ids.len() * MAX_ORGANIC_FERTILIZE_ROUNDS);
+        let mut success = 0usize;
+        let mut remaining_secs: Option<i64> = None;
+        let mut idx = 0usize;
+        while success < operation_limit && !ids.is_empty() {
+            let land_id = ids[idx];
+            match self.fertilize(land_id, ORGANIC_FERTILIZER_ID).await {
+                Ok((r, lands)) => {
+                    remaining_secs = r.or(remaining_secs);
+                    success += 1;
+                    if r == Some(0) {
+                        break;
+                    }
+                    if land_became_ripe(&lands, land_id) {
+                        ids.remove(idx);
+                    } else {
+                        idx += 1;
+                    }
+                }
+                Err(_) => {
+                    ids.remove(idx);
+                }
+            }
+            if ids.is_empty() {
+                break;
+            }
+            idx %= ids.len();
+            let delay_ms = 1000 + (rand::random::<u64>() % 500);
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        }
+        if success >= operation_limit {
+            crate::services::panel_log::log_warn(
+                account_id,
+                "施肥",
+                format!("有机肥催熟达到单次上限 {operation_limit}，已停止继续请求"),
                 crate::constants::PanelEvent::Fertilize,
                 Some(serde_json::json!({ "module": "farm", "result": "limit", "count": success })),
             );

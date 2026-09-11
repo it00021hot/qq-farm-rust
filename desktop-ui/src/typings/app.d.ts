@@ -1164,6 +1164,7 @@ declare namespace App {
             fertilizerLandTypesHint: string;
             fertilizerSmartSeconds: string;
             fertilizerSmartSecondsHint: string;
+            fertilizerBothHint: string;
             skipOwnWeedBug: string;
             mysteryAutoBuy: string;
             mysteryArrivalNotify: string;

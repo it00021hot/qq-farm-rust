@@ -667,6 +667,10 @@ impl FarmService {
                 account_id,
                 "fertilizer_multi_season",
             )
+            && !matches!(
+                crate::models::store::account_config::get_automation(Some(account_id)).fertilizer,
+                crate::models::types::FertilizerMode::Both
+            )
         {
             post_growing.sort_unstable();
             post_growing.dedup();
@@ -773,7 +777,11 @@ impl FarmService {
 
         let fertilizer_mode =
             crate::models::store::account_config::get_automation(Some(account_id)).fertilizer;
-        if matches!(fertilizer_mode, crate::models::types::FertilizerMode::Smart) {
+        if matches!(
+            fertilizer_mode,
+            crate::models::types::FertilizerMode::Smart
+                | crate::models::types::FertilizerMode::Both
+        ) {
             if let Ok(result) = planting
                 .lock()
                 .await
@@ -782,26 +790,35 @@ impl FarmService {
                     host_gid,
                     account_id,
                     crate::services::farm::planting::FertilizeOptions {
-                        skip_normal: true,
+                        skip_normal: matches!(
+                            fertilizer_mode,
+                            crate::models::types::FertilizerMode::Smart
+                        ),
                         multi_season: false,
                     },
                 )
                 .await
             {
-                if result.organic > 0 {
+                if result.normal + result.organic > 0 {
                     let _ = event_tx.send(FarmEvent::Fertilized {
                         normal: result.normal,
                         organic: result.organic,
                     });
-                    actions.push(format!("有机肥{}", result.organic));
+                    if result.normal > 0 {
+                        actions.push(format!("普通肥{}", result.normal));
+                    }
+                    if result.organic > 0 {
+                        actions.push(format!("有机肥{}", result.organic));
+                    }
                     crate::services::panel_log::log(
                         account_id,
                         "施肥",
-                        format!("巡田施肥完成 有机{}", result.organic),
+                        format!("巡田施肥完成 普通{} / 有机{}", result.normal, result.organic),
                         crate::constants::PanelEvent::Fertilize,
                         Some(serde_json::json!({
                             "module": "farm",
                             "result": "ok",
+                            "normal": result.normal,
                             "organic": result.organic,
                         })),
                     );

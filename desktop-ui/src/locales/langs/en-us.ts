@@ -342,7 +342,7 @@ const local: App.I18n.Schema = {
           none: 'None',
           normal: 'Normal fertilizer only',
           organic: 'Organic fertilizer only',
-          both: 'Normal + Organic',
+          both: 'Inorganic once + organic to mature',
           smart: 'Normal + fast-mature organic'
         },
         platform: {
@@ -924,12 +924,14 @@ const local: App.I18n.Schema = {
         fertilizerBuyNormalThreshold: 'Trigger Threshold (h)',
         fertilizerBuyCheckInterval: 'Check Interval (min)',
         fertilizerBuyHint:
-          'Organic and inorganic share the same flow: after fertilizing, remaining is checked and bought below threshold; a timer is only fallback. Saving triggers an immediate check. When both are on, organic is preferred.',
+          'Organic and inorganic share the same flow: after fertilizing, remaining is checked and bought below threshold. Login and saving each trigger one check. When both are on, organic is preferred.',
         fertilizerMultiSeason: 'Multi-season Refertilize',
         fertilizerLandTypes: 'Fertilizer Scope',
         fertilizerLandTypesHint: 'Fertilizer runs only on lands matching the selected types.',
         fertilizerSmartSeconds: 'Fast-mature Threshold (sec)',
         fertilizerSmartSecondsHint: 'Apply organic when time-to-mature ≤ this many seconds (default 300).',
+        fertilizerBothHint:
+          'Each farm tick: apply inorganic once to every land that can take it, then loop organic on all immature crops until mature or fertilizer runs out.',
         skipOwnWeedBug: 'Skip one-click farm care on check',
         mysteryAutoBuy: 'Mystery Shop Auto Buy',
         mysteryArrivalNotify: 'Arrival Notify',

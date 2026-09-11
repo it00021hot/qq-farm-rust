@@ -1220,3 +1220,38 @@
 - 改：删除 `quality` job 与 `needs: quality`，push `v*` 直接并行打
   Apple Silicon / Intel / Windows
 
+### 2026-09-11 — 化肥购买去掉周期定时器
+
+- 事件驱动补购（施肥后 / 保存后 / 登录后各检一次）已上线，设置页也已去掉
+  「检测间隔」；但 worker 仍按 `fertilizer_buy_check_interval_minutes` 挂
+  `fertilizer_buy_check` 周期任务，登录还会打「定时器已启动」
+- **改**：删除 `start_fertilizer_buy_timer`；登录与保存配置时 `clear` 掉旧
+  任务；登录做一次即时检测。购买成功日志改走 `fertilizer_buy`
+- 配置字段 `fertilizer_buy_check_interval_minutes` 仍保留读兼容，运行时不读
+- 验证：`RUSTFLAGS="-D warnings" cargo check --workspace --all-targets` 0 错 0 警；
+  `cargo test -p qq-farm-core --lib` 981/981；`cargo fmt --all --check` 通过；
+  `corepack pnpm typecheck` 通过
+- **实机待验**：开启自动买肥后不再出现「化肥自动购买检测定时器已启动」；
+  施肥耗尽后仍会补购
+
+### 2026-09-11 — 「普通+有机」改全场无机一次 + 有机催熟（有意偏离 bot）
+
+- 用户策略：所有还能施无机肥的地各打 1 次；然后所有未成熟作物循环打有机肥
+  直到成熟。原 Both 只打刚种/多季地，且巡田不扫全场
+- **选地**：无机 = 未成熟且本季 `ferts_used` 尚无 1011；有机 = 全部未成熟
+- **执行**：巡田末尾跑完整 Both（不再 `skip_normal`）；种完/多季补肥不再
+  立刻再打，避免同一轮两遍。有机催熟遇单块失败踢掉该地继续，余量 0 停
+- 设置页选项改名为「无机一次 + 有机催熟」，并加说明
+- 验证：`RUSTFLAGS="-D warnings" cargo check --workspace --all-targets` 0 错 0 警；
+  `cargo test -p qq-farm-core --lib` 983/983；`cargo fmt --all --check` 通过；
+  `corepack pnpm typecheck` 通过
+- **实机待验**：Both 下已长着的未成熟地每轮会被无机打到、有机催熟
+
+### 2026-09-11 — 桌面顶栏去掉「更多」
+
+- 「更多」是手机端把搜索/主题/语言/更新收进下拉的入口；桌面这些已是独立图标，
+  再留「更多」只剩「关于与更新」一项，看起来像误带了移动端控件
+- **改**：桌面隐藏「更多」，改为独立「关于与更新」图标；手机端下拉不变
+- 验证：`corepack pnpm typecheck` 通过
+- **实机待验**：宽屏顶栏无「更多」，点信息图标仍能打开关于与更新
+

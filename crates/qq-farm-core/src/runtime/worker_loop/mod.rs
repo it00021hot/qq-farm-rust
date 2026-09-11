@@ -467,7 +467,8 @@ impl WorkerLoop {
             if self.unified_scheduler_running.load(Ordering::Acquire) {
                 self.schedule_unified_next_tick(scheduler);
             }
-            self.start_fertilizer_buy_timer(scheduler);
+            // 化肥购买已改为事件驱动，保存时清掉旧的周期定时器
+            scheduler.clear("fertilizer_buy_check");
             self.start_mystery_shop_timer(scheduler);
 
             // 对齐 bot：神秘商人配置变更后 2s 补查一次（不等下一个 10min tick）
@@ -694,7 +695,8 @@ impl WorkerLoop {
             .await;
         }
         self.start_farm_ticks(scheduler);
-        self.start_fertilizer_buy_timer(scheduler);
+        scheduler.clear("fertilizer_buy_check");
+        self.check_fertilizer_buy_once().await;
         self.start_mystery_shop_timer(scheduler);
         {
             let this = Arc::clone(self);
@@ -1093,40 +1095,6 @@ impl WorkerLoop {
         );
     }
 
-    /// 对齐 TS `startFertilizerBuyCheckTimer`
-    fn start_fertilizer_buy_timer(self: &Arc<Self>, scheduler: &Scheduler) {
-        if !self.auto_on("fertilizer_buy_organic") && !self.auto_on("fertilizer_buy_normal") {
-            scheduler.clear("fertilizer_buy_check");
-            return;
-        }
-        let snap = crate::models::store::account_config::get_account_config_snapshot(Some(
-            &self.account.id,
-        ));
-        let minutes = snap.fertilizer_buy_check_interval_minutes.max(1) as u64;
-        let this = Arc::clone(self);
-        scheduler.set_interval_task(
-            "fertilizer_buy_check",
-            Duration::from_secs(minutes * 60),
-            Arc::new(move || {
-                let this = this.clone();
-                Box::pin(async move {
-                    this.check_fertilizer_buy_once().await;
-                })
-            }),
-        );
-        crate::services::panel_log::log(
-            &self.account.id,
-            "农场",
-            format!("化肥自动购买检测定时器已启动，间隔 {minutes} 分钟"),
-            crate::constants::PanelEvent::FertilizerBuyTimer,
-            Some(serde_json::json!({
-                "module": "farm",
-                "result": "start",
-                "intervalMinutes": minutes,
-            })),
-        );
-    }
-
     async fn check_fertilizer_buy_once(&self) {
         if !self.auto_on("fertilizer_buy_organic") && !self.auto_on("fertilizer_buy_normal") {
             return;
@@ -1160,7 +1128,7 @@ impl WorkerLoop {
                     result.normal_bought,
                     result.normal_current_hours
                 ),
-                crate::constants::PanelEvent::FertilizerBuyTimer,
+                crate::constants::PanelEvent::FertilizerBuy,
                 Some(serde_json::json!({
                     "module": "farm",
                     "result": "bought",
@@ -1171,10 +1139,8 @@ impl WorkerLoop {
         }
     }
 
-    /// 施肥轮结束后的事件驱动化肥补充（2026-09-11 需求：自动购买不能只靠
-    /// 定时器——容器在两次定时检查之间耗尽时，施肥会一直空转到下个周期；
-    /// 现在施肥轮结束即检测，低于阈值当场购买，下一轮施肥就能用上。
-    /// 节流 3 分钟/账号；定时器保留兜底）。
+    /// 施肥轮结束后的事件驱动化肥补充：施肥结束即检测，低于阈值当场购买。
+    /// 账号级节流 60 秒，避免同一轮巡田重复打商城。
     pub async fn maybe_event_fertilizer_buy(&self) {
         if !self.auto_on("fertilizer_buy_organic") && !self.auto_on("fertilizer_buy_normal") {
             return;
@@ -1332,7 +1298,7 @@ impl WorkerLoop {
                     if this.auto_on("fertilizer_gift") {
                         let _ = this.warehouse.auto_open_fertilizer_gift_packs().await;
                     }
-                    // 施肥轮结束即检测化肥余量（事件驱动补充，节流 3 分钟）
+                    // 施肥轮结束即检测化肥余量（事件驱动补充）
                     this.maybe_event_fertilizer_buy().await;
                     this.sync_status();
                 },
