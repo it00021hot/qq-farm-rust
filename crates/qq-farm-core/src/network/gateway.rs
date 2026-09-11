@@ -217,6 +217,11 @@ struct Inner {
     /// 出站 token 提供器：登录后暂存一次性 TSDK 初始化凭据，由下一条消息携带
     /// （对齐 bot `GatewayTokenProvider.stageInitToken/next/clear`）。
     token_provider: crate::utils::random::GatewayTokenProvider,
+    /// 发送顺序锁：seq 分配 → 加密 → 入发送通道必须原子完成。bot 是单线程
+    /// drain 队列、帧严格按 client_seq 递增上wire；rust 并发下三步可交错，
+    /// 乱序帧（或加密序 ≠ seq 序）会被服务端丢弃，反复即触发静默断供
+    /// （2026-09-11 慢性掉线排查：登录爆发期并发最高，最容易撞出乱序）。
+    send_order: tokio::sync::Mutex<()>,
 }
 
 /// 已占用的业务并发槽（共享或前台保留）。字段不读：持有即占用，Drop 释放。
@@ -252,6 +257,7 @@ impl Gateway {
                 fg_rpc_slot: Arc::new(Semaphore::new(1)),
                 rpc_queued: AtomicUsize::new(0),
                 token_provider: crate::utils::random::GatewayTokenProvider::new(),
+                send_order: tokio::sync::Mutex::new(()),
             }),
         }
     }
@@ -491,6 +497,8 @@ impl Gateway {
             let phase = *self.inner.phase.read();
             rpc_phase_ok(phase, true)?;
         }
+        // 与 send_rpc 同一把发送顺序锁，保证 no-reply 帧也不破坏 seq 递增
+        let _order = self.inner.send_order.lock().await;
         let seq = self.inner.requests.next_seq();
         let (token, staged) = self.inner.token_provider.next_marked();
         if staged {
@@ -592,6 +600,9 @@ impl Gateway {
             None
         };
 
+        // 发送顺序锁：seq → 加密 → 入队原子化，保证上 wire 的帧严格按
+        // client_seq 递增（对齐 bot 单线程 drain 队列）。等回包在锁外。
+        let _order = self.inner.send_order.lock().await;
         let (seq, rx) = self.inner.requests.call(service, method);
         let (token, staged) = self.inner.token_provider.next_marked();
         if staged {
@@ -617,6 +628,7 @@ impl Gateway {
             let _ = self.inner.requests.cancel(seq);
             return Err(NetworkError::WebSocket("ws sender closed".into()));
         }
+        drop(_order);
 
         let waited = if let Some(ms) = timeout_ms {
             match tokio::time::timeout(std::time::Duration::from_millis(ms), rx).await {

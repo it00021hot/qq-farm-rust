@@ -145,26 +145,9 @@ const RUNTIME_TABLE: [u8; 59] = [
     107, 197, 136, 167, 52, 155, 228, 209, 117, 218, 8, 107, 241, 32, 62, 53, 200, 238,
 ];
 
-/// Merged data segments: (offset, length) —— 17 段
-const MERGED_DATA_SEGMENTS: &[(u32, u32)] = &[
-    (1024, 5541),
-    (6580, 8989),
-    (15585, 33),
-    (15643, 1),
-    (15655, 21),
-    (15701, 1),
-    (15713, 21),
-    (15759, 1),
-    (15771, 30),
-    (15826, 14),
-    (15875, 1),
-    (15887, 21),
-    (15933, 1),
-    (15945, 671),
-    (16632, 400),
-    (17040, 103),
-    (67_371_008, 404),
-];
+/// Merged data 元数据段（bot tsdk-runtime.ts:30 `MERGED_DATA_METADATA`）：
+/// 先解密它拿到段表，再由 wasm 的 `decrypt_all_data()` 解密全部段
+const MERGED_DATA_METADATA: (u32, u32) = (67_371_008, 404);
 
 // ===== Store 状态 =====
 
@@ -253,6 +236,9 @@ struct Exports {
     encrypt: Func,
     decrypt: Func,
     decrypt_strings: Func,
+    /// `decrypt_all_data()` —— bot init 必调（tsdk-runtime.ts:331-332），
+    /// 除解密全部 merged 段外可能还做运行态初始化/校验和，缺它 AntiData 会异常
+    decrypt_all_data: Func,
     // === ACE 协议接口 ===
     /// `H()` → ptr (string)
     h: Func,
@@ -438,31 +424,35 @@ impl TsdkRuntime {
         let exports = extract_exports(&instance, &mut store)?;
         store.data_mut().memory = Some(exports.memory);
 
-        // 校验 merged data 段范围
+        // 对齐 bot init（tsdk-runtime.ts:327-334）：只解密 404 字节元数据段，
+        // 段表由 wasm 内部持有；随后调 wasm 自己的 decrypt_all_data() 解密全部
+        // 段并完成其内部初始化。旧实现用宿主静态 17 段表手动解密且跳过
+        // decrypt_all_data —— AntiData 内容与真机/bot 不一致，服务端 ACE 判异常
+        // 后对会话静默断供（登录成功但 1s~14min 后入站归零，2026-09-11 实锤）
+        let (metadata_offset, metadata_len) = MERGED_DATA_METADATA;
         let mem_size = exports.memory.data(&store).len();
-        for (offset, length) in MERGED_DATA_SEGMENTS {
-            let end = (*offset as usize).saturating_add(*length as usize);
-            if end > mem_size {
-                return Err(Error::crypto(format!(
-                    "merged data segment out of bounds: offset={offset}, length={length}, mem={mem_size}"
-                )));
-            }
+        let metadata_end = (metadata_offset as usize).saturating_add(metadata_len as usize);
+        if metadata_end > mem_size {
+            return Err(Error::crypto(format!(
+                "merged data metadata out of bounds: offset={metadata_offset}, length={metadata_len}, mem={mem_size}"
+            )));
         }
-        // 解密 merged data
-        for (offset, length) in MERGED_DATA_SEGMENTS {
-            exports
-                .decrypt_strings
-                .call(
-                    &mut store,
-                    &[
-                        Val::I32(*offset as i32),
-                        Val::I32(*length as i32),
-                        Val::I32(MERGED_DATA_KEY as i32),
-                    ],
-                    &mut [],
-                )
-                .map_err(|e| Error::crypto(format!("decrypt_strings failed: {e}")))?;
-        }
+        exports
+            .decrypt_strings
+            .call(
+                &mut store,
+                &[
+                    Val::I32(metadata_offset as i32),
+                    Val::I32(metadata_len as i32),
+                    Val::I32(MERGED_DATA_KEY as i32),
+                ],
+                &mut [],
+            )
+            .map_err(|e| Error::crypto(format!("decrypt_strings failed: {e}")))?;
+        exports
+            .decrypt_all_data
+            .call(&mut store, &[], &mut [])
+            .map_err(|e| Error::crypto(format!("decrypt_all_data failed: {e}")))?;
 
         // 调 x() 初始化
         exports
@@ -1004,14 +994,29 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
         },
     )?;
 
-    // c: captureStackTrace — 写空字符串
+    // c: captureStackTrace —— 对齐 bot tsdk-runtime.ts:212-216：返回 Node 风格
+    // `Error.stack`（"Error: TSDK JavaScript 调用栈\n    at ..."）。wasm 把它编入
+    // AntiData 上报：空栈 = 非真实 JS 运行时特征，服务端 ACE 判异常后静默掐会话
     linker.func_wrap(
         "a",
         "c",
-        |mut c: wasmtime::Caller<'_, HostState>, ptr: i32, _cap: i32| -> WasmResult<i32> {
-            // 写一个空 cstring
-            write_cstring_in_caller(&mut c, ptr, b"")?;
-            Ok(1)
+        |mut c: wasmtime::Caller<'_, HostState>, ptr: i32, cap: i32| -> WasmResult<i32> {
+            let stack = "Error: TSDK JavaScript 调用栈\n\
+                 at a.c (file:///app/core/src/utils/tsdk-runtime.ts:212:34)\n\
+                 at wasm://wasm/0001ace0:wasm-function[152]:0x9c2f\n\
+                 at wasm://wasm/0001ace0:wasm-function[89]:0x6d41\n\
+                 at wasm://wasm/0001ace0:wasm-function[203]:0x11f02\n";
+            let bytes = stack.as_bytes();
+            let len = bytes.len() + 1; // 含 NUL；bot 返回 byteLength+1
+            let Some(m) = c.data().memory else { return Ok(0) };
+            let data = m.data_mut(&mut c);
+            let start = ptr as usize;
+            if len > cap as usize || start.saturating_add(len) > data.len() {
+                return Ok(0);
+            }
+            data[start..start + bytes.len()].copy_from_slice(bytes);
+            data[start + bytes.len()] = 0;
+            Ok(len as i32)
         },
     )?;
 
@@ -1260,13 +1265,17 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
         },
     )?;
 
-    // q: serverTime — 写服务器同步时钟秒（bot 先写本地再异步用 HTTP Date 校正；
-    // rust 的 now_ms 已由 Login/Heartbeat 回包持续同步，等效且更准）
+    // q: serverTime —— 对齐 bot tsdk-runtime.ts:258-269：先写本地秒，同时用
+    // https://api.anticheatexpert.com/test 的 HTTP Date 头校时。bot 每次 q 都
+    // 异步拉一次并回写 wasm 内存槽；rust 以进程级偏移实现（首次触发拉取，
+    // 之后每次 q 直接写校准值——ACE 后台时钟漂移可忽略，行为等效）
     linker.func_wrap(
         "a",
         "q",
         |mut c: wasmtime::Caller<'_, HostState>, out: i32| -> WasmResult<i32> {
-            let now = (crate::utils::time::now_ms() / 1000) as u32;
+            let now_local = (crate::utils::time::now_ms() / 1000) as i64;
+            maybe_fetch_anticheat_time_offset();
+            let now = (now_local + anticheat_time_offset_secs()) as u32;
             let mem = c.data().memory;
             if let Some(m) = mem {
                 write_u32_le(m.data_mut(&mut c), out, now);
@@ -1415,6 +1424,9 @@ fn extract_exports(instance: &Instance, store: &mut Store<HostState>) -> Result<
     let decrypt_strings = instance
         .get_func(&mut *store, "__mergewasm_shared____wasm_decrypt_strings")
         .ok_or_else(|| Error::crypto("missing __mergewasm_shared____wasm_decrypt_strings"))?;
+    let decrypt_all_data = instance
+        .get_func(&mut *store, "decrypt_all_data")
+        .ok_or_else(|| Error::crypto("missing decrypt_all_data"))?;
     let h = instance
         .get_func(&mut *store, "H")
         .ok_or_else(|| Error::crypto("missing required export: H"))?;
@@ -1446,6 +1458,7 @@ fn extract_exports(instance: &Instance, store: &mut Store<HostState>) -> Result<
         encrypt,
         decrypt,
         decrypt_strings,
+        decrypt_all_data,
         h,
         m,
         p,
@@ -1705,15 +1718,72 @@ fn read_cstring_in_caller(
     Ok(s.to_string())
 }
 
-/// TSDK 文件路径解析（对齐 bot resolveDataPath：限制在账号数据目录内，防路径穿越）
+/// TSDK 文件路径解析（对齐 bot resolveDataPath：限制在账号数据目录内，防路径穿越；
+/// bot 会先剥掉 QQ 宿主的 `qqfile://usr/` 前缀）
 fn resolve_data_path(data_dir: &str, input: &str) -> Option<std::path::PathBuf> {
     let relative = input.replace('\\', "/");
+    let relative = relative.strip_prefix("qqfile://usr/").unwrap_or(&relative);
     let relative = relative.trim_start_matches('/');
     if relative.is_empty() || relative.contains("..") {
         return None;
     }
     let root = std::path::Path::new(data_dir);
     Some(root.join(relative))
+}
+
+// ===== ACE 后台校时（对齐 bot import q 的 https Date 校时）=====
+
+/// ACE 后台时间与本地时钟的偏移（秒）；0 = 未校准/校准失败（bot 同样静默失败）
+static ANTICHEAT_TIME_OFFSET: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+static ANTICHEAT_TIME_FETCHING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn anticheat_time_offset_secs() -> i64 {
+    ANTICHEAT_TIME_OFFSET.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 进程内首次触发时拉一次 `api.anticheatexpert.com/test` 的 Date 头算偏移
+fn maybe_fetch_anticheat_time_offset() {
+    use std::sync::atomic::Ordering;
+    if ANTICHEAT_TIME_FETCHING.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        ANTICHEAT_TIME_FETCHING.store(false, Ordering::Relaxed);
+        return;
+    };
+    handle.spawn(async move {
+        let client = match reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(3_000))
+            .build()
+        {
+            Ok(c) => c,
+            Err(_) => {
+                ANTICHEAT_TIME_FETCHING.store(false, Ordering::Relaxed);
+                return;
+            }
+        };
+        let Ok(resp) = client.get("https://api.anticheatexpert.com/test").send().await else {
+            return; // 保持未校准；不再重试（下次进程再来）
+        };
+        let Some(date) = resp
+            .headers()
+            .get(reqwest::header::DATE)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+        else {
+            return;
+        };
+        // HTTP-date: "Wed, 21 Oct 2015 07:28:00 GMT"
+        let Ok(parsed) = chrono::DateTime::parse_from_str(&date, "%a, %d %b %Y %H:%M:%S GMT")
+        else {
+            return;
+        };
+        let server_secs = parsed.timestamp();
+        let local_secs = (crate::utils::time::now_ms() / 1000) as i64;
+        ANTICHEAT_TIME_OFFSET.store(server_secs - local_secs, Ordering::Relaxed);
+        tracing::debug!(offset_secs = server_secs - local_secs, "ACE 后台校时完成");
+    });
 }
 
 /// 从 wasm 内存读 cstring（以 NUL 结尾）
