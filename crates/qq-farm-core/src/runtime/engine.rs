@@ -434,6 +434,9 @@ impl RuntimeEngine {
                                     w.disconnected_since = None;
                                     w.auto_delete_triggered = false;
                                     engine.wx_reconnect.write().attempts.remove(&account_id);
+                                    // 会话存活打点（内部 30s 节流落盘），
+                                    // 供进程重启后的自动重连避开服务端旧 session 释放窗口
+                                    crate::infra::session_liveness::note_online(&account_id);
                                 } else if !w.stopping {
                                     if w.disconnected_since.is_none() {
                                         w.disconnected_since = Some(now);
@@ -621,6 +624,8 @@ impl RuntimeEngine {
                             );
                             continue;
                         }
+                        // 该账号已无在跑会话：清除存活打点，重启后无需再等释放窗口
+                        crate::infra::session_liveness::note_offline(&account_id);
                         let (name, already) = {
                             let mut workers = state.workers.lock();
                             match workers.get_mut(&account_id) {
@@ -1174,6 +1179,24 @@ impl RuntimeEngine {
                     tokio::time::sleep(Duration::from_millis(stagger)).await;
                 }
                 first = false;
+                // 上个进程的会话若刚被杀（TCP 未优雅登出），服务端释放旧 session
+                // 需要时间，立刻重登会被判"已在其他终端登录"连环踢（2026-09-11
+                // 实测重启后 0~2 分钟内登录全部秒死）。等过释放窗口再登。
+                let extra_delay = crate::infra::session_liveness::boot_delay_ms(&latest.id);
+                if extra_delay > 0 {
+                    let name = if latest.name.trim().is_empty() {
+                        latest.id.clone()
+                    } else {
+                        latest.name.clone()
+                    };
+                    let wait = extra_delay / 1000;
+                    engine.runtime_state.log(
+                        "系统",
+                        &format!("账号 {name} 上个会话结束不足 3 分钟，服务端旧会话释放中，延迟 {wait} 秒后自动重连"),
+                        None,
+                    );
+                    tokio::time::sleep(Duration::from_millis(extra_delay)).await;
+                }
                 // 与手动 start/restart/重连串行化，避免同账号并发拉起两个会话
                 let lock = engine.lifecycle_lock(&latest.id);
                 let _guard = lock.lock().await;

@@ -1027,3 +1027,77 @@
   无互踢；手动登录后各菜单请求正常；双击 exe 两次第二实例仅聚焦窗口。
   另：如再出现无进程内第二登录的「已在其他终端登录」，需查手机端/其他终端
   （游戏本体顶号机制，非本程序问题）
+
+### 2026-09-11 — 二轮排查：重启撞 session 释放窗口修复 + 两类残留问题定位
+
+- **实机复测**（新构建装上后）：14:06:46 旧实例仍在健康务农 → 用户杀进程换新
+  构建 → 新实例 13~95 秒内把三账号全部重登 → 全部登录后 ~1 秒入站冻结秒死；
+  15 分钟后的自动重连（间隔已过释放窗口）全部健康。证实：**重启后自动登录
+  撞服务端旧 session 释放窗口**（同 WX_KICKOUT_RECONNECT_DELAY_MS 的教训，
+  但启动路径此前不设防）
+- **修复**：新增 `infra/session_liveness.rs` 持久化每账号最后确认在线时刻
+  （事件桥 Status(connected) 打点 30s 节流、Stopped 清除）；
+  `schedule_wx_authorized_start` 批量启动前按 `boot_delay_ms` 等过 3 分钟
+  释放窗口（冷启动不受影响），等待时面板提示「旧会话释放中」
+- **可观测性**（定位两类残留问题）：
+  - 大号/小小号每次登录 11~14 分钟后被分钟级联饿死（14:37:57/14:39 先后
+    冻结）而小号会话一直健康（UI 可用、心跳应答）——外部终端定时抢会话特征，
+    待用户排查手机端；ACE AntiData 今日回包恒为空（昨日健康时段 1081 字节）
+  - 小号"在线但自动化零动作"：巡查间隔仅 20~25s（秒级），却从登录后第一轮
+    tick 起 36 分钟零动作、零超时（会话本身健康，UI 可用）——自动化互斥
+    permit 被挂死任务永久持有，且挂死的是独立 tick task，worker 重连/停止
+    都无法释放（全局按账号信号量跨 worker 存续）。**修复**：
+    `run_exclusive_automation_task` 执行超 10 分钟即取消 future 自愈
+    （释放 permit 与锁守卫，排队任务恢复，单轮作废下轮重来），等待 2 分钟
+    点名持有者告警；心跳任务三处静默跳过门（phase/gid/在途 Heartbeat）
+    升级为 WARN——此前零日志正是"在线但无监控盲区"无法被发现的原因
+- 验证：`RUSTFLAGS="-D warnings" cargo check --workspace --all-targets` 0 错
+  0 警；`cargo test -p qq-farm-core` 978 项全过；`cargo fmt --all --check` 通过
+- **实机待验**：重启 app 后日志应出现「旧会话释放中，延迟 N 秒」且首批登录
+  不再秒死；小号若再出现零动作，日志会点名卡死的持有者任务
+
+### 2026-09-11 — 三轮排查：找到慢性掉线根因——TSDK 反作弊宿主接口三处未对齐
+
+- **决定性对照**：同机同号，bot（TS）稳定不掉线，rust 慢性掉线（历史日志
+  实证 8/23 起每天 13~57 次心跳超时，8/21-22 健康）→ 排除风控/外部终端，
+  病灶在 rust 客户端自身协议行为；症状（登录成功 → 0.5~14min 后服务端
+  静默断供、TCP 保持）= 服务端 ACE 反作弊隔离区典型表现
+- **Explore 逐项 diff**（bot tsdk-runtime.ts vs rust crypto/tsdk.rs）锁定三处：
+  1. **init 跳过 `decrypt_all_data()`**：rust 用宿主静态 17 段表手动解密，
+     bot 解密 404B 元数据段后调 wasm 自己的 `decrypt_all_data()`（内部
+     持有权威段表，且可能做运行态初始化/校验和）→ AntiData 内容与真机
+     不一致
+  2. **import `c`（captureStackTrace）返回空字符串**：bot 返回真实 Node
+     `Error.stack`（"Error: TSDK JavaScript 调用栈
+ at ..."），wasm 把它编入
+     AntiData 每 5s 上报——空栈 = 非真实 JS 运行时特征
+  3. **import `q`（serverTime）不做 ACE 后台校时**：bot GET
+     `api.anticheatexpert.com/test` 用 HTTP Date 头校正 wasm 时间槽
+- **修复**（全部 1:1 对齐 bot）：init 改为「元数据段 + `decrypt_all_data()`」
+  序列（MERGED_DATA_METADATA=(67371008,404)，删除静态 17 段表）；`c` 返回
+  Node 风格栈串（容量不足返 0、成功返 byteLength+1，语义同 bot）；`q` 进程
+  级偏移实现 ACE 校时（首次触发异步拉取 Date 头，失败静默保持本地钟）；
+  顺手对齐 `resolve_data_path` 剥离 `qqfile://usr/` 前缀
+- 排除项：TSDK 中途重建链（`WasmReset`/`pending_reset`）——历史日志 8/24
+  起 0 次触发，非本因；心跳策略/参数与 bot 全一致（逐项核对无差异）
+- 验证：`RUSTFLAGS="-D warnings" cargo check --workspace --all-targets` 0 错
+  0 警；`cargo test -p qq-farm-core` 979 项全过（含 TSDK 加解密官方向量，
+  新 init 序列不破坏密码学）
+- **实机验证中**：dev 实例 15:51 起新构建运行，观察三账号能否稳定越过
+  历史 1s/11-14min 两个死亡区间
+- **四轮补修（帧序）**：15:51 构建实测小号活 15min/小小号活 11min 后仍被
+  饿死 → 锁定 Explore diff 的最后一项：**发送帧乱序**。bot 是单线程 drain
+  队列，帧严格按 client_seq 递增；rust 的「seq 分配 → 加密 → 入发送通道」
+  三步在并发下可交错（通道满载时 `send().await` 必然让出调度），乱序帧或
+  加密序≠seq 序都会被服务端丢弃，反复即触发静默断供——登录爆发期并发最高
+  最易撞出乱序，与「落地即死/越忙越易死」现象吻合。修复：`Inner` 新增
+  `send_order: tokio::sync::Mutex`，`send_rpc` 与 `send_no_reply` 的
+  「seq→加密→入队」全部原子化（等回包在锁外），1:1 复刻 bot 单写者语义。
+  此修复与 TSDK 三项对齐同批生效待验
+- **实机验证结果**（dev 实例 16:15 构建起）：三账号连续在线 27+ 分钟
+  **零心跳告警、零掉线、零被踢**，巡查/偷菜/出售全程正常——今天此前
+  每一轮（13:26 安装版、15:11 dev、15:51 dev+TSDK 对齐）都在 15 分钟内
+  死亡。逐构建对照：15:11（无 TSDK/帧序修复）落地即死；15:51（+TSDK
+  对齐）存活 4.5~15 分钟仍死；16:15（+发送顺序锁）27 分钟+ 零告警。
+  两个修复孰为决定性无法单独隔离（均 1:1 对齐 bot，都应保留）；更长期
+  稳定性（bot 级小时/天）随日常使用继续观察

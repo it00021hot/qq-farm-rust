@@ -891,18 +891,27 @@ impl WorkerLoop {
                 let cv_snapshot = client_version.clone();
                 let stale_ms = hb_timeout.as_millis() as i64;
                 Box::pin(async move {
-                    // 对齐 network.ts：phase !== 'online' || !gid 则跳过
+                    // 对齐 network.ts：phase !== 'online' || !gid 则跳过。
+                    // 心跳任务只在登录成功后注册，此时 phase 应为 Online 且 gid>0；
+                    // 以下跳过若出现即为异常（曾导致"在线但零动作零超时"的僵尸会话
+                    // 无法被发现），必须留告警痕迹
                     if gateway.phase() != crate::network::gateway::ConnectionPhase::Online {
+                        tracing::warn!(
+                            account_id = %acc_id,
+                            phase = ?gateway.phase(),
+                            "心跳跳过：网关不在 Online 阶段"
+                        );
                         return;
                     }
                     let current_gid = *gid_lock.lock();
                     if current_gid == 0 {
+                        tracing::warn!(account_id = %acc_id, "心跳跳过：gid 未设置");
                         return;
                     }
                     if gateway.has_pending_method("Heartbeat") {
-                        tracing::debug!(
+                        tracing::warn!(
                             account_id = %acc_id,
-                            "skip Heartbeat: already in flight"
+                            "心跳跳过：上一拍 Heartbeat 仍在途（其 10s 超时未生效，疑似请求挂死）"
                         );
                         return;
                     }

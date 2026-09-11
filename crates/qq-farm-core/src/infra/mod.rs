@@ -9,6 +9,7 @@ pub mod fs_async;
 pub mod json_db;
 pub mod panel_log;
 pub mod rate_limiter;
+pub mod session_liveness;
 pub mod stats;
 pub mod status;
 
