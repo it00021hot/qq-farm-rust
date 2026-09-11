@@ -15,6 +15,9 @@ use crate::runtime::worker_message::WorkerMessage;
 pub struct WorkerHandle {
     /// 关联账号 ID
     pub account_id: String,
+    /// 世代号（engine 每次 start_worker 递增）。旧 worker 退出时按世代校验，
+    /// 不得摘除已属于新 worker 的注册，否则会 spawn 出同账号双会话互踢。
+    pub generation: u64,
     /// 消息发送端
     pub(crate) msg_tx: mpsc::Sender<WorkerMessage>,
     /// 取消 token（clone 出来多次取消都生效）

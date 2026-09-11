@@ -57,6 +57,12 @@ pub const WX_RECONNECT_RETRY_DELAY_MS: u64 = 10 * 60 * 1000;
 /// 被踢下线（"已在其他终端登录"）后重登等待时间。
 /// 服务端旧 session 释放需要时间，重登过快会连环被踢，因此每次都等满 3 分钟。
 pub const WX_KICKOUT_RECONNECT_DELAY_MS: u64 = 3 * 60 * 1000;
+/// 主动重启 worker（改码/重授权）时，旧连接关闭后到新登录之间的等待。
+/// 与 WX_KICKOUT_RECONNECT_DELAY_MS 同因：服务端旧 session 释放需要时间，
+/// 取消即重登会被判"已在其他终端登录"触发互踢循环（2026-09-11 互搏事故）。
+pub const WX_RESTART_GRACE_MS: u64 = 3_000;
+/// 主动重启/停止时等待旧 worker 任务退出的上限，超时强杀。
+pub const WORKER_STOP_WAIT_MS: u64 = 10_000;
 /// 进程启动后已授权微信账号首次自动重连的等待时间
 pub const WX_STARTUP_RECONNECT_DELAY_MS: u64 = 60 * 1000;
 /// 启动重连时相邻账号之间的随机间隔范围：所有账号同一时刻集中登录本身是风控信号。

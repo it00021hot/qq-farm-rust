@@ -12,8 +12,10 @@ use serde::Serialize;
 pub enum WorkerEvent {
     /// Worker 已启动
     Started { account_id: String, account_name: String },
-    /// Worker 已停止
-    Stopped { account_id: String, reason: String },
+    /// Worker 已停止。
+    /// `generation` 标识退出的是哪一代 worker：事件桥据此刻丢弃已被替换的
+    /// 旧世代事件，避免旧 worker 的退出处理（摘注册/排重连）波及新 worker。
+    Stopped { account_id: String, reason: String, generation: u64 },
     /// Worker 状态更新（轮询周期上报）
     Status {
         account_id: String,

@@ -18,38 +18,41 @@ use super::dto::{
 
 /// 面板风格账号列表（含 `nextId` / running / nick）。
 #[tauri::command]
-pub fn list_accounts_page(state: State<'_, DesktopState>) -> IpcResult<Value> {
+pub async fn list_accounts_page(state: State<'_, DesktopState>) -> IpcResult<Value> {
     let _ = &state.acl;
     Ok(accounts::list_accounts_enriched(&state.app, None))
 }
 
 /// 创建或更新账号。
 #[tauri::command]
-pub fn upsert_account(
+pub async fn upsert_account(
     state: State<'_, DesktopState>,
     req: UpsertAccountRequest,
 ) -> IpcResult<Value> {
-    accounts::upsert_account(&state.app, &state.acl, req).map_err(IpcError::from)
+    let st = state.inner().clone();
+    accounts::upsert_account(&st.app, &st.acl, req).await.map_err(IpcError::from)
 }
 
 /// 删除账号。
 #[tauri::command]
-pub fn delete_account(state: State<'_, DesktopState>, account_id: String) -> IpcResult<()> {
-    accounts::delete_account(&state.app, &state.acl, &account_id).map_err(IpcError::from)
+pub async fn delete_account(state: State<'_, DesktopState>, account_id: String) -> IpcResult<()> {
+    let st = state.inner().clone();
+    accounts::delete_account(&st.app, &st.acl, &account_id).map_err(IpcError::from)
 }
 
 /// 启动账号 worker。
 #[tauri::command]
-pub fn start_account(state: State<'_, DesktopState>, account_id: String) -> IpcResult<Value> {
-    let acc =
-        accounts::start_account(&state.app, &state.acl, &account_id).map_err(IpcError::from)?;
+pub async fn start_account(state: State<'_, DesktopState>, account_id: String) -> IpcResult<Value> {
+    let st = state.inner().clone();
+    let acc = accounts::start_account(&st.app, &st.acl, &account_id).map_err(IpcError::from)?;
     Ok(accounts::account_to_public_json(&acc))
 }
 
 /// 停止账号 worker。
 #[tauri::command]
-pub fn stop_account(state: State<'_, DesktopState>, account_id: String) -> IpcResult<()> {
-    accounts::stop_account(&state.app, &state.acl, &account_id).map_err(IpcError::from)
+pub async fn stop_account(state: State<'_, DesktopState>, account_id: String) -> IpcResult<()> {
+    let st = state.inner().clone();
+    accounts::stop_account(&st.app, &st.acl, &account_id).map_err(IpcError::from)
 }
 
 /// 创建微信扫码登录任务。

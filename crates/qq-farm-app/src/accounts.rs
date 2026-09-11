@@ -191,7 +191,8 @@ fn policy_username_filter(policy: &AclPolicy) -> Option<&str> {
 }
 
 /// 创建或更新账号；新建且有 code 时自动 start。
-pub fn upsert_account(
+/// async：restart_worker 需要等待旧 worker 真正退出（避免互踢），调用方需在 tokio 上下文。
+pub async fn upsert_account(
     ctx: &AppContext,
     policy: &AclPolicy,
     req: UpsertAccountRequest,
@@ -236,11 +237,12 @@ pub fn upsert_account(
         ensure_account_access(policy, &update_id)?;
     }
 
-    let qq_set = req.qq.is_some();
-    let uin_set = req.uin.is_some();
-    let avatar_set = req.avatar.is_some();
     let code_provided = !code.trim().is_empty();
     let mut code_changed = false;
+    let mut platform_changed = false;
+    let mut qq_changed = false;
+    let mut uin_changed = false;
+    let mut avatar_changed = false;
     let mut saved = if is_update {
         let existing = accounts::get_accounts()
             .into_iter()
@@ -249,6 +251,13 @@ pub fn upsert_account(
         if code_provided {
             code_changed = code.trim() != existing.code.trim();
         }
+        // 语义化 diff：与现有记录逐项比对，而不是按"字段是否提供"判断——
+        // 前端修改账号时总是回传 code+platform，按提供与否判断会让纯改名/备注
+        // 也触发 restart，进而与服务端旧 session 互踢（2026-09-11 互搏事故）
+        platform_changed = platform_set && platform.trim() != existing.platform.trim();
+        qq_changed = req.qq.as_deref().is_some_and(|v| v != existing.qq.as_str());
+        uin_changed = req.uin.as_deref().is_some_and(|v| v != existing.uin.as_str());
+        avatar_changed = req.avatar.as_ref().is_some_and(|v| *v != existing.avatar);
         let updated = AccountRecord {
             name: if name.is_empty() { existing.name.clone() } else { name },
             code: if code.is_empty() { existing.code.clone() } else { code },
@@ -297,15 +306,23 @@ pub fn upsert_account(
     accounts::persist_global();
 
     if is_update {
-        let only_remark = !code_provided && !platform_set && !qq_set && !uin_set && !avatar_set;
         let was_running = ctx.engine.has_worker(&saved.id);
+        let credential_changed =
+            code_changed || platform_changed || qq_changed || uin_changed || avatar_changed;
         // Align Go: refreshing login code implies reconnect — start/restart even if previously stopped.
-        let should_restart = remark_relogin || code_changed || (was_running && !only_remark);
+        let should_restart = remark_relogin || code_changed || (was_running && credential_changed);
         if should_restart && (!saved.code.is_empty() || saved.has_wx_auth()) {
             let models_acc = qq_farm_core::models::AccountSession::from_store(&saved);
-            if let Err(e) = ctx.engine.restart_worker(models_acc) {
+            if let Err(e) = ctx.engine.restart_worker(models_acc).await {
                 tracing::warn!(account_id = %saved.id, "更新后重启 worker 失败: {e}");
                 return Err(AppError::Internal(format!("账号已更新，自动启动失败: {e}")));
+            }
+        } else if was_running {
+            // 纯改名/备注不重启：只同步运行态显示名，保持会话不动
+            let rs = ctx.engine.runtime_state();
+            let mut workers = rs.workers.lock();
+            if let Some(w) = workers.get_mut(&saved.id) {
+                w.account_name = saved.name.clone();
             }
         }
         let msg = if remark_relogin || code_changed {

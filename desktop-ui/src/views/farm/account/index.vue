@@ -136,12 +136,26 @@ const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagi
             </NButton>
           }
           {row.runStatus !== 1 && (
-            <NButton type="success" ghost size="small" onClick={() => handleStart(row.id)}>
+            <NButton
+              type="success"
+              ghost
+              size="small"
+              loading={isStarting(row.id)}
+              disabled={isStarting(row.id)}
+              onClick={() => handleStart(row.id)}
+            >
               {$t('page.farm.account.start')}
             </NButton>
           )}
           {row.runStatus === 1 && (
-            <NButton type="warning" ghost size="small" onClick={() => handleStop(row.id)}>
+            <NButton
+              type="warning"
+              ghost
+              size="small"
+              loading={isStopping(row.id)}
+              disabled={isStopping(row.id)}
+              onClick={() => handleStop(row.id)}
+            >
               {$t('page.farm.account.stop')}
             </NButton>
           )}
@@ -177,19 +191,43 @@ function edit(id: number) {
   handleEdit(id);
 }
 
+// 启停防连点：后端有幂等守卫，但连点会排队多次生命周期操作，前端也拦一道
+const startingIds = ref<number[]>([]);
+const stoppingIds = ref<number[]>([]);
+
+function isStarting(id: number) {
+  return startingIds.value.includes(id);
+}
+
+function isStopping(id: number) {
+  return stoppingIds.value.includes(id);
+}
+
 async function handleStart(id: number) {
-  const { error } = await fetchStartFarmAccount(id);
-  if (!error) {
-    window.$message?.success($t('common.updateSuccess'));
-    await getDataByPage();
+  if (isStarting(id)) return;
+  startingIds.value.push(id);
+  try {
+    const { error } = await fetchStartFarmAccount(id);
+    if (!error) {
+      window.$message?.success($t('common.updateSuccess'));
+      await getDataByPage();
+    }
+  } finally {
+    startingIds.value = startingIds.value.filter(v => v !== id);
   }
 }
 
 async function handleStop(id: number) {
-  const { error } = await fetchStopFarmAccount(id);
-  if (!error) {
-    window.$message?.success($t('common.updateSuccess'));
-    await getDataByPage();
+  if (isStopping(id)) return;
+  stoppingIds.value.push(id);
+  try {
+    const { error } = await fetchStopFarmAccount(id);
+    if (!error) {
+      window.$message?.success($t('common.updateSuccess'));
+      await getDataByPage();
+    }
+  } finally {
+    stoppingIds.value = stoppingIds.value.filter(v => v !== id);
   }
 }
 

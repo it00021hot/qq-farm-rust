@@ -64,6 +64,16 @@ pub fn run() {
     let _enter = handle.enter();
 
     let builder = tauri::Builder::default()
+        // 单实例保护必须最先注册：第二个进程只聚焦已有窗口后退出。
+        // 没有它，双击两次 exe = 两个进程各自自动登录全部账号，
+        // 服务端按"已在其他终端登录"互相顶号，形成跨进程互踢循环（2026-09-11 事故）。
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())

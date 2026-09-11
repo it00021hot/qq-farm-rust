@@ -718,7 +718,11 @@ function closeDrawer() {
   visible.value = false;
 }
 
+// 提交防连点：更新会触发后端 worker 重启，连点会排队多次重启导致互踢
+const submitting = ref(false);
+
 async function handleSubmit() {
+  if (submitting.value) return;
   if (activeLoginTab.value === 'wx') {
     window.$message?.info(isAddMode.value ? '请使用微信授权完成添加' : '请使用微信授权完成更新');
     return;
@@ -744,34 +748,39 @@ async function handleSubmit() {
   const codeForApi = looksLikeLoginUrl(rawInput) ? rawInput : parsed.code || rawInput;
   const platform = parsed.platform || model.value.platform || 'qq';
 
-  if (props.operateType === 'add') {
-    const { error } = await fetchAddFarmAccount({
-      code: codeForApi,
-      name: String(model.value.name || '').trim(),
-      platform,
-      remark: model.value.remark
-    });
+  submitting.value = true;
+  try {
+    if (props.operateType === 'add') {
+      const { error } = await fetchAddFarmAccount({
+        code: codeForApi,
+        name: String(model.value.name || '').trim(),
+        platform,
+        remark: model.value.remark
+      });
 
-    if (!error) {
-      window.$message?.success($t('common.addSuccess'));
-      closeDrawer();
-      emit('submitted');
-    }
-  } else {
-    const { error } = await fetchModifyFarmAccount({
-      id: model.value.id!,
-      code: codeForApi,
-      name: String(model.value.name || '').trim(),
-      platform,
-      remark: model.value.remark,
-      status: (Number(model.value.status || 1) === 2 ? 2 : 1) as unknown as Api.Farm.EnableStatus
-    });
+      if (!error) {
+        window.$message?.success($t('common.addSuccess'));
+        closeDrawer();
+        emit('submitted');
+      }
+    } else {
+      const { error } = await fetchModifyFarmAccount({
+        id: model.value.id!,
+        code: codeForApi,
+        name: String(model.value.name || '').trim(),
+        platform,
+        remark: model.value.remark,
+        status: (Number(model.value.status || 1) === 2 ? 2 : 1) as unknown as Api.Farm.EnableStatus
+      });
 
-    if (!error) {
-      window.$message?.success($t('common.updateSuccess'));
-      closeDrawer();
-      emit('submitted');
+      if (!error) {
+        window.$message?.success($t('common.updateSuccess'));
+        closeDrawer();
+        emit('submitted');
+      }
     }
+  } finally {
+    submitting.value = false;
   }
 }
 
@@ -907,7 +916,13 @@ onBeforeUnmount(() => {
       <template #footer>
         <NSpace :size="16">
           <NButton @click="closeDrawer">{{ $t('common.cancel') }}</NButton>
-          <NButton v-if="!isWxTab && !isQqTab" type="primary" @click="handleSubmit">
+          <NButton
+            v-if="!isWxTab && !isQqTab"
+            type="primary"
+            :loading="submitting"
+            :disabled="submitting"
+            @click="handleSubmit"
+          >
             {{ $t('common.confirm') }}
           </NButton>
         </NSpace>

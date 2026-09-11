@@ -39,6 +39,8 @@ pub struct Worker {
     config: WorkerConfig,
     scheduler: Scheduler,
     cancel: CancellationToken,
+    /// 世代号（由 engine 分配，随 WorkerEvent::Stopped 上报用于过期判断）
+    generation: u64,
     msg_tx: mpsc::Sender<WorkerMessage>,
     msg_rx: Option<mpsc::Receiver<WorkerMessage>>,
     event_tx: tokio::sync::broadcast::Sender<WorkerEvent>,
@@ -50,6 +52,7 @@ impl Worker {
         account: AccountSession,
         config: WorkerConfig,
         event_tx: tokio::sync::broadcast::Sender<WorkerEvent>,
+        generation: u64,
     ) -> Self {
         let namespace = format!("worker:{}", account.id);
         let (msg_tx, msg_rx) = mpsc::channel(32);
@@ -58,6 +61,7 @@ impl Worker {
             config,
             scheduler: Scheduler::new(namespace),
             cancel: CancellationToken::new(),
+            generation,
             msg_tx,
             msg_rx: Some(msg_rx),
             event_tx,
@@ -68,6 +72,7 @@ impl Worker {
     pub fn handle(&self) -> WorkerHandle {
         WorkerHandle {
             account_id: self.account.id.clone(),
+            generation: self.generation,
             msg_tx: self.msg_tx.clone(),
             cancel: self.cancel.clone(),
         }
@@ -83,14 +88,17 @@ impl Worker {
     /// 如果传了 `engine`，会在 spawn 完成后构造 WorkerLoop 并注册到 engine，
     /// controller 就能通过 `engine.worker_loop(account_id)` 拿到实例。
     /// 退出时自动 `unregister_worker_loop`。
+    ///
+    /// 返回控制句柄和任务 JoinHandle（engine 用它在重启时等待旧任务真正退出）。
     pub fn spawn_with_engine(
         mut self,
         engine: Option<Arc<crate::runtime::engine::RuntimeEngine>>,
-    ) -> WorkerHandle {
+    ) -> (WorkerHandle, tokio::task::JoinHandle<()>) {
         let handle = self.handle();
         let event_tx = self.event_tx.clone();
         let account_id = self.account.id.clone();
         let account_name = self.account.display_name.clone();
+        let generation = self.generation;
         let cancel = self.cancel.clone();
         let config = self.config.clone();
         let scheduler = self.scheduler.clone();
@@ -102,8 +110,9 @@ impl Worker {
         let panic_account_name = account_name.clone();
         let panic_event_tx = event_tx.clone();
         let panic_engine = engine.clone();
+        let panic_generation = generation;
 
-        crate::runtime::safe_spawn::spawn_logged_with_account(
+        let join = crate::runtime::safe_spawn::spawn_logged_with_account(
             "worker",
             panic_account_id.clone(),
             async move {
@@ -126,15 +135,34 @@ impl Worker {
                 let data_dir_s = tsdk_data_dir.to_string_lossy().to_string();
                 // TSDK 宿主按账号平台初始化（QQ 账号走 QQ 宿主，对齐 bot b0a4405）
                 let tsdk_platform = config.gateway.platform.clone();
-                let tsdk = match tokio::task::spawn_blocking(move || {
+                let tsdk_load = tokio::task::spawn_blocking(move || {
                     crate::crypto::tsdk::TsdkRuntime::load_for_platform(
                         &wasm_path,
                         data_dir_s,
                         &tsdk_platform,
                     )
-                })
-                .await
-                {
+                });
+                let tsdk_result = match or_cancel(&cancel, tsdk_load).await {
+                    Some(r) => r,
+                    None => {
+                        tracing::info!(
+                            account_id = %account_id,
+                            generation,
+                            "启动过程中被取消（TSDK 加载阶段），放弃登录"
+                        );
+                        crate::services::panel_log::unregister(&account_id);
+                        if let Some(eng) = &engine {
+                            eng.release_worker_gen(&account_id, generation);
+                        }
+                        let _ = event_tx.send(WorkerEvent::Stopped {
+                            account_id: account_id.clone(),
+                            reason: "主动取消".to_string(),
+                            generation,
+                        });
+                        return;
+                    }
+                };
+                let tsdk = match tsdk_result {
                     Ok(Ok(rt)) => Arc::new(rt),
                     Ok(Err(e)) => {
                         tracing::error!(account_id = %account_id, "TSDK 加载失败: {e}");
@@ -146,10 +174,11 @@ impl Worker {
                             &format!("TSDK 加载失败: {e}"),
                             "tsdk_load",
                             false,
+                            generation,
                         );
                         crate::services::panel_log::unregister(&account_id);
                         if let Some(eng) = &engine {
-                            eng.release_worker(&account_id);
+                            eng.release_worker_gen(&account_id, generation);
                         }
                         return;
                     }
@@ -163,10 +192,11 @@ impl Worker {
                             &format!("TSDK 加载失败: {e}"),
                             "tsdk_load",
                             false,
+                            generation,
                         );
                         crate::services::panel_log::unregister(&account_id);
                         if let Some(eng) = &engine {
-                            eng.release_worker(&account_id);
+                            eng.release_worker_gen(&account_id, generation);
                         }
                         return;
                     }
@@ -177,7 +207,27 @@ impl Worker {
                 let mut config = config;
                 if account.has_wx_auth() {
                     emit_login_log(&account_id, "正在用应用宝授权换取新的登录码", false);
-                    match prepare_wx_gateway_code(&account).await {
+                    let minted = match or_cancel(&cancel, prepare_wx_gateway_code(&account)).await {
+                        Some(r) => r,
+                        None => {
+                            tracing::info!(
+                                account_id = %account_id,
+                                generation,
+                                "启动过程中被取消（换码阶段），放弃登录"
+                            );
+                            crate::services::panel_log::unregister(&account_id);
+                            if let Some(eng) = &engine {
+                                eng.release_worker_gen(&account_id, generation);
+                            }
+                            let _ = event_tx.send(WorkerEvent::Stopped {
+                                account_id: account_id.clone(),
+                                reason: "主动取消".to_string(),
+                                generation,
+                            });
+                            return;
+                        }
+                    };
+                    match minted {
                         Ok((code, creds)) => {
                             persist_wx_gateway_credentials(&account_id, &code, &creds);
                             config.gateway.auth_code = code;
@@ -202,6 +252,7 @@ impl Worker {
                                 &account_name,
                                 &format!("应用宝授权已失效，请重新扫码: {e}"),
                                 source,
+                                generation,
                             );
                             if dead {
                                 if let Some(eng) = &engine {
@@ -210,7 +261,7 @@ impl Worker {
                             }
                             crate::services::panel_log::unregister(&account_id);
                             if let Some(eng) = &engine {
-                                eng.release_worker(&account_id);
+                                eng.release_worker_gen(&account_id, generation);
                             }
                             return;
                         }
@@ -304,7 +355,26 @@ impl Worker {
                     });
 
                     // === 1. WS 连接 + 登录；失败即退出（对齐 handleTerminalDisconnect） ===
-                    if let Err(e) = gateway.connect().await {
+                    let connected = match or_cancel(&cancel, gateway.connect()).await {
+                        Some(r) => r,
+                        None => {
+                            tracing::info!(
+                                account_id = %account_id,
+                                generation,
+                                "启动过程中被取消（连接网关阶段），放弃登录"
+                            );
+                            gateway.force_disconnect();
+                            crate::services::panel_log::unregister(&account_id);
+                            eng.release_worker_gen(&account_id, generation);
+                            let _ = event_tx.send(WorkerEvent::Stopped {
+                                account_id: account_id.clone(),
+                                reason: "主动取消".to_string(),
+                                generation,
+                            });
+                            return;
+                        }
+                    };
+                    if let Err(e) = connected {
                         tracing::warn!(account_id = %account_id, "WS 连接失败: {e}");
                         let err_s = format!("WS 连接失败: {e}");
                         if parse_ws_http_code(&err_s) == Some(400) {
@@ -320,10 +390,11 @@ impl Worker {
                             &err_s,
                             "ws_connect",
                             has_wx_auth,
+                            generation,
                         );
                         gateway.force_disconnect();
                         crate::services::panel_log::unregister(&account_id);
-                        eng.release_worker(&account_id);
+                        eng.release_worker_gen(&account_id, generation);
                         return;
                     }
                     emit_login_log(&account_id, "网关已连接，正在登录", false);
@@ -337,6 +408,7 @@ impl Worker {
                         let acc_id = account_id.clone();
                         let acc_name = account_name.clone();
                         let kick_wx_auth = has_wx_auth;
+                        let kick_generation = generation;
                         tokio::spawn(async move {
                             while let Some(ev) = notify_rx.recv().await {
                                 match ev {
@@ -363,6 +435,7 @@ impl Worker {
                                         &why,
                                         "kickout",
                                         kick_wx_auth,
+                                        kick_generation,
                                     );
                                     gw.force_disconnect_with_reason("kickout");
                                     break;
@@ -479,7 +552,29 @@ impl Worker {
                         ..Default::default()
                     };
 
-                    match gateway.login(&device_info, &report_data, &tsdk).await {
+                    let login_result =
+                        match or_cancel(&cancel, gateway.login(&device_info, &report_data, &tsdk))
+                            .await
+                        {
+                            Some(r) => r,
+                            None => {
+                                tracing::info!(
+                                    account_id = %account_id,
+                                    generation,
+                                    "启动过程中被取消（登录阶段），放弃登录并断开连接"
+                                );
+                                gateway.force_disconnect();
+                                crate::services::panel_log::unregister(&account_id);
+                                eng.release_worker_gen(&account_id, generation);
+                                let _ = event_tx.send(WorkerEvent::Stopped {
+                                    account_id: account_id.clone(),
+                                    reason: "主动取消".to_string(),
+                                    generation,
+                                });
+                                return;
+                            }
+                        };
+                    match login_result {
                         Ok(reply) => {
                             let login_msg = if let Some(basic) = &reply.basic {
                                 let nick = if basic.name.is_empty() {
@@ -672,10 +767,11 @@ impl Worker {
                                 &format!("登录失败: {e}"),
                                 "login",
                                 has_wx_auth,
+                                generation,
                             );
                             gateway.force_disconnect();
                             crate::services::panel_log::unregister(&account_id);
-                            eng.release_worker(&account_id);
+                            eng.release_worker_gen(&account_id, generation);
                             return;
                         }
                     }
@@ -695,15 +791,20 @@ impl Worker {
 
                 crate::services::panel_log::unregister(&account_id);
                 if let Some(eng) = &engine {
-                    eng.release_worker(&account_id);
+                    eng.release_worker_gen(&account_id, generation);
                 }
 
-                let _ = event_tx.send(WorkerEvent::Stopped { account_id, reason: exit.reason });
+                let _ = event_tx.send(WorkerEvent::Stopped {
+                    account_id,
+                    reason: exit.reason,
+                    generation,
+                });
             },
             move |account_id, msg| {
                 let _ = panic_event_tx.send(WorkerEvent::Stopped {
                     account_id: account_id.to_string(),
                     reason: format!("worker panicked: {msg}"),
+                    generation: panic_generation,
                 });
                 let _ = panic_event_tx.send(WorkerEvent::Log {
                     account_id: account_id.to_string(),
@@ -714,16 +815,16 @@ impl Worker {
                 });
                 crate::services::panel_log::unregister(account_id);
                 if let Some(eng) = &panic_engine {
-                    eng.release_worker(account_id);
+                    eng.release_worker_gen(account_id, panic_generation);
                 }
             },
         );
 
-        handle
+        (handle, join)
     }
 
     /// 启动 worker（不注册到 engine）
-    pub fn spawn(self) -> WorkerHandle {
+    pub fn spawn(self) -> (WorkerHandle, tokio::task::JoinHandle<()>) {
         self.spawn_with_engine(None)
     }
 }
@@ -893,11 +994,13 @@ fn emit_terminal_stop(
     _detail: &str,
     source: &str,
     has_wx_auth: bool,
+    generation: u64,
 ) {
     emit_disconnect_log(event_tx, account_id, account_name, source, has_wx_auth);
     let _ = event_tx.send(WorkerEvent::Stopped {
         account_id: account_id.to_string(),
         reason: format!("disconnect:{source}"),
+        generation,
     });
 }
 
@@ -907,6 +1010,7 @@ fn emit_wx_failure_stop(
     account_name: &str,
     message: &str,
     source: &str,
+    generation: u64,
 ) {
     let _ = event_tx.send(WorkerEvent::Log {
         account_id: account_id.to_string(),
@@ -918,7 +1022,22 @@ fn emit_wx_failure_stop(
     let _ = event_tx.send(WorkerEvent::Stopped {
         account_id: account_id.to_string(),
         reason: format!("disconnect:{source}"),
+        generation,
     });
+}
+
+/// 启动前奏（TSDK/换码/连接/登录）的取消检查点：被取消时返回 `None`。
+/// 前奏阶段不像 run_worker_loop 有 select 兜底，不检查就会"已停仍登录"，
+/// 与新 worker 互踢（2026-09-11 互搏事故根因之一）。
+async fn or_cancel<T>(
+    cancel: &CancellationToken,
+    fut: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => None,
+        v = fut => Some(v),
+    }
 }
 
 async fn prepare_wx_gateway_code(

@@ -104,6 +104,13 @@ pub struct RuntimeEngine {
     workers: Arc<RwLock<HashMap<String, WorkerHandle>>>,
     /// WorkerLoop 注册表（controller 用）
     worker_loops: Arc<RwLock<HashMap<String, Arc<crate::runtime::worker_loop::WorkerLoop>>>>,
+    /// worker 任务句柄（account_id -> (世代号, JoinHandle)），重启时等待旧任务真正退出用
+    worker_tasks: Arc<RwLock<HashMap<String, (u64, tokio::task::JoinHandle<()>)>>>,
+    /// 每账号生命周期锁：串行化 start/stop/restart/重连触发，防止并发生命周期操作
+    /// 产生同账号双会话互踢（tokio::sync::Mutex 不可重入，只在这些入口最外层获取）
+    lifecycle_locks: RwLock<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// 全局世代计数器：每次 start_worker 递增，用于识别过期 worker 的退出事件
+    generation: std::sync::atomic::AtomicU64,
     events: broadcast::Sender<WorkerEvent>,
     /// Runtime 状态（log / account_log / configRevision / 事件总线）
     runtime_state: Arc<RuntimeState>,
@@ -117,6 +124,8 @@ pub struct RuntimeEngine {
 struct WxReconnectState {
     attempts: HashMap<String, u32>,
     inflight: HashSet<String>,
+    /// 沉睡中的重连任务句柄（任务触发时自摘；手动启停时 abort，杜绝幽灵重连）
+    tasks: HashMap<String, tokio::task::AbortHandle>,
 }
 
 impl std::fmt::Debug for RuntimeEngine {
@@ -170,6 +179,9 @@ impl RuntimeEngine {
             config,
             workers,
             worker_loops,
+            worker_tasks: Arc::new(RwLock::new(HashMap::new())),
+            lifecycle_locks: RwLock::new(HashMap::new()),
+            generation: std::sync::atomic::AtomicU64::new(1),
             events,
             runtime_state,
             relogin_reminder,
@@ -271,12 +283,66 @@ impl RuntimeEngine {
         self.workers.read().get(account_id).is_some_and(|h| !h.is_cancelled())
     }
 
-    /// worker 任务已退出时摘掉注册，不 cancel（供 spawn 内部调用）
-    pub fn release_worker(&self, account_id: &str) {
+    /// 退出的 worker 是否已过期（注册表里已是更新的世代）。
+    /// 旧 worker 的退出处理（摘注册/排重连）不得波及新 worker。
+    #[must_use]
+    fn is_stale_generation(&self, account_id: &str, generation: u64) -> bool {
+        self.workers.read().get(account_id).is_some_and(|h| h.generation != generation)
+    }
+
+    /// worker 任务退出时摘掉注册（按世代校验）：只摘自己这一代。
+    /// 修复：旧实现按 account_id 无条件摘除，restart 后旧 worker 迟到的退出会把
+    /// 新 worker 的注册一并抹掉，导致 has_worker/启动守卫全部失明，spawn 出双会话互踢。
+    pub fn release_worker_gen(&self, account_id: &str, generation: u64) {
+        let stale = self.is_stale_generation(account_id, generation);
+        if stale {
+            tracing::debug!(
+                account_id,
+                generation,
+                "忽略过期世代 worker 的退出清理（已有新 worker 接管）"
+            );
+            return;
+        }
         self.workers.write().remove(account_id);
         self.worker_loops.write().remove(account_id);
+        let mut tasks = self.worker_tasks.write();
+        if tasks.get(account_id).is_some_and(|(g, _)| *g == generation) {
+            tasks.remove(account_id);
+        }
         if let Some(w) = self.runtime_state.workers.lock().get_mut(account_id) {
             w.stopping = true;
+        }
+    }
+
+    /// 取（或创建）某账号的生命周期锁
+    fn lifecycle_lock(&self, account_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        if let Some(l) = self.lifecycle_locks.read().get(account_id) {
+            return l.clone();
+        }
+        let l = Arc::new(tokio::sync::Mutex::new(()));
+        self.lifecycle_locks.write().insert(account_id.to_string(), l.clone());
+        l
+    }
+
+    /// 等待某世代的 worker 任务退出（超时则强杀）。
+    /// 必须持有该账号的 lifecycle 锁后调用。
+    async fn wait_worker_exit(&self, account_id: &str, generation: u64, timeout: Duration) {
+        let entry = self.worker_tasks.write().remove(account_id);
+        let Some((gen, mut join)) = entry else {
+            return;
+        };
+        if gen != generation {
+            // 已是别的世代（被替换），不动它
+            self.worker_tasks.write().insert(account_id.to_string(), (gen, join));
+            return;
+        }
+        match tokio::time::timeout(timeout, &mut join).await {
+            Ok(_) => {}
+            Err(_) => {
+                tracing::warn!(account_id, generation, "等待旧 worker 退出超时，强制中止任务");
+                join.abort();
+                let _ = (&mut join).await;
+            }
         }
     }
 
@@ -539,7 +605,19 @@ impl RuntimeEngine {
                             AccountNoticeKind::Online,
                         );
                     }
-                    WorkerEvent::Stopped { account_id, reason } => {
+                    WorkerEvent::Stopped { account_id, reason, generation } => {
+                        // 过期世代：这个 worker 已被 restart/start 替换，它的退出
+                        // 不得摘掉新 worker 的注册、也不得为它排重连（否则幽灵重连
+                        // 再开一个会话与新 worker 互踢）
+                        if engine.is_stale_generation(&account_id, generation) {
+                            tracing::debug!(
+                                account_id = %account_id,
+                                generation,
+                                reason = %reason,
+                                "忽略过期世代 worker 的 Stopped 事件（新 worker 已接管）"
+                            );
+                            continue;
+                        }
                         let (name, already) = {
                             let mut workers = state.workers.lock();
                             match workers.get_mut(&account_id) {
@@ -755,30 +833,43 @@ impl RuntimeEngine {
                             }
                         }
                         state.workers.lock().remove(&account_id);
-                        engine.release_worker(&account_id);
+                        engine.release_worker_gen(&account_id, generation);
                         if let Some(attempt) = schedule_wx_reconnect {
                             let engine2 = engine.clone();
                             let reconnect_id = account_id.clone();
                             let kicked_delay = kicked;
-                            crate::runtime::safe_spawn::spawn_logged("wx_reconnect", async move {
-                                let delay = if kicked_delay {
-                                    crate::constants::wx_kickout_reconnect_delay_ms()
-                                } else {
-                                    crate::constants::wx_reconnect_delay_ms(attempt)
-                                };
-                                tokio::time::sleep(Duration::from_millis(delay)).await;
-                                engine2.wx_reconnect.write().inflight.remove(&reconnect_id);
-                                let Some(latest) = accounts_store::get_accounts()
-                                    .into_iter()
-                                    .find(|a| a.id == reconnect_id)
-                                else {
-                                    return;
-                                };
-                                if !latest.has_wx_auth() {
-                                    return;
-                                }
-                                engine2.start_wx_authorized_account(&latest, attempt);
-                            });
+                            let engine_for_task = engine2.clone();
+                            let reconnect_abort = crate::runtime::safe_spawn::spawn_logged(
+                                "wx_reconnect",
+                                async move {
+                                    let delay = if kicked_delay {
+                                        crate::constants::wx_kickout_reconnect_delay_ms()
+                                    } else {
+                                        crate::constants::wx_reconnect_delay_ms(attempt)
+                                    };
+                                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                                    engine_for_task.mark_wx_reconnect_fired(&reconnect_id);
+                                    let Some(latest) = accounts_store::get_accounts()
+                                        .into_iter()
+                                        .find(|a| a.id == reconnect_id)
+                                    else {
+                                        return;
+                                    };
+                                    if !latest.has_wx_auth() {
+                                        return;
+                                    }
+                                    // 与手动 start/restart 串行化，避免撞出同账号双会话
+                                    let lock = engine_for_task.lifecycle_lock(&reconnect_id);
+                                    let _guard = lock.lock().await;
+                                    engine_for_task.start_wx_authorized_account(&latest, attempt);
+                                },
+                            )
+                            .abort_handle();
+                            engine2
+                                .wx_reconnect
+                                .write()
+                                .tasks
+                                .insert(account_id.clone(), reconnect_abort);
                         }
                         let panel = engine.panel_status(&account_id);
                         let _ = state.events.send(RuntimeEvent::Status {
@@ -837,9 +928,12 @@ impl RuntimeEngine {
             data_dir: self.config.data_root.clone(),
         };
 
-        let worker = Worker::new(account.clone(), worker_config, self.events.clone());
+        let generation = self.generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let worker = Worker::new(account.clone(), worker_config, self.events.clone(), generation);
         let handle = worker.handle();
         self.workers.write().insert(handle.account_id.clone(), handle);
+        // 新 worker 已接管：作废该账号还挂在路上的重连任务，防止迟到重连再开一个会话
+        self.clear_wx_reconnect(&account.id);
 
         // 同步 worker 状态到 runtime_state
         {
@@ -858,7 +952,8 @@ impl RuntimeEngine {
                 },
             );
         }
-        worker.spawn_with_engine(Some(self.clone()));
+        let (_, join) = worker.spawn_with_engine(Some(self.clone()));
+        self.worker_tasks.write().insert(account.id.clone(), (generation, join));
         let start_extra = Some(serde_json::json!({
             "accountId": account.id,
             "accountName": account.display_name,
@@ -923,6 +1018,17 @@ impl RuntimeEngine {
         let mut g = self.wx_reconnect.write();
         g.attempts.remove(account_id);
         g.inflight.remove(account_id);
+        // 连同沉睡中的重连任务一起作废（任务触发时会自摘句柄，这里只杀还没醒的）
+        if let Some(t) = g.tasks.remove(account_id) {
+            t.abort();
+        }
+    }
+
+    /// 重连任务触发时自摘 inflight/tasks 记录（独立 fn，保证锁守卫不跨 await）
+    fn mark_wx_reconnect_fired(&self, account_id: &str) {
+        let mut g = self.wx_reconnect.write();
+        g.inflight.remove(account_id);
+        g.tasks.remove(account_id);
     }
 
     fn plan_wx_reconnect(&self, account_id: &str) -> WxReconnectPlan {
@@ -957,12 +1063,42 @@ impl RuntimeEngine {
                 w.stopping = true;
             }
         }
+        // 主动停止必须连同未触发的自动重连一起作废，否则几分钟后幽灵重连
+        // 会带着同一份凭证再登一次，把用户意图顶翻（也会顶掉在线的新会话）
+        self.clear_wx_reconnect(account_id);
     }
 
-    /// 重启一个 worker
-    pub fn restart_worker(self: &Arc<Self>, account: AccountSession) -> Result<()> {
+    /// 重启一个 worker：等待旧任务真正退出 + 留给服务端释放旧 session 的宽限，
+    /// 再启动新 worker。旧实现"取消即启动"，新旧两个登录撞在服务端互相顶号，
+    /// 是改名/换码后"已在其他终端登录"互踢循环的直接根因。
+    pub async fn restart_worker(self: &Arc<Self>, account: AccountSession) -> Result<()> {
+        let lock = self.lifecycle_lock(&account.id);
+        let _guard = lock.lock().await;
+        let old_generation = self.workers.read().get(&account.id).map(|h| h.generation);
         self.stop_worker(&account.id);
+        if let Some(gen) = old_generation {
+            self.wait_worker_exit(
+                &account.id,
+                gen,
+                Duration::from_millis(crate::constants::WORKER_STOP_WAIT_MS),
+            )
+            .await;
+        }
+        // 服务端旧 session 释放需要时间（同 WX_KICKOUT_RECONNECT_DELAY_MS 的教训），
+        // 立刻重登会被判"已在其他终端登录"
+        tokio::time::sleep(Duration::from_millis(crate::constants::WX_RESTART_GRACE_MS)).await;
         self.start_worker(account)
+    }
+
+    /// 同步上下文用的 restart_worker：把异步重启派发到后台执行。
+    /// 调用方拿不到完成信号，仅用于 relogin 提醒等"尽力而为"的路径。
+    pub fn restart_worker_bg(self: &Arc<Self>, account: AccountSession) {
+        let engine = self.clone();
+        crate::runtime::safe_spawn::spawn_logged("wx_restart", async move {
+            if let Err(e) = engine.restart_worker(account.clone()).await {
+                tracing::warn!(account_id = %account.id, "restart_worker failed: {e}");
+            }
+        });
     }
 
     /// 启动所有账号（原 TS `startAllAccounts`）
@@ -1035,6 +1171,9 @@ impl RuntimeEngine {
                     tokio::time::sleep(Duration::from_millis(stagger)).await;
                 }
                 first = false;
+                // 与手动 start/restart/重连串行化，避免同账号并发拉起两个会话
+                let lock = engine.lifecycle_lock(&latest.id);
+                let _guard = lock.lock().await;
                 engine.start_wx_authorized_account(&latest, 0);
             }
         });
@@ -1321,12 +1460,8 @@ impl WorkerControls for EngineWorkerControls {
         &self,
         account: &crate::models::store::accounts::AccountRecord,
     ) -> Option<()> {
-        let id = account.id.clone();
-        let a = AccountSession::from_store(account);
-        if let Err(e) = self.engine.restart_worker(a) {
-            tracing::warn!(account_id = %id, "restart_worker failed: {e}");
-            return None;
-        }
+        // 异步重启（等待旧任务退出+宽限）在后台执行；同步 trait 拿不到完成信号
+        self.engine.restart_worker_bg(AccountSession::from_store(account));
         Some(())
     }
 }

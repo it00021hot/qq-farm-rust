@@ -955,6 +955,7 @@
   不受影响，因此线上一直正常）。修复：`resolveCatalogImage` Windows 分支统一改用
   WebView2 映射形式 `http://farmcfg.localhost/<rel>`（后端 assets.rs 本就支持该
   host 形式并有单测），macOS 保持 `farmcfg://localhost/`。dev 实机验证图片恢复。
+
 ### 2026-09-11 — 热修：普通+有机模式下有机肥永远 0（实机发现；proto 保持 bot 镜像不动）
 
 - **现象**（安装版日志实证）：账号选「普通+有机」后每轮只施 1 块地（普通肥
@@ -988,3 +989,41 @@
 - 能力状态：施肥矩阵行维持「齐」；**实机待验**：both 模式种植后有机肥应出现
   「有机化肥循环施肥完成，共施 X 次」且 X>0，多季补肥同理
 
+### 2026-09-11 — 热修：登录互搏/请求超时集体掉线（安装版日志实证，七项根因）
+
+- **现象**（`AppData\Local\QQFarmRust\logs` 实证）：改名/备注/编辑扫码后同账号
+  「已在其他终端登录」互踢；手动登录后点任意菜单请求超时、随后心跳超时掉线；
+  09-11 10:17–10:29 三账号集体入站冻结掉线，10:33:39/10:34:06 应用被启动两次
+  （两条「发现 N 个已授权微信账号」setup 日志），第二实例错峰重登全部账号
+  形成跨进程互踢；09-10 全天为同一循环
+- **根因**（全部读码核实）：
+  1. 无单实例保护，双击两次 exe = 两进程各自自动登录全部账号互相顶号
+  2. `upsert_account` 按"字段是否提供"判断重启，而前端修改时总是回传
+     code+platform → 纯改名/备注也触发 `restart_worker`
+  3. `restart_worker` 取消即启动：旧 WS 未关就换码重登，被服务端判互踢
+     （timing.rs 对被踢重登等 3 分钟的注释早有此教训，restart 无视了它）
+  4. worker 启动前奏（TSDK/换码/连接/登录）不检查取消令牌，已停 worker
+     继续登录并踢掉新 worker
+  5. 注册表按 account_id 无条件摘除：restart 后旧 worker 迟到的退出把新
+     worker 注册一并抹掉，has_worker/启动守卫全盲 → 可再 spawn 第二会话
+  6. 重连是 detached sleep 任务不可撤销，手动启停后幽灵重连仍按时拉起第二登录
+  7. 生命周期 IPC 全是同步命令跑在主线程（日志 `main` 线程「启动 worker」）
+- **修复**：desktop 注册 `tauri-plugin-single-instance`（第二实例仅聚焦窗口）；
+  `upsert_account` 改语义化 diff（仅 code/platform/qq/uin/avatar 实际变化才
+  重启，纯改名只同步运行态显示名）；`restart_worker` 改 async——per-account
+  lifecycle 锁串行化 + 等待旧任务退出（10s 上限强杀）+ `WX_RESTART_GRACE_MS`
+  宽限后启动；前奏四段 await 全部加取消检查点（`or_cancel`）；WorkerHandle/
+  Stopped 事件携带 generation，`release_worker_gen` 与事件桥按世代丢弃过期
+  退出（新 worker 注册不再被抹）；重连任务保留 AbortHandle，stop/start/restart
+  时 abort，触发时自摘句柄并取 lifecycle 锁；`start/stop/upsert/delete_account`
+  IPC 改 async（off 主线程）；前端启动/停止/提交按钮防连点
+- 明确不改：被踢 3 分钟/心跳超时 15 分钟重连节奏、`remark_relogin` 语义、
+  扫码编辑后前端兜底 `start_account`（现幂等）
+- 验证：`RUSTFLAGS="-D warnings" cargo check --workspace --all-targets` 0 错
+  0 警；`cargo test --workspace` 全过（core 977 项）；`cargo fmt --all --check`
+  通过；`corepack pnpm typecheck`+`build` 通过
+- **实机待验**（新构建替换安装版后）：任务管理器仅一个 qq-farm-desktop.exe；
+  在线账号改名/备注 → 日志无「启动 worker」且不掉线；编辑扫码 → 单次重启
+  无互踢；手动登录后各菜单请求正常；双击 exe 两次第二实例仅聚焦窗口。
+  另：如再出现无进程内第二登录的「已在其他终端登录」，需查手机端/其他终端
+  （游戏本体顶号机制，非本程序问题）
