@@ -90,6 +90,12 @@ git push origin v0.2.0
 cargo test --workspace
 ```
 
+## 开发规范
+
+本仓库的开发宪法位于 [.agents/skills/qq-farm-rust-dev/SKILL.md](.agents/skills/qq-farm-rust-dev/SKILL.md)：
+架构分层、从 qq-farm-bot 同步功能的标准化流程、验证门槛、历史踩坑红线（bot 镜像文件禁改、图片 farmcfg 协议、IPC ACL 注册等）。
+在本仓库内开发、修 bug、移植 bot 功能前必读；配套踩坑全录见同目录 `references/pitfalls.md`，移植流程明细见 `references/bot-sync-playbook.md`。
+
 ## 许可
 
 仅供学习使用。
