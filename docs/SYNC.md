@@ -1276,3 +1276,20 @@
   手动查询一条调用链
 - 实机待验：大号打开萌宠页好友夺宝下拉不再触发超时/掉线；选好友→查询
   →开战全流程可用
+
+### 2026-09-11 — Mac 拆架构后「检查更新」失败
+
+- **现象**：v0.3.5 `latest.json` 只有 `windows-x86_64`，Intel/Apple Silicon
+  客户端查不到 `darwin-*` 平台，检查更新报错
+- **根因**：
+  1. `bundle.targets` 只有 `nsis`/`dmg`。DMG 不是 updater 目标，Mac job
+     打不出 `.app.tar.gz` + `.sig`（CI 日志：`no updater-enabled targets`）
+  2. 三个矩阵 job 都开 `uploadUpdaterJson`（`includeUpdaterJson` 已更名，
+     旧输入无效，默认仍为 true）。并行写同一份 `latest.json`，最后写的
+     Windows 覆盖掉可能存在的 darwin 键
+- **修**：targets 加上 `app`；各 job `uploadUpdaterJson: false`；publish
+  全部结束后由 `scripts/build-updater-manifest.py` 读三端 `.sig` 写一份
+  清单，缺任一平台直接失败；`SHA256SUMS` 等这份 JSON 上传后再算
+- 验证：`python3 scripts/build-updater-manifest.py --self-test` 通过
+- **现网 v0.3.5 无法热补**（Release 上没有 Mac `.app.tar.gz.sig`），需再打
+  一个 tag 才会恢复 Mac 检查更新

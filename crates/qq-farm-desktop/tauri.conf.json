@@ -47,6 +47,7 @@
     "createUpdaterArtifacts": true,
     "targets": [
       "nsis",
+      "app",
       "dmg"
     ],
     "icon": [

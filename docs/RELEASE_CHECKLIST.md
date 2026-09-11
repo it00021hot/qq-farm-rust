@@ -18,7 +18,8 @@ GitHub repo **Settings → Secrets and variables → Actions**：
   - Windows NSIS installer (`.exe`)
   - macOS Apple Silicon `.dmg` (`*_aarch64.dmg`)
   - macOS Intel `.dmg` (`*_x64.dmg`)
-  - updater artifacts (`.sig` / `.app.tar.gz` / nsis zip) and `latest.json`（含 `darwin-aarch64` / `darwin-x86_64` / `windows-x86_64`）
+  - updater artifacts（Mac `.app.tar.gz` + `.sig`，Windows `.exe` + `.sig`；仅有 DMG 不能给「检查更新」用）
+  - `latest.json`（必须同时含 `darwin-aarch64` / `darwin-x86_64` / `windows-x86_64`，由 `updater-manifest` job 写一次）
   - `SHA256SUMS`
 - [ ] `assets/tsdk.wasm` was present in the checkout (workflow fails otherwise)
 

@@ -136,7 +136,7 @@ jobs:
           releaseBody: See the assets to download and install this version.
           releaseDraft: false
           prerelease: false
-          includeUpdaterJson: true
+          uploadUpdaterJson: false
           retryAttempts: 3
 
       - name: Build and upload (password-protected key)
@@ -155,12 +155,35 @@ jobs:
           releaseBody: See the assets to download and install this version.
           releaseDraft: false
           prerelease: false
-          includeUpdaterJson: true
+          uploadUpdaterJson: false
           retryAttempts: 3
+
+  updater-manifest:
+    name: latest.json
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Resolve version
+        id: ver
+        run: |
+          REF="${{ github.event.inputs.tag || github.ref_name }}"
+          VER="${REF#v}"
+          echo "tag=v${VER}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and upload latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/build-updater-manifest.py --self-test
+          python3 scripts/build-updater-manifest.py "${{ steps.ver.outputs.tag }}"
+          gh release upload "${{ steps.ver.outputs.tag }}" latest.json --repo "${{ github.repository }}" --clobber
 
   checksums:
     name: SHA256SUMS
-    needs: publish
+    needs: updater-manifest
     runs-on: ubuntu-latest
     steps:
       - name: Resolve version
