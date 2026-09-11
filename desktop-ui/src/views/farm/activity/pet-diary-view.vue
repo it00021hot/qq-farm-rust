@@ -8,7 +8,6 @@ import {
   NInputNumber,
   NModal,
   NProgress,
-  NSpace,
   NSpin,
   NSwitch,
   NTabPane,
@@ -254,13 +253,9 @@ const growthPercent = computed(() => {
   return Math.min(100, Math.round(((nurture.growth || 0) / nurture.adultGrowth) * 100));
 });
 
-const claimableTreasure = computed(
-  () => snapshot.value?.treasures?.some(t => t.status === 3) ?? false
-);
+const claimableTreasure = computed(() => snapshot.value?.treasures?.some(t => t.status === 3) ?? false);
 
-const solarClaimable = computed(
-  () => snapshot.value?.solarTerms?.terms?.filter(t => t.canClaim) ?? []
-);
+const solarClaimable = computed(() => snapshot.value?.solarTerms?.terms?.filter(t => t.canClaim) ?? []);
 
 async function loadSnapshot(showLoading = true) {
   const accountId = farmAccountStore.currentAccountId;
@@ -384,11 +379,7 @@ async function exchange() {
     message.warning('请输入商品编号');
     return;
   }
-  await operate(
-    'exchange',
-    { goodsId: exchangeGoodsId.value.trim(), count: exchangeCount.value || 1 },
-    '兑换成功'
-  );
+  await operate('exchange', { goodsId: exchangeGoodsId.value.trim(), count: exchangeCount.value || 1 }, '兑换成功');
 }
 
 async function loadLogs() {
@@ -458,7 +449,12 @@ onMounted(() => {
             <NCollapseItem title="萌宠养成" name="nurture">
               <div class="flex flex-col gap-10px">
                 <template v-if="!snapshot.nurture?.initialized">
-                  <NButton type="primary" size="small" :loading="pending === 'initialize'" @click="operate('initialize', {}, '领养成功')">
+                  <NButton
+                    type="primary"
+                    size="small"
+                    :loading="pending === 'initialize'"
+                    @click="operate('initialize', {}, '领养成功')"
+                  >
                     领养比熊幼崽
                   </NButton>
                 </template>
@@ -469,11 +465,12 @@ onMounted(() => {
                       :percentage="growthPercent"
                       :height="14"
                       class="max-w-360px"
-                      :indicator-text-color="'#18a058'"
+                      indicator-text-color="#18a058"
                     />
                     <span class="text-13px">
-                      成长 {{ snapshot.nurture?.growth ?? 0 }}/{{ snapshot.nurture?.adultGrowth ?? 0 }}
-                      （{{ snapshot.nurture?.adult ? '已成年' : '幼年期' }}）
+                      成长 {{ snapshot.nurture?.growth ?? 0 }}/{{ snapshot.nurture?.adultGrowth ?? 0 }} （{{
+                        snapshot.nurture?.adult ? '已成年' : '幼年期'
+                      }}）
                     </span>
                   </div>
                   <div class="flex flex-wrap items-center gap-8px">
@@ -518,7 +515,8 @@ onMounted(() => {
                     寻宝（{{ snapshot.hunt?.count ?? 0 }}/{{ snapshot.hunt?.limit ?? 10 }}）
                   </NButton>
                   <span class="text-12px text-gray-500">
-                    消耗：{{ (snapshot.hunt?.costs ?? []).map(itemText).join('、') }}；累计宝藏 {{ snapshot.hunt?.total ?? '0' }}，幸运星 {{ snapshot.hunt?.luckyStarTotal ?? '0' }}
+                    消耗：{{ (snapshot.hunt?.costs ?? []).map(itemText).join('、') }}；累计宝藏
+                    {{ snapshot.hunt?.total ?? '0' }}，幸运星 {{ snapshot.hunt?.luckyStarTotal ?? '0' }}
                   </span>
                   <NButton
                     size="small"
@@ -543,15 +541,26 @@ onMounted(() => {
                     :key="treasure.id"
                     class="flex flex-wrap items-center gap-8px rounded-6px bg-gray-50 px-10px py-6px dark:bg-gray-800/40"
                   >
-                    <NTag size="small" :type="treasure.status === 3 ? 'success' : treasure.status === 2 ? 'info' : 'default'">
+                    <NTag
+                      size="small"
+                      :type="treasure.status === 3 ? 'success' : treasure.status === 2 ? 'info' : 'default'"
+                    >
                       {{ TREASURE_STATUS[treasure.status ?? 0] || `状态 ${treasure.status}` }}
                     </NTag>
-                    <img v-if="catalogImage(treasure.item)" :src="catalogImage(treasure.item)" class="h-20px w-20px" alt="" />
+                    <img
+                      v-if="catalogImage(treasure.item)"
+                      :src="catalogImage(treasure.item)"
+                      class="h-20px w-20px"
+                      alt=""
+                    />
                     <span class="text-13px">{{ itemText(treasure.item) }}</span>
                     <span class="text-12px text-gray-500">
-                      保护 {{ treasure.protectedCount }}/{{ treasure.originalCount }}，被夺 {{ treasure.plunderCount }}/{{ treasure.maxPlunderCount }}
+                      保护 {{ treasure.protectedCount }}/{{ treasure.originalCount }}，被夺
+                      {{ treasure.plunderCount }}/{{ treasure.maxPlunderCount }}
                     </span>
-                    <span v-if="treasure.endTime" class="text-12px text-gray-400">{{ fmtTime(treasure.endTime) }} 到达</span>
+                    <span v-if="treasure.endTime" class="text-12px text-gray-400">
+                      {{ fmtTime(treasure.endTime) }} 到达
+                    </span>
                   </div>
                 </div>
                 <NEmpty v-else description="暂无宝藏，寻宝后可开启护送" size="small" />
@@ -567,9 +576,7 @@ onMounted(() => {
                     :disabled="!snapshot.charms?.canRefresh"
                     :loading="pending === 'refreshCharm'"
                     @click="
-                      (snapshot.charms?.freeRefreshRemaining ?? 0) > 0
-                        ? refreshCharm(false)
-                        : (paidRefreshModal = true)
+                      (snapshot.charms?.freeRefreshRemaining ?? 0) > 0 ? refreshCharm(false) : (paidRefreshModal = true)
                     "
                   >
                     刷新锦囊池（免费 {{ snapshot.charms?.freeRefreshRemaining ?? 0 }} 次）
@@ -602,7 +609,8 @@ onMounted(() => {
                 <div v-if="(snapshot.charms?.equipped ?? []).length" class="flex flex-wrap items-center gap-8px">
                   <span class="text-12px text-gray-500">已装备：</span>
                   <NTag v-for="charm in snapshot.charms?.equipped ?? []" :key="charm.id" size="small" type="info">
-                    {{ charm.name }}<template v-if="charm.remaining?.length">（剩 {{ charm.remaining.join('/') }} 次）</template>
+                    {{ charm.name }}
+                    <template v-if="charm.remaining?.length">（剩 {{ charm.remaining.join('/') }} 次）</template>
                   </NTag>
                 </div>
               </div>
@@ -633,7 +641,12 @@ onMounted(() => {
                     :key="treasure.id"
                     class="flex flex-wrap items-center gap-8px rounded-6px bg-gray-50 px-10px py-6px dark:bg-gray-800/40"
                   >
-                    <img v-if="catalogImage(treasure.item)" :src="catalogImage(treasure.item)" class="h-20px w-20px" alt="" />
+                    <img
+                      v-if="catalogImage(treasure.item)"
+                      :src="catalogImage(treasure.item)"
+                      class="h-20px w-20px"
+                      alt=""
+                    />
                     <span class="text-13px">{{ itemText(treasure.item) }}</span>
                     <NButton
                       v-for="preview in treasure.previews ?? []"
@@ -643,7 +656,10 @@ onMounted(() => {
                       :disabled="!preview.canStart"
                       @click="pickBattleTarget(treasure, String(preview.challengeId ?? ''))"
                     >
-                      {{ CHALLENGES.find(c => c.id === String(preview.challengeId))?.label || `挑战书 ${preview.challengeId}` }}（可夺 {{ preview.plunderableCount ?? 0 }}）
+                      {{
+                        CHALLENGES.find(c => c.id === String(preview.challengeId))?.label ||
+                        `挑战书 ${preview.challengeId}`
+                      }}（可夺 {{ preview.plunderableCount ?? 0 }}）
                     </NButton>
                   </div>
                   <div class="flex flex-wrap items-center gap-8px">
@@ -651,7 +667,13 @@ onMounted(() => {
                       已选宝藏 {{ battleTreasureId }}，挑战书
                       {{ CHALLENGES.find(c => c.id === battleChallengeId)?.label || battleChallengeId }}
                     </span>
-                    <NButton size="small" type="error" :disabled="!snapshot.hunt?.canPlunder" :loading="pending === 'battle'" @click="startBattle()">
+                    <NButton
+                      size="small"
+                      type="error"
+                      :disabled="!snapshot.hunt?.canPlunder"
+                      :loading="pending === 'battle'"
+                      @click="startBattle()"
+                    >
                       开始夺宝
                     </NButton>
                   </div>
@@ -664,7 +686,9 @@ onMounted(() => {
                   <div class="mt-2px text-12px text-gray-600">
                     骰子 我方 {{ battleResult.attackerDice }} : 对方 {{ battleResult.defenderDice }}
                     <template v-if="battleResult.plundered">；掠夺 {{ itemText(battleResult.plundered) }}</template>
-                    <template v-if="battleResult.rewards?.length">；奖励 {{ battleResult.rewards.map(itemText).join('、') }}</template>
+                    <template v-if="battleResult.rewards?.length">
+                      ；奖励 {{ battleResult.rewards.map(itemText).join('、') }}
+                    </template>
                   </div>
                 </div>
               </div>
@@ -771,7 +795,11 @@ onMounted(() => {
             </NCollapseItem>
 
             <!-- 节令 -->
-            <NCollapseItem v-if="solarClaimable.length || (snapshot.solarTerms?.terms ?? []).length" title="节令小礼" name="solar">
+            <NCollapseItem
+              v-if="solarClaimable.length || (snapshot.solarTerms?.terms ?? []).length"
+              title="节令小礼"
+              name="solar"
+            >
               <div class="flex flex-wrap items-center gap-10px">
                 <div
                   v-for="term in snapshot.solarTerms?.terms ?? []"
@@ -814,7 +842,9 @@ onMounted(() => {
                   <div class="flex flex-col gap-4px">
                     <div v-for="(log, index) in plunderLogs" :key="index" class="text-12px text-gray-600">
                       {{ fmtTime(log.time) }} · {{ log.name }}（Lv.{{ log.level }}）
-                      <NTag size="tiny" :type="log.won ? 'error' : 'success'">{{ log.won ? '对方获胜' : '对方失败' }}</NTag>
+                      <NTag size="tiny" :type="log.won ? 'error' : 'success'">
+                        {{ log.won ? '对方获胜' : '对方失败' }}
+                      </NTag>
                       <template v-if="log.lost?.length">· 损失 {{ log.lost.map(itemText).join('、') }}</template>
                       <template v-if="log.fake">· 移花接木假宝藏</template>
                     </div>

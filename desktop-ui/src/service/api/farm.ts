@@ -924,11 +924,7 @@ export function fetchGetFarmActivityPetDiary(accountId: number) {
   return invokeFlat('activity_get_pet_diary', { accountId: aid(accountId) });
 }
 
-export function fetchOperateFarmActivityPetDiary(
-  accountId: number,
-  action: string,
-  params: Record<string, unknown>
-) {
+export function fetchOperateFarmActivityPetDiary(accountId: number, action: string, params: Record<string, unknown>) {
   return invokeFlat('activity_operate_pet_diary', {
     accountId: aid(accountId),
     action,
