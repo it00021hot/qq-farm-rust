@@ -361,7 +361,7 @@ onMounted(async () => {
                 <template #header-extra>
                   <NSpace align="center" size="small">
                     <span class="text-13px text-gray-500">{{ $t('page.farm.analytics.refLevel') }}</span>
-                    <NInputNumber v-model:value="strategyLevel" class="w-90px" size="small" :min="1" :max="999" />
+                    <NInputNumber v-model:value="strategyLevel" class="w-90px" size="small" :min="1" :max="200" />
                   </NSpace>
                 </template>
 

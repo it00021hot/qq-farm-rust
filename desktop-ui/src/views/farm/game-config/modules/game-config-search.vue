@@ -3,7 +3,10 @@ import { toRaw } from 'vue';
 import { jsonClone } from '@sa/utils';
 import { useNaiveForm } from '@/hooks/common/form';
 import { $t } from '@/locales';
+import { useAppStore } from '@/store/modules/app';
 import { rarityOptions, seasonOptions, type GameConfigTab } from '../shared';
+
+const appStore = useAppStore();
 
 defineOptions({
   name: 'FarmGameConfigSearch'
@@ -49,7 +52,7 @@ async function search() {
   <NCard :bordered="false" size="small" class="card-wrapper">
     <NCollapse>
       <NCollapseItem :title="$t('common.search')" name="farm-game-config-search">
-        <NForm ref="formRef" :model="model" label-placement="left" :label-width="80">
+        <NForm ref="formRef" :model="model" :label-placement="appStore.isMobile ? 'top' : 'left'" :label-width="80">
           <NGrid responsive="screen" item-responsive>
             <NFormItemGi span="24 s:12 m:6" :label="$t('page.farm.gameConfig.keyword')" path="keyword">
               <NInput v-model:value="model.keyword" :placeholder="$t('common.keywordSearch')" />

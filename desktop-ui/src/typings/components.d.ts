@@ -13,6 +13,7 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     AppProvider: typeof import('./../components/common/app-provider.vue')['default']
+    AppUpdateDialog: typeof import('./../components/common/app-update-dialog.vue')['default']
     BetterScroll: typeof import('./../components/custom/better-scroll.vue')['default']
     ButtonIcon: typeof import('./../components/custom/button-icon.vue')['default']
     CountTo: typeof import('./../components/custom/count-to.vue')['default']
@@ -42,6 +43,7 @@ declare module 'vue' {
     LangSwitch: typeof import('./../components/common/lang-switch.vue')['default']
     LookForward: typeof import('./../components/custom/look-forward.vue')['default']
     MenuToggler: typeof import('./../components/common/menu-toggler.vue')['default']
+    MobileRecordList: typeof import('./../components/advanced/mobile-record-list.vue')['default']
     NAlert: typeof import('naive-ui')['NAlert']
     NBadge: typeof import('naive-ui')['NBadge']
     NBreadcrumb: typeof import('naive-ui')['NBreadcrumb']
@@ -71,6 +73,7 @@ declare module 'vue' {
     NMessageProvider: typeof import('naive-ui')['NMessageProvider']
     NModal: typeof import('naive-ui')['NModal']
     NNotificationProvider: typeof import('naive-ui')['NNotificationProvider']
+    NPagination: typeof import('naive-ui')['NPagination']
     NPopconfirm: typeof import('naive-ui')['NPopconfirm']
     NPopover: typeof import('naive-ui')['NPopover']
     NRadio: typeof import('naive-ui')['NRadio']
@@ -102,6 +105,7 @@ declare module 'vue' {
 // For TSX support
 declare global {
   const AppProvider: typeof import('./../components/common/app-provider.vue')['default']
+  const AppUpdateDialog: typeof import('./../components/common/app-update-dialog.vue')['default']
   const BetterScroll: typeof import('./../components/custom/better-scroll.vue')['default']
   const ButtonIcon: typeof import('./../components/custom/button-icon.vue')['default']
   const CountTo: typeof import('./../components/custom/count-to.vue')['default']
@@ -131,6 +135,7 @@ declare global {
   const LangSwitch: typeof import('./../components/common/lang-switch.vue')['default']
   const LookForward: typeof import('./../components/custom/look-forward.vue')['default']
   const MenuToggler: typeof import('./../components/common/menu-toggler.vue')['default']
+  const MobileRecordList: typeof import('./../components/advanced/mobile-record-list.vue')['default']
   const NAlert: typeof import('naive-ui')['NAlert']
   const NBadge: typeof import('naive-ui')['NBadge']
   const NBreadcrumb: typeof import('naive-ui')['NBreadcrumb']
@@ -160,6 +165,7 @@ declare global {
   const NMessageProvider: typeof import('naive-ui')['NMessageProvider']
   const NModal: typeof import('naive-ui')['NModal']
   const NNotificationProvider: typeof import('naive-ui')['NNotificationProvider']
+  const NPagination: typeof import('naive-ui')['NPagination']
   const NPopconfirm: typeof import('naive-ui')['NPopconfirm']
   const NPopover: typeof import('naive-ui')['NPopover']
   const NRadio: typeof import('naive-ui')['NRadio']

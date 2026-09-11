@@ -14,11 +14,11 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 /// 默认客户端版本（与原 TS DEFAULT_CLIENT_VERSION 一致）
-pub const DEFAULT_CLIENT_VERSION: &str = "1.14.0.1_20260909";
+pub const DEFAULT_CLIENT_VERSION: &str = "1.14.0.3_20260909";
 
 /// 默认客户端版本的发布时间（毫秒）。保存的版本只有在其时间戳**更新**时才沿用，
 /// 防止旧存档把升级链锁死在过期版本上（对齐 bot `resolveClientVersion`）。
-pub const DEFAULT_CLIENT_VERSION_UPDATED_AT: i64 = 1_789_004_223_123;
+pub const DEFAULT_CLIENT_VERSION_UPDATED_AT: i64 = 1_789_111_371_648;
 
 /// 解析生效的 client_version：保存值比默认值新才沿用，否则回默认。
 #[must_use]

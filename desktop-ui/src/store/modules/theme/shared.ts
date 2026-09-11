@@ -6,17 +6,10 @@ import { toggleHtmlClass } from '@/utils/common';
 import { localStg } from '@/utils/storage';
 import { overrideThemeSettings, themeSettings } from '@/theme/settings';
 import { themeVars } from '@/theme/vars';
+import { themePreference } from '@/utils/theme-preference';
 
 /** Init theme settings */
 export function initThemeSettings() {
-  const isProd = import.meta.env.PROD;
-
-  // if it is development mode, the theme settings will not be cached, by update `themeSettings` in `src/theme/settings.ts` to update theme settings
-  if (!isProd) return themeSettings;
-
-  // if it is production mode, the theme settings will be cached in localStorage
-  // if want to update theme settings when publish new version, please update `overrideThemeSettings` in `src/theme/settings.ts`
-
   const localSettings = localStg.get('themeSettings');
 
   let settings = defu(localSettings, themeSettings);
@@ -29,7 +22,8 @@ export function initThemeSettings() {
     localStg.set('overrideThemeFlag', BUILD_TIME);
   }
 
-  return settings;
+  settings.themeScheme = themePreference(localSettings?.themeScheme);
+  return structuredClone(settings);
 }
 
 /**

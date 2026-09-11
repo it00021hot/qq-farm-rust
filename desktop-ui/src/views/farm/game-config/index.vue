@@ -20,6 +20,7 @@ import GameConfigSearch from './modules/game-config-search.vue';
 import SeedOperateDrawer from './modules/seed-operate-drawer.vue';
 import FruitOperateDrawer from './modules/fruit-operate-drawer.vue';
 import ItemOperateDrawer from './modules/item-operate-drawer.vue';
+import MobileRecordList from '@/components/advanced/mobile-record-list.vue';
 
 defineOptions({ name: 'FarmGameConfig' });
 
@@ -547,7 +548,19 @@ onMounted(async () => {
           @refresh="() => refreshList()"
         />
       </template>
+      <MobileRecordList
+        v-if="appStore.isMobile"
+        :key="activeTab"
+        v-model:checked-row-keys="checkedRowKeys"
+        :columns="columns"
+        :data="data"
+        :row-key="rowKey"
+        :primary-keys="['name', 'requiredLevel', 'price', 'rarity']"
+        :pagination="mobilePagination"
+        :loading="loading"
+      />
       <NDataTable
+        v-else
         v-model:checked-row-keys="checkedRowKeys"
         :columns="columns"
         :data="data"

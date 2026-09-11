@@ -4,6 +4,7 @@ mod dto;
 
 pub mod account;
 pub mod activity;
+pub mod application;
 pub mod commerce;
 pub mod config;
 pub mod farm;

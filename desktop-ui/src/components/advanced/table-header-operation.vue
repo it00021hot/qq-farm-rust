@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { $t } from '@/locales';
+import { useAppStore } from '@/store/modules/app';
+
+const appStore = useAppStore();
 
 defineOptions({
   name: 'TableHeaderOperation'
@@ -39,7 +42,7 @@ function refresh() {
 </script>
 
 <template>
-  <NSpace :align="itemAlign" wrap justify="end" class="lt-sm:w-200px">
+  <NSpace :align="itemAlign" wrap :justify="appStore.isMobile ? 'start' : 'end'" class="lt-sm:w-full">
     <slot name="prefix"></slot>
     <slot name="default">
       <NButton size="small" ghost type="primary" @click="add">
@@ -66,7 +69,7 @@ function refresh() {
       </template>
       {{ $t('common.refresh') }}
     </NButton>
-    <TableColumnSetting v-model:columns="columns" />
+    <TableColumnSetting v-if="!appStore.isMobile" v-model:columns="columns" />
     <slot name="suffix"></slot>
   </NSpace>
 </template>

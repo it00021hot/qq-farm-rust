@@ -1,4 +1,4 @@
-//! 萌宠成长日记 — 快照 + 写操作（对齐 bot `pet-diary.ts`，bot main 2026-09-10）。
+//! 萌宠成长日记 — 快照 + 写操作（对齐 bot `pet-diary.ts`，bot main 2026-09-11）。
 //!
 //! - 活动组 `2026090100`：养成 `…01`（GetGroup 读取 + `PetDiaryOperateRequest` 写）、
 //!   种子赠礼 `…02`（一键领取 op=21）、拾物小铺 `…03`（兑换 op=1 / 目录 op=7）
@@ -645,16 +645,12 @@ impl ActivityCenterService {
                     .iter()
                     .map(|story| {
                         let desc = pet_desc_json(&story.selected_desc);
-                        let say = desc.get("say").and_then(serde_json::Value::as_str).unwrap_or("");
-                        let caption_image = pet_asset_url(say);
                         serde_json::json!({
                             "order": story.order,
                             "unlocked": story.unlocked,
                             "claimed": story.claimed,
                             "animated": story.animated,
                             "photo": pet_asset_url(desc.get("photo").and_then(serde_json::Value::as_str).unwrap_or("")),
-                            "captionImage": caption_image,
-                            "caption": if caption_image.is_empty() { say.to_string() } else { String::new() },
                         })
                     })
                     .collect()
@@ -1491,14 +1487,16 @@ mod tests {
     #[test]
     fn asset_url_maps_catalog_paths() {
         assert_eq!(
-            pet_asset_url("gui/texture/Season/S3/S3JieqiBigImg/img_S3Jieqi_pattern_bailu"),
-            "/activity-assets/pet-diary/img_S3Jieqi_pattern_bailu.png"
+            pet_asset_url("gui/texture/Season/S3/S3SkillType/img_s3_skillType1"),
+            "/activity-assets/pet-diary/img_s3_skillType1.webp"
         );
         assert_eq!(
-            pet_asset_url(
-                "gui/texture/Season/S3/S3JieqiBigImg/img_S3Jieqi_pattern_bailu/spriteFrame"
-            ),
-            "/activity-assets/pet-diary/img_S3Jieqi_pattern_bailu.png"
+            pet_asset_url("gui/texture/Season/S3/S3SkillType/img_s3_skillType1/spriteFrame"),
+            "/activity-assets/pet-diary/img_s3_skillType1.webp"
+        );
+        assert_eq!(
+            pet_asset_url("gui/texture/Season/S3/S3PhotoWallPhotos/img_s3PhotoWall_photo0"),
+            "/activity-assets/pet-diary/img_s3PhotoWall_photo0.webp"
         );
         assert_eq!(pet_asset_url("unknown/path"), "");
     }
@@ -1572,7 +1570,7 @@ mod tests {
                 server_url: "wss://gate.example.com/ws".to_string(),
                 platform: "qq".to_string(),
                 os: "Windows".to_string(),
-                client_version: "1.14.0.1_20260909".to_string(),
+                client_version: crate::config::DEFAULT_CLIENT_VERSION.to_string(),
                 auth_code: "test".to_string(),
                 headers: std::collections::HashMap::new(),
             },

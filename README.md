@@ -48,7 +48,7 @@ cd crates/qq-farm-desktop && cargo tauri dev
 
 ### 发版与自动更新
 
-打 tag 后 GitHub Actions 构建 Windows NSIS + macOS universal DMG，并上传 `latest.json` 供客户端更新。验收见 [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)。
+打 tag 后 GitHub Actions 构建 Windows NSIS、macOS Apple Silicon DMG 和 macOS Intel DMG，并上传 `latest.json` 供客户端按架构更新。验收见 [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)。
 
 ```bash
 git tag v0.2.0

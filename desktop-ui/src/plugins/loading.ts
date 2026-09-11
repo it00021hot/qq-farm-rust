@@ -4,10 +4,11 @@ import { DARK_CLASS } from '@/constants/app';
 import { localStg } from '@/utils/storage';
 import { toggleHtmlClass } from '@/utils/common';
 import { $t } from '@/locales';
+import { resolveDarkMode } from '@/utils/theme-preference';
 
 export function setupLoading() {
   const themeColor = localStg.get('themeColor') || '#646cff';
-  const darkMode = localStg.get('darkMode') || false;
+  const darkMode = resolveDarkMode(localStg.get('themeSettings')?.themeScheme, window.matchMedia('(prefers-color-scheme: dark)').matches);
   const palette = getColorPalette(themeColor);
 
   const { r, g, b } = getRgb(themeColor);
@@ -22,6 +23,8 @@ export function setupLoading() {
 
   if (darkMode) {
     toggleHtmlClass(DARK_CLASS).add();
+  } else {
+    toggleHtmlClass(DARK_CLASS).remove();
   }
 
   const loadingClasses = [

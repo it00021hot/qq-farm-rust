@@ -148,6 +148,11 @@ function handleDropdownVisible(visible: boolean | undefined) {
   }
 }
 
+function openActiveTabMenu(event: MouseEvent) {
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  setDropdown({ visible: true, tabId: tabStore.activeTabId, x: rect.left, y: rect.bottom });
+}
+
 async function handleContextMenu(e: MouseEvent, tabId: string) {
   e.preventDefault();
 
@@ -183,6 +188,8 @@ watch(
   () => route.fullPath,
   () => {
     tabStore.addTab(route);
+    setDropdown({ visible: false });
+    if (appStore.isMobile) appStore.setSiderCollapse(true);
   }
 );
 watch(
@@ -230,6 +237,7 @@ init();
       </BetterScroll>
     </div>
     <ReloadButton :loading="!appStore.reloadFlag" @click="refresh" />
+    <ButtonIcon icon="mdi:dots-horizontal" :aria-label="appStore.locale === 'en-US' ? 'Tab actions' : '标签操作'" @click="openActiveTabMenu" />
     <FullScreen :full="appStore.fullContent" @click="appStore.toggleFullContent" />
   </DarkModeContainer>
   <ContextMenu

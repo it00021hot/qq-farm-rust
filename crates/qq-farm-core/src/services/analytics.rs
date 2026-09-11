@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::game_config::global as global_game_config;
 
+/// 分析页排除的白萝卜种子（对齐 bot `EXCLUDED_RADISH_SEED_ID`）。
+const EXCLUDED_RADISH_SEED_ID: i64 = 29999;
+
 /// 解析 grow_phases 字符串求和（如 "种子:30;发芽:30;成熟:0;" → 60）
 #[must_use]
 pub fn parse_grow_time(grow_phases: &str) -> i64 {
@@ -131,11 +134,11 @@ pub fn get_plant_rankings(sort_by: SortBy) -> Vec<PlantRanking> {
     let mut results = Vec::new();
 
     for plant in plants {
-        // 筛选普通作物：必须有 seed_id 和 grow_phases
+        // 筛选普通作物：必须有 seed_id 和 grow_phases；排除白萝卜种子 29999
         let Some(seed_id) = plant.seed_id else {
             continue;
         };
-        if seed_id <= 0 {
+        if seed_id <= 0 || seed_id == EXCLUDED_RADISH_SEED_ID {
             continue;
         }
         let Some(ref grow_phases) = plant.grow_phases else {
@@ -311,5 +314,12 @@ mod tests {
         for w in r.windows(2) {
             assert!(w[0].level.unwrap_or(-1) >= w[1].level.unwrap_or(-1));
         }
+    }
+
+    #[test]
+    fn rankings_exclude_radish_seed_29999() {
+        let _ = global_game_config();
+        let r = get_plant_rankings(SortBy::Exp);
+        assert!(!r.iter().any(|p| p.seed_id == EXCLUDED_RADISH_SEED_ID));
     }
 }

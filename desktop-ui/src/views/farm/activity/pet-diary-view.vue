@@ -91,7 +91,6 @@ type Story = {
   claimed?: boolean;
   animated?: boolean;
   photo?: string;
-  caption?: string;
 };
 
 type SolarTerm = {
@@ -879,9 +878,14 @@ watch(
                   :key="story.order"
                   class="flex w-170px flex-col gap-4px rounded-8px border border-gray-200 px-10px py-8px text-center dark:border-gray-700"
                 >
-                  <span class="text-12px text-gray-400">手记 {{ story.order }}</span>
-                  <img v-if="story.photo" :src="story.photo" class="h-70px w-full rounded-4px object-cover" alt="" />
-                  <span v-if="story.caption" class="text-12px text-gray-500">{{ story.caption }}</span>
+                  <span class="text-12px text-gray-400">第 {{ story.order }} 则</span>
+                  <img
+                    v-if="story.photo"
+                    :src="story.photo"
+                    class="w-full rounded-4px object-contain"
+                    alt=""
+                  />
+                  <span v-else class="text-12px text-gray-400">未解锁</span>
                   <NTag size="tiny" :type="story.claimed ? 'success' : story.unlocked ? 'warning' : 'default'">
                     {{ story.claimed ? '已领取' : story.unlocked ? '可领取' : '未解锁' }}
                   </NTag>

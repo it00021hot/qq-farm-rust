@@ -21,6 +21,9 @@ import {
 } from '@/service/api';
 import { useFormRules, useNaiveForm } from '@/hooks/common/form';
 import { $t } from '@/locales';
+import { useAppStore } from '@/store/modules/app';
+
+const appStore = useAppStore();
 
 defineOptions({
   name: 'FarmAccountOperateDrawer'
@@ -801,7 +804,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <NDrawer v-model:show="visible" display-directive="if" to="body" :width="420">
+  <NDrawer v-model:show="visible" display-directive="if" to="body" :width="appStore.isMobile ? '100vw' : 420">
     <NDrawerContent :title="title" :native-scrollbar="false" closable>
       <NForm ref="formRef" :model="model" :rules="rules" label-placement="top">
         <NFormItem :label="$t('page.farm.account.name')" path="name">

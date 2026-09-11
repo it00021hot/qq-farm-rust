@@ -9,6 +9,8 @@ mod events;
 #[cfg(target_os = "macos")]
 mod menu;
 mod paths;
+#[cfg(any(mobile, test))]
+mod release;
 #[cfg(desktop)]
 mod shell;
 mod state;
@@ -156,6 +158,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::application::get_app_info,
+            commands::application::check_app_update,
             // snapshot
             commands::snapshot::desktop_ready,
             commands::snapshot::get_snapshot,

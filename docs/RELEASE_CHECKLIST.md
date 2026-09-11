@@ -13,11 +13,12 @@ GitHub repo **Settings → Secrets and variables → Actions**：
 
 ## CI / Release page
 
-- [ ] Actions workflow **Release** is green (macos + windows + SHA256SUMS)
+- [ ] Actions workflow **Release** is green (macOS Apple Silicon + macOS Intel + Windows + SHA256SUMS)
 - [ ] GitHub Release for the tag includes:
   - Windows NSIS installer (`.exe`)
-  - macOS `.dmg`
-  - updater artifacts (`.sig` / `.app.tar.gz` / nsis zip) and `latest.json`
+  - macOS Apple Silicon `.dmg` (`*_aarch64.dmg`)
+  - macOS Intel `.dmg` (`*_x64.dmg`)
+  - updater artifacts (`.sig` / `.app.tar.gz` / nsis zip) and `latest.json`（含 `darwin-aarch64` / `darwin-x86_64` / `windows-x86_64`）
   - `SHA256SUMS`
 - [ ] `assets/tsdk.wasm` was present in the checkout (workflow fails otherwise)
 
@@ -31,6 +32,7 @@ GitHub repo **Settings → Secrets and variables → Actions**：
 
 ## macOS
 
+- [ ] Download the matching DMG (`*_aarch64.dmg` on Apple Silicon, `*_x64.dmg` on Intel)
 - [ ] Open DMG, drag to Applications (or `~/Applications`)
 - [ ] First open may need Privacy & Security allow (ad-hoc signed)
 - [ ] App menu **应用 → 检查更新** and tray work against a newer Release

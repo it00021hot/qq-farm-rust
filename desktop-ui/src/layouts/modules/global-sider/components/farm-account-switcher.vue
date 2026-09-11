@@ -30,10 +30,10 @@ function handleUpdate(value: number | null) {
       :options="farmAccountStore.accountOptions"
       :loading="farmAccountStore.loading"
       :placeholder="$t('page.farm.common.selectAccount')"
-      :consistent-menu-width="false"
+      :consistent-menu-width="appStore.isMobile"
       filterable
       size="small"
-      :show-arrow="!appStore.siderCollapse"
+      :show-arrow="appStore.isMobile || !appStore.siderCollapse"
       @update:value="handleUpdate"
     />
   </div>

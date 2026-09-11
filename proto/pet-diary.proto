@@ -4,7 +4,7 @@ package gamepb.activitypb;
 
 import "corepb.proto";
 
-// Official QQ mini-program 1.14.0.1 (main e802e, 2026-09-10).
+// Official QQ mini-program 1.14.0.3 (main e802e, 2026-09-11).
 // Field numbers/types extracted from the official encoder and verified against captures.
 
 message PetTreasureHuntStoryInfo {

@@ -1,5 +1,6 @@
 //! GitHub Releases 自动更新（Tauri updater + 原生对话框，对齐 Wails 行为）。
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tauri::AppHandle;
@@ -9,6 +10,18 @@ use tauri_plugin_updater::UpdaterExt;
 const STARTUP_DELAY: Duration = Duration::from_secs(5);
 const BACKGROUND_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const MANUAL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+static CHECKING: AtomicBool = AtomicBool::new(false);
+
+struct CheckGuard;
+impl Drop for CheckGuard {
+    fn drop(&mut self) {
+        CHECKING.store(false, Ordering::Release);
+    }
+}
+
+pub async fn check_manually(app: AppHandle) {
+    run_check(app, true, MANUAL_TIMEOUT).await;
+}
 
 /// 启动约 5 秒后静默检查；有更新才弹窗。
 pub fn setup(app: &AppHandle) {
@@ -28,6 +41,13 @@ pub fn check_for_updates(app: &AppHandle, show_up_to_date: bool) {
 }
 
 async fn run_check(app: AppHandle, show_up_to_date: bool, timeout: Duration) {
+    if CHECKING.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        if show_up_to_date {
+            show_info(&app, "正在检查或安装更新，请稍候").await;
+        }
+        return;
+    }
+    let _guard = CheckGuard;
     match tokio::time::timeout(timeout, check_inner(&app)).await {
         Ok(Ok(Some(version))) => prompt_and_install(app, version).await,
         Ok(Ok(None)) => {

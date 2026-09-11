@@ -49,6 +49,9 @@ import {
 import { useFarmAccountStore } from '@/store/modules/farm-account';
 import { useManagedInterval } from '@/hooks/common/use-managed-interval';
 import { $t } from '@/locales';
+import { useAppStore } from '@/store/modules/app';
+
+const appStore = useAppStore();
 
 defineOptions({
   name: 'FarmSettings'
@@ -1139,7 +1142,7 @@ onUnmounted(() => {
           :description="$t('page.farm.common.selectAccount')"
         />
         <NCard v-else :bordered="false" size="small" class="card-wrapper">
-          <NForm label-placement="left" :label-width="140">
+          <NForm :label-placement="appStore.isMobile ? 'top' : 'left'" :label-width="140">
             <div class="grid gap-12px md:grid-cols-2">
               <NFormItem :label="$t('page.farm.settings.plantingStrategy')">
                 <NSelect v-model:value="plantingStrategy" class="w-full" :options="strategyOptions" />
@@ -1411,7 +1414,7 @@ onUnmounted(() => {
 
           <template v-if="showFertilizerBuyPanel">
             <NDivider title-placement="left">{{ $t('page.farm.settings.fertilizerBuy') }}</NDivider>
-            <NForm label-placement="left" :label-width="140">
+            <NForm :label-placement="appStore.isMobile ? 'top' : 'left'" :label-width="140">
               <div v-if="automation.fertilizer_buy_organic" class="mb-12px grid gap-12px sm:grid-cols-2 md:grid-cols-3">
                 <div class="sm:col-span-2 md:col-span-3 text-sm font-medium">
                   {{ $t('page.farm.settings.fertilizerBuyOrganicTitle') }}
@@ -1464,7 +1467,7 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <NForm class="mt-12px" label-placement="left" :label-width="140">
+            <NForm class="mt-12px" :label-placement="appStore.isMobile ? 'top' : 'left'" :label-width="140">
               <div class="grid gap-12px sm:grid-cols-2 md:grid-cols-3">
                 <NFormItem :label="$t('page.farm.settings.friendAutoAccept')">
                   <NSwitch v-model:value="automation.friend_auto_accept" />
@@ -1572,7 +1575,7 @@ onUnmounted(() => {
       <NTabPane name="offline" :tab="$t('page.farm.settings.offlineReminder')">
         <NCard :bordered="false" size="small" class="card-wrapper">
           <NText depth="3" class="mb-16px block text-12px">{{ $t('page.farm.settings.offlineHint') }}</NText>
-          <NForm label-placement="left" :label-width="140">
+          <NForm :label-placement="appStore.isMobile ? 'top' : 'left'" :label-width="140">
             <div class="grid max-w-640px gap-12px">
               <NFormItem :label="$t('page.farm.settings.provider')">
                 <div class="flex w-full gap-8px">

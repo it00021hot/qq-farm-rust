@@ -3,7 +3,10 @@ import { computed, ref, watch } from 'vue';
 import { fetchAddFarmGameConfigSeed, fetchModifyFarmGameConfigSeed } from '@/service/api';
 import { useFormRules, useNaiveForm } from '@/hooks/common/form';
 import { $t } from '@/locales';
+import { useAppStore } from '@/store/modules/app';
 import { growPhaseTemplates, priceIdOptions, seasonOptions, sizeOptions } from '../shared';
+
+const appStore = useAppStore();
 
 defineOptions({ name: 'FarmGameConfigSeedDrawer' });
 
@@ -98,9 +101,9 @@ async function handleSubmit() {
 </script>
 
 <template>
-  <NDrawer v-model:show="visible" display-directive="show" :width="480">
+  <NDrawer v-model:show="visible" display-directive="show" :width="appStore.isMobile ? '100vw' : 480">
     <NDrawerContent :title="title" :native-scrollbar="false" closable>
-      <NForm ref="formRef" :model="model" :rules="rules" label-placement="left" :label-width="100">
+      <NForm ref="formRef" :model="model" :rules="rules" :label-placement="appStore.isMobile ? 'top' : 'left'" :label-width="100">
         <NFormItem :label="$t('page.farm.gameConfig.seedId')" path="seedId">
           <NInputNumber
             v-model:value="model.seedId"

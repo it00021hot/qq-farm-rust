@@ -17,6 +17,7 @@ import { defaultTransform, useNaivePaginatedTable, useTableOperate } from '@/hoo
 import { $t } from '@/locales';
 import AccountOperateDrawer from './modules/account-operate-drawer.vue';
 import AccountSearch from './modules/account-search.vue';
+import MobileRecordList from '@/components/advanced/mobile-record-list.vue';
 
 defineOptions({
   name: 'FarmAccount'
@@ -333,7 +334,18 @@ useFarmWs({
           </template>
         </TableHeaderOperation>
       </template>
+      <MobileRecordList
+        v-if="appStore.isMobile"
+        v-model:checked-row-keys="checkedRowKeys"
+        :columns="columns"
+        :data="data"
+        :row-key="row => row.id"
+        :primary-keys="['name', 'platform', 'runStatus', 'wxAuthorized']"
+        :pagination="mobilePagination"
+        :loading="loading"
+      />
       <NDataTable
+        v-else
         v-model:checked-row-keys="checkedRowKeys"
         :columns="columns"
         :data="data"

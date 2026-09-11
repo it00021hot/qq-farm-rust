@@ -27,6 +27,9 @@ import {
   fetchPetWithdraw
 } from '@/service/api';
 import { $t } from '@/locales';
+import { useAppStore } from '@/store/modules/app';
+
+const appStore = useAppStore();
 
 defineOptions({ name: 'PetPanel' });
 
@@ -141,7 +144,7 @@ void load();
       </template>
       <NEmpty v-if="!info" :description="$t('page.farm.personal.pet.empty')" />
       <template v-else>
-        <NDescriptions :column="3" size="small" label-placement="left" class="mb-12px">
+        <NDescriptions :column="appStore.isMobile ? 1 : 3" size="small" label-placement="left" class="mb-12px">
           <NDescriptionsItem :label="$t('page.farm.personal.pet.protectRemaining')">
             {{ days(info.protectDuration) }}
           </NDescriptionsItem>
@@ -207,8 +210,8 @@ void load();
       </div>
     </NCard>
 
-    <NModal v-model:show="logsVisible" preset="card" :title="$t('page.farm.personal.pet.logTitle')" class="w-720px">
-      <NDataTable :columns="logColumns" :data="logs" :max-height="420" size="small" />
+    <NModal v-model:show="logsVisible" preset="card" :title="$t('page.farm.personal.pet.logTitle')" class="w-720px max-w-[calc(100vw-24px)]">
+      <NDataTable :columns="logColumns" :data="logs" :max-height="420" :scroll-x="600" size="small" />
     </NModal>
   </div>
 </template>

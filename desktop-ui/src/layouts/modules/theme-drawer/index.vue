@@ -20,7 +20,7 @@ const drawerWidth = computed(() => {
 
   // On mobile devices, use 90% of viewport width with a maximum of 400px
   if (appStore.isMobile) {
-    return `min(90vw, ${width}px)`;
+    return '100vw';
   }
 
   return width;

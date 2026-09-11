@@ -2,6 +2,7 @@
 @import './nprogress.css';
 @import './transition.css';
 @import './farm-land.css';
+@import './mobile.css';
 
 html,
 body,
@@ -16,11 +17,11 @@ html {
 }
 
 /* Tauri / frameless: drag / no-drag regions (align qq-farm-desktop) */
-.desktop-drag-region {
+html.desktop-shell .desktop-drag-region {
   -webkit-app-region: drag;
 }
 
-.desktop-no-drag {
+html.desktop-shell .desktop-no-drag {
   -webkit-app-region: no-drag;
 }
 

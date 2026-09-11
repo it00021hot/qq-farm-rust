@@ -77,14 +77,23 @@ jobs:
 
   publish:
     needs: quality
+    name: ${{ matrix.name }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest
-            args: --target universal-apple-darwin
-          - platform: windows-latest
+          - name: macOS Apple Silicon
+            platform: macos-latest
+            args: --target aarch64-apple-darwin
+            rust_target: aarch64-apple-darwin
+          - name: macOS Intel
+            platform: macos-latest
+            args: --target x86_64-apple-darwin
+            rust_target: x86_64-apple-darwin
+          - name: Windows
+            platform: windows-latest
             args: --target x86_64-pc-windows-msvc
+            rust_target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout
@@ -117,7 +126,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.98.1
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || 'x86_64-pc-windows-msvc' }}
+          targets: ${{ matrix.rust_target }}
 
       - name: Install protoc
         uses: taiki-e/install-action@v2
@@ -128,6 +137,7 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: "."
+          key: ${{ matrix.rust_target }}
 
       - name: Resolve version
         id: ver
@@ -188,6 +198,7 @@ jobs:
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true
+          retryAttempts: 3
 
       - name: Build and upload (password-protected key)
         if: steps.signing.outputs.has_password == 'true'
@@ -206,6 +217,7 @@ jobs:
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true
+          retryAttempts: 3
 
   checksums:
     name: SHA256SUMS

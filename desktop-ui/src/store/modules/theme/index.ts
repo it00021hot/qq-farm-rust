@@ -1,10 +1,12 @@
 import { computed, effectScope, onScopeDispose, ref, toRefs, watch } from 'vue';
 import type { Ref } from 'vue';
-import { useDateFormat, useEventListener, useNow, usePreferredColorScheme } from '@vueuse/core';
+import { useDateFormat, useNow, usePreferredColorScheme } from '@vueuse/core';
 import { defineStore } from 'pinia';
 import { getPaletteColorByNumber } from '@sa/color';
 import { localStg } from '@/utils/storage';
 import { SetupStoreId } from '@/enum';
+import { themeSettings } from '@/theme/settings';
+import { resolveDarkMode } from '@/utils/theme-preference';
 import { useAuthStore } from '../auth';
 import {
   addThemeVarsToGlobal,
@@ -31,12 +33,7 @@ export const useThemeStore = defineStore(SetupStoreId.Theme, () => {
   const { now: watermarkTime, pause: pauseWatermarkTime, resume: resumeWatermarkTime } = useNow({ controls: true });
 
   /** Dark mode */
-  const darkMode = computed(() => {
-    if (settings.value.themeScheme === 'auto') {
-      return osTheme.value === 'dark';
-    }
-    return settings.value.themeScheme === 'dark';
-  });
+  const darkMode = computed(() => resolveDarkMode(settings.value.themeScheme, osTheme.value === 'dark'));
 
   /** grayscale mode */
   const grayscaleMode = computed(() => settings.value.grayscale);
@@ -89,9 +86,11 @@ export const useThemeStore = defineStore(SetupStoreId.Theme, () => {
 
   /** Reset store */
   function resetStore() {
-    const themeStore = useThemeStore();
-
-    themeStore.$reset();
+    Object.assign(settings.value, structuredClone(themeSettings));
+    naiveThemeOverrides.value = undefined;
+    const backup = localStg.get('backupThemeSettingBeforeIsMobile');
+    if (backup) localStg.set('backupThemeSettingBeforeIsMobile', { ...backup, layout: themeSettings.layout.mode });
+    cacheThemeSettings();
   }
 
   /**
@@ -224,20 +223,16 @@ export const useThemeStore = defineStore(SetupStoreId.Theme, () => {
 
   /** Cache theme settings */
   function cacheThemeSettings() {
-    const isProd = import.meta.env.PROD;
-
-    if (!isProd) return;
-
-    localStg.set('themeSettings', settings.value);
+    const backup = localStg.get('backupThemeSettingBeforeIsMobile');
+    localStg.set('themeSettings', {
+      ...settings.value,
+      layout: { ...settings.value.layout, mode: backup?.layout ?? settings.value.layout.mode }
+    });
   }
-
-  // cache theme settings when page is closed or refreshed
-  useEventListener(window, 'beforeunload', () => {
-    cacheThemeSettings();
-  });
 
   // watch store
   scope.run(() => {
+    watch(settings, cacheThemeSettings, { deep: true, flush: 'sync' });
     // watch dark mode
     watch(
       darkMode,

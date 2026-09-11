@@ -2,6 +2,8 @@
 identifier = "allow-desktop-commands"
 description = "Allow QQ Farm desktop farm-domain IPC commands"
 commands.allow = [
+  "get_app_info",
+  "check_app_update",
   "desktop_ready",
   "get_snapshot",
   "list_accounts_page",
