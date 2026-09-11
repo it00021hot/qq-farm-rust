@@ -345,8 +345,13 @@ mod tests {
         DataDirGuard(prev)
     }
 
+    /// 账号名加原子序号：仅靠毫秒时间戳时，同组串行测试背靠背执行可能落在
+    /// 同一毫秒 → 撞名 → 读到上一测试留在全局注册表里的条目（2026-09-11
+    /// CI tri_state_and_write_through 偶发失败根因：首查期望 Unknown 实得 Protect）
     fn fresh_account() -> String {
-        format!("pet-cache-test-{}", crate::services::friend::visit_strategy::now_ms())
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        format!("pet-cache-test-{}-{seq}", crate::services::friend::visit_strategy::now_ms())
     }
 
     #[test]

@@ -625,7 +625,11 @@ mod tests {
 
     #[test]
     fn stop_friend_pet_sync_cancels_token() {
-        let acc = format!("pet-sync-test-{}", crate::services::friend::visit_strategy::now_ms());
+        // 序号后缀防同毫秒撞名（同 pet_cache::tests::fresh_account 的隔离缺陷）
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let acc =
+            format!("pet-sync-test-{}-{seq}", crate::services::friend::visit_strategy::now_ms());
         assert!(!is_friend_pet_sync_active(&acc));
         active_tokens().lock().insert(acc.clone(), CancellationToken::new());
         assert!(is_friend_pet_sync_active(&acc));
