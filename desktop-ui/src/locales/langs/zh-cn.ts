@@ -930,7 +930,7 @@ const local: App.I18n.Schema = {
         fertilizerBuyNormalThreshold: '触发阈值 (小时)',
         fertilizerBuyCheckInterval: '检测间隔 (分钟)',
         fertilizerBuyHint:
-          '系统会按照设定的检测间隔定时检测化肥容器剩余量，当低于触发阈值时自动购买。保存设置后会立即检测一次。同时开启两种化肥购买时，优先购买有机化肥。',
+          '有机/无机同一套机制：施肥后立即检测余量，低于触发阈值当场补购；另有定时兜底。保存设置后会立即检测一次。双开时优先买有机化肥。',
         fertilizerMultiSeason: '多季补肥',
         fertilizerLandTypes: '施肥范围',
         fertilizerLandTypesHint: '施肥前会优先按土地类型过滤，仅对命中范围的地块执行施肥策略。',

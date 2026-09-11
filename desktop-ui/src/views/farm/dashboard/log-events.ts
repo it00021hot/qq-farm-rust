@@ -49,8 +49,9 @@ const EVENT_LABELS: Record<string, string> = {
   ws_close: '连接关闭',
   offline_delete: '离线删除',
   // 对齐后端 PanelEvent 全量 key（panel_events.rs），新增事件必须同步补这里
-  charity_settlement_gift_open: '公益礼包',
-  pet_op: '萌宠操作',
+  // 公益活动正式名「公益小红花」；本事件是结算礼包开启（区别于每日公益礼包）
+  charity_settlement_gift_open: '公益结算礼包',
+  pet_op: '宠物操作',
   dog_skill_gift: '同气连枝礼包',
   mystery_shop_watch: '神秘商人'
 };

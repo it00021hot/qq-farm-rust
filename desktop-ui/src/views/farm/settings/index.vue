@@ -1439,16 +1439,6 @@ onUnmounted(() => {
                   <NInputNumber v-model:value="fertilizerBuy.normalThresholdHours" class="w-full" :min="1" :max="990" />
                 </NFormItem>
               </div>
-              <div class="grid gap-12px sm:grid-cols-2 md:grid-cols-3">
-                <NFormItem :label="$t('page.farm.settings.fertilizerBuyCheckInterval')">
-                  <NInputNumber
-                    v-model:value="fertilizerBuy.checkIntervalMinutes"
-                    class="w-full"
-                    :min="1"
-                    :max="1440"
-                  />
-                </NFormItem>
-              </div>
               <NText depth="3" class="text-12px">{{ $t('page.farm.settings.fertilizerBuyHint') }}</NText>
             </NForm>
           </template>

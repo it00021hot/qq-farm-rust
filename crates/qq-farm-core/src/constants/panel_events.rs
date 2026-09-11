@@ -292,8 +292,10 @@ mod tests {
         };
         for event in ALL {
             let key = event.as_str();
+            // 要求独立属性行（`  key:`），避免子串误匹配
+            let needle = format!("\n  {key}:");
             assert!(
-                ts.contains(&format!("{key}:")),
+                ts.contains(&needle) || ts.contains(&format!("\n\t{key}:")),
                 "desktop-ui log-events.ts 缺少事件 {key} 的中文标签"
             );
         }

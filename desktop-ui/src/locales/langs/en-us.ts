@@ -935,7 +935,7 @@ const local: App.I18n.Schema = {
         fertilizerBuyNormalThreshold: 'Trigger Threshold (h)',
         fertilizerBuyCheckInterval: 'Check Interval (min)',
         fertilizerBuyHint:
-          'The system checks fertilizer container remaining on the interval and buys when below threshold. Saving triggers an immediate check. When both buys are on, organic is preferred.',
+          'Organic and inorganic share the same flow: after fertilizing, remaining is checked and bought below threshold; a timer is only fallback. Saving triggers an immediate check. When both are on, organic is preferred.',
         fertilizerMultiSeason: 'Multi-season Refertilize',
         fertilizerLandTypes: 'Fertilizer Scope',
         fertilizerLandTypesHint: 'Fertilizer runs only on lands matching the selected types.',

@@ -1149,3 +1149,19 @@
   高负载下偶发，单跑通过）；`corepack pnpm typecheck`+`build` 通过
 - **实机待验**：小号有机肥耗尽场景——施肥日志后几秒内出现「已自动补充
   化肥」面板日志，化肥桶数字随之跳动
+
+### 2026-09-11 — 实机反馈三连优化：化肥去间隔 UI、神秘商人标签、萌宠可夺下拉
+
+- **化肥购买去「检测间隔」**（settings）：有机/无机已统一为事件驱动补购
+  （施肥后即检 + 定时兜底），设置页再暴露「检测间隔」易被当成无机专属；
+  UI 去掉该字段，hint 改为说明事件驱动；后端仍读既有
+  `fertilizer_buy_check_interval_minutes` 作兜底
+- **神秘商人标签**：上一提交已补 `mystery_shop_watch → 神秘商人` 与防回归
+  测试；需前端 rebuild 后生效
+- **萌宠夺宝下拉只列可夺好友**（pet-diary-view）：拉好友后限并发探测
+  op47，仅保留「护送中 + canStart」好友；排除黑名单；「刷新可夺」
+  按钮；查询结果同样只展示可开战宝藏；tag 手输 GID 逃生口保留
+- 验证：`corepack pnpm typecheck`+`build` 通过；
+  `cargo test -p qq-farm-core every_panel_event_has_frontend_label` 通过
+- **实机待验**：设置页无机块无检测间隔；日志 chip 显示「神秘商人」；
+  萌宠下拉仅为可夺好友
