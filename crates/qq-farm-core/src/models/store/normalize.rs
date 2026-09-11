@@ -54,8 +54,8 @@ pub const DEFAULT_FERTILIZER_LAND_TYPES: &[FertilizerLandType] = &[
 pub const DEFAULT_PLANT_BLACKLIST: &[i64] =
     &[20_002, 20_003, 20_059, 20_065, 20_064, 20_060, 20_061];
 
-/// 默认 bag seed priority（对齐 bot：空列表）
-pub const DEFAULT_BAG_SEED_PRIORITY: &[i64] = &[];
+/// 默认背包种子优先顺序（对齐本机账号 1；仅新账号初始值）
+pub const DEFAULT_BAG_SEED_PRIORITY: &[i64] = &[29_003, 20_129, 21_380, 20_108, 26_032];
 
 /// 智能施肥秒数（对齐 Go `DefaultAccountConfig` / 面板默认 360）
 pub const DEFAULT_FERTILIZER_SMART_SECONDS: i64 = 360;
@@ -182,8 +182,9 @@ pub fn normalize_intervals(intervals: IntervalConfig) -> IntervalConfig {
     }
 }
 
-/// 默认 AccountConfig（自动化开关维持用户既有状态：帮忙/捣乱/经验满关、
-/// 填充化肥开。仅作新账号初始值，绝不改写用户已保存的设置）
+/// 默认 AccountConfig（对齐本机账号 1 的自动化/策略：帮忙/捣乱/经验满关、
+/// 填充化肥开、背包优先、静默 01:00–08:30、偷菜间隔 60–90。
+/// 仅作新账号初始值，绝不改写用户已保存的设置）
 #[must_use]
 pub fn default_account_config() -> AccountConfig {
     AccountConfig {
@@ -218,7 +219,7 @@ pub fn default_account_config() -> AccountConfig {
             mystery_shop_allow_gold_bean: false,
             mystery_shop_allow_diamond: false,
         },
-        planting_strategy: PlantingStrategy::MaxExp,
+        planting_strategy: PlantingStrategy::BagPriority,
         preferred_seed_id: 0,
         intervals: IntervalConfig {
             farm: 2,
@@ -226,14 +227,14 @@ pub fn default_account_config() -> AccountConfig {
             farm_max: 25,
             help_min: 20,
             help_max: 25,
-            steal_min: 20,
-            steal_max: 25,
+            steal_min: 60,
+            steal_max: 90,
             extra: Default::default(),
         },
         friend_quiet_hours: QuietHoursConfig {
-            enabled: false,
+            enabled: true,
             start: "01:00".to_string(),
-            end: "07:30".to_string(),
+            end: "08:30".to_string(),
             continue_farm: true,
         },
         known_friend_gids: vec![],
@@ -250,7 +251,7 @@ pub fn default_account_config() -> AccountConfig {
         fertilizer_buy_normal_threshold_hours: 10,
         fertilizer_buy_check_interval_minutes: 60,
         bag_seed_priority: DEFAULT_BAG_SEED_PRIORITY.to_vec(),
-        bag_seed_fallback_strategy: BagSeedFallbackStrategy::Level,
+        bag_seed_fallback_strategy: BagSeedFallbackStrategy::Preferred,
         bag_seed_land_types: Default::default(),
         auto_accept_friend_min_level: 0,
         auto_accept_require_own_level: false,
@@ -333,7 +334,8 @@ mod tests {
     #[test]
     fn default_account_config_valid() {
         let cfg = default_account_config();
-        assert_eq!(cfg.planting_strategy, PlantingStrategy::MaxExp);
+        assert_eq!(cfg.planting_strategy, PlantingStrategy::BagPriority);
+        assert_eq!(cfg.bag_seed_fallback_strategy, BagSeedFallbackStrategy::Preferred);
         assert_eq!(cfg.automation.fertilizer_land_types.len(), 5);
         assert!(cfg.automation.farm);
         assert!(cfg.automation.friend);
@@ -346,9 +348,11 @@ mod tests {
         assert!(!cfg.automation.fertilizer_buy_normal);
         assert!(cfg.automation.skip_own_weed_bug);
         assert_eq!(cfg.automation.fertilizer_smart_seconds, 360);
-        assert_eq!(cfg.intervals.steal_min, 20);
-        assert_eq!(cfg.intervals.steal_max, 25);
-        assert!(cfg.bag_seed_priority.is_empty());
+        assert_eq!(cfg.intervals.steal_min, 60);
+        assert_eq!(cfg.intervals.steal_max, 90);
+        assert!(cfg.friend_quiet_hours.enabled);
+        assert_eq!(cfg.friend_quiet_hours.end, "08:30");
+        assert_eq!(cfg.bag_seed_priority, DEFAULT_BAG_SEED_PRIORITY);
         assert_eq!(cfg.fertilizer_buy_organic_threshold_hours, 10);
         assert_eq!(PREVIOUS_DEFAULT_CLIENT_VERSION, "1.13.0.5_20260723");
     }
@@ -361,7 +365,7 @@ mod tests {
 
     #[test]
     fn bag_seed_priority_default() {
-        assert!(DEFAULT_BAG_SEED_PRIORITY.is_empty());
+        assert_eq!(DEFAULT_BAG_SEED_PRIORITY, &[29_003, 20_129, 21_380, 20_108, 26_032]);
     }
 
     #[test]

@@ -494,16 +494,13 @@ const local: App.I18n.Schema = {
         bagCatTool: 'Tool',
         bagCatOther: 'Other',
         use: 'Use',
-        useConfirm: 'Use 1 of this item?',
         useSuccess: 'Used successfully',
         useFailed: 'Use failed',
         sell: 'Sell',
-        sellConfirm: 'Sell this item?',
         sellSuccess: 'Sold successfully',
         sellFailed: 'Sell failed',
         sellNotFound: 'No sellable items found',
         batchSell: 'Batch Sell',
-        batchSellConfirm: 'Sell {count} selected item type(s)?',
         batchSellSuccess: 'Batch sell succeeded',
         batchSellEmpty: 'Select sellable items first',
         dailyGiftsTitle: 'Daily Gifts & Tasks',
@@ -528,13 +525,6 @@ const local: App.I18n.Schema = {
           clear: 'Maintain',
           plant: 'Plant',
           upgrade: 'Upgrade Lands'
-        },
-        confirm: {
-          all: 'Run all farm operations?',
-          harvest: 'Harvest all mature crops?',
-          clear: 'Weed, de-bug, and water all lands?',
-          plant: 'Plant on all empty lands?',
-          upgrade: 'Upgrade all upgradable lands?'
         }
       },
       account: {
@@ -910,7 +900,6 @@ const local: App.I18n.Schema = {
         autoAcceptHarvestStealSteal: 'Steal count',
         autoAcceptHint:
           'Friend requests are accepted automatically; filter by level and career steal/harvest ratio (ratio = steal / harvest).',
-        showManualFertilizer: 'Show manual fertilize button',
         timeZone: 'Time zone',
         farm: 'Auto Plant & Harvest',
         farmPush: 'Push-triggered Farm Check',

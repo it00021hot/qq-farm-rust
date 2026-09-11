@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import { NButton, NCard, NCheckbox, NEmpty, NPopconfirm, NSpace, NSpin, NTag, useMessage } from 'naive-ui';
+import { NButton, NCard, NCheckbox, NEmpty, NSpace, NSpin, NTag, useMessage } from 'naive-ui';
 import { fetchGetFarmBag, fetchSellFarmBag, fetchUseFarmBag } from '@/service/api';
 import {
   COUPON_ITEM_ID,
@@ -272,15 +272,17 @@ defineExpose({ refresh: loadBag });
         <NButton v-if="batchMode" size="small" quaternary @click="selectAllSellable">
           {{ $t('common.selectAll') }}
         </NButton>
-        <NPopconfirm v-if="batchMode" :disabled="selectedSellableCount === 0" @positive-click="handleBatchSell">
-          <template #trigger>
-            <NButton size="small" type="error" :loading="batchSelling" :disabled="selectedSellableCount === 0">
-              {{ $t('page.farm.personal.batchSell') }}
-              <span v-if="selectedSellableCount > 0" class="ml-4px">({{ selectedSellableCount }})</span>
-            </NButton>
-          </template>
-          {{ $t('page.farm.personal.batchSellConfirm', { count: selectedSellableCount }) }}
-        </NPopconfirm>
+        <NButton
+          v-if="batchMode"
+          size="small"
+          type="error"
+          :loading="batchSelling"
+          :disabled="selectedSellableCount === 0"
+          @click="handleBatchSell"
+        >
+          {{ $t('page.farm.personal.batchSell') }}
+          <span v-if="selectedSellableCount > 0" class="ml-4px">({{ selectedSellableCount }})</span>
+        </NButton>
       </NSpace>
     </template>
 
@@ -356,22 +358,24 @@ defineExpose({ refresh: loadBag });
           </div>
           <!-- 批量模式只隐藏"出售"；"使用"保持可用，否则不可出售的道具（如同气连枝礼包）会没有任何操作 -->
           <div v-if="!batchMode || canUse(item)" class="mt-8px flex-center gap-6px">
-            <NPopconfirm v-if="!batchMode && canSell(item)" @positive-click="handleSell(item)">
-              <template #trigger>
-                <NButton size="tiny" type="error" :loading="sellingId === item.id">
-                  {{ $t('page.farm.personal.sell') }}
-                </NButton>
-              </template>
-              {{ $t('page.farm.personal.sellConfirm') }}
-            </NPopconfirm>
-            <NPopconfirm v-if="canUse(item)" @positive-click="handleUse(item)">
-              <template #trigger>
-                <NButton size="tiny" type="primary" :loading="usingId === item.id">
-                  {{ $t('page.farm.personal.use') }}
-                </NButton>
-              </template>
-              {{ $t('page.farm.personal.useConfirm') }}
-            </NPopconfirm>
+            <NButton
+              v-if="!batchMode && canSell(item)"
+              size="tiny"
+              type="error"
+              :loading="sellingId === item.id"
+              @click="handleSell(item)"
+            >
+              {{ $t('page.farm.personal.sell') }}
+            </NButton>
+            <NButton
+              v-if="canUse(item)"
+              size="tiny"
+              type="primary"
+              :loading="usingId === item.id"
+              @click="handleUse(item)"
+            >
+              {{ $t('page.farm.personal.use') }}
+            </NButton>
           </div>
         </div>
       </div>

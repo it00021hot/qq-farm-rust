@@ -139,12 +139,12 @@ function createDefaultSystemConfig(): SystemConfigPayload {
   };
 }
 
-const plantingStrategy = ref('preferred');
+const plantingStrategy = ref('bag_priority');
 const preferredSeedId = ref<number | null>(0);
-const bagSeedPriority = ref<number[]>([]);
-const bagSeedFallbackStrategy = ref('level');
-const plantOrderRandom = ref(false);
-const plantDelaySeconds = ref(0);
+const bagSeedPriority = ref<number[]>([29003, 20129, 21380, 20108, 26032]);
+const bagSeedFallbackStrategy = ref('preferred');
+const plantOrderRandom = ref(true);
+const plantDelaySeconds = ref(2);
 const stealDelaySeconds = ref(1);
 const plantBlacklist = ref<number[]>([]);
 const intervals = reactive<Api.Farm.IntervalsConfig>({
@@ -152,13 +152,13 @@ const intervals = reactive<Api.Farm.IntervalsConfig>({
   farmMax: 25,
   helpMin: 20,
   helpMax: 25,
-  stealMin: 10,
-  stealMax: 15
+  stealMin: 60,
+  stealMax: 90
 });
 const quietHours = reactive<Api.Farm.QuietHoursConfig>({
-  enabled: false,
+  enabled: true,
   start: '01:00',
-  end: '07:30',
+  end: '08:30',
   continueFarm: true
 });
 
@@ -167,7 +167,7 @@ const friendAutoAccept = reactive({
   enabled: true,
   minLevel: 0,
   requireOwnLevel: false,
-  harvestStealEnabled: false,
+  harvestStealEnabled: true,
   harvest: 8,
   steal: 1
 });
@@ -258,8 +258,7 @@ const automation = reactive<Api.Farm.AutomationConfig>({
   mystery_shop_allow_coupon: false,
   mystery_shop_allow_gold_bean: false,
   mystery_shop_allow_diamond: false,
-  friend_auto_accept: true,
-  show_manual_fertilizer: true
+  friend_auto_accept: true
 });
 
 const showFertilizerBuyPanel = computed(
@@ -634,20 +633,19 @@ function applyDetail(data: Api.Farm.AccountAutomationDetail) {
   automation.mystery_shop_allow_gold_bean = !!src.mystery_shop_allow_gold_bean;
   automation.mystery_shop_allow_diamond = !!src.mystery_shop_allow_diamond;
   automation.friend_auto_accept = src.friend_auto_accept !== false;
-  automation.show_manual_fertilizer = src.show_manual_fertilizer !== false;
 
   if (data.intervals) Object.assign(intervals, data.intervals);
   if (data.friendQuietHours) Object.assign(quietHours, data.friendQuietHours);
   friendAutoAccept.enabled = data.friendAutoAccept !== false;
   friendAutoAccept.minLevel = Number(data.autoAcceptFriendMinLevel ?? 0);
   friendAutoAccept.requireOwnLevel = !!data.autoAcceptRequireOwnLevel;
-  friendAutoAccept.harvestStealEnabled = !!data.autoAcceptHarvestStealEnabled;
+  friendAutoAccept.harvestStealEnabled = data.autoAcceptHarvestStealEnabled !== false;
   friendAutoAccept.harvest = Number(data.autoAcceptHarvestStealHarvest ?? 8);
   friendAutoAccept.steal = Number(data.autoAcceptHarvestStealSteal ?? 1);
-  plantingStrategy.value = data.plantingStrategy || 'preferred';
+  plantingStrategy.value = data.plantingStrategy || 'bag_priority';
   preferredSeedId.value = data.preferredSeedId ?? 0;
   bagSeedPriority.value = [...(data.bagSeedPriority || [])];
-  bagSeedFallbackStrategy.value = data.bagSeedFallbackStrategy || 'level';
+  bagSeedFallbackStrategy.value = data.bagSeedFallbackStrategy || 'preferred';
   plantOrderRandom.value = !!data.plantOrderRandom;
   plantDelaySeconds.value = data.plantDelaySeconds ?? 0;
   stealDelaySeconds.value = data.stealDelaySeconds ?? 1;
@@ -750,11 +748,9 @@ async function handleSaveAutomation() {
         mystery_shop_allow_coupon: automation.mystery_shop_allow_coupon,
         mystery_shop_allow_gold_bean: automation.mystery_shop_allow_gold_bean,
         mystery_shop_allow_diamond: automation.mystery_shop_allow_diamond,
-        friend_auto_accept: automation.friend_auto_accept,
-        show_manual_fertilizer: automation.show_manual_fertilizer
+        friend_auto_accept: automation.friend_auto_accept
       },
       friendAutoAccept: friendAutoAccept.enabled,
-      showManualFertilizer: automation.show_manual_fertilizer,
       autoAcceptFriendMinLevel: friendAutoAccept.minLevel,
       autoAcceptRequireOwnLevel: friendAutoAccept.requireOwnLevel,
       autoAcceptHarvestStealEnabled: friendAutoAccept.harvestStealEnabled,
@@ -1377,10 +1373,6 @@ onUnmounted(() => {
             <div class="auto-switch-item">
               <NSwitch v-model:value="automation.skip_own_weed_bug" />
               <span>{{ $t('page.farm.settings.skipOwnWeedBug') }}</span>
-            </div>
-            <div class="auto-switch-item">
-              <NSwitch v-model:value="automation.show_manual_fertilizer" />
-              <span>{{ $t('page.farm.settings.showManualFertilizer') }}</span>
             </div>
             <div class="auto-switch-item">
               <NSwitch v-model:value="automation.mystery_shop_auto_buy" />

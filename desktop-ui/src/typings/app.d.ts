@@ -732,16 +732,13 @@ declare namespace App {
             bagCatTool: string;
             bagCatOther: string;
             use: string;
-            useConfirm: string;
             useSuccess: string;
             useFailed: string;
             sell: string;
-            sellConfirm: string;
             sellSuccess: string;
             sellFailed: string;
             sellNotFound: string;
             batchSell: string;
-            batchSellConfirm: string;
             batchSellSuccess: string;
             batchSellEmpty: string;
             dailyGiftsTitle: string;
@@ -761,13 +758,6 @@ declare namespace App {
             operateSuccess: string;
             operateFailed: string;
             op: {
-              all: string;
-              harvest: string;
-              clear: string;
-              plant: string;
-              upgrade: string;
-            };
-            confirm: {
               all: string;
               harvest: string;
               clear: string;
@@ -1145,7 +1135,6 @@ declare namespace App {
             autoAcceptHarvestStealHarvest: string;
             autoAcceptHarvestStealSteal: string;
             autoAcceptHint: string;
-            showManualFertilizer: string;
             timeZone: string;
             farm: string;
             farmPush: string;

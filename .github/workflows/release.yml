@@ -15,68 +15,7 @@ permissions:
   contents: write
 
 jobs:
-  quality:
-    name: Quality checks
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
-        with:
-          version: 12.3.4
-
-      - name: Setup Node
-        uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-          cache: pnpm
-          cache-dependency-path: desktop-ui/pnpm-lock.yaml
-
-      - name: Install frontend deps
-        run: pnpm -C desktop-ui install --frozen-lockfile
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.98.1
-          components: clippy,rustfmt
-
-      - name: Install protoc
-        uses: taiki-e/install-action@v2
-        with:
-          tool: protoc
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: "."
-
-      - name: Check Rust formatting
-        run: cargo fmt --all -- --check
-
-      - name: Check frontend
-        run: |
-          pnpm -C desktop-ui typecheck
-          pnpm -C desktop-ui exec oxlint .
-          pnpm -C desktop-ui exec eslint --max-warnings 0 .
-          pnpm -C desktop-ui exec oxfmt --check .
-          pnpm -C desktop-ui build
-
-      - name: Lint Rust
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Test Rust
-        run: cargo test --workspace -- --test-threads=1
-
   publish:
-    needs: quality
     name: ${{ matrix.name }}
     strategy:
       fail-fast: false

@@ -523,9 +523,9 @@ mod tests {
         let cfg = AccountConfig::default();
         let json = serde_json::to_string(&cfg).unwrap();
         let back: AccountConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.planting_strategy, PlantingStrategy::MaxExp);
+        assert_eq!(back.planting_strategy, PlantingStrategy::BagPriority);
         assert_eq!(back.intervals.farm, 2);
-        assert_eq!(back.intervals.steal_min, 20);
+        assert_eq!(back.intervals.steal_min, 60);
         assert!(back.automation.farm);
         assert!(back.automation.sell);
         assert!(back.automation.skip_own_weed_bug);
@@ -534,7 +534,7 @@ mod tests {
         assert!(!back.automation.friend_help_exp_limit);
         assert!(back.automation.fertilizer_gift);
         assert_eq!(back.automation.fertilizer_smart_seconds, 360);
-        assert!(back.bag_seed_priority.is_empty());
+        assert_eq!(back.bag_seed_priority, vec![29_003, 20_129, 21_380, 20_108, 26_032]);
     }
 
     #[test]

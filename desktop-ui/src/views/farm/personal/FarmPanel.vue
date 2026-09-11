@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
-import { NButton, NCard, NEmpty, NPopconfirm, NSpace, NSpin, NTag, useMessage } from 'naive-ui';
+import { NButton, NCard, NEmpty, NSpace, NSpin, NTag, useMessage } from 'naive-ui';
 import { fetchFarmOperate, fetchGetFarmLands } from '@/service/api';
 import LandCountdown from '@/views/farm/shared/LandCountdown.vue';
 import { useFarmAccountStore } from '@/store/modules/farm-account';
@@ -182,14 +182,18 @@ defineExpose({ refresh: loadLands });
   <NCard :title="$t('page.farm.personal.landsTitle')" :bordered="false" size="small" class="card-wrapper">
     <template #header-extra>
       <NSpace size="small">
-        <NPopconfirm v-for="item in visibleOperateOptions" :key="item.op" @positive-click="handleOperate(item.op)">
-          <template #trigger>
-            <NButton size="small" :type="item.type" ghost :loading="operating" :disabled="!connected">
-              {{ $t(`page.farm.personal.op.${item.op}`) }}
-            </NButton>
-          </template>
-          {{ $t(`page.farm.personal.confirm.${item.op}`) }}
-        </NPopconfirm>
+        <NButton
+          v-for="item in visibleOperateOptions"
+          :key="item.op"
+          size="small"
+          :type="item.type"
+          ghost
+          :loading="operating"
+          :disabled="!connected"
+          @click="handleOperate(item.op)"
+        >
+          {{ $t(`page.farm.personal.op.${item.op}`) }}
+        </NButton>
       </NSpace>
     </template>
 

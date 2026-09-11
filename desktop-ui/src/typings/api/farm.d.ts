@@ -104,8 +104,6 @@ declare namespace Api {
       mystery_shop_allow_diamond?: boolean;
       /** 自动通过好友申请（默认开） */
       friend_auto_accept?: boolean;
-      /** 土地卡展示「手动施肥」按钮（默认开，仅影响显示） */
-      show_manual_fertilizer?: boolean;
     };
 
     type IntervalsConfig = {
@@ -185,7 +183,6 @@ declare namespace Api {
       friendBlacklist?: number[];
       plantBlacklist?: number[];
       friendAutoAccept?: boolean;
-      showManualFertilizer?: boolean;
       autoAcceptFriendMinLevel?: number;
       autoAcceptRequireOwnLevel?: boolean;
       autoAcceptHarvestStealEnabled?: boolean;
@@ -214,7 +211,6 @@ declare namespace Api {
       friendBlacklist?: number[];
       plantBlacklist?: number[];
       friendAutoAccept?: boolean;
-      showManualFertilizer?: boolean;
       autoAcceptFriendMinLevel?: number;
       autoAcceptRequireOwnLevel?: boolean;
       autoAcceptHarvestStealEnabled?: boolean;

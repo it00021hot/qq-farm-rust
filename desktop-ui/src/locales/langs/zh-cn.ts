@@ -490,16 +490,13 @@ const local: App.I18n.Schema = {
         bagCatTool: '道具',
         bagCatOther: '其他',
         use: '使用',
-        useConfirm: '确认使用 1 个该物品吗？',
         useSuccess: '使用成功',
         useFailed: '使用失败',
         sell: '出售',
-        sellConfirm: '确认出售该物品吗？',
         sellSuccess: '出售成功',
         sellFailed: '出售失败',
         sellNotFound: '未找到可出售物品',
         batchSell: '批量出售',
-        batchSellConfirm: '确认出售选中的 {count} 种物品吗？',
         batchSellSuccess: '批量出售成功',
         batchSellEmpty: '请先勾选可出售物品',
         dailyGiftsTitle: '每日礼包 & 任务',
@@ -524,13 +521,6 @@ const local: App.I18n.Schema = {
           clear: '一键务农',
           plant: '种植',
           upgrade: '升级土地'
-        },
-        confirm: {
-          all: '确定执行一键全收吗？',
-          harvest: '确定收获所有成熟作物吗？',
-          clear: '确定一键务农吗？(除草+除虫+浇水)',
-          plant: '确定一键种植吗？',
-          upgrade: '确定升级所有可升级的土地吗？'
         }
       },
       account: {
@@ -905,7 +895,6 @@ const local: App.I18n.Schema = {
         autoAcceptHarvestStealHarvest: '收获份数',
         autoAcceptHarvestStealSteal: '偷菜份数',
         autoAcceptHint: '开启后自动通过好友申请；可按等级与生涯收偷比过滤（收偷比 = 偷菜份数 / 收获份数）。',
-        showManualFertilizer: '显示手动施肥按钮',
         timeZone: '时区',
         farm: '自动种植收获',
         farmPush: '推送触发巡田',

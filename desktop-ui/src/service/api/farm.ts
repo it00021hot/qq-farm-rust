@@ -140,12 +140,9 @@ function toAutomationDetail(raw: any, accountId: number): Api.Farm.AccountAutoma
     friendBlacklist: Array.isArray(raw?.friendBlacklist) ? raw.friendBlacklist.map(Number) : [],
     plantBlacklist: Array.isArray(raw?.plantBlacklist) ? raw.plantBlacklist.map(Number) : [],
     friendAutoAccept: Boolean(raw?.automation?.friend_auto_accept ?? raw?.automation?.friendAutoAccept ?? true),
-    showManualFertilizer: Boolean(
-      raw?.automation?.show_manual_fertilizer ?? raw?.automation?.showManualFertilizer ?? true
-    ),
     autoAcceptFriendMinLevel: Number(raw?.autoAcceptFriendMinLevel ?? 0),
     autoAcceptRequireOwnLevel: !!raw?.autoAcceptRequireOwnLevel,
-    autoAcceptHarvestStealEnabled: !!raw?.autoAcceptHarvestStealEnabled,
+    autoAcceptHarvestStealEnabled: raw?.autoAcceptHarvestStealEnabled !== false,
     autoAcceptHarvestStealHarvest: Number(raw?.autoAcceptHarvestStealHarvest ?? 8),
     autoAcceptHarvestStealSteal: Number(raw?.autoAcceptHarvestStealSteal ?? 1),
     fertilizerBuyOrganicCount: Number(raw?.fertilizerBuyOrganicCount ?? 1),

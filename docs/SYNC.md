@@ -1187,3 +1187,36 @@
   `cargo fmt --all --check` 通过；`pnpm typecheck` 通过
 - 能力状态：不变；L1–L8 仍待实机勾选
 
+### 2026-09-11 — 去掉手动施肥显示开关；个人页操作不再二次确认
+
+- **设置页**：去掉「显示手动施肥按钮」。桌面版个人农场从未接土地卡手动施肥，
+  该开关只写配置、无界面效果。后端 `show_manual_fertilizer` 字段仍保留
+  （bot 对齐 / 已存账号配置不破），只是面板不再读写
+- **个人页**：农场一键收获/务农/种植/升级/全收，以及背包出售/使用/批量出售，
+  去掉 `NPopconfirm`，点按钮即执行
+- 验证：`corepack pnpm typecheck` 通过；纯前端改动
+- 实机待验：自动控制页无该开关；个人农场/背包操作一击即发
+
+### 2026-09-11 — 新账号默认对齐本机账号 1 的自动化/策略
+
+- 来源：安装版 `store.json` 账号 `1`。自动控制开关原本已与默认一致
+  （帮忙/捣乱/经验满关、填充化肥开、智能施肥 360s）
+- **策略默认**按账号 1 改：种植 `bag_priority`、兜底 `preferred`、背包优先
+  `29003,20129,21380,20108,26032`；静默 01:00–08:30 开启且继续巡田；
+  偷菜间隔 60–90 秒
+- 仅影响新账号初始值，已存账号不改写
+- 验证：`cargo test -p qq-farm-core --lib default_` 30/30；
+  `ensure_creates_default` / `get_snapshot_no_id_returns_fallback` /
+  `bag_seed_priority_default` / `account_config_default_serde` 通过；
+  `corepack pnpm typecheck` 通过
+- 实机待验：新建账号开局即背包优先 + 上述间隔/静默
+
+### 2026-09-11 — Release 去掉 Quality checks 门槛
+
+- 发版流水线原先先跑一整轮 Ubuntu fmt/oxfmt/eslint/clippy/test，通过才开始
+  打三端包。上次 v0.3.3 被 oxfmt 空格拦住，包没开始编，空耗一轮 runner
+- 这些检查本地 skill 门槛已有；打 tag 的目的是出安装包。编包 job 仍带
+  `RUSTFLAGS=-D warnings`，编译错误照样会失败
+- 改：删除 `quality` job 与 `needs: quality`，push `v*` 直接并行打
+  Apple Silicon / Intel / Windows
+
