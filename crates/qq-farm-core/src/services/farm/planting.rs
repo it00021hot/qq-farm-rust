@@ -92,6 +92,76 @@ fn fertilizer_types_to_analysis(
         .collect()
 }
 
+/// 施肥面板日志上下文：账号 + 原因（常规/多季），对齐 bot `runFertilizerByConfig` 日志
+struct FertLogCtx<'a> {
+    account_id: &'a str,
+    reason: &'static str,
+    reason_label: &'static str,
+}
+
+impl<'a> FertLogCtx<'a> {
+    fn new(account_id: &'a str, multi_season: bool) -> Self {
+        Self {
+            account_id,
+            reason: if multi_season { "multi_season" } else { "normal" },
+            reason_label: if multi_season { "多季补肥" } else { "常规施肥" },
+        }
+    }
+
+    /// 空账号（单测/无 hook）时静默，对齐 bot 面板日志行为
+    fn log(&self, msg: String, extra: serde_json::Value) {
+        if self.account_id.is_empty() {
+            return;
+        }
+        crate::services::panel_log::log(
+            self.account_id,
+            "施肥",
+            msg,
+            crate::constants::PanelEvent::Fertilize,
+            Some(extra),
+        );
+    }
+
+    fn log_warn(&self, msg: String, extra: serde_json::Value) {
+        if self.account_id.is_empty() {
+            return;
+        }
+        crate::services::panel_log::log_warn(
+            self.account_id,
+            "施肥",
+            msg,
+            crate::constants::PanelEvent::Fertilize,
+            Some(extra),
+        );
+    }
+}
+
+/// 勾选的施肥土地类型范围（日志展示用：中文名 + 原始 id）
+struct FertScope {
+    labels: Vec<&'static str>,
+    ids: Vec<&'static str>,
+}
+
+impl FertScope {
+    fn new(types: &[crate::services::farm::land_analysis::LandType]) -> Self {
+        use crate::services::farm::land_analysis::{
+            fertilizer_land_type_id, fertilizer_land_type_label,
+        };
+        Self {
+            labels: types.iter().copied().map(fertilizer_land_type_label).collect(),
+            ids: types.iter().copied().map(fertilizer_land_type_id).collect(),
+        }
+    }
+
+    fn label(&self) -> String {
+        self.labels.join("、")
+    }
+
+    fn ids(&self) -> &Vec<&'static str> {
+        &self.ids
+    }
+}
+
 /// 种植配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlantingConfig {
@@ -506,9 +576,10 @@ impl PlantingEngine {
     ) -> Result<FertilizeResult> {
         use crate::models::types::FertilizerMode;
         use crate::services::farm::land_analysis::{
-            filter_ids_by_land_types, get_fast_mature_lands,
-            get_organic_fertilizer_targets_from_lands, ALL_FERTILIZER_LAND_TYPES,
+            filter_ids_by_land_types, ALL_FERTILIZER_LAND_TYPES,
         };
+
+        let log_ctx = FertLogCtx::new(account_id, options.multi_season);
 
         let auto = if account_id.is_empty() {
             None
@@ -524,6 +595,12 @@ impl PlantingEngine {
                 FertilizeMode::Smart => FertilizerMode::Smart,
             });
         if matches!(mode, FertilizerMode::None) {
+            log_ctx.log(
+                format!("{}：当前施肥策略为不施肥，跳过", log_ctx.reason_label),
+                serde_json::json!({
+                    "module": "farm", "result": "skip", "reason": log_ctx.reason, "type": "none",
+                }),
+            );
             return Ok(FertilizeResult::default());
         }
 
@@ -532,8 +609,15 @@ impl PlantingEngine {
             .map(|a| fertilizer_types_to_analysis(&a.fertilizer_land_types))
             .unwrap_or_else(|| ALL_FERTILIZER_LAND_TYPES.to_vec());
         if selected.is_empty() {
+            log_ctx.log(
+                format!("{}：未勾选施肥范围，跳过本轮施肥", log_ctx.reason_label),
+                serde_json::json!({
+                    "module": "farm", "result": "skip", "reason": log_ctx.reason, "scope": "none",
+                }),
+            );
             return Ok(FertilizeResult::default());
         }
+        let scope = FertScope::new(&selected);
 
         let planted: Vec<i64> = {
             let mut seen = std::collections::HashSet::new();
@@ -545,12 +629,24 @@ impl PlantingEngine {
                 FertilizerMode::Organic | FertilizerMode::Both | FertilizerMode::Smart
             )
         {
+            log_ctx.log(
+                format!("{}：没有可施肥地块，跳过", log_ctx.reason_label),
+                serde_json::json!({
+                    "module": "farm", "result": "skip", "reason": log_ctx.reason, "count": 0,
+                }),
+            );
             return Ok(FertilizeResult::default());
         }
 
         let latest_lands = self.api.get_all_lands(0).await.map(|r| r.lands).unwrap_or_default();
-        // 拉地失败/空列表时 fail-closed：无法确认土地类型则跳过本轮施肥（对齐 bot）
+        // 拉地失败/空列表时 fail-closed：无法确认土地类型则跳过本轮施肥（比 bot 更严，保守）
         if latest_lands.is_empty() {
+            log_ctx.log_warn(
+                format!("{}：获取土地信息失败，已跳过本轮施肥", log_ctx.reason_label),
+                serde_json::json!({
+                    "module": "farm", "result": "error", "reason": log_ctx.reason,
+                }),
+            );
             return Ok(FertilizeResult::default());
         }
 
@@ -559,45 +655,26 @@ impl PlantingEngine {
         let mut result = FertililzeResultBuilder::default();
         if !options.skip_normal
             && matches!(mode, FertilizerMode::Normal | FertilizerMode::Both | FertilizerMode::Smart)
-            && !normal_targets.is_empty()
         {
-            for (i, &land_id) in normal_targets.iter().enumerate() {
-                if self.api.fertilize(land_id, NORMAL_FERTILIZER_ID).await.is_err() {
-                    break;
-                }
-                result.normal += 1;
-                if i + 1 < normal_targets.len() {
-                    sleep(Duration::from_millis(50)).await;
-                }
-            }
+            result.normal =
+                self.fertilize_normal_step(&normal_targets, planted.len(), &log_ctx, &scope).await;
         }
 
-        if matches!(mode, FertilizerMode::Organic | FertilizerMode::Both) {
-            let mut organic_targets = planted.clone();
-            if !latest_lands.is_empty() {
-                organic_targets = get_organic_fertilizer_targets_from_lands(&latest_lands);
-                // 对齐 bot：多季补肥时有机肥目标限定到本次多季地块
-                if options.multi_season && !planted.is_empty() {
-                    let planted_set: std::collections::HashSet<i64> =
-                        planted.iter().copied().collect();
-                    organic_targets.retain(|id| planted_set.contains(id));
-                }
-                organic_targets =
-                    filter_ids_by_land_types(&organic_targets, &latest_lands, &selected);
-            }
-            result.organic = self.api.fertilize_organic_loop(&organic_targets).await;
-        } else if matches!(mode, FertilizerMode::Smart) {
-            let smart_secs =
-                auto.as_ref().map(|a| a.fertilizer_smart_seconds).filter(|n| *n > 0).unwrap_or(300);
-            let lands = if latest_lands.is_empty() {
-                self.api.get_all_lands(0).await.map(|r| r.lands).unwrap_or_default()
-            } else {
-                latest_lands
-            };
-            let organic_targets = get_fast_mature_lands(&lands, smart_secs);
-            if !organic_targets.is_empty() {
-                result.organic = self.api.fertilize_organic_loop(&organic_targets).await;
-            }
+        let smart_secs =
+            auto.as_ref().map(|a| a.fertilizer_smart_seconds).filter(|n| *n > 0).unwrap_or(300);
+        if matches!(mode, FertilizerMode::Organic | FertilizerMode::Both | FertilizerMode::Smart) {
+            result.organic = self
+                .fertilize_organic_step(
+                    mode,
+                    &planted,
+                    &latest_lands,
+                    &selected,
+                    &scope,
+                    &log_ctx,
+                    options.multi_season,
+                    smart_secs,
+                )
+                .await;
         }
 
         if result.normal + result.organic > 0 && !account_id.is_empty() {
@@ -608,6 +685,134 @@ impl PlantingEngine {
             );
         }
         Ok(result.build())
+    }
+
+    /// 有机肥分支：organic/both 用「还能施有机肥的地」，smart 用即将成熟地
+    /// （对齐 bot `runFertilizerByConfig` 对应分支），带面板日志
+    async fn fertilize_organic_step(
+        &self,
+        mode: crate::models::types::FertilizerMode,
+        planted: &[i64],
+        latest_lands: &[crate::proto::generated::gamepb::plantpb::LandInfo],
+        selected: &[crate::services::farm::land_analysis::LandType],
+        scope: &FertScope,
+        log_ctx: &FertLogCtx<'_>,
+        multi_season: bool,
+        smart_secs: i64,
+    ) -> usize {
+        use crate::models::types::FertilizerMode;
+        use crate::services::farm::land_analysis::{
+            filter_ids_by_land_types, get_fast_mature_lands,
+            get_organic_fertilizer_targets_from_lands,
+        };
+
+        let organic_targets = match mode {
+            FertilizerMode::Organic | FertilizerMode::Both => {
+                let mut targets = get_organic_fertilizer_targets_from_lands(latest_lands);
+                // 对齐 bot：多季补肥时有机肥目标限定到本次多季地块
+                if multi_season && !planted.is_empty() {
+                    let planted_set: std::collections::HashSet<i64> =
+                        planted.iter().copied().collect();
+                    targets.retain(|id| planted_set.contains(id));
+                }
+                filter_ids_by_land_types(&targets, latest_lands, selected)
+            }
+            FertilizerMode::Smart => get_fast_mature_lands(latest_lands, smart_secs),
+            FertilizerMode::Normal | FertilizerMode::None => return 0,
+        };
+        if organic_targets.is_empty() {
+            return 0;
+        }
+        let organic = self.api.fertilize_organic_loop(&organic_targets, log_ctx.account_id).await;
+        if organic > 0 {
+            if matches!(mode, FertilizerMode::Organic | FertilizerMode::Both) {
+                log_ctx.log(
+                    format!(
+                        "{}：有机化肥循环施肥完成，共施 {} 次（范围: {}）",
+                        log_ctx.reason_label,
+                        organic,
+                        scope.label()
+                    ),
+                    serde_json::json!({
+                        "module": "farm", "result": "ok", "reason": log_ctx.reason,
+                        "type": "organic", "count": organic, "landTypes": scope.ids(),
+                    }),
+                );
+            } else {
+                log_ctx.log(
+                    format!("有机化肥循环施肥完成，共施{} 次", organic),
+                    serde_json::json!({
+                        "module": "farm", "result": "ok",
+                        "type": "organic", "count": organic,
+                    }),
+                );
+            }
+        }
+        organic
+    }
+
+    /// 普通化肥分支：逐块施肥（遇错即停，对齐 bot `fertilize`），带面板日志
+    async fn fertilize_normal_step(
+        &self,
+        normal_targets: &[i64],
+        planted_count: usize,
+        log_ctx: &FertLogCtx<'_>,
+        scope: &FertScope,
+    ) -> usize {
+        if normal_targets.is_empty() {
+            log_ctx.log(
+                format!(
+                    "{}：普通化肥目标为空（传入 {} 块，范围: {}），跳过普通施肥",
+                    log_ctx.reason_label,
+                    planted_count,
+                    scope.label()
+                ),
+                serde_json::json!({
+                    "module": "farm", "result": "skip", "reason": log_ctx.reason,
+                    "type": "normal", "count": 0, "landTypes": scope.ids(),
+                }),
+            );
+            return 0;
+        }
+        let mut normal = 0usize;
+        for (i, &land_id) in normal_targets.iter().enumerate() {
+            if self.api.fertilize(land_id, NORMAL_FERTILIZER_ID).await.is_err() {
+                break;
+            }
+            normal += 1;
+            if i + 1 < normal_targets.len() {
+                sleep(Duration::from_millis(50)).await;
+            }
+        }
+        let (msg, result_field) = if normal > 0 {
+            (
+                format!(
+                    "{}：已为{}/{} 块地施普通化肥（范围: {}）",
+                    log_ctx.reason_label,
+                    normal,
+                    normal_targets.len(),
+                    scope.label()
+                ),
+                "ok",
+            )
+        } else {
+            (
+                format!(
+                    "{}：普通化肥施肥 0/{} 块（可能化肥不足或地块不可施）",
+                    log_ctx.reason_label,
+                    normal_targets.len()
+                ),
+                "skip",
+            )
+        };
+        log_ctx.log(
+            msg,
+            serde_json::json!({
+                "module": "farm", "result": result_field, "reason": log_ctx.reason,
+                "type": "normal", "count": normal, "landTypes": scope.ids(),
+            }),
+        );
+        normal
     }
 
     /// 收获指定土地

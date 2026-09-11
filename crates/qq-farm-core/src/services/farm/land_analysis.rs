@@ -565,6 +565,30 @@ pub fn land_type_by_level(level: i64) -> LandType {
 pub const ALL_FERTILIZER_LAND_TYPES: &[LandType] =
     &[LandType::PurpleGold, LandType::Gold, LandType::Black, LandType::Red, LandType::Normal];
 
+/// 施肥土地类型中文名（1:1 对齐 TS `FERTILIZER_LAND_TYPE_LABELS`）
+#[must_use]
+pub fn fertilizer_land_type_label(t: LandType) -> &'static str {
+    match t {
+        LandType::PurpleGold => "紫金土地",
+        LandType::Gold => "金土地",
+        LandType::Black => "黑土地",
+        LandType::Red => "红土地",
+        LandType::Normal => "普通土地",
+    }
+}
+
+/// 施肥土地类型原始 id（对齐 TS meta 里 `landTypes` 用的字符串）
+#[must_use]
+pub fn fertilizer_land_type_id(t: LandType) -> &'static str {
+    match t {
+        LandType::PurpleGold => "purple-gold",
+        LandType::Gold => "gold",
+        LandType::Black => "black",
+        LandType::Red => "red",
+        LandType::Normal => "normal",
+    }
+}
+
 /// 规范化施肥土地类型（去重 + 顺序）
 #[must_use]
 pub fn normalize_fertilizer_land_types(types: &[LandType]) -> Vec<LandType> {
@@ -630,10 +654,11 @@ pub fn get_organic_fertilizer_targets_from_lands(lands: &[LandInfo]) -> Vec<i64>
         if matches!(current_phase(land), PlantPhase::Dead) {
             continue;
         }
-        // proto3：未下发即为 0，视为不能再施有机肥
-        if plant.left_inorc_fert_times <= 0 {
-            continue;
-        }
+        // 注意：不按 left_inorc_fert_times 过滤。bot 用 Object.hasOwn 区分
+        // 「服务端未下发=可施」，prost 普通 int64 看不到 presence；官方向量
+        // （bot core/tests/farm-fertilize-proto.test.js）证实服务端额度>0 时
+        // 下发该字段、=0 时省略，从不显式发 0，故 bot 的 hasOwn≤0 分支在真实
+        // 报文上不可达——「不过滤」与 bot 实际行为 wire 等价。
         targets.push(land.id);
     }
     targets
@@ -691,9 +716,8 @@ pub fn get_fast_mature_lands(lands: &[LandInfo], threshold_secs: i64) -> Vec<i64
         if time_to_mature > threshold || time_to_mature < 0 {
             continue;
         }
-        if plant.left_inorc_fert_times <= 0 {
-            continue;
-        }
+        // 同 get_organic_fertilizer_targets_from_lands：不按 left_inorc_fert_times
+        // 过滤（服务端从不显式发 0，不过滤与 bot hasOwn 行为 wire 等价）
         out.push(land.id);
     }
     out
@@ -1762,21 +1786,18 @@ mod tests {
     }
 
     #[test]
-    fn organic_targets_skip_only_when_left_inorc_present_and_zero() {
-        let mut allow = make_land(1, true, Some(PlantPhase::Growing));
-        if let Some(p) = allow.plant.as_mut() {
+    fn organic_targets_ignore_left_inorc_quota_field() {
+        // 官方向量证实服务端从不显式发 left_inorc_fert_times=0（额度 0 时省略），
+        // bot 的 hasOwn≤0 分支在真实报文上不可达；prost 看不到 presence，故该字段
+        // 不参与过滤——额度耗尽（0）的地也必须保留为有机肥目标，否则 both 模式
+        // 普通肥把额度用完后整场无机肥目标被清空（2026-09-11 实机事故）
+        let exhausted = make_land(1, true, Some(PlantPhase::Growing));
+        let mut fresh = make_land(2, true, Some(PlantPhase::Growing));
+        if let Some(p) = fresh.plant.as_mut() {
             p.left_inorc_fert_times = 2;
         }
-        let mut deny = make_land(2, true, Some(PlantPhase::Growing));
-        if let Some(p) = deny.plant.as_mut() {
-            p.left_inorc_fert_times = 0;
-        }
-        let mut ok = make_land(3, true, Some(PlantPhase::Growing));
-        if let Some(p) = ok.plant.as_mut() {
-            p.left_inorc_fert_times = 2;
-        }
-        let targets = get_organic_fertilizer_targets_from_lands(&[allow, deny, ok]);
-        assert_eq!(targets, vec![1, 3]);
+        let targets = get_organic_fertilizer_targets_from_lands(&[exhausted, fresh]);
+        assert_eq!(targets, vec![1, 2]);
     }
 
     // ===== 多季作物阶段识别（对齐 bot farm-multi-season.test.js，PR #68）=====

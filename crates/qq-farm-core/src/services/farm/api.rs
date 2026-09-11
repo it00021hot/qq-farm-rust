@@ -153,15 +153,22 @@ impl Api {
         Ok(())
     }
 
-    /// 有机肥循环施肥（对齐 TS `fertilizeOrganicLoop`：按地块轮询直到失败）
-    pub async fn fertilize_organic_loop(&self, land_ids: &[i64]) -> usize {
+    /// 有机肥循环施肥（对齐 TS `fertilizeOrganicLoop`：按地块轮询直到失败或达单次上限）
+    ///
+    /// 上限对齐 bot：`min(MAX_ORGANIC_FERTILIZE_OPERATIONS, 地块数 * MAX_ORGANIC_FERTILIZE_ROUNDS)`。
+    pub async fn fertilize_organic_loop(&self, land_ids: &[i64], account_id: &str) -> usize {
+        const MAX_ORGANIC_FERTILIZE_OPERATIONS: usize = 240;
+        const MAX_ORGANIC_FERTILIZE_ROUNDS: usize = 20;
+
         let ids: Vec<i64> = land_ids.iter().copied().filter(|id| *id > 0).collect();
         if ids.is_empty() {
             return 0;
         }
+        let operation_limit =
+            MAX_ORGANIC_FERTILIZE_OPERATIONS.min(ids.len() * MAX_ORGANIC_FERTILIZE_ROUNDS);
         let mut success = 0usize;
         let mut idx = 0usize;
-        loop {
+        while success < operation_limit {
             if self.fertilize(ids[idx], ORGANIC_FERTILIZER_ID).await.is_err() {
                 break;
             }
@@ -169,6 +176,15 @@ impl Api {
             idx = (idx + 1) % ids.len();
             let delay_ms = 1000 + (rand::random::<u64>() % 500);
             tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        }
+        if success >= operation_limit {
+            crate::services::panel_log::log_warn(
+                account_id,
+                "施肥",
+                format!("有机肥循环达到单次上限 {operation_limit}，已停止继续请求"),
+                crate::constants::PanelEvent::Fertilize,
+                Some(serde_json::json!({ "module": "farm", "result": "limit", "count": success })),
+            );
         }
         success
     }

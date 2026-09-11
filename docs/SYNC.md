@@ -955,3 +955,36 @@
   不受影响，因此线上一直正常）。修复：`resolveCatalogImage` Windows 分支统一改用
   WebView2 映射形式 `http://farmcfg.localhost/<rel>`（后端 assets.rs 本就支持该
   host 形式并有单测），macOS 保持 `farmcfg://localhost/`。dev 实机验证图片恢复。
+### 2026-09-11 — 热修：普通+有机模式下有机肥永远 0（实机发现；proto 保持 bot 镜像不动）
+
+- **现象**（安装版日志实证）：账号选「普通+有机」后每轮只施 1 块地（普通肥
+  1/新种地块），有机肥恒为 0；同日 smart 模式 `巡田施肥完成 有机3/7` 正常，
+  02:57 批量种 24 块地 fertilize 245→269（普通 24/24 全成功）排除普通肥链路
+- **根因**：`get_organic_fertilizer_targets_from_lands` / `get_fast_mature_lands`
+  按 `left_inorc_fert_times <= 0` 排除地块。该字段是植物剩余普通肥额度，
+  proto3 零值省略：普通肥一施额度即归 0、服务端停止下发 → prost 解码为 0 →
+  Rust 把这些地全部踢出有机肥目标 → both/organic 模式有机肥目标被清空。
+  bot 用 `Object.hasOwn`（未下发=仍可施），不受影响
+- **官方向量实证**（bot `core/tests/farm-fertilize-proto.test.js` 两只真实抓包，
+  protobufjs 复刻解码验证）：有机肥成功回包中 land 的该字段**下发**且=1（施
+  有机肥不耗普通额度）；普通肥成功回包中该字段**不下发**（施普通肥把额度
+  归 0 后省略）。即服务端**从不显式发 0**，bot 的 hasOwn≤0 分支在真实报文上
+  不可达，bot 实际行为 = 所有活着的种植地块均为有机肥目标
+- **修复（纯代码侧，proto 保持与 bot 逐字符镜像不动）**：两个函数移除该字段
+  过滤，与 bot 实际行为 wire 等价；单测改为「额度 0/额度>0 地块均入选」
+- **顺手补齐两处 bot 对齐缺口**：
+  - `fertilize_organic_loop` 补单次上限 `min(240, 地块数×20)` 与上限
+    面板告警（bot api.ts `MAX_ORGANIC_FERTILIZE_OPERATIONS/ROUNDS`，原实现
+    无上限存在长循环风险）
+  - `fertilize_by_config_ex` 补齐 bot `runFertilizerByConfig` 的全部面板日志
+    （未勾选范围/策略为不施肥/无可施肥地块/拉地失败跳过/普通目标为空/
+    已为 X/N 块施普通化肥/0-N 可能化肥不足/有机循环完成共施 X 次/smart 变体），
+    此前 rust 完全静默，正是本次问题难以从面板定位的直接原因
+- 明确不改：拉地失败 fail-closed（既有决策），仅新增 warn 面板日志提升可见性
+- 验证：`RUSTFLAGS="-D warnings" cargo check --workspace --all-targets` 0 错
+  0 警；`cargo test --workspace -- --test-threads=1` 全过（core 977 项）；
+  `cargo fmt --all --check` 通过；`proto/plantpb.proto` 与 bot 文件 diff 一致
+  （仅行尾符）；纯 core 侧改动，无 IPC/前端变化
+- 能力状态：施肥矩阵行维持「齐」；**实机待验**：both 模式种植后有机肥应出现
+  「有机化肥循环施肥完成，共施 X 次」且 X>0，多季补肥同理
+
