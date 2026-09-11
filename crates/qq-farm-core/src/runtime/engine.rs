@@ -98,6 +98,9 @@ pub struct EngineWorkerInfo {
     pub running: bool,
 }
 
+/// worker 任务注册表：account_id -> (世代号, JoinHandle)（clippy type_complexity 抽别名）
+type WorkerTaskRegistry = Arc<RwLock<HashMap<String, (u64, tokio::task::JoinHandle<()>)>>>;
+
 /// Runtime 引擎
 pub struct RuntimeEngine {
     config: EngineConfig,
@@ -105,7 +108,7 @@ pub struct RuntimeEngine {
     /// WorkerLoop 注册表（controller 用）
     worker_loops: Arc<RwLock<HashMap<String, Arc<crate::runtime::worker_loop::WorkerLoop>>>>,
     /// worker 任务句柄（account_id -> (世代号, JoinHandle)），重启时等待旧任务真正退出用
-    worker_tasks: Arc<RwLock<HashMap<String, (u64, tokio::task::JoinHandle<()>)>>>,
+    worker_tasks: WorkerTaskRegistry,
     /// 每账号生命周期锁：串行化 start/stop/restart/重连触发，防止并发生命周期操作
     /// 产生同账号双会话互踢（tokio::sync::Mutex 不可重入，只在这些入口最外层获取）
     lifecycle_locks: RwLock<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
