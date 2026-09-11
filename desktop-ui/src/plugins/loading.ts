@@ -8,7 +8,10 @@ import { resolveDarkMode } from '@/utils/theme-preference';
 
 export function setupLoading() {
   const themeColor = localStg.get('themeColor') || '#646cff';
-  const darkMode = resolveDarkMode(localStg.get('themeSettings')?.themeScheme, window.matchMedia('(prefers-color-scheme: dark)').matches);
+  const darkMode = resolveDarkMode(
+    localStg.get('themeSettings')?.themeScheme,
+    window.matchMedia('(prefers-color-scheme: dark)').matches
+  );
   const palette = getColorPalette(themeColor);
 
   const { r, g, b } = getRgb(themeColor);

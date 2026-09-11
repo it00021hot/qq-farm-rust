@@ -210,7 +210,12 @@ void load();
       </div>
     </NCard>
 
-    <NModal v-model:show="logsVisible" preset="card" :title="$t('page.farm.personal.pet.logTitle')" class="w-720px max-w-[calc(100vw-24px)]">
+    <NModal
+      v-model:show="logsVisible"
+      preset="card"
+      :title="$t('page.farm.personal.pet.logTitle')"
+      class="w-720px max-w-[calc(100vw-24px)]"
+    >
       <NDataTable :columns="logColumns" :data="logs" :max-height="420" :scroll-x="600" size="small" />
     </NModal>
   </div>

@@ -184,9 +184,7 @@ const stealableFriends = computed(() => normalFriends.value.filter(friend => can
  * 全是黑名单/失效 GID，被同步排除却占着分母） */
 const petSyncScope = computed(() => friends.value.filter(friend => !isBlacklisted(friend.gid)));
 const petKnownCount = computed(
-  () =>
-    petSyncScope.value.filter(friend => friend.petState === 'protect' || friend.petState === 'other')
-      .length
+  () => petSyncScope.value.filter(friend => friend.petState === 'protect' || friend.petState === 'other').length
 );
 
 const blacklistFriends = computed(() => {
@@ -755,10 +753,7 @@ onUnmounted(() => {
             </NSpace>
           </div>
 
-          <div
-            v-if="petSyncScope.length && petKnownCount < petSyncScope.length"
-            class="mb-8px text-12px text-gray-400"
-          >
+          <div v-if="petSyncScope.length && petKnownCount < petSyncScope.length" class="mb-8px text-12px text-gray-400">
             {{
               $t('page.farm.friends.petSyncProgress', {
                 known: petKnownCount,

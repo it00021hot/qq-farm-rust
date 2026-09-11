@@ -6,7 +6,13 @@ import { GLOBAL_HEADER_MENU_ID } from '@/constants/app';
 import { useAppStore } from '@/store/modules/app';
 import { useThemeStore } from '@/store/modules/theme';
 import { isTauriRuntime } from '@/service/tauri/client';
-import { desktopIsFullscreen, desktopStartDragging, desktopToggleFullscreen, isDesktopWindows, isDesktopShell } from '@/utils/desktop';
+import {
+  desktopIsFullscreen,
+  desktopStartDragging,
+  desktopToggleFullscreen,
+  isDesktopWindows,
+  isDesktopShell
+} from '@/utils/desktop';
 import AppUpdateDialog from '@/components/common/app-update-dialog.vue';
 import FarmAccountSwitcher from '../global-sider/components/farm-account-switcher.vue';
 import SearchModal from '../global-search/components/search-modal.vue';
@@ -39,16 +45,29 @@ const updateVisible = ref(false);
 const searchVisible = ref(false);
 const en = computed(() => appStore.locale === 'en-US');
 const moreOptions = computed(() => [
-  ...(appStore.isMobile ? [
-    ...(themeStore.header.globalSearch.visible ? [{ key: 'search', label: en.value ? 'Search pages' : '搜索页面' }] : []),
-    { key: 'theme', label: en.value ? 'Theme' : '主题模式', children: [
-      { key: 'auto', label: `${themeStore.themeScheme === 'auto' ? '✓ ' : ''}${en.value ? 'Follow system' : '跟随系统'}` },
-      { key: 'light', label: `${themeStore.themeScheme === 'light' ? '✓ ' : ''}${en.value ? 'Light' : '浅色'}` },
-      { key: 'dark', label: `${themeStore.themeScheme === 'dark' ? '✓ ' : ''}${en.value ? 'Dark' : '深色'}` }
-    ] },
-    { key: 'settings', label: en.value ? 'Theme settings' : '主题设置' },
-    ...(themeStore.header.multilingual.visible ? [{ key: 'language', label: en.value ? '切换中文' : 'Switch to English' }] : [])
-  ] : []),
+  ...(appStore.isMobile
+    ? [
+        ...(themeStore.header.globalSearch.visible
+          ? [{ key: 'search', label: en.value ? 'Search pages' : '搜索页面' }]
+          : []),
+        {
+          key: 'theme',
+          label: en.value ? 'Theme' : '主题模式',
+          children: [
+            {
+              key: 'auto',
+              label: `${themeStore.themeScheme === 'auto' ? '✓ ' : ''}${en.value ? 'Follow system' : '跟随系统'}`
+            },
+            { key: 'light', label: `${themeStore.themeScheme === 'light' ? '✓ ' : ''}${en.value ? 'Light' : '浅色'}` },
+            { key: 'dark', label: `${themeStore.themeScheme === 'dark' ? '✓ ' : ''}${en.value ? 'Dark' : '深色'}` }
+          ]
+        },
+        { key: 'settings', label: en.value ? 'Theme settings' : '主题设置' },
+        ...(themeStore.header.multilingual.visible
+          ? [{ key: 'language', label: en.value ? '切换中文' : 'Switch to English' }]
+          : [])
+      ]
+    : []),
   { key: 'updates', label: en.value ? 'About & updates' : '关于与更新' }
 ]);
 
@@ -121,7 +140,11 @@ function startWindowDrag(event: MouseEvent) {
     </div>
     <div class="h-full flex-y-center justify-end desktop-no-drag">
       <GlobalSearch v-if="!appStore.isMobile && themeStore.header.globalSearch.visible" />
-      <FullScreen v-if="!appStore.isMobile && (isDesktopShell || !isTauriRuntime())" :full="isFullscreen" @click="toggleFullscreen" />
+      <FullScreen
+        v-if="!appStore.isMobile && (isDesktopShell || !isTauriRuntime())"
+        :full="isFullscreen"
+        @click="toggleFullscreen"
+      />
       <LangSwitch
         v-if="!appStore.isMobile && themeStore.header.multilingual.visible"
         :lang="appStore.locale"
@@ -136,7 +159,11 @@ function startWindowDrag(event: MouseEvent) {
       />
       <ThemeButton v-if="!appStore.isMobile" />
       <NDropdown trigger="click" :options="moreOptions" @select="handleMore">
-        <ButtonIcon icon="mdi:dots-vertical" :aria-label="en ? 'More' : '更多'" :tooltip-content="en ? 'More' : '更多'" />
+        <ButtonIcon
+          icon="mdi:dots-vertical"
+          :aria-label="en ? 'More' : '更多'"
+          :tooltip-content="en ? 'More' : '更多'"
+        />
       </NDropdown>
       <WindowControls v-if="windowsDesktop" />
     </div>

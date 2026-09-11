@@ -127,7 +127,13 @@ async function handleSubmit() {
 <template>
   <NDrawer v-model:show="visible" display-directive="show" :width="appStore.isMobile ? '100vw' : 480">
     <NDrawerContent :title="title" :native-scrollbar="false" closable>
-      <NForm ref="formRef" :model="model" :rules="rules" :label-placement="appStore.isMobile ? 'top' : 'left'" :label-width="110">
+      <NForm
+        ref="formRef"
+        :model="model"
+        :rules="rules"
+        :label-placement="appStore.isMobile ? 'top' : 'left'"
+        :label-width="110"
+      >
         <NFormItem :label="$t('page.farm.gameConfig.itemId')" path="id">
           <NInputNumber
             v-model:value="model.id"

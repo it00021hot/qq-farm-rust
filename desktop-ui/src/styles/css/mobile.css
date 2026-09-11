@@ -1,36 +1,114 @@
 /* Shared small-screen rules; native Android already consumes system-bar insets. */
-.app-page { min-width: 0; }
+.app-page {
+  min-width: 0;
+}
 
 @media (max-width: 639px) {
-  .app-page { padding: 12px; min-height: 0; gap: 12px; }
-  .app-page .n-card-header { flex-wrap: wrap; gap: 12px; }
-  .app-page .n-card-header__main { min-width: 0; overflow-wrap: anywhere; }
-  .app-page .n-card-header__extra { margin-left: 0; max-width: 100%; flex-wrap: wrap; }
-  .app-page .n-card-header__extra:has(.n-space) { flex-basis: 100%; }
-  .app-page .n-card__content { min-width: 0; }
-  .app-page :is(.n-input, .n-input-number, .n-base-selection) { max-width: 100%; }
-  .app-page .n-form-item-blank { min-width: 0; flex-wrap: wrap; gap: 8px; }
-  .app-page .n-tabs-nav { max-width: 100%; }
-  .app-page .n-tabs-tab { flex-shrink: 0; }
-  .app-page .n-tabs-tab__label { white-space: nowrap; }
-  .n-modal, .n-dialog { max-width: calc(100vw - 24px); }
-  .n-modal.n-card { max-height: calc(100dvh - 24px); overflow-y: auto; }
-  .n-dialog { max-height: calc(100dvh - 24px); overflow-y: auto; }
-  .n-drawer .n-drawer-content-wrapper { min-height: 0; }
-  .n-drawer .n-drawer-body-content-wrapper { padding: 16px; }
-  .n-drawer .n-drawer-footer { flex-wrap: wrap; gap: 8px; padding: 12px 16px; }
-  .n-popover { max-width: calc(100vw - 24px); }
-  .n-dropdown-menu { max-height: calc(100dvh - 100px); overflow-y: auto; }
-  .n-message-container { max-width: calc(100vw - 24px); }
-  .n-message-container .n-message { overflow-wrap: anywhere; }
-  .mobile-record-list .n-checkbox { min-height: 44px; align-items: center; }
+  .app-page {
+    padding: 12px;
+    min-height: 0;
+    gap: 12px;
+  }
+  .app-page .n-card-header {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .app-page .n-card-header__main {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .app-page .n-card-header__extra {
+    margin-left: 0;
+    max-width: 100%;
+    flex-wrap: wrap;
+  }
+  .app-page .n-card-header__extra:has(.n-space) {
+    flex-basis: 100%;
+  }
+  .app-page .n-card__content {
+    min-width: 0;
+  }
+  .app-page :is(.n-input, .n-input-number, .n-base-selection) {
+    max-width: 100%;
+  }
+  .app-page .n-form-item-blank {
+    min-width: 0;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .app-page .n-tabs-nav {
+    max-width: 100%;
+  }
+  .app-page .n-tabs-tab {
+    flex-shrink: 0;
+  }
+  .app-page .n-tabs-tab__label {
+    white-space: nowrap;
+  }
+  .n-modal,
+  .n-dialog {
+    max-width: calc(100vw - 24px);
+  }
+  .n-modal.n-card {
+    max-height: calc(100dvh - 24px);
+    overflow-y: auto;
+  }
+  .n-dialog {
+    max-height: calc(100dvh - 24px);
+    overflow-y: auto;
+  }
+  .n-drawer .n-drawer-content-wrapper {
+    min-height: 0;
+  }
+  .n-drawer .n-drawer-body-content-wrapper {
+    padding: 16px;
+  }
+  .n-drawer .n-drawer-footer {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 12px 16px;
+  }
+  .n-popover {
+    max-width: calc(100vw - 24px);
+  }
+  .n-dropdown-menu {
+    max-height: calc(100dvh - 100px);
+    overflow-y: auto;
+  }
+  .n-message-container {
+    max-width: calc(100vw - 24px);
+  }
+  .n-message-container .n-message {
+    overflow-wrap: anywhere;
+  }
+  .mobile-record-list .n-checkbox {
+    min-height: 44px;
+    align-items: center;
+  }
 }
 
 @media (pointer: coarse), (max-width: 639px) {
-  .n-button { min-height: 44px; min-width: 44px; touch-action: manipulation; }
-  .n-dropdown-option-body { min-height: 44px; }
-  .n-tabs-tab { min-height: 44px; }
-  .n-pagination-item { min-height: 44px; min-width: 36px; }
-  .n-input .n-input__input-el, .n-base-selection .n-base-selection-label { min-height: 44px; }
-  .n-checkbox, .n-radio { touch-action: manipulation; }
+  .n-button {
+    min-height: 44px;
+    min-width: 44px;
+    touch-action: manipulation;
+  }
+  .n-dropdown-option-body {
+    min-height: 44px;
+  }
+  .n-tabs-tab {
+    min-height: 44px;
+  }
+  .n-pagination-item {
+    min-height: 44px;
+    min-width: 36px;
+  }
+  .n-input .n-input__input-el,
+  .n-base-selection .n-base-selection-label {
+    min-height: 44px;
+  }
+  .n-checkbox,
+  .n-radio {
+    touch-action: manipulation;
+  }
 }

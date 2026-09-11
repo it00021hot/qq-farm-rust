@@ -215,9 +215,7 @@ const friendOptionsLoading = ref(false);
 const friendOptionsHint = ref('');
 
 function isPlunderableTreasure(treasure: Treasure): boolean {
-  return (
-    treasure.status === 2 && (treasure.previews ?? []).some(preview => Boolean(preview.canStart))
-  );
+  return treasure.status === 2 && (treasure.previews ?? []).some(preview => Boolean(preview.canStart));
 }
 
 async function loadFriendOptions(force = false) {
@@ -251,10 +249,7 @@ async function loadFriendOptions(force = false) {
         const friend = candidates[index];
         const gid = String(friend.gid);
         try {
-          const { error: probeError, data: probe } = await fetchGetFarmActivityPetDiaryFriend(
-            probeAccountId,
-            gid
-          );
+          const { error: probeError, data: probe } = await fetchGetFarmActivityPetDiaryFriend(probeAccountId, gid);
           if (probeError) continue;
           if ((probe?.treasures ?? []).some(isPlunderableTreasure)) {
             plunderable.push({
@@ -879,12 +874,7 @@ watch(
                   class="flex w-170px flex-col gap-4px rounded-8px border border-gray-200 px-10px py-8px text-center dark:border-gray-700"
                 >
                   <span class="text-12px text-gray-400">第 {{ story.order }} 则</span>
-                  <img
-                    v-if="story.photo"
-                    :src="story.photo"
-                    class="w-full rounded-4px object-contain"
-                    alt=""
-                  />
+                  <img v-if="story.photo" :src="story.photo" class="w-full rounded-4px object-contain" alt="" />
                   <span v-else class="text-12px text-gray-400">未解锁</span>
                   <NTag size="tiny" :type="story.claimed ? 'success' : story.unlocked ? 'warning' : 'default'">
                     {{ story.claimed ? '已领取' : story.unlocked ? '可领取' : '未解锁' }}

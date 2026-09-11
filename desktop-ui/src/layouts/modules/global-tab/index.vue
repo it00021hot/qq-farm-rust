@@ -237,7 +237,11 @@ init();
       </BetterScroll>
     </div>
     <ReloadButton :loading="!appStore.reloadFlag" @click="refresh" />
-    <ButtonIcon icon="mdi:dots-horizontal" :aria-label="appStore.locale === 'en-US' ? 'Tab actions' : '标签操作'" @click="openActiveTabMenu" />
+    <ButtonIcon
+      icon="mdi:dots-horizontal"
+      :aria-label="appStore.locale === 'en-US' ? 'Tab actions' : '标签操作'"
+      @click="openActiveTabMenu"
+    />
     <FullScreen :full="appStore.fullContent" @click="appStore.toggleFullContent" />
   </DarkModeContainer>
   <ContextMenu
