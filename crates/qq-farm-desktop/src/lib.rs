@@ -39,9 +39,7 @@ pub extern "system" fn Java_com_qqfarm_rust_MainActivity_initRustlsVerifier<'cal
     use jni::errors::LogErrorAndDefault;
 
     unowned_env
-        .with_env(|env| {
-            rustls_platform_verifier::android::init_with_env(env, context)
-        })
+        .with_env(|env| rustls_platform_verifier::android::init_with_env(env, context))
         .resolve::<LogErrorAndDefault>();
 }
 
