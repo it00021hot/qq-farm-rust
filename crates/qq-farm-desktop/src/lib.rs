@@ -258,8 +258,6 @@ pub fn run() {
             commands::friend::farm_interaction_items_use,
             commands::friend::illustrated_snapshot,
             // settings
-            commands::settings::get_settings_panel,
-            commands::settings::save_settings,
             commands::settings::get_offline_reminder,
             commands::settings::set_offline_reminder,
             commands::settings::test_offline_reminder,

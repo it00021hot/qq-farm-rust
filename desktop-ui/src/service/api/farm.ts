@@ -1077,14 +1077,6 @@ export function fetchPurchaseFarmMysteryShop(data: any) {
   });
 }
 
-export function fetchGetFarmSettings(accountId?: number | string) {
-  return invokeFlat('get_settings_panel', { accountId: accountId != null ? aid(accountId) : '' });
-}
-
-export function fetchSaveFarmSettings(accountId: number | string, snapshot: unknown) {
-  return invokeFlat('save_settings', { accountId: aid(accountId), snapshot });
-}
-
 // ============ 宠物 / 同气连枝礼包 ============
 
 export function fetchGetPetInfo(accountId: number) {

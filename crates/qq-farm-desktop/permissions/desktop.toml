@@ -85,8 +85,6 @@ commands.allow = [
   "commerce_mall_purchase",
   "commerce_mystery_shop",
   "commerce_mystery_purchase",
-  "get_settings_panel",
-  "save_settings",
   "get_offline_reminder",
   "set_offline_reminder",
   "test_offline_reminder",

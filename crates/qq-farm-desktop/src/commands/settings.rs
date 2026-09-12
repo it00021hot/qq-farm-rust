@@ -3,7 +3,6 @@
 use serde_json::{json, Value};
 use tauri::State;
 
-use qq_farm_app::accounts;
 use qq_farm_app::admin;
 use qq_farm_app::qq_bot_bind;
 use qq_farm_app::settings;
@@ -11,24 +10,6 @@ use qq_farm_core::services::qq_bot::{BindPollResult, BindStartResult};
 
 use crate::error::{IpcError, IpcResult};
 use crate::state::DesktopState;
-
-/// 设置面板聚合。
-#[tauri::command]
-pub fn get_settings_panel(state: State<'_, DesktopState>, account_id: String) -> IpcResult<Value> {
-    accounts::ensure_account_access(&state.acl, &account_id).map_err(IpcError::from)?;
-    Ok(settings::settings_panel(&account_id, "local"))
-}
-
-/// 保存设置快照。
-#[tauri::command]
-pub fn save_settings(
-    state: State<'_, DesktopState>,
-    account_id: String,
-    snapshot: Value,
-) -> IpcResult<Value> {
-    accounts::ensure_account_access(&state.acl, &account_id).map_err(IpcError::from)?;
-    settings::save_settings(&state.app, &account_id, snapshot).map_err(IpcError::from)
-}
 
 const DESKTOP_USERNAME: &str = "local";
 
