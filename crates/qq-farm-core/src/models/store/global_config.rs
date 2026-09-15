@@ -127,16 +127,6 @@ impl QqBotConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WechatBotConfig {}
 
-/// 登录设置（对齐 bot `LoginSettings`）：微信/QQ 扫码开关与 NapCat 接口配置。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct LoginSettings {
-    pub wechat_qr_login: bool,
-    pub qq_qr_login: bool,
-    pub nap_cat_endpoint: String,
-    pub nap_cat_signature: String,
-}
-
 /// 离线提醒配置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -147,7 +137,6 @@ pub struct OfflineReminder {
     pub wechat_bot: WechatBotConfig,
     pub title: String,
     pub msg: String,
-    pub offline_delete_sec: i64,
     /// 钉钉 webhook：endpoint 支持完整 URL 或裸 access_token，与 token 二选一
     #[serde(default)]
     pub endpoint: String,
@@ -194,7 +183,6 @@ pub fn default_offline_reminder() -> OfflineReminder {
         wechat_bot: WechatBotConfig::default(),
         title: "账号下线提醒".to_string(),
         msg: "账号下线".to_string(),
-        offline_delete_sec: 0,
         endpoint: String::new(),
         token: String::new(),
         secret: String::new(),
@@ -238,8 +226,6 @@ pub struct GlobalConfigState {
     pub system_config: Option<SystemConfig>,
     /// QQ 官方机器人全局凭据
     pub qq_bot_credentials: QqBotCredentials,
-    /// 登录设置（扫码开关 / NapCat）
-    pub login_settings: LoginSettings,
 }
 
 impl GlobalConfigState {
@@ -254,7 +240,6 @@ impl GlobalConfigState {
             announcement_read_records: HashMap::new(),
             system_config: None,
             qq_bot_credentials: QqBotCredentials::default(),
-            login_settings: LoginSettings::default(),
         }
     }
 }
@@ -367,18 +352,6 @@ pub fn effective_qq_bot_credentials() -> QqBotCredentials {
         };
     }
     get_qq_bot_credentials()
-}
-
-/// 读取登录设置（扫码开关 / NapCat）
-#[must_use]
-pub fn get_login_settings() -> LoginSettings {
-    STATE.read().login_settings.clone()
-}
-
-/// 保存登录设置
-pub fn set_login_settings(settings: LoginSettings) {
-    STATE.write().login_settings = settings;
-    let _ = save_global_config();
 }
 
 /// 将绑定结果写入用户离线提醒。
@@ -519,7 +492,6 @@ pub fn save_global_config() -> std::io::Result<()> {
         "announcementReadRecords": state.announcement_read_records,
         "systemConfig": state.system_config,
         "qqBotCredentials": state.qq_bot_credentials,
-        "loginSettings": state.login_settings,
     });
     let body = serde_json::to_string_pretty(&data).map_err(std::io::Error::other)?;
 
@@ -598,11 +570,6 @@ pub fn load_global_config() -> std::io::Result<()> {
     if let Some(creds) = data.get("qqBotCredentials") {
         if let Ok(parsed) = serde_json::from_value::<QqBotCredentials>(creds.clone()) {
             new_global.qq_bot_credentials = parsed;
-        }
-    }
-    if let Some(settings) = data.get("loginSettings") {
-        if let Ok(parsed) = serde_json::from_value::<LoginSettings>(settings.clone()) {
-            new_global.login_settings = parsed;
         }
     }
     set_state(new_global);
@@ -804,8 +771,7 @@ mod tests {
             "endpoint": "https://example.com",
             "token": "legacy",
             "title": "old",
-            "msg": "old",
-            "offlineDeleteSec": 0
+            "msg": "old"
         });
         assert!(serde_json::from_value::<OfflineReminder>(legacy).is_err());
     }

@@ -9,12 +9,7 @@ import {
   fetchCreateFarmWxQuickLoginSession,
   fetchFarmWxLoginCode,
   fetchFarmWxLoginStatus,
-  fetchGetQqLoginSettings,
   fetchModifyFarmAccount,
-  fetchQqLoginCancelTask,
-  fetchQqLoginCreateTask,
-  fetchQqLoginMiniappCode,
-  fetchQqLoginTaskStatus,
   fetchStartFarmAccount,
   fetchWxLocalAuthorize,
   fetchWxLocalCheckLogin
@@ -56,7 +51,7 @@ const title = computed(() => {
 });
 
 type Model = Api.Farm.AccountCreateParams & Partial<Pick<Api.Farm.AccountUpdateParams, 'id' | 'status'>>;
-type LoginTab = 'code' | 'wx' | 'qq';
+type LoginTab = 'code' | 'wx';
 type WxMode = 'local' | 'qr';
 
 const model = ref<Model>(createDefaultModel());
@@ -76,16 +71,6 @@ const wxSubmitting = ref(false);
 let wxPollTimer: ReturnType<typeof setTimeout> | undefined;
 let wxQrStartPromise: Promise<void> | undefined;
 
-// ===== QQ 扫码登录（NapCat 对接）=====
-const qqQrAvailable = ref(false);
-const qqTaskId = ref('');
-const qqQrUrl = ref('');
-const qqStatus = ref('');
-const qqError = ref('');
-const qqLoading = ref(false);
-const qqSubmitting = ref(false);
-let qqPollTimer: ReturnType<typeof setTimeout> | undefined;
-
 // 前端调用本机微信 HTTP 插件所需的 OAuth 参数（create session 返回）
 const wxQuickOauth = ref<{ appId: string; scope: string; redirectUri: string; state: string } | null>(null);
 function createDefaultModel(): Model {
@@ -102,7 +87,7 @@ const rules = computed<Record<string, App.Global.FormRule | App.Global.FormRule[
   const base: Record<string, App.Global.FormRule | App.Global.FormRule[]> = {
     platform: defaultRequiredRule
   };
-  if (activeLoginTab.value !== 'wx' && activeLoginTab.value !== 'qq') {
+  if (activeLoginTab.value !== 'wx') {
     base.code = defaultRequiredRule;
   }
   return base;
@@ -112,7 +97,6 @@ const platformOptions = computed(() => translateStringOptions(farmPlatformOption
 const isAddMode = computed(() => props.operateType === 'add');
 const isWxTab = computed(() => activeLoginTab.value === 'wx');
 const isWxLocalMode = computed(() => wxMode.value === 'local');
-const isQqTab = computed(() => activeLoginTab.value === 'qq');
 
 function decodeParam(value: string | null | undefined): string {
   const raw = String(value || '').trim();
@@ -342,147 +326,6 @@ async function getWxCodeAndSave() {
   await saveWxCode(String(data.code));
 }
 
-// ===== QQ 扫码登录（NapCat 对接，对齐 bot AccountModal 扫码页签）=====
-
-function stopQqPolling() {
-  if (qqPollTimer) {
-    clearTimeout(qqPollTimer);
-    qqPollTimer = undefined;
-  }
-}
-
-function resetQqLogin() {
-  stopQqPolling();
-  qqTaskId.value = '';
-  qqQrUrl.value = '';
-  qqStatus.value = '';
-  qqError.value = '';
-  qqLoading.value = false;
-  qqSubmitting.value = false;
-}
-
-async function loadQqLoginAvailability() {
-  try {
-    const { data } = await fetchGetQqLoginSettings();
-    qqQrAvailable.value = Boolean(data?.qqQrLogin);
-  } catch {
-    qqQrAvailable.value = false;
-  }
-}
-
-/** 用登录 code 保存账号（add：保存后自动启动；edit：更新后自动启动）。 */
-async function saveAccountWithLoginCode(code: string, platform: 'qq' | 'wx') {
-  const name = String(model.value.name || '').trim();
-  const remark = model.value.remark || '';
-  if (props.operateType !== 'add' && model.value.id) {
-    const { error: modifyError } = await fetchModifyFarmAccount({
-      id: model.value.id,
-      code,
-      name,
-      platform,
-      remark,
-      status: (Number(model.value.status || 1) === 2 ? 2 : 1) as unknown as Api.Farm.EnableStatus
-    });
-    if (modifyError) {
-      throw new Error((modifyError as any)?.message || '更新账号失败');
-    }
-    const { error: startError } = await fetchStartFarmAccount(model.value.id);
-    if (startError) {
-      window.$message?.warning($t('common.updateSuccess') + '，自动启动失败，请手动重新登录');
-    } else {
-      window.$message?.success($t('common.updateSuccess') + '，已自动启动');
-    }
-  } else {
-    const { data: added, error: addError } = await fetchAddFarmAccount({ code, name, platform, remark });
-    if (addError) {
-      throw new Error((addError as any)?.message || '保存账号失败');
-    }
-    if (added?.id) {
-      const { error: startError } = await fetchStartFarmAccount(added.id);
-      if (startError) {
-        window.$message?.warning($t('common.addSuccess') + '，自动启动失败，请手动点击启动');
-      } else {
-        window.$message?.success($t('common.addSuccess') + '，已自动启动');
-      }
-    } else {
-      window.$message?.success($t('common.addSuccess'));
-    }
-  }
-  resetQqLogin();
-  closeDrawer();
-  emit('submitted');
-}
-
-async function pollQqLogin() {
-  if (!qqTaskId.value) return;
-  try {
-    const { data, error } = await fetchQqLoginTaskStatus(qqTaskId.value);
-    if (error) {
-      qqError.value = (error as any)?.message || '登录状态检查失败';
-      return;
-    }
-    const status = String(data?.status || '');
-    if (status === 'waiting_scan') qqStatus.value = '等待 QQ 扫码';
-    else if (status === 'scanned') qqStatus.value = '已扫码，请在手机上确认';
-    else if (status === 'confirmed') {
-      stopQqPolling();
-      await getQqCodeAndSave();
-      return;
-    } else if (['cancelled', 'expired', 'failed'].includes(status)) {
-      qqError.value = '二维码已失效，请重新获取';
-      return;
-    }
-    qqPollTimer = setTimeout(pollQqLogin, 1200);
-  } catch (err: any) {
-    qqError.value = err?.message || '登录状态检查失败';
-  }
-}
-
-async function startQqLogin() {
-  stopQqPolling();
-  resetQqLogin();
-  qqLoading.value = true;
-  try {
-    const { data, error } = await fetchQqLoginCreateTask();
-    if (error || !data?.taskId || !data?.qrImage) {
-      throw new Error((error as any)?.message || '未获取到 QQ 登录二维码');
-    }
-    qqTaskId.value = String(data.taskId);
-    qqQrUrl.value = String(data.qrImage);
-    qqStatus.value = '等待 QQ 扫码';
-    void pollQqLogin();
-  } catch (err: any) {
-    qqError.value = err?.message || '二维码获取失败';
-  } finally {
-    qqLoading.value = false;
-  }
-}
-
-async function cancelQqLogin() {
-  if (!qqTaskId.value) return;
-  try {
-    await fetchQqLoginCancelTask(qqTaskId.value);
-  } catch {
-    // 尽力而为
-  }
-  resetQqLogin();
-}
-
-async function getQqCodeAndSave() {
-  qqSubmitting.value = true;
-  try {
-    const { data, error } = await fetchQqLoginMiniappCode(qqTaskId.value);
-    if (error || !data?.code) {
-      throw new Error((error as any)?.message || '未获取到 QQ 登录 Code');
-    }
-    await saveAccountWithLoginCode(String(data.code), 'qq');
-  } catch (err: any) {
-    qqError.value = err?.message || 'QQ 登录失败';
-  } finally {
-    qqSubmitting.value = false;
-  }
-}
-
 async function detectLocalWechat() {
   wxLoading.value = true;
   wxError.value = '';
@@ -679,19 +522,13 @@ async function startWxLogin() {
 }
 
 function onLoginTabChange(tab: string | number) {
-  const next = (['wx', 'qq'].includes(String(tab)) ? tab : 'code') as LoginTab;
+  const next = (String(tab) === 'wx' ? tab : 'code') as LoginTab;
   activeLoginTab.value = next;
   if (next === 'wx') {
     model.value.platform = 'wx';
-    resetQqLogin();
     void startWxAuthFlow();
-  } else if (next === 'qq') {
-    model.value.platform = 'qq';
-    resetWxLogin();
-    void startQqLogin();
   } else {
     resetWxLogin();
-    resetQqLogin();
   }
 }
 
@@ -700,8 +537,6 @@ function handleInitModel() {
   urlHint.value = '';
   activeLoginTab.value = 'code';
   resetWxLogin();
-  resetQqLogin();
-  void loadQqLoginAvailability();
 
   if (props.operateType === 'edit' && props.rowData) {
     const { id, name, code, platform, remark, status } = props.rowData;
@@ -728,10 +563,6 @@ async function handleSubmit() {
   if (submitting.value) return;
   if (activeLoginTab.value === 'wx') {
     window.$message?.info(isAddMode.value ? '请使用微信授权完成添加' : '请使用微信授权完成更新');
-    return;
-  }
-  if (activeLoginTab.value === 'qq') {
-    window.$message?.info(isAddMode.value ? '请使用 QQ 扫码完成添加' : '请使用 QQ 扫码完成更新');
     return;
   }
 
@@ -793,13 +624,11 @@ watch(visible, () => {
     restoreValidation();
   } else {
     resetWxLogin();
-    resetQqLogin();
   }
 });
 
 onBeforeUnmount(() => {
   resetWxLogin();
-  resetQqLogin();
 });
 </script>
 
@@ -814,28 +643,9 @@ onBeforeUnmount(() => {
         <NTabs :value="activeLoginTab" type="segment" class="mb-12px" @update:value="onLoginTabChange">
           <NTab name="code" tab="输入 code" />
           <NTab name="wx" tab="微信授权" />
-          <NTab v-if="qqQrAvailable" name="qq" tab="QQ 扫码" />
         </NTabs>
 
-        <template v-if="isQqTab">
-          <!-- QQ 扫码登录：NapCat 出码，1.2s 轮询，confirmed 后换 code 登录 -->
-          <div class="mb-12px flex flex-col items-center gap-12px">
-            <NSpin :show="qqLoading || qqSubmitting">
-              <div class="h-220px w-220px flex items-center justify-center overflow-hidden rounded-8px bg-#f5f5f5">
-                <img v-if="qqQrUrl" :src="qqQrUrl" alt="QQ 登录二维码" class="h-full w-full object-contain" />
-                <span v-else class="text-13px text-#999">二维码加载中</span>
-              </div>
-            </NSpin>
-            <p class="text-13px text-primary">{{ qqStatus || '准备扫码登录' }}</p>
-            <p v-if="qqError" class="text-13px text-error">{{ qqError }}</p>
-            <NSpace>
-              <NButton size="small" :loading="qqLoading" @click="startQqLogin">刷新二维码</NButton>
-              <NButton v-if="qqTaskId" size="small" quaternary @click="cancelQqLogin">取消登录</NButton>
-            </NSpace>
-          </div>
-        </template>
-
-        <template v-else-if="!isWxTab">
+        <template v-if="!isWxTab">
           <NFormItem :label="$t('page.farm.account.code')" path="code">
             <NInput
               :value="model.code"
@@ -920,7 +730,7 @@ onBeforeUnmount(() => {
         <NSpace :size="16">
           <NButton @click="closeDrawer">{{ $t('common.cancel') }}</NButton>
           <NButton
-            v-if="!isWxTab && !isQqTab"
+            v-if="!isWxTab"
             type="primary"
             :loading="submitting"
             :disabled="submitting"
