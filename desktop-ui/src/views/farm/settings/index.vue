@@ -84,10 +84,6 @@ const offlineSaving = ref(false);
 const offlineTesting = ref(false);
 const activeTab = ref<'strategy' | 'automation' | 'offline' | 'system'>('strategy');
 
-// 登录设置（QQ 扫码 NapCat）页签已移除：NapCat 方式不好用不再暴露配置入口；
-// 后端 store 键与 IPC 命令保留，账号抽屉的「QQ 扫码」页签按既有 qqQrLogin
-// 开关决定展示（默认关闭即隐藏）
-
 const systemConfigLoading = ref(false);
 const systemConfigSaving = ref(false);
 const devicePresets = ref<
@@ -193,7 +189,6 @@ const offline = reactive<Api.Farm.OfflineReminder>({
   wechatBot: {},
   title: '账号下线提醒',
   msg: '账号下线',
-  offlineDeleteSec: 0,
   endpoint: '',
   token: '',
   secret: ''
@@ -850,7 +845,6 @@ function applyOffline(data: Api.Farm.OfflineReminder) {
   };
   offline.title = data.title || '';
   offline.msg = data.msg || '';
-  offline.offlineDeleteSec = Number(data.offlineDeleteSec || 0);
   offline.endpoint = data.endpoint || '';
   offline.token = data.token || '';
   offline.secret = data.secret || '';
@@ -978,7 +972,6 @@ function offlinePayload(): Api.Farm.OfflineReminder {
     wechatBot: {},
     title: offline.title || '',
     msg: offline.msg || '',
-    offlineDeleteSec: Number(offline.offlineDeleteSec || 0),
     endpoint: offline.endpoint || '',
     token: offline.token || '',
     secret: offline.secret || ''

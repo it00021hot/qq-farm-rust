@@ -29,8 +29,17 @@ pub enum NotifyEvent {
     },
     /// 物品变化
     ItemChanged { event_type: String, items: Vec<ItemChgLite> },
-    /// 基本信息变化（升级 / 金币 / 经验）
-    BasicChanged { event_type: String, level: Option<i64>, gold: Option<i64>, exp: Option<i64> },
+    /// 基本信息变化（升级 / 金币 / 经验 / 昵称 / 头像）
+    BasicChanged {
+        event_type: String,
+        level: Option<i64>,
+        gold: Option<i64>,
+        exp: Option<i64>,
+        /// 最新昵称（proto3 空串 = 未携带；只在非空时给出，对齐 go applyBasicNotify）
+        nick: Option<String>,
+        /// 最新头像 URL（同样只在非空时给出）
+        avatar: Option<String>,
+    },
     /// 未知 / 未处理的事件类型
     Unknown { event_type: String },
     /// 好友申请（gid / 名称 / 等级）
@@ -39,15 +48,12 @@ pub enum NotifyEvent {
     DogSkillGiftPending { count: i64 },
     /// 宠物守护记录更新（NewProtectLogNotify，空事件）
     DogProtectLogChanged,
-    /// 活动列表变化（ActivitiesChangedNotify，用于失效活动时间窗缓存）
+    /// 活动列表变化（ActiviesChangeNotify，用于失效活动时间窗缓存）
     ActivitiesChanged,
+    /// 通行证（游记）变化（BattlePassChangeNotify，用于刷新赛季缓存）
+    BattlePassChanged { pass: Option<crate::proto::generated::gamepb::seasonpb::SeasonPass> },
     /// 任务信息推送
     TaskInfoNotify { task_info: Option<crate::proto::generated::gamepb::taskpb::TaskInfo> },
-    /// 农场级社交事件变化（青蛙 5005 等；清空事件时 social_events 为空）
-    FarmSocialEventsChanged {
-        event_type: String,
-        events: Vec<crate::proto::generated::gamepb::plantpb::FarmSocialEvent>,
-    },
     /// 天气变化（自己或好友农场；WeatherChangeNotify）
     WeatherChanged { event_type: String, host_gid: i64 },
 }
@@ -110,6 +116,12 @@ pub fn parse_event(event: &EventMessage) -> NotifyEvent {
         match crate::proto::generated::gamepb::userpb::BasicNotify::decode(body) {
             Ok(notify) => {
                 let basic = notify.basic;
+                // 昵称 / 头像只在非空时携带（proto3 空串等价于未携带；
+                // go applyBasicNotify 同样对空串直接跳过，避免清空已有值）
+                let nick =
+                    basic.as_ref().filter(|b| !b.name.is_empty()).map(|b| b.name.clone());
+                let avatar =
+                    basic.as_ref().filter(|b| !b.avatar_url.is_empty()).map(|b| b.avatar_url.clone());
                 NotifyEvent::BasicChanged {
                     event_type,
                     level: basic
@@ -117,9 +129,18 @@ pub fn parse_event(event: &EventMessage) -> NotifyEvent {
                         .and_then(|b| (has_level && b.level > 0).then_some(b.level)),
                     gold: basic.as_ref().and_then(|b| has_gold.then_some(b.gold)),
                     exp: basic.as_ref().and_then(|b| has_exp.then_some(b.exp)),
+                    nick,
+                    avatar,
                 }
             }
-            Err(_) => NotifyEvent::BasicChanged { event_type, level: None, gold: None, exp: None },
+            Err(_) => NotifyEvent::BasicChanged {
+                event_type,
+                level: None,
+                gold: None,
+                exp: None,
+                nick: None,
+                avatar: None,
+            },
         }
     } else if event_type.contains("FriendApplicationReceivedNotify") {
         match crate::proto::generated::gamepb::friendpb::FriendApplicationReceivedNotify::decode(
@@ -146,9 +167,22 @@ pub fn parse_event(event: &EventMessage) -> NotifyEvent {
         }
     } else if event_type.contains("NewProtectLogNotify") {
         NotifyEvent::DogProtectLogChanged
-    } else if event_type.contains("ActivitiesChangedNotify")
-        || event_type.contains("ActivitiesNotify")
+    } else if event_type.contains("BattlePassChangeNotify") {
+        // 通行证（游记）进度变化推送，对齐 go manager.go 的 applyBattlePassNotify
+        match crate::proto::generated::gamepb::seasonpb::BattlePassChangeNotify::decode(body) {
+            Ok(notify) => NotifyEvent::BattlePassChanged { pass: notify.pass },
+            Err(_) => NotifyEvent::BattlePassChanged { pass: None },
+        }
+    } else if event_type.contains("ActiviesChangeNotify") || event_type.contains("ActivityChangeNotify")
     {
+        // proto 真实消息名是 ActiviesChangeNotify（proto/activitypb.proto，服务端
+        // 就少拼一个 i），此前误写成 ActivitiesChangedNotify / ActivitiesNotify，
+        // 永远匹配不上导致活动时间窗缓存失效链路不通。匹配集对齐 go manager.go：
+        // 同时兼容 ActivityChangeNotify。
+        // go 还兜底匹配 activity 服务的 method 名（service == "gamepb.activitypb.ActivityService"
+        // && method 含 "Activity"），但 rust 的 EventMessage 只有 message_type / body
+        // 两个字段（proto/game.proto），网关推送帧拿不到 service/method，且 message_type
+        // 本身就是 proto 消息名，上面两条子串匹配已完整覆盖真实推送。
         NotifyEvent::ActivitiesChanged
     } else if event_type.contains("TaskInfoNotify") {
         match crate::proto::generated::gamepb::taskpb::TaskInfoNotify::decode(body) {
@@ -159,13 +193,6 @@ pub fn parse_event(event: &EventMessage) -> NotifyEvent {
         match crate::proto::generated::gamepb::weatherpb::WeatherChangeNotify::decode(body) {
             Ok(notify) => NotifyEvent::WeatherChanged { event_type, host_gid: notify.host_gid },
             Err(_) => NotifyEvent::WeatherChanged { event_type, host_gid: 0 },
-        }
-    } else if event_type.contains("FarmSocialEventsNotify") {
-        match crate::proto::generated::gamepb::plantpb::FarmSocialEventsNotify::decode(body) {
-            Ok(notify) => {
-                NotifyEvent::FarmSocialEventsChanged { event_type, events: notify.social_events }
-            }
-            Err(_) => NotifyEvent::FarmSocialEventsChanged { event_type, events: Vec::new() },
         }
     } else {
         NotifyEvent::Unknown { event_type }
@@ -346,12 +373,74 @@ mod tests {
         body.extend_from_slice(&inner);
         let ev = EventMessage { message_type: "BasicNotify".to_string(), body: body.into() };
         match parse_event(&ev) {
-            NotifyEvent::BasicChanged { level, gold, exp, .. } => {
+            NotifyEvent::BasicChanged { level, gold, exp, nick, avatar, .. } => {
                 assert_eq!(level, None);
                 assert_eq!(gold, Some(0));
                 assert_eq!(exp, Some(42));
+                assert_eq!(nick, None, "缺昵称的包不得带空串");
+                assert_eq!(avatar, None, "缺头像的包不得带空串");
             }
             other => panic!("expected BasicChanged, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn basic_notify_extracts_nick_and_avatar() {
+        let basic = crate::proto::generated::gamepb::userpb::BasicInfo {
+            name: "新昵称".to_string(),
+            avatar_url: "https://example.com/a.png".to_string(),
+            ..Default::default()
+        };
+        let notify = crate::proto::generated::gamepb::userpb::BasicNotify { basic: Some(basic) };
+        let ev = EventMessage {
+            message_type: "BasicNotify".to_string(),
+            body: notify.encode_to_vec().into(),
+        };
+        match parse_event(&ev) {
+            NotifyEvent::BasicChanged { nick, avatar, .. } => {
+                assert_eq!(nick.as_deref(), Some("新昵称"));
+                assert_eq!(avatar.as_deref(), Some("https://example.com/a.png"));
+            }
+            other => panic!("expected BasicChanged, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn activies_change_notify_matches_real_proto_name() {
+        // proto 里只有 ActiviesChangeNotify（服务端少拼一个 i）；
+        // 此前匹配集写错导致推送被判为 Unknown，活动缓存失效链路不通
+        for name in ["ActiviesChangeNotify", "ActivityChangeNotify"] {
+            let ev = EventMessage { message_type: name.to_string(), body: b"".to_vec().into() };
+            match parse_event(&ev) {
+                NotifyEvent::ActivitiesChanged => {}
+                other => panic!("expected ActivitiesChanged for {name}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn battle_pass_change_notify_extracts_pass() {
+        let pass = crate::proto::generated::gamepb::seasonpb::SeasonPass {
+            activity_id: 100,
+            current_level: 3,
+            current_progress: 1,
+            progress_target: 10,
+            ..Default::default()
+        };
+        let notify =
+            crate::proto::generated::gamepb::seasonpb::BattlePassChangeNotify { pass: Some(pass) };
+        let ev = EventMessage {
+            message_type: "BattlePassChangeNotify".to_string(),
+            body: notify.encode_to_vec().into(),
+        };
+        match parse_event(&ev) {
+            NotifyEvent::BattlePassChanged { pass } => {
+                let pass = pass.expect("应解出通行证");
+                assert_eq!(pass.activity_id, 100);
+                assert_eq!(pass.current_level, 3);
+                assert_eq!(pass.current_progress, 1);
+            }
+            other => panic!("expected BattlePassChanged, got {other:?}"),
         }
     }
 }

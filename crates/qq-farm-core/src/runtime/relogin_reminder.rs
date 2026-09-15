@@ -4,7 +4,6 @@
 //!
 //! ## 职责
 //!
-//! - `getOfflineAutoDeleteMs` — 计算自动删除离线账号的延迟（用户级配置覆盖全局）
 //! - `applyReloginCode` — 应用新 code（更新或新增账号 + 重启 worker）
 //! - `startReloginWatcher` — 轮询登录码状态（`maxRounds = 120`，1s/轮）
 //! - `triggerOfflineReminder` — 触发 QQ Bot 离线提醒与重登录二维码
@@ -153,21 +152,6 @@ impl ReloginReminderService {
             worker_controls,
             logger,
             relogin_watchers: Arc::new(AsyncMutex::new(HashMap::new())),
-        }
-    }
-
-    /// 计算自动删除离线账号的延迟（ms）。
-    ///
-    /// 0 表示不自动删除（用 `i64::MAX` 表示原 TS `Infinity`）。
-    /// `username` 为空时取全局配置；否则先查 user 级，再回退到全局。
-    #[must_use]
-    pub fn get_offline_auto_delete_ms(&self, username: &str) -> i64 {
-        let cfg = self.get_offline_reminder_config(username);
-        let sec = cfg.offline_delete_sec.max(0);
-        if sec == 0 {
-            i64::MAX
-        } else {
-            sec.saturating_mul(1000)
         }
     }
 
@@ -686,30 +670,6 @@ mod tests {
             logger.clone() as Arc<dyn ReminderLogger>,
         );
         (Arc::new(svc), logger, controls)
-    }
-
-    #[test]
-    fn get_offline_auto_delete_ms_default_infinity() {
-        let (svc, _, _) = make_service();
-        // 全局默认 offline_delete_sec = 0 → i64::MAX
-        let ms = svc.get_offline_auto_delete_ms("");
-        assert_eq!(ms, i64::MAX);
-    }
-
-    #[test]
-    #[serial_test::serial(relogin)]
-    #[serial_test::serial(farm_data_dir)]
-    fn get_offline_auto_delete_ms_user_override() {
-        let _dir = TempFarmData::enter();
-        // 先重置全局（避免被其他测试污染）
-        global_config::set_offline_reminder(OfflineReminder::default());
-        let (svc, _, _) = make_service();
-        global_config::set_offline_reminder(OfflineReminder {
-            offline_delete_sec: 60,
-            ..Default::default()
-        });
-        let ms = svc.get_offline_auto_delete_ms("any");
-        assert_eq!(ms, 60_000);
     }
 
     #[test]

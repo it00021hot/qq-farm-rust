@@ -47,7 +47,6 @@ const EVENT_LABELS: Record<string, string> = {
   kickout: '被踢下线',
   ws_400: '登录失效',
   ws_close: '连接关闭',
-  offline_delete: '离线删除',
   // 对齐后端 PanelEvent 全量 key（panel_events.rs），新增事件必须同步补这里
   // 公益活动正式名「公益小红花」；本事件是结算礼包开启（区别于每日公益礼包）
   charity_settlement_gift_open: '公益结算礼包',

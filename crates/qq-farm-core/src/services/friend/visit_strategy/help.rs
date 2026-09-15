@@ -591,7 +591,7 @@ pub async fn visit_friend(
         let _ = api.leave_farm(friend_gid).await;
         return VisitResult { acted: false, entered: true, stolen: 0 };
     }
-    let mut status = analyze_friend_lands(&lands, my_gid, &plant_blacklist, false, account_id);
+    let mut status = analyze_friend_lands(&lands, my_gid, &plant_blacklist);
     let snapshot_key = RecentHelpCache::make_snapshot_key(
         &lands.iter().map(LandSnapshot::from_land).collect::<Vec<_>>(),
     );
@@ -714,7 +714,7 @@ pub async fn visit_friend_for_help(
         return Some(VisitResult { acted: false, entered: true, stolen: 0 });
     }
 
-    let status = analyze_friend_lands(&lands, my_gid, &[], false, account_id);
+    let status = analyze_friend_lands(&lands, my_gid, &[]);
     let snapshot_key = RecentHelpCache::make_snapshot_key(
         &lands.iter().map(LandSnapshot::from_land).collect::<Vec<_>>(),
     );
@@ -839,7 +839,7 @@ async fn do_farm_op(
     lands: &[LandInfo],
     my_gid: i64,
 ) -> serde_json::Value {
-    let status = analyze_friend_lands(lands, my_gid, &[], false, "");
+    let status = analyze_friend_lands(lands, my_gid, &[]);
     let land_ids: Vec<i64> = match op {
         crate::models::types::FriendOperation::Farming => status
             .need_weed
@@ -883,7 +883,7 @@ pub async fn do_bad_op(
     if api.remaining_bad_times() <= 0 {
         return serde_json::json!({"ok": true, "opType": "bad", "count": 0, "bugCount": 0, "weedCount": 0, "message": "今日捣乱次数已达上限", "limitReached": true});
     }
-    let status = analyze_friend_lands(lands, my_gid, &[], false, "");
+    let status = analyze_friend_lands(lands, my_gid, &[]);
     if status.can_put_bug.is_empty() && status.can_put_weed.is_empty() {
         return serde_json::json!({"ok": true, "opType": "bad", "count": 0, "bugCount": 0, "weedCount": 0, "message": "没有可捣乱土地"});
     }

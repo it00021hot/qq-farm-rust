@@ -18,11 +18,9 @@ pub const FRIEND_LIST_FAIL_COOLDOWN_MS: u64 = 30_000;
 /// 好友 LandsNotify 按 gid 去抖，避免连发气泡打满 GetGameFriends。
 pub const FRIEND_LANDS_NOTIFY_DEBOUNCE_MS: u64 = 500;
 pub const QQ_FRIEND_LIST_BATCH_SIZE: usize = 35;
-/// 网关 in-flight 上限（对齐 bot `MAX_IN_FLIGHT_REQUESTS`）；Heartbeat 不受此限。
-/// 实际拆成共享 4 + 前台保留 1（`gateway::acquire_rpc_slot`）：后台自动化只用共享槽。
-pub const MAX_IN_FLIGHT_REQUESTS: usize = 5;
-/// 网关等待队列上限（对齐 bot `MAX_QUEUED_REQUESTS`）。
-pub const MAX_QUEUED_REQUESTS: usize = 100;
+/// （五班次模型后不再有全局在途 / 排队上限：并发预算按班次拆分，
+/// 见 `network::priority` 的 MAX_BUSINESS_IN_FLIGHT / max_in_flight_for_class /
+/// max_queued_for_class，数值对齐 bot request-priority.ts。）
 /// 活动窗口缓存 TTL（对齐 bot `activity-windows.ts`）。
 pub const ACTIVITY_WINDOWS_CACHE_TTL_MS: u64 = 5 * 60 * 1000;
 /// 活动窗口刷新失败日志节流。
@@ -33,7 +31,8 @@ pub const HEARTBEAT_RPC_TIMEOUT_MS: u64 = 20_000;
 /// 业务 RPC 默认超时（对齐 bot sendMsgAsync 的 20s 默认值）。
 /// 无超时的话服务端漏回一个包就永久占用并发槽，漏 5 个后业务全堵死。
 pub const DEFAULT_RPC_TIMEOUT_MS: u64 = 20_000;
-/// 业务 RPC 排队（等并发槽）超时，与默认超时同值。
+/// 业务 RPC 排队（等班次槽位）超时；background 班次例外，8s 即让路
+/// （见 `network::priority::LOW_PRIORITY_QUEUE_WAIT_MS`）。
 pub const RPC_QUEUE_TIMEOUT_MS: u64 = 20_000;
 
 /// 探测本机微信 `/api/check-login` 超时（对齐 YYB scan.html）

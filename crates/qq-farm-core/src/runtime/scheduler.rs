@@ -126,6 +126,11 @@ impl Scheduler {
         let task_for_run = task.clone();
         let prevent_overlap = options.prevent_overlap;
         let run_immediately = options.run_immediately;
+        // 定时任务按调度器命名空间注入 RPC 班次（对齐 bot classForSchedulerNamespace）：
+        // farm-service → farm、friend-service → friend、worker:{id} → farm（保守默认）、
+        // ace → 不注入（AntiData 按方法名自行解析成 critical 保留通道）。
+        let ambient_class =
+            crate::network::priority::class_for_scheduler_namespace(&self.inner.namespace);
 
         let handle = crate::runtime::safe_spawn::spawn_logged("scheduler_interval", async move {
             let mut ticker = tokio::time::interval(interval_tokio);
@@ -149,8 +154,15 @@ impl Scheduler {
                         let task = task_for_run.clone();
                         let running = running.clone();
                         crate::runtime::safe_spawn::spawn_logged("scheduler_tick", async move {
-                            // 定时任务一律标记为后台 RPC 班次：不占前台保留槽
-                            crate::network::gateway::background_scope(task()).await;
+                            // 任务回调跑在命名空间对应的 RPC 班次里（对齐 bot
+                            // runWithRequestClass）：farm/friend 定时任务只竞争
+                            // 各自班次的在途额度，前台操作至少保留两个业务槽位
+                            match ambient_class {
+                                Some(class) => {
+                                    crate::network::gateway::request_class_scope(class, task()).await;
+                                }
+                                None => task().await,
+                            }
                             running.store(false, Ordering::Release);
                         });
                     }
@@ -176,13 +188,21 @@ impl Scheduler {
         let cancel = self.inner.cancel.clone();
         let delay_ms = delay.as_millis() as u64;
         let task_name = name.to_string();
+        // 与 interval 一致：按命名空间注入 RPC 班次（见 set_interval_task_with_options）
+        let ambient_class =
+            crate::network::priority::class_for_scheduler_namespace(&self.inner.namespace);
         let handle = crate::runtime::safe_spawn::spawn_logged("scheduler_timeout", async move {
             tokio::select! {
                 _ = cancel.cancelled() => return,
                 _ = tokio::time::sleep(delay) => {
                     // 到期后另起 task 跑回调，clear() 只取消尚未开火的 timer。
                     crate::runtime::safe_spawn::spawn_logged("scheduler_timeout_fire", async move {
-                        crate::network::gateway::background_scope(task()).await;
+                        match ambient_class {
+                            Some(class) => {
+                                crate::network::gateway::request_class_scope(class, task()).await;
+                            }
+                            None => task().await,
+                        }
                     });
                 }
             }

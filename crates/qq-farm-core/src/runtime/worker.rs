@@ -412,120 +412,127 @@ impl Worker {
                         tokio::spawn(async move {
                             while let Some(ev) = notify_rx.recv().await {
                                 match ev {
-                                crate::network::notify::NotifyEvent::Kickout { reason, .. } => {
-                                    let why = if reason.is_empty() {
-                                        "未知".to_string()
-                                    } else {
-                                        reason
-                                    };
-                                    let _ = tx.send(WorkerEvent::Log {
-                                        account_id: acc_id.clone(),
-                                        account_name: acc_name.clone(),
-                                        level: "info".to_string(),
-                                        module: "system".to_string(),
-                                        message: format!(
-                                            "检测到踢下线，准备自动停止账号。原因: {why}"
-                                        ),
-                                    });
-                                    wl.on_kickout(&why);
-                                    emit_terminal_stop(
-                                        &tx,
-                                        &acc_id,
-                                        &acc_name,
-                                        &why,
-                                        "kickout",
-                                        kick_wx_auth,
-                                        kick_generation,
-                                    );
-                                    gw.force_disconnect_with_reason("kickout");
-                                    break;
-                                }
-                                crate::network::notify::NotifyEvent::ItemChanged {
-                                    items, ..
-                                } => {
-                                    wl.apply_item_notify(&items);
-                                }
-                                crate::network::notify::NotifyEvent::BasicChanged {
-                                    level,
-                                    gold,
-                                    exp,
-                                    ..
-                                } => {
-                                    wl.apply_basic_notify(level, gold, exp);
-                                }
-                                crate::network::notify::NotifyEvent::LandsChanged {
-                                    host_gid,
-                                    changed_count,
-                                    lands,
-                                    ..
-                                } => {
-                                    wl.on_lands_notify(host_gid, changed_count, lands);
-                                }
-                                crate::network::notify::NotifyEvent::FriendApplications {
-                                    applications,
-                                } => {
-                                    if !applications.is_empty() {
-                                        let own_level = wl.own_level();
-                                        let friend = wl.friend().clone();
-                                        let account_id = wl.account_id().to_string();
-                                        tokio::spawn(async move {
-                                            friend
-                                                .accept_friend_applications(
-                                                    &applications,
-                                                    own_level,
-                                                    &account_id,
-                                                )
-                                                .await;
+                                    crate::network::notify::NotifyEvent::Kickout {
+                                        reason, ..
+                                    } => {
+                                        let why = if reason.is_empty() {
+                                            "未知".to_string()
+                                        } else {
+                                            reason
+                                        };
+                                        let _ = tx.send(WorkerEvent::Log {
+                                            account_id: acc_id.clone(),
+                                            account_name: acc_name.clone(),
+                                            level: "info".to_string(),
+                                            module: "system".to_string(),
+                                            message: format!(
+                                                "检测到踢下线，准备自动停止账号。原因: {why}"
+                                            ),
                                         });
+                                        wl.on_kickout(&why);
+                                        emit_terminal_stop(
+                                            &tx,
+                                            &acc_id,
+                                            &acc_name,
+                                            &why,
+                                            "kickout",
+                                            kick_wx_auth,
+                                            kick_generation,
+                                        );
+                                        gw.force_disconnect_with_reason("kickout");
+                                        break;
                                     }
-                                }
-                                crate::network::notify::NotifyEvent::DogSkillGiftPending {
-                                    count,
-                                } => {
-                                    // 同气连枝礼包掉落推送 → 自动领取（单飞锁在服务内）
-                                    let gift =
+                                    crate::network::notify::NotifyEvent::ItemChanged {
+                                        items,
+                                        ..
+                                    } => {
+                                        wl.apply_item_notify(&items);
+                                    }
+                                    crate::network::notify::NotifyEvent::BasicChanged {
+                                        level,
+                                        gold,
+                                        exp,
+                                        nick,
+                                        avatar,
+                                        ..
+                                    } => {
+                                        wl.apply_basic_notify(level, gold, exp, nick, avatar);
+                                    }
+                                    crate::network::notify::NotifyEvent::LandsChanged {
+                                        host_gid,
+                                        changed_count,
+                                        lands,
+                                        ..
+                                    } => {
+                                        wl.on_lands_notify(host_gid, changed_count, lands);
+                                    }
+                                    crate::network::notify::NotifyEvent::FriendApplications {
+                                        applications,
+                                    } => {
+                                        if !applications.is_empty() {
+                                            let own_level = wl.own_level();
+                                            let friend = wl.friend().clone();
+                                            let account_id = wl.account_id().to_string();
+                                            tokio::spawn(async move {
+                                                friend
+                                                    .accept_friend_applications(
+                                                        &applications,
+                                                        own_level,
+                                                        &account_id,
+                                                    )
+                                                    .await;
+                                            });
+                                        }
+                                    }
+                                    crate::network::notify::NotifyEvent::DogSkillGiftPending {
+                                        count,
+                                    } => {
+                                        // 同气连枝礼包掉落推送 → 自动领取（单飞锁在服务内）
+                                        let gift =
                                         crate::services::dog_skill_gifts::DogSkillGiftService::new(
                                             gw.clone(),
                                         );
-                                    tokio::spawn(async move {
-                                        let _ = gift.check_and_claim(count).await;
-                                    });
-                                }
-                                crate::network::notify::NotifyEvent::DogProtectLogChanged => {
-                                    // 守护记录更新：面板打开时自会拉取，无需处理
-                                }
-                                crate::network::notify::NotifyEvent::ActivitiesChanged => {
-                                    crate::config::activity_windows::invalidate_activity_windows();
-                                    // 活动列表变化：天气快照与好友天气缓存一并失效
-                                    wl.weather().clear_caches();
-                                }
-                                crate::network::notify::NotifyEvent::WeatherChanged {
-                                    host_gid,
-                                    ..
-                                } => {
-                                    // 天气变化：清空快照与好友天气缓存（对齐 bot weatherChanged）
-                                    tracing::debug!(host_gid, "天气变化推送");
-                                    wl.weather().clear_caches();
-                                }
-                                crate::network::notify::NotifyEvent::TaskInfoNotify {
-                                    task_info,
-                                } => {
-                                    if let Some(info) = task_info {
-                                        let task = wl.task().clone();
                                         tokio::spawn(async move {
-                                            task.on_task_info_notify(&info).await;
+                                            let _ = gift.check_and_claim(count).await;
                                         });
                                     }
+                                    crate::network::notify::NotifyEvent::DogProtectLogChanged => {
+                                        // 守护记录更新：面板打开时自会拉取，无需处理
+                                    }
+                                    crate::network::notify::NotifyEvent::ActivitiesChanged => {
+                                        crate::config::activity_windows::invalidate_activity_windows();
+                                        // 活动列表变化：天气快照与好友天气缓存一并失效
+                                        wl.weather().clear_caches();
+                                    }
+                                    crate::network::notify::NotifyEvent::BattlePassChanged {
+                                        pass,
+                                    } => {
+                                        // 通行证（游记）进度推送：合并进赛季缓存
+                                        // （对齐 go applyBattlePassNotify；解码失败时 pass 为 None，忽略）
+                                        if let Some(pass) = pass {
+                                            wl.activity_center().apply_battle_pass_notify(&pass);
+                                        }
+                                    }
+                                    crate::network::notify::NotifyEvent::WeatherChanged {
+                                        host_gid,
+                                        ..
+                                    } => {
+                                        // 天气变化：清空快照与好友天气缓存（对齐 bot weatherChanged）
+                                        tracing::debug!(host_gid, "天气变化推送");
+                                        wl.weather().clear_caches();
+                                    }
+                                    crate::network::notify::NotifyEvent::TaskInfoNotify {
+                                        task_info,
+                                    } => {
+                                        if let Some(info) = task_info {
+                                            let task = wl.task().clone();
+                                            tokio::spawn(async move {
+                                                task.on_task_info_notify(&info).await;
+                                            });
+                                        }
+                                    }
+                                    crate::network::notify::NotifyEvent::Unknown { .. } => {}
                                 }
-                                crate::network::notify::NotifyEvent::FarmSocialEventsChanged {
-                                    events,
-                                    ..
-                                } => {
-                                    // 青蛙等农场级事件推送 → farm_push 触发巡查清理
-                                    wl.on_farm_social_events_push(events.len());
-                                }
-                                crate::network::notify::NotifyEvent::Unknown { .. } => {}
-                            }
                             }
                         });
                     }

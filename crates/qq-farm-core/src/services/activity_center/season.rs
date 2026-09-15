@@ -4,7 +4,7 @@ use crate::constants::{SEASON_SERVICE, SOLAR_TERMS_SERVICE};
 use crate::error::{Error, Result};
 use crate::proto::generated::gamepb::seasonpb::{
     ClaimBattlePassRewardsReply, ClaimBattlePassRewardsRequest, GetSeasonInfoReply,
-    GetSeasonInfoRequest,
+    GetSeasonInfoRequest, SeasonInfo, SeasonPass,
 };
 use crate::proto::generated::gamepb::solartermspb::{
     ClaimSolarTermsReply, ClaimSolarTermsRequest, GetSolarTermsReply, GetSolarTermsRequest,
@@ -76,6 +76,51 @@ impl ActivityCenterService {
     /// 刷新赛季通行证（用最新数据刷新缓存）
     pub async fn refresh_season_pass(&self) -> Result<SeasonDto> {
         self.get_current_season_event().await
+    }
+
+    /// 处理 BattlePassChangeNotify 推送：把推送里的通行证合并进赛季缓存。
+    ///
+    /// 对齐 go `activitycenter.ApplySeasonPassNotify`（snapshot.go）：推送常省略
+    /// title / activityId / nodes，合并时保留缓存里的旧值；领取标记（claimed /
+    /// claimable 等）由 `pass_dto` 按 currentLevel / claimedThroughLevel 实时推导，
+    /// 无需像 go 那样显式重算。缓存缺失时按最小 Reply 落一份，等下次
+    /// GetSeasonInfo 拉全量覆盖。
+    pub fn apply_battle_pass_notify(&self, pass: &SeasonPass) {
+        let mut cached = self.cached_season.lock();
+        let reply = cached.get_or_insert_with(GetSeasonInfoReply::default);
+        let info = reply.season_info.get_or_insert_with(SeasonInfo::default);
+        let merged = match info.pass.as_ref() {
+            None => pass.clone(),
+            Some(prev) => {
+                let mut merged = pass.clone();
+                // proto3 里 0 / 空 = 未携带，沿用缓存旧值（对齐 go 的
+                // title / activityId / nodes 三段保留逻辑）
+                if merged.title.is_empty() {
+                    merged.title = prev.title.clone();
+                }
+                if merged.activity_id == 0 {
+                    merged.activity_id = prev.activity_id;
+                }
+                if merged.nodes.is_empty() {
+                    merged.nodes = prev.nodes.clone();
+                }
+                merged
+            }
+        };
+        // 日志字段对齐 go 的 "battle pass changed"（title 空时按 go 习惯显示"游记"）
+        let mut title = String::from_utf8_lossy(&merged.title).trim().to_string();
+        if title.is_empty() {
+            title = "游记".to_string();
+        }
+        tracing::info!(
+            activity_id = merged.activity_id,
+            title = %title,
+            level = merged.current_level,
+            progress = merged.current_progress,
+            progress_max = merged.progress_target,
+            "通行证变化推送，赛季缓存已刷新"
+        );
+        info.pass = Some(merged);
     }
 
     // ----- 节气 -----

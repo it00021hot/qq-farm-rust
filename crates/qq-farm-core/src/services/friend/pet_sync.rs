@@ -142,12 +142,14 @@ pub fn plan_next_sync_pacing(
 }
 
 /// 让路型错误：网关没余力或连接已断，不是这位好友的问题
-/// （bot `isGatewayYieldError`，pet-sync.ts 里 low-priority-gate 的分类）。
+/// （bot `isGatewayYieldError`，pet-sync.ts 里 low-priority-gate 的分类；
+/// `GatewayBusy` 是五班次调度里 background 排队 8s 让路的专用错误）。
 fn is_gateway_yield_error(err: &Error) -> bool {
     matches!(
         err,
         Error::Network(
-            NetworkError::QueueFull { .. }
+            NetworkError::GatewayBusy { .. }
+                | NetworkError::QueueFull { .. }
                 | NetworkError::Timeout { .. }
                 | NetworkError::Closed { .. }
                 | NetworkError::Phase(_)
@@ -186,12 +188,14 @@ async fn wait_friend_task_idle(service: &FriendService) -> bool {
     true
 }
 
-/// 等网关空闲：有在途请求时不排队（只观察不加压），最多 `GATEWAY_IDLE_WAIT_MS`
-/// （bot `waitForGatewayIdle`；rust 网关没有请求分级，用 pending 数近似）。
+/// 等网关空闲：只在网关对 background 完全空闲时才插队（只观察不加压），
+/// 最多 `GATEWAY_IDLE_WAIT_MS`（bot `waitForGatewayIdle`；判定口径见
+/// `network::priority::is_gateway_idle_for_low_priority`：无业务在途 / 排队、
+/// 心跳没漏拍、在途请求没有卡住）。
 async fn wait_gateway_idle(service: &FriendService) -> bool {
     let gateway = service.api().gateway();
     let deadline = tokio::time::Instant::now() + Duration::from_millis(GATEWAY_IDLE_WAIT_MS);
-    while gateway.pending_count() > 0 {
+    while !gateway.is_gateway_idle_for_background() {
         if tokio::time::Instant::now() >= deadline {
             return false;
         }
@@ -272,7 +276,8 @@ pub fn spawn_friend_pet_sync(
     active_tokens().lock().insert(account_id.clone(), token.clone());
     let service = Arc::clone(service);
     crate::runtime::safe_spawn::spawn_logged("friend_pet_sync", async move {
-        // 补数据任务标记为后台 RPC 班次：只在网关有空闲时占用共享槽
+        // 补数据任务标记为 background RPC 班次（对齐 bot runWithRequestClass('background')）：
+        // 只在网关完全空闲时占用唯一的 background 在途槽，前台请求排队时让路
         crate::network::gateway::background_scope(run_sync_chain(
             service, account_id, is_running, token,
         ))

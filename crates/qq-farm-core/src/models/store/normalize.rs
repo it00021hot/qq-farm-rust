@@ -195,7 +195,6 @@ pub fn default_account_config() -> AccountConfig {
             friend: true,
             friend_help_exp_limit: false,
             friend_steal: true,
-            friend_steal_activity_only: false,
             friend_help: false,
             friend_bad: false,
             task: true,

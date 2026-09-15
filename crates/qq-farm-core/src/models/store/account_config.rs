@@ -619,9 +619,6 @@ fn apply_automation_bool(a: &mut AutomationConfig, key: &str, value: bool) {
         "show_manual_fertilizer" | "showManualFertilizer" => a.show_manual_fertilizer = value,
         "friend_help_exp_limit" | "friendHelpExpLimit" => a.friend_help_exp_limit = value,
         "friend_steal" | "friendSteal" => a.friend_steal = value,
-        "friend_steal_activity_only" | "friendStealActivityOnly" => {
-            a.friend_steal_activity_only = value
-        }
         "friend_help" | "friendHelp" => a.friend_help = value,
         "friend_bad" | "friendBad" => a.friend_bad = value,
         "task" => a.task = value,

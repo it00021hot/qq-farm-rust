@@ -11,20 +11,31 @@
 //!
 //! 阶段 1A 范围：基础连接 + 状态机 + send/recv + sendMsgAsync 机制。
 //! 登录流程（ACE runtime / WASM 握手）留到阶段 1B 业务模块。
+//!
+//! ## 与 bot 的有意差异
+//!
+//! - 请求班次模型移植自 bot `request-priority.ts` / `low-priority-gate.ts`
+//!   （对照 go `protocol/priority.go`），纯逻辑见 [`crate::network::priority`]。
+//!   心跳 / ACE 不再绕开业务槽，而是走 critical 的两条独立保留通道；
+//! - 排队超时：bot 的 20s 是「从调用起算、覆盖排队+回包」的单窗口；rust 拆成
+//!   两段（排队 20s + 回包 20s），background 排队 8s 即让路（`GatewayBusy`）；
+//! - `heartbeat_misses` 用「入站静默 > 心跳阈值」近似（bot 由心跳循环显式计数），
+//!   见 [`Gateway::gateway_load`]。
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use parking_lot::RwLock;
-use tokio::sync::{mpsc, oneshot, watch, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::network::client::{ConnectOptions, WsClient};
 use crate::network::encryptor::Encryptor;
 use crate::network::error::{NetworkError, Result};
 use crate::network::frame::{FrameBuilder, FrameParser};
 use crate::network::notify::NotifyEvent;
+use crate::network::priority::{CriticalLane, InFlightGuard, RequestClass, RpcScheduler};
 use crate::network::request::RequestManager;
 use crate::proto::generated::gamepb::userpb::{
     DeviceInfo, HeartbeatReply, HeartbeatRequest, LoginReply, LoginRequest, ReportData,
@@ -145,20 +156,28 @@ pub struct Gateway {
 }
 
 tokio::task_local! {
-    /// 前台（面板触发）请求标记。自动化定时任务用 [`background_scope`] 包裹；
-    /// 其余调用链（桌面 IPC / 登录）默认视为前台。
-    static IS_FOREGROUND_RPC: bool;
+    /// 环境请求班次（对齐 bot request-context.ts 的 AsyncLocalStorage）：
+    /// 调度器在任务入口按命名空间注入 farm / friend，补数据链路注入 background；
+    /// 未注入（面板 / IPC / 登录链路）默认按 foreground 处理——那些路径上
+    /// 确实有人在等结果。
+    static AMBIENT_RPC_CLASS: RequestClass;
 }
 
-/// 当前调用链是否前台。缺省 = 前台（IPC 发起的链路不打标记）。
-fn rpc_call_is_foreground() -> bool {
-    IS_FOREGROUND_RPC.try_with(|v| *v).unwrap_or(true)
+/// 当前调用链的环境班次；未注入 = `None`（默认按 foreground 处理）。
+fn ambient_rpc_class() -> Option<RequestClass> {
+    AMBIENT_RPC_CLASS.try_with(|c| *c).ok()
 }
 
-/// 把 future 标记为后台（自动化定时任务）：只竞争共享槽，不占前台保留槽
-/// （对齐 bot request-priority 的「非前台业务 ≤ 总预算-1，前台永远留一个槽」）。
+/// 把 future 标记为指定 RPC 班次（对齐 bot `runWithRequestClass`）：定时任务入口
+/// 打一次标记，任务内所有请求自动继承该班次，不必把班次参数一路透传到每个 API。
+pub fn request_class_scope<F: Future>(class: RequestClass, fut: F) -> impl Future<Output = F::Output> {
+    AMBIENT_RPC_CLASS.scope(class, fut)
+}
+
+/// 补数据任务（宠物同步等）标记为 background 班次：只在网关完全空闲时才发，
+/// 前台请求排队时让路（对齐 bot `runWithRequestClass('background')`）。
 pub fn background_scope<F: Future>(fut: F) -> impl Future<Output = F::Output> {
-    IS_FOREGROUND_RPC.scope(false, fut)
+    request_class_scope(RequestClass::Background, fut)
 }
 
 /// 临时 Notify 订阅（Drop 时自动退订）。
@@ -209,11 +228,11 @@ struct Inner {
     last_rx_ms: AtomicI64,
     /// TSDK 重建中标志（worker rebuild 期间置 true，WorkerLoop 据此放宽 silence 阈值）
     rebuilding: AtomicBool,
-    /// 业务 RPC 并发槽（对齐 bot 5 in-flight / 100 排队）。Heartbeat 不占槽。
-    /// 拆成共享 4 + 前台保留 1：后台自动化只可用共享槽，面板请求永远有通道。
-    rpc_slots: Arc<Semaphore>,
-    fg_rpc_slot: Arc<Semaphore>,
-    rpc_queued: AtomicUsize,
+    /// 五班次请求调度器（对齐 bot request-priority.ts 的队列模型，替换旧的
+    /// 「共享 4 槽 + 前台保留 1 槽」信号量）：
+    /// critical(heartbeat/ace 各一保留槽) > foreground > farm > friend > background。
+    /// 业务流量总在途 ≤3、其中非前台 ≤1；background 只在连接彻底空闲时发。
+    rpc_scheduler: Arc<RpcScheduler>,
     /// 出站 token 提供器：登录后暂存一次性 TSDK 初始化凭据，由下一条消息携带
     /// （对齐 bot `GatewayTokenProvider.stageInitToken/next/clear`）。
     token_provider: crate::utils::random::GatewayTokenProvider,
@@ -222,13 +241,6 @@ struct Inner {
     /// 乱序帧（或加密序 ≠ seq 序）会被服务端丢弃，反复即触发静默断供
     /// （2026-09-11 慢性掉线排查：登录爆发期并发最高，最容易撞出乱序）。
     send_order: tokio::sync::Mutex<()>,
-}
-
-/// 已占用的业务并发槽（共享或前台保留）。字段不读：持有即占用，Drop 释放。
-#[allow(dead_code)]
-enum RpcPermit {
-    Shared(OwnedSemaphorePermit),
-    Foreground(OwnedSemaphorePermit),
 }
 
 impl Gateway {
@@ -251,11 +263,7 @@ impl Gateway {
                 disconnect_reason: parking_lot::Mutex::new(None),
                 last_rx_ms: AtomicI64::new(0),
                 rebuilding: AtomicBool::new(false),
-                rpc_slots: Arc::new(Semaphore::new(
-                    crate::constants::MAX_IN_FLIGHT_REQUESTS.saturating_sub(1).max(1),
-                )),
-                fg_rpc_slot: Arc::new(Semaphore::new(1)),
-                rpc_queued: AtomicUsize::new(0),
+                rpc_scheduler: RpcScheduler::new(),
                 token_provider: crate::utils::random::GatewayTokenProvider::new(),
                 send_order: tokio::sync::Mutex::new(()),
             }),
@@ -464,12 +472,14 @@ impl Gateway {
 
     /// 高阶 API：发请求 + 等响应。默认 20s 超时（对齐 bot `sendMsgAsync`）：
     /// 无超时会让服务端漏回的请求永久占用并发槽，5 槽漏满后业务全堵死。
+    /// 班次由方法名 + 环境标记决定（`resolve_request_class`）。
     pub async fn request(&self, service: &str, method: &str, body: &[u8]) -> Result<Vec<u8>> {
         self.send_rpc(service, method, body, Some(crate::constants::DEFAULT_RPC_TIMEOUT_MS), true)
             .await
     }
 
-    /// 不等待业务锁（ACE AntiData）。同样 20s 默认超时。
+    /// 与 [`Self::request`] 同路径（历史上 ACE AntiData 用它绕开业务槽；
+    /// 五班次模型下 AntiData 按方法名走 critical 的 ace 保留通道，无需特判）。
     pub async fn request_unlocked(
         &self,
         service: &str,
@@ -480,7 +490,8 @@ impl Gateway {
             .await
     }
 
-    /// 仅 Login / Heartbeat：带超时。不占业务锁，避免大包把心跳堵住。
+    /// 带自定义回包超时的请求（Heartbeat / AntiData 用）。同样过五班次调度：
+    /// Heartbeat → critical/heartbeat 保留通道，AntiData → critical/ace 保留通道。
     pub async fn request_with_timeout(
         &self,
         service: &str,
@@ -497,6 +508,10 @@ impl Gateway {
             let phase = *self.inner.phase.read();
             rpc_phase_ok(phase, true)?;
         }
+        // 对齐 go SendNoReply / bot sendMsgNoReply：no-reply 帧也过五班次调度器
+        // （发送完成即还槽，不等待回包）
+        let (class, lane) = crate::network::priority::resolve_request_class(method, ambient_rpc_class());
+        let _slot = self.acquire_dispatch(class, lane, service, method).await?;
         // 与 send_rpc 同一把发送顺序锁，保证 no-reply 帧也不破坏 seq 递增
         let _order = self.inner.send_order.lock().await;
         let seq = self.inner.requests.next_seq();
@@ -516,44 +531,68 @@ impl Gateway {
         Ok(())
     }
 
-    /// 获取业务并发槽。后台只用共享池；前台额外可用保留槽
-    /// （`acquire_owned` 可安全取消，select 分支落选即释放）。
-    async fn acquire_rpc_slot(&self, foreground: bool) -> Result<RpcPermit> {
-        if let Ok(permit) = Arc::clone(&self.inner.rpc_slots).try_acquire_owned() {
-            return Ok(RpcPermit::Shared(permit));
-        }
-        if foreground {
-            if let Ok(permit) = Arc::clone(&self.inner.fg_rpc_slot).try_acquire_owned() {
-                return Ok(RpcPermit::Foreground(permit));
+    /// 入队并等待班次调度授权（对齐 bot 队列模型的「入队 → drain 授权」）。
+    ///
+    /// 排队超时口径（对齐 go priority.go / 现有 rust 20s 常量）：
+    /// - background：[`LOW_PRIORITY_QUEUE_WAIT_MS`]（8s）内拿不到空闲就让路
+    ///   （go `GatewayBusyError` / bot「网关繁忙，后台请求已让路」）——排队本身
+    ///   会拖长队列把 pending 拉满，把剩下的活留给下一轮更健康；
+    /// - 其余班次：[`RPC_QUEUE_TIMEOUT_MS`]（20s，沿用 rust 既有口径；bot 的
+    ///   20s 是覆盖排队+回包的单窗口，rust 拆成两段，见模块注释的有意差异）。
+    ///
+    /// 返回的 [`InFlightGuard`] 持有该班次的一个在途槽位，Drop 时归还并触发
+    /// 重新调度；等待中被取消（future drop）也不会漏账。
+    async fn acquire_dispatch(
+        &self,
+        class: RequestClass,
+        lane: Option<CriticalLane>,
+        service: &str,
+        method: &str,
+    ) -> Result<InFlightGuard> {
+        let scheduler = Arc::clone(&self.inner.rpc_scheduler);
+        let ticket = match scheduler.try_enqueue(class, lane) {
+            Ok(ticket) => ticket,
+            Err(info) => {
+                // 该班次排队配额已满：入队前直接拒绝（对齐 bot isClassQueueFull）
+                return Err(NetworkError::QueueFull {
+                    pending: info.pending,
+                    queued: info.queued_total,
+                });
             }
-        }
-        let queued = self.inner.rpc_queued.fetch_add(1, Ordering::SeqCst);
-        if queued >= crate::constants::MAX_QUEUED_REQUESTS {
-            self.inner.rpc_queued.fetch_sub(1, Ordering::SeqCst);
-            return Err(NetworkError::QueueFull {
-                pending: self.inner.requests.pending_count(),
-                queued,
-            });
-        }
-        let permit = if foreground {
-            tokio::select! {
-                p = Arc::clone(&self.inner.rpc_slots).acquire_owned() => {
-                    RpcPermit::Shared(p.map_err(|_| NetworkError::Phase("rpc limiter closed".into()))?)
-                }
-                p = Arc::clone(&self.inner.fg_rpc_slot).acquire_owned() => {
-                    RpcPermit::Foreground(p.map_err(|_| NetworkError::Phase("rpc limiter closed".into()))?)
-                }
-            }
-        } else {
-            RpcPermit::Shared(
-                Arc::clone(&self.inner.rpc_slots)
-                    .acquire_owned()
-                    .await
-                    .map_err(|_| NetworkError::Phase("rpc limiter closed".into()))?,
-            )
         };
-        self.inner.rpc_queued.fetch_sub(1, Ordering::SeqCst);
-        Ok(permit)
+        let wait_ms = if class == RequestClass::Background {
+            crate::network::priority::LOW_PRIORITY_QUEUE_WAIT_MS
+        } else {
+            crate::constants::RPC_QUEUE_TIMEOUT_MS
+        };
+        match tokio::time::timeout(
+            std::time::Duration::from_millis(wait_ms),
+            ticket.granted(),
+        )
+        .await
+        {
+            Ok(Some(guard)) => Ok(guard),
+            // 队列被清空（连接断开 / 会话结束）：对齐 go「连接未打开: %s」
+            Ok(None) => Err(NetworkError::Phase(format!("连接未打开: {method}"))),
+            Err(_) => {
+                // ticket 已随本 future 丢弃，队列条目会在下次 drain 时回收
+                if class == RequestClass::Background {
+                    Err(NetworkError::GatewayBusy {
+                        method_name: method.to_string(),
+                        waited_ms: wait_ms,
+                        pending: self.inner.requests.pending_count(),
+                        queued: scheduler.queued_count(),
+                    })
+                } else {
+                    Err(NetworkError::Timeout {
+                        client_seq: 0,
+                        service_name: service.to_string(),
+                        method_name: method.to_string(),
+                        pending: self.inner.requests.pending_count(),
+                    })
+                }
+            }
+        }
     }
 
     /// `sendMsg` / `sendMsgAsync` 共用发送路径。
@@ -570,35 +609,12 @@ impl Gateway {
             let phase = *self.inner.phase.read();
             rpc_phase_ok(phase, require_online)?;
         }
-        // Heartbeat / AntiData 不占业务并发槽：两者各自有防重入（心跳 skip-if-in-flight、
-        // ACE request_running CAS），合计最多 2 个并发，等价 bot 的高优先级通道
-        // （MAX_HIGH_IN_FLIGHT_REQUESTS=2）。业务高峰 QueueFull 时 AntiData 不能被
-        // 饿死，否则 ACE 数据流中断会被服务端踢线。
-        let bypass_rpc_slot =
-            method.eq_ignore_ascii_case("Heartbeat") || method.eq_ignore_ascii_case("AntiData");
-        let is_foreground = rpc_call_is_foreground();
-        let _slot = if require_online && !bypass_rpc_slot {
-            // 排队也限时（对齐 bot 超时从 sendMsgAsync 调用起算）：槽被卡死时请求
-            // 不会无限排队，超时返回而非把队列堆满。
-            match tokio::time::timeout(
-                std::time::Duration::from_millis(crate::constants::RPC_QUEUE_TIMEOUT_MS),
-                self.acquire_rpc_slot(is_foreground),
-            )
-            .await
-            {
-                Ok(res) => Some(res?),
-                Err(_) => {
-                    return Err(NetworkError::Timeout {
-                        client_seq: 0,
-                        service_name: service.to_string(),
-                        method_name: method.to_string(),
-                        pending: self.inner.requests.pending_count(),
-                    });
-                }
-            }
-        } else {
-            None
-        };
+        // 五班次调度（对齐 bot request-priority.ts）：心跳 / ACE 按方法名走
+        // critical 的两条保留通道；面板 / 登录链路默认 foreground；定时任务由
+        // scheduler 注入 farm / friend；补数据任务注入 background。业务高峰时
+        // 心跳和 AntiData 依然有保留槽位，不会被业务流量挤到超时掉线。
+        let (class, lane) = crate::network::priority::resolve_request_class(method, ambient_rpc_class());
+        let _slot = self.acquire_dispatch(class, lane, service, method).await?;
 
         // 发送顺序锁：seq → 加密 → 入队原子化，保证上 wire 的帧严格按
         // client_seq 递增（对齐 bot 单线程 drain 队列）。等回包在锁外。
@@ -657,6 +673,37 @@ impl Gateway {
     #[must_use]
     pub fn pending_count(&self) -> usize {
         self.inner.requests.pending_count()
+    }
+
+    /// 当前网关负载快照（对齐 bot `getGatewayLoad` / go `GatewayLoad`）。
+    ///
+    /// `heartbeat_misses` 用「入站静默超过心跳阈值」近似（bot 由心跳循环显式计数，
+    /// rust 的 miss 计数在 worker_loop 内部）：服务端一旦不回包，心跳必然漏拍，
+    /// 两种口径对「连接可疑」的判定等价。
+    #[must_use]
+    pub fn gateway_load(&self) -> crate::network::priority::GatewayLoadSnapshot {
+        let mut load = self.inner.rpc_scheduler.load();
+        let now = crate::utils::time::now_ms();
+        let last_rx = self.last_rx_ms();
+        if last_rx > 0
+            && now.saturating_sub(last_rx) > crate::constants::HEARTBEAT_SILENCE_MS as i64
+        {
+            load.heartbeat_misses = 1;
+        }
+        load
+    }
+
+    /// background 请求现在是否可以发（低优先空闲门，对齐 bot `isGatewayIdleForLowPriority`）
+    #[must_use]
+    pub fn is_gateway_idle_for_background(&self) -> bool {
+        crate::network::priority::is_gateway_idle_for_low_priority(&self.gateway_load())
+    }
+
+    /// farm / friend 定时任务健康度闸门（对齐 bot `isGatewayHealthyForBusiness`）：
+    /// 只要求连接还在回包，正常排队竞争不算不健康。
+    #[must_use]
+    pub fn is_gateway_healthy_for_business(&self) -> bool {
+        crate::network::priority::is_gateway_healthy_for_business(&self.gateway_load())
     }
 
     /// 是否已有指定方法名的 RPC 在路上（心跳避免叠发）
@@ -878,6 +925,12 @@ fn end_session(inner: &Inner, reason: Option<&str>) {
     if n > 0 {
         tracing::warn!(count = n, "rejected pending requests on disconnect");
     }
+    // 排队中的请求一并失败（对齐 go rejectAll）：掉 drop 授权发送端，
+    // 等待方拿到「连接未打开」而不是熬到排队超时
+    let queued = inner.rpc_scheduler.reject_all_queued();
+    if queued > 0 {
+        tracing::warn!(count = queued, "rejected queued requests on disconnect");
+    }
     let _ = inner.session_end.send(true);
 }
 
@@ -1034,55 +1087,92 @@ mod tests {
         assert!(url.contains("code=abc123"));
     }
 
-    #[tokio::test]
-    async fn foreground_reserved_slot_survives_shared_saturation() {
+    /// 前台保留槽位回归：后台自动化（farm/friend 班次）占满非前台额度后，
+    /// 前台请求依然能立即拿到授权（对齐 bot「前台至少保留两个业务槽位」）。
+    /// start_paused：background 8s 让路时限用虚拟时钟自动推进，不必真等 8 秒。
+    #[tokio::test(start_paused = true)]
+    async fn foreground_survives_non_foreground_saturation() {
         let gateway = test_gateway();
-        // 后台占满共享槽（MAX_IN_FLIGHT_REQUESTS - 1 = 4）
-        let mut background = Vec::new();
-        for _ in 0..(crate::constants::MAX_IN_FLIGHT_REQUESTS - 1) {
-            background.push(gateway.acquire_rpc_slot(false).await.expect("shared slot"));
-        }
-        // 后台拿不到保留槽（排队挂起）
+        // farm 占住唯一的非前台在途槽（MAX_NON_FOREGROUND_BUSINESS_IN_FLIGHT = 1）
+        let farm = gateway
+            .acquire_dispatch(RequestClass::Farm, None, "svc", "FarmOp")
+            .await
+            .expect("farm slot");
+        // friend 也想飞：非前台额度已满 → 只能排队
         assert!(
             tokio::time::timeout(
                 std::time::Duration::from_millis(50),
-                gateway.acquire_rpc_slot(false)
+                gateway.acquire_dispatch(RequestClass::Friend, None, "svc", "FriendOp")
             )
             .await
             .is_err(),
-            "background must not take the foreground-reserved slot"
+            "friend must queue while the single non-foreground slot is taken"
         );
-        // 前台仍可通过保留槽立即拿到
-        let fg = tokio::time::timeout(
-            std::time::Duration::from_millis(50),
-            gateway.acquire_rpc_slot(true),
+        // 前台不受影响：两个保留槽位都能立即拿到（业务总预算 3 = farm + 前台×2）
+        let fg1 = gateway
+            .acquire_dispatch(RequestClass::Foreground, None, "svc", "PanelOp1")
+            .await
+            .expect("foreground slot 1");
+        let fg2 = gateway
+            .acquire_dispatch(RequestClass::Foreground, None, "svc", "PanelOp2")
+            .await
+            .expect("foreground slot 2");
+        // 业务总预算占满后，background 让路：8s 时限到点返回 GatewayBusy 而非无限排队
+        let busy = gateway
+            .acquire_dispatch(RequestClass::Background, None, "svc", "PetSync")
+            .await
+            .unwrap_err();
+        assert!(matches!(busy, NetworkError::GatewayBusy { .. }), "actual: {busy:?}");
+        drop((farm, fg1, fg2));
+    }
+
+    /// 心跳保留通道回归：业务流量占满总预算时，Heartbeat 仍立即拿到
+    /// critical 独立保留槽位（对齐 bot「心跳业务排满也挤不掉」）。
+    #[tokio::test]
+    async fn heartbeat_lane_survives_business_saturation() {
+        let gateway = test_gateway();
+        let _slots = futures::future::join_all([
+            gateway.acquire_dispatch(RequestClass::Foreground, None, "svc", "A"),
+            gateway.acquire_dispatch(RequestClass::Foreground, None, "svc", "B"),
+            gateway.acquire_dispatch(RequestClass::Foreground, None, "svc", "C"),
+        ])
+        .await;
+        assert_eq!(gateway.inner.rpc_scheduler.in_flight_count(), 3);
+        // Heartbeat 方法名自动解析为 critical 保留通道
+        let (class, lane) =
+            crate::network::priority::resolve_request_class("Heartbeat", ambient_rpc_class());
+        assert_eq!(class, RequestClass::Critical);
+        let hb = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            gateway.acquire_dispatch(class, lane, "svc", "Heartbeat"),
         )
         .await
-        .expect("foreground reserved slot")
-        .expect("permit");
-        drop(fg);
-        drop(background);
+        .expect("heartbeat granted immediately")
+        .expect("heartbeat guard");
+        assert_eq!(gateway.gateway_load().critical_pending, 1);
+        drop(hb);
     }
 
     #[tokio::test]
-    async fn task_local_defaults_to_foreground_and_background_scope_flips_it() {
-        use std::sync::atomic::Ordering::Relaxed;
-        let seen_default = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let seen_bg = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-
-        // 缺省 = 前台
-        assert!(rpc_call_is_foreground());
-        seen_default.store(rpc_call_is_foreground(), Relaxed);
-
-        background_scope(async {
-            seen_bg.store(!rpc_call_is_foreground(), Relaxed);
+    async fn ambient_class_defaults_to_foreground_and_scope_overrides() {
+        // 缺省（面板 / IPC / 登录链路）= foreground
+        assert_eq!(ambient_rpc_class(), None);
+        assert_eq!(
+            crate::network::priority::resolve_request_class("Purchase", ambient_rpc_class())
+                .0,
+            RequestClass::Foreground
+        );
+        // request_class_scope 注入后整条调用链继承班次
+        let seen = request_class_scope(RequestClass::Friend, async {
+            ambient_rpc_class()
         })
         .await;
-
-        assert!(seen_default.load(Relaxed));
-        assert!(seen_bg.load(Relaxed));
-        // scope 结束后恢复前台
-        assert!(rpc_call_is_foreground());
+        assert_eq!(seen, Some(RequestClass::Friend));
+        // background_scope 标记补数据任务
+        let seen = background_scope(async { ambient_rpc_class() }).await;
+        assert_eq!(seen, Some(RequestClass::Background));
+        // scope 结束后恢复默认
+        assert_eq!(ambient_rpc_class(), None);
     }
 
     #[test]

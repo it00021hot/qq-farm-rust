@@ -546,13 +546,7 @@ const local: App.I18n.Schema = {
         stop: '停止',
         startConfirm: '确认启动该账号吗？',
         stopConfirm: '确认停止该账号吗？',
-        deleteConfirm: '确认删除该账号吗？',
-        clearStopped: '清理已停止',
-        clearStoppedTitle: '一键清理已停止账号',
-        clearStoppedConfirm: '确定要清理 {count} 个已停止的账号吗？此操作不可恢复！',
-        clearStoppedSuccess: '成功清理 {count} 个已停止账号',
-        noStoppedAccounts: '没有已停止的账号需要清理',
-        batchDeleteStoppedOnly: '只能批量删除已停止的账号'
+        deleteConfirm: '确认删除该账号吗？'
       },
       friends: {
         title: '好友',
@@ -989,8 +983,6 @@ const local: App.I18n.Schema = {
         qqBotCredentialsMissing: '请先填写 AppID 和 AppSecret。',
         reminderTitle: '标题',
         reminderMsg: '内容',
-        offlineDeleteSec: '离线删除账号 (秒)',
-        offlineDeleteHint: '0 表示不删除',
         offlineHint: '绑定 QQ 机器人后，账号下线、上线、应用宝授权失效时会自动推送，无需配置标题和内容。',
         system: '运行环境',
         runtimeEnv: '运行环境',

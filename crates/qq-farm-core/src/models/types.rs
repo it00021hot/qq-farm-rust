@@ -295,7 +295,6 @@ pub struct AutomationConfig {
     pub friend: bool,
     pub friend_help_exp_limit: bool,
     pub friend_steal: bool,
-    pub friend_steal_activity_only: bool,
     pub friend_help: bool,
     pub friend_bad: bool,
     pub task: bool,

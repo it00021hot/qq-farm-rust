@@ -1293,3 +1293,18 @@
 - 验证：`python3 scripts/build-updater-manifest.py --self-test` 通过
 - **现网 v0.3.5 无法热补**（Release 上没有 Mac `.app.tar.gz.sig`），需再打
   一个 tag 才会恢复 Mac 检查更新
+
+### 2026-09-12 — 删除 4 项废弃功能（用户决策的有意删除）
+
+以下 4 项是用户明确决策从 rust 侧删掉的功能，**从 bot 同步时不要误当缺口补回**：
+
+1. **偷菜「仅活动作物」过滤**（`friend_steal_activity_only`）——功能已从产品删除，
+   字段/key 映射/偷菜过滤分支与活动植物标记辅助全部移除
+2. **农场社交事件（青蛙）清理管线**——活动已过期；`FarmingRequest` 不再携带
+   `social_event_item_ids`（field 5），推送分支与 land_analysis 辅助删除。
+   注意：天气活动「雨落成诗」的青蛙瓶逻辑是另一个功能，保留未动；proto/ 是
+   bot 镜像，字段留在 proto 里，同步时勿删勿补
+3. **离线账号自动删除**（`offline_delete_sec`）——功能取消；仅删自动删除定时器
+   与设置项，离线提醒推送本体保留
+4. **「一键清理已停止账号」按钮**（clearStopped）——功能取消；仅 desktop-ui，
+   后端本就无对应批量命令；通用批量删除不再限制「仅已停止」

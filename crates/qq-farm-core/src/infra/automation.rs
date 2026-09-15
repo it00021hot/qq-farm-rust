@@ -57,7 +57,6 @@ pub fn is_automation_on_for(account_id: &str, category: &str) -> bool {
         "friend_help" => a.friend_help,
         "friend_help_exp_limit" => a.friend_help_exp_limit,
         "friend_steal" => a.friend_steal,
-        "friend_steal_activity_only" => a.friend_steal_activity_only,
         "friend_bad" => a.friend_bad,
         "task" => a.task,
         "fertilizer_gift" => a.fertilizer_gift,

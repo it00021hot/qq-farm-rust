@@ -303,42 +303,6 @@ export function fetchFarmWxLoginCode(taskId: string) {
   return invokeFlat<{ code: string }>('wx_login_code', { taskId });
 }
 
-// ===== QQ 扫码登录（NapCat 对接，对齐 bot qq-login）=====
-
-export function fetchGetQqLoginSettings() {
-  return invokeFlat<{
-    qqQrLogin: boolean;
-    napCatEndpoint: string;
-    napCatSignature: string;
-  }>('get_qq_login_settings');
-}
-
-export function fetchSaveQqLoginSettings(settings: {
-  qqQrLogin: boolean;
-  napCatEndpoint: string;
-  napCatSignature: string;
-}) {
-  return invokeFlat('save_qq_login_settings', { settings });
-}
-
-export function fetchQqLoginCreateTask() {
-  return invokeFlat<{ taskId: string; status: string; qrImage: string; expiresAt?: number }>('qq_login_create_task');
-}
-
-export function fetchQqLoginTaskStatus(taskId: string) {
-  return invokeFlat<{ taskId: string; status: string; qrImage: string; expiresAt?: number }>('qq_login_task_status', {
-    taskId
-  });
-}
-
-export function fetchQqLoginMiniappCode(taskId: string) {
-  return invokeFlat<{ code: string }>('qq_login_miniapp_code', { taskId });
-}
-
-export function fetchQqLoginCancelTask(taskId: string) {
-  return invokeFlat<{ ok: boolean }>('qq_login_cancel_task', { taskId });
-}
-
 export function fetchCreateFarmWxQuickLoginSession() {
   return invokeFlat<{
     sessionId: string;
@@ -662,7 +626,6 @@ function toOfflineReminder(raw: any): Api.Farm.OfflineReminder {
     wechatBot: {},
     title: String(raw?.title ?? ''),
     msg: String(raw?.msg ?? ''),
-    offlineDeleteSec: Number(raw?.offlineDeleteSec ?? raw?.offline_delete_sec ?? 0),
     endpoint: String(raw?.endpoint ?? ''),
     token: String(raw?.token ?? ''),
     secret: String(raw?.secret ?? '')

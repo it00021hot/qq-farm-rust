@@ -421,8 +421,6 @@ impl RuntimeEngine {
                             })
                             .unwrap_or("")
                             .to_string();
-                        let now = crate::utils::time::now_ms();
-                        let mut auto_delete: Option<(String, String, i64)> = None;
                         {
                             let mut workers = state.workers.lock();
                             if let Some(w) = workers.get_mut(&account_id) {
@@ -431,36 +429,10 @@ impl RuntimeEngine {
                                     w.account_name = account_name.clone();
                                 }
                                 if connected {
-                                    w.disconnected_since = None;
-                                    w.auto_delete_triggered = false;
                                     engine.wx_reconnect.write().attempts.remove(&account_id);
                                     // 会话存活打点（内部 30s 节流落盘），
                                     // 供进程重启后的自动重连避开服务端旧 session 释放窗口
                                     crate::infra::session_liveness::note_online(&account_id);
-                                } else if !w.stopping {
-                                    if w.disconnected_since.is_none() {
-                                        w.disconnected_since = Some(now);
-                                    }
-                                    let since = w.disconnected_since.unwrap_or(now);
-                                    let username = crate::models::store::accounts::get_accounts()
-                                        .into_iter()
-                                        .find(|a| a.id == account_id)
-                                        .map(|a| a.username)
-                                        .unwrap_or_default();
-                                    let auto_ms = engine
-                                        .relogin_reminder()
-                                        .get_offline_auto_delete_ms(&username);
-                                    if !w.auto_delete_triggered
-                                        && auto_ms != i64::MAX
-                                        && now.saturating_sub(since) >= auto_ms
-                                    {
-                                        w.auto_delete_triggered = true;
-                                        auto_delete = Some((
-                                            account_id.clone(),
-                                            w.account_name.clone(),
-                                            now.saturating_sub(since),
-                                        ));
-                                    }
                                 }
                             }
                         }
@@ -483,24 +455,6 @@ impl RuntimeEngine {
                                     crate::models::store::accounts::persist_global();
                                 }
                             }
-                        }
-                        if let Some((id, name, offline_ms)) = auto_delete {
-                            let mins = offline_ms / 60_000;
-                            state.log(
-                                "系统",
-                                &format!("账号 {name} 持续离线 {mins} 分钟，自动删除账号信息"),
-                                Some(serde_json::json!({ "accountId": id })),
-                            );
-                            state.add_account_log(
-                                "offline_delete",
-                                &format!("账号 {name} 持续离线 {mins} 分钟，已自动删除"),
-                                Some(&id),
-                                Some(&name),
-                                Some(serde_json::json!({ "reason": "offline_timeout", "offlineMs": offline_ms })),
-                            );
-                            engine.stop_worker(&id);
-                            crate::models::store::accounts::delete_account(&id);
-                            crate::models::store::accounts::persist_global();
                         }
                         let panel = engine.panel_status(&account_id);
                         let _ = state.events.send(RuntimeEvent::Status {
@@ -955,8 +909,6 @@ impl RuntimeEngine {
                     ws_error: None,
                     stopping: false,
                     terminal_handled: false,
-                    disconnected_since: None,
-                    auto_delete_triggered: false,
                 },
             );
         }
@@ -1694,16 +1646,6 @@ mod tests {
         );
         engine.start_all_accounts();
         assert_eq!(engine.worker_count(), 0);
-    }
-
-    #[test]
-    fn relogin_reminder_default_present() {
-        let engine = make_engine();
-        let svc = engine.relogin_reminder();
-        // 即便没有显式传 relogin_reminder，assemble 也应保证一个可用实例
-        let ms = svc.get_offline_auto_delete_ms("");
-        // 默认 offline_delete_sec = 0 → i64::MAX
-        assert_eq!(ms, i64::MAX);
     }
 
     #[test]

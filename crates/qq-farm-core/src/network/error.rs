@@ -43,6 +43,21 @@ pub enum NetworkError {
     #[error("请求等待队列已满 (pending={pending}, queued={queued})")]
     QueueFull { pending: usize, queued: usize },
 
+    /// 网关繁忙：background 班次排队超过让路时限，主动让位给业务流量
+    /// （对齐 go `GatewayBusyError` / bot low-priority-gate 的「已让路」错误：
+    /// 排队本身会拖长队列，把剩下的活留给下一轮比熬到超时更健康）
+    #[error("网关繁忙，后台请求已让路: {method_name} (waited={waited_ms}ms, pending={pending}, queued={queued})")]
+    GatewayBusy {
+        /// 请求方法名
+        method_name: String,
+        /// 已等待时长
+        waited_ms: u64,
+        /// 在途请求数
+        pending: usize,
+        /// 排队请求数
+        queued: usize,
+    },
+
     /// 请求超时（对齐 TS `请求超时: ${methodName} (seq=${seq}, pending=${pending})`）
     #[error("请求超时: {method_name} (seq={client_seq}, pending={pending})")]
     Timeout { client_seq: i64, service_name: String, method_name: String, pending: usize },

@@ -44,9 +44,6 @@ pub type LandMap = HashMap<i64, LandInfo>;
 /// 农场主可清理的地块级互动道具 ID 集合
 pub const OWNER_CLEANABLE_INTERACTION_ITEM_IDS: &[i64] = &[301_101, 301_102, 5006];
 
-/// 农场级社交事件道具（青蛙 5005）：不绑定地块，清理时经 FarmingRequest field 5 发送
-pub const OWNER_CLEANABLE_FARM_SOCIAL_EVENT_ITEM_IDS: &[i64] = &[5005];
-
 const QIXI_DEW_ITEM_ID: i64 = 301_103;
 const QIXI_MUTANT_CONFIG_ID: i64 = 13;
 const QIXI_DEW_HISTORY_CODES: &[i64] = &[9, 10];
@@ -238,43 +235,6 @@ pub fn get_plant_interaction_effects(
         }
     }
     effects
-}
-
-/// 农场级社交事件里可清理的道具 ID（青蛙 5005；去重正值）
-#[must_use]
-pub fn get_cleanable_farm_social_event_item_ids(
-    events: &[crate::proto::generated::gamepb::plantpb::FarmSocialEvent],
-) -> Vec<i64> {
-    let mut seen = HashSet::new();
-    events
-        .iter()
-        .map(|e| e.item_id)
-        .filter(|id| *id > 0 && OWNER_CLEANABLE_FARM_SOCIAL_EVENT_ITEM_IDS.contains(id))
-        .filter(|id| seen.insert(*id))
-        .collect()
-}
-
-/// 农场级社交事件展示明细
-#[must_use]
-pub fn build_farm_social_event_details(
-    events: &[crate::proto::generated::gamepb::plantpb::FarmSocialEvent],
-) -> Vec<serde_json::Value> {
-    events
-        .iter()
-        .filter(|e| e.item_id > 0)
-        .map(|event| {
-            let item_id = event.item_id;
-            let (item_name, activity_id) = interaction_item_metadata(item_id);
-            serde_json::json!({
-                "itemId": item_id,
-                "itemName": item_name,
-                "activityId": activity_id,
-                "visitorGid": if event.visitor_gid > 0 { event.visitor_gid } else { 0 },
-                "occurredAt": event.timestamp,
-                "cleanable": OWNER_CLEANABLE_FARM_SOCIAL_EVENT_ITEM_IDS.contains(&item_id),
-            })
-        })
-        .collect()
 }
 
 /// 构造 land_id -> LandInfo 映射

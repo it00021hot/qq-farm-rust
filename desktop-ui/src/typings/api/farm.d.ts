@@ -140,7 +140,6 @@ declare namespace Api {
       wechatBot: Record<string, never>;
       title: string;
       msg: string;
-      offlineDeleteSec: number;
       /** 钉钉 Webhook 地址（完整 URL，与 token 二选一） */
       endpoint?: string;
       /** 钉钉机器人 Access Token（与 endpoint 二选一） */

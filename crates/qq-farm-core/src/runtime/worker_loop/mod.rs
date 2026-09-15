@@ -789,8 +789,16 @@ impl WorkerLoop {
         }
     }
 
-    /// 对齐 network.ts BasicNotify
-    pub fn apply_basic_notify(&self, level: Option<i64>, gold: Option<i64>, exp: Option<i64>) {
+    /// 对齐 network.ts BasicNotify（gold/exp/level 保留显式 0 值语义；
+    /// 昵称 / 头像对齐 go manager.go applyBasicNotify：非空才更新账号存储）
+    pub fn apply_basic_notify(
+        &self,
+        level: Option<i64>,
+        gold: Option<i64>,
+        exp: Option<i64>,
+        nick: Option<String>,
+        avatar: Option<String>,
+    ) {
         self.mark_status_dirty();
         let account_id = &self.account.id;
         let st = status_svc::status_data_for(account_id);
@@ -817,6 +825,31 @@ impl WorkerLoop {
         }
         if next_level != old_level {
             crate::services::stats::record_operation_for(account_id, "levelUp", 1);
+        }
+        // 推送里带最新昵称 / 头像时同步账号存储（go 侧更新 s.nick / s.avatar 后
+        // publishStatusSnapshotThrottled；这里 mark_status_dirty 已在函数开头做过，
+        // 空值过滤在 notify 解析层完成，这里再兜底一次空串判断）
+        let nick = nick.filter(|n| !n.is_empty());
+        let avatar = avatar.filter(|a| !a.is_empty());
+        if nick.is_some() || avatar.is_some() {
+            if let Some(mut acc) = crate::models::store::accounts::get_accounts()
+                .into_iter()
+                .find(|a| a.id == account_id.as_str())
+            {
+                let mut dirty = false;
+                if let Some(n) = nick.filter(|n| acc.nick != *n) {
+                    acc.nick = n;
+                    dirty = true;
+                }
+                if let Some(a) = avatar.filter(|a| acc.avatar != *a) {
+                    acc.avatar = a;
+                    dirty = true;
+                }
+                if dirty {
+                    crate::models::store::accounts::add_or_update_account(acc);
+                    crate::models::store::accounts::persist_global();
+                }
+            }
         }
     }
 
@@ -1434,18 +1467,27 @@ impl WorkerLoop {
         self.reset_unified_schedule();
     }
 
-    /// 土地推送：自己的田走巡田；好友田只刷新该 gid 气泡。
+    /// 土地推送：自己的田走巡田；好友田走按 gid 定向刷新。
+    ///
+    /// 好友分支对齐 go 版 manager.go `handleNotify` 好友田 LandsNotify 分支：
+    /// 不再丢弃推送，交给 friend 服务按 gid 去抖后定向拉取（GetGameFriends 单
+    /// gid）刷新气泡，并把可偷数记入 `push_steal_hints` 供偷菜巡逻排序消费；
+    /// 面板侧以 `friend_plant_patch` 事件同步。自建田推送路径（巡田）保持不变。
     pub fn on_lands_notify(
         self: &Arc<Self>,
         host_gid: i64,
         changed_count: usize,
-        _lands: Vec<crate::proto::generated::gamepb::plantpb::LandInfo>,
+        lands: Vec<crate::proto::generated::gamepb::plantpb::LandInfo>,
     ) {
         self.mark_status_dirty();
         let my = *self.gid.lock();
         if host_gid > 0 && my > 0 && host_gid != my {
-            // 对齐 bot network.ts:452-464：好友田推送直接丢弃（不触发任何拉取）。
-            // 事件驱动的好友田 GetGameFriends 拉取是 rust 独有模式，bot 没有。
+            // 去抖（500ms/gid）在 friend 服务内做（对齐 go `lastFriendPushAt`）；
+            // 这里只负责异步触发，不阻塞 ws dispatch。
+            let friend = Arc::clone(&self.friend);
+            tokio::spawn(async move {
+                friend.on_friend_lands_notify(host_gid, lands).await;
+            });
             return;
         }
         self.on_lands_changed(changed_count);
@@ -1466,36 +1508,6 @@ impl WorkerLoop {
             &self.account.id,
             "农场",
             format!("收到推送: {changed_count}块土地变化，检查中..."),
-            crate::constants::PanelEvent::LandsNotify,
-            Some(serde_json::json!({
-                "module": "farm",
-                "result": "trigger_check",
-                "count": changed_count,
-            })),
-        );
-        let this = Arc::clone(self);
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            let _ = this.farm.check_farm().await;
-        });
-    }
-
-    /// 对齐 bot `onFarmSocialEventsChangedPush`：青蛙等农场级社交事件推送，
-    /// 与土地推送同路径（farm_push 门控 + 500ms 节流）触发巡查清理。
-    pub fn on_farm_social_events_push(self: &Arc<Self>, changed_count: usize) {
-        if !self.login_ready() || !self.auto_on("farm_push") {
-            return;
-        }
-        let now = now_ms();
-        let last = self.last_lands_push_at.load(Ordering::Acquire);
-        if now - last < 500 {
-            return;
-        }
-        self.last_lands_push_at.store(now, Ordering::Release);
-        crate::services::panel_log::log(
-            &self.account.id,
-            "农场",
-            format!("收到推送: {changed_count}个农场社交事件，检查中..."),
             crate::constants::PanelEvent::LandsNotify,
             Some(serde_json::json!({
                 "module": "farm",
@@ -1903,6 +1915,33 @@ mod tests {
         // 第二次 kickout 不应 panic / 不应改状态
         loop_.on_kickout("second");
         assert!(loop_.shutdown_started());
+    }
+
+    #[test]
+    fn lands_notify_friend_gid_routes_to_friend_service() {
+        // 好友田推送（对齐 go 版 handleNotify 好友分支）走 friend 定向刷新，
+        // 不触发自建田巡田路径（不占用 last_lands_push_at 500ms 去抖）。
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let (loop_, _) = make_loop();
+        rt.block_on(async {
+            loop_.on_lands_notify(999_999, 3, Vec::new());
+            // 让 spawn 出去的定向刷新任务跑完（未连接网关，请求快速失败兜底返回）
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        });
+        assert_eq!(loop_.last_lands_push_at.load(Ordering::Acquire), 0);
+        // 好友推送记入 hint 的入口在 friend 服务，不改变 worker 自身巡田状态
+        assert!(!loop_.login_ready());
+    }
+
+    #[test]
+    fn lands_notify_self_gid_still_gates_on_login_ready() {
+        // 自建田推送路径保持不变：未登录时连去抖时间戳都不应被占用
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let (loop_, _) = make_loop();
+        rt.block_on(async {
+            loop_.on_lands_notify(0, 1, Vec::new());
+        });
+        assert_eq!(loop_.last_lands_push_at.load(Ordering::Acquire), 0);
     }
 
     #[test]

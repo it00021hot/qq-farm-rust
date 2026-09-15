@@ -550,13 +550,7 @@ const local: App.I18n.Schema = {
         stop: 'Stop',
         startConfirm: 'Start this account?',
         stopConfirm: 'Stop this account?',
-        deleteConfirm: 'Delete this account?',
-        clearStopped: 'Clear stopped',
-        clearStoppedTitle: 'Clear stopped accounts',
-        clearStoppedConfirm: 'Delete {count} stopped account(s)? This cannot be undone.',
-        clearStoppedSuccess: 'Removed {count} stopped account(s)',
-        noStoppedAccounts: 'No stopped accounts to clear',
-        batchDeleteStoppedOnly: 'Batch delete only applies to stopped accounts'
+        deleteConfirm: 'Delete this account?'
       },
       friends: {
         title: 'Friends',
@@ -996,8 +990,6 @@ const local: App.I18n.Schema = {
         qqBotCredentialsMissing: 'Enter AppID and AppSecret first.',
         reminderTitle: 'Title',
         reminderMsg: 'Message',
-        offlineDeleteSec: 'Delete Offline Account (sec)',
-        offlineDeleteHint: '0 means never delete',
         offlineHint:
           'After binding, offline, online, and YYB QR alerts are sent automatically. No title or message setup is needed.',
         system: 'Runtime',

@@ -4,7 +4,9 @@
 //! - 库存识别：type=23 + interaction_type=additemuseitem + can_use>0，
 //!   白名单 301101/301102/301103 或描述含"好友/他人"；
 //! - 好友模式：Enter → 逐地块 `ItemService.Use`（UseTarget.host_gid + land_ids）→ Leave；
-//! - 自己模式：仅 301103（SELF_USABLE 白名单），AllLands 快照后逐地块；
+//! - 自己模式：仅 SELF_USABLE 白名单（5003 闪电变异瓶 / 301103 鹊羽灵露），
+//!   AllLands 快照后逐地块；自用道具不要求描述含"好友/他人"（对齐 bot
+//!   isSelfLandInteractionMetadata 走通用土地元数据，go 版同）；
 //! - 堆叠按过期时间升序消耗；非网关错误触发 BATCH_ABORTED 中断后续地块。
 
 use std::sync::Arc;
@@ -23,8 +25,9 @@ const ITEM_SERVICE: &str = "gamepb.itempb.ItemService";
 const SPECIAL_INTERACTION_TYPE: &str = "additemuseitem";
 const MAX_BATCH_LANDS: usize = 48;
 
-/// 可以对自己农场使用的互动道具白名单（种草/黄金虫/足球只能作用于他人农场）
-const SELF_USABLE_INTERACTION_ITEM_IDS: &[i64] = &[301103];
+/// 可以对自己农场使用的互动道具白名单（种草/黄金虫/足球只能作用于他人农场；
+/// 5003 闪电变异瓶作用于自己的未成熟 1*1 作物）
+const SELF_USABLE_INTERACTION_ITEM_IDS: &[i64] = &[5003, 301103];
 
 fn is_friend_interaction_metadata(info: &ItemCfg) -> bool {
     if info.item_type != 23 {
@@ -46,8 +49,21 @@ fn is_friend_interaction_metadata(info: &ItemCfg) -> bool {
     desc.contains("好友") || desc.contains("他人")
 }
 
+/// 通用互动土地道具元数据：type=23 + can_use>0 + additemuseitem，
+/// 不含"好友/他人"描述启发（自用白名单的基底，对齐 bot isLandInteractionMetadata）
+fn is_land_interaction_metadata(info: &ItemCfg) -> bool {
+    if info.item_type != 23 {
+        return false;
+    }
+    if info.can_use.unwrap_or(0) <= 0 {
+        return false;
+    }
+    info.interaction_type.as_deref().unwrap_or("").trim().to_lowercase()
+        == SPECIAL_INTERACTION_TYPE
+}
+
 fn is_self_interaction_metadata(info: &ItemCfg) -> bool {
-    is_friend_interaction_metadata(info) && SELF_USABLE_INTERACTION_ITEM_IDS.contains(&info.id)
+    is_land_interaction_metadata(info) && SELF_USABLE_INTERACTION_ITEM_IDS.contains(&info.id)
 }
 
 /// 可用堆叠（按过期时间升序，无过期排最后）
@@ -117,6 +133,16 @@ struct Inventory {
 }
 
 async fn collect_inventory(gateway: &Arc<Gateway>) -> Result<Inventory> {
+    collect_inventory_by(gateway, is_friend_interaction_metadata).await
+}
+
+/// 按元数据谓词收集互动道具库存。好友模式用 is_friend_interaction_metadata；
+/// 自用模式用 is_self_interaction_metadata，使 5003 闪电变异瓶等仅自用道具可列出
+/// （对齐 bot collectInteractionInventory 的谓词注入形态）。
+async fn collect_inventory_by(
+    gateway: &Arc<Gateway>,
+    metadata_of: fn(&ItemCfg) -> bool,
+) -> Result<Inventory> {
     let bag = WarehouseService::get_bag_via(gateway).await?;
     let bag_items = get_bag_items(&bag);
     let gc = global_game_config();
@@ -129,7 +155,7 @@ async fn collect_inventory(gateway: &Arc<Gateway>) -> Result<Inventory> {
     let mut out = Inventory { items: Vec::new(), stacks_by_item_id: Default::default() };
     for item_id in item_ids {
         let Some(info) = gc.get_item_by_id(item_id) else { continue };
-        if !is_friend_interaction_metadata(&info) {
+        if !metadata_of(&info) {
             continue;
         }
         let stacks = eligible_stacks(&bag_items, item_id, &info);
@@ -170,7 +196,7 @@ pub async fn get_friend_interaction_items(gateway: &Arc<Gateway>) -> Result<serd
 
 /// 自用互动道具库存（仅 SELF_USABLE 白名单）
 pub async fn get_self_interaction_items(gateway: &Arc<Gateway>) -> Result<serde_json::Value> {
-    let inv = collect_inventory(gateway).await?;
+    let inv = collect_inventory_by(gateway, is_self_interaction_metadata).await?;
     let items: Vec<_> = inv
         .items
         .iter()
@@ -427,7 +453,9 @@ pub async fn use_friend_interaction_item_batch(
         return Err(Error::Business("该物品不是可用于好友土地的特殊互动道具".into()));
     }
     let item_name = info.name.clone();
-    let mut stacks = resolve_usable_stocks(gateway, item_id, land_ids.len()).await?;
+    let mut stacks =
+        resolve_usable_stocks(gateway, item_id, land_ids.len(), is_friend_interaction_metadata)
+            .await?;
 
     let friend_api = crate::services::friend::api::FriendApi::new(gateway.clone());
     let enter = friend_api.enter_farm(friend_gid).await?;
@@ -489,7 +517,9 @@ pub async fn use_self_interaction_item_batch(
         return Err(Error::Business("该道具只能在好友农场使用，不能对自己的农场使用".into()));
     }
     let item_name = info.name.clone();
-    let mut stacks = resolve_usable_stocks(gateway, item_id, land_ids.len()).await?;
+    let mut stacks =
+        resolve_usable_stocks(gateway, item_id, land_ids.len(), is_self_interaction_metadata)
+            .await?;
 
     let farm_api = crate::services::farm::api::Api::new(gateway.clone());
     let reply = farm_api.get_all_lands(host_gid).await?;
@@ -521,8 +551,9 @@ async fn resolve_usable_stocks(
     gateway: &Arc<Gateway>,
     item_id: i64,
     land_count: usize,
+    metadata_of: fn(&ItemCfg) -> bool,
 ) -> Result<Vec<UsableStack>> {
-    let inv = collect_inventory(gateway).await?;
+    let inv = collect_inventory_by(gateway, metadata_of).await?;
     let stacks = inv.stacks_by_item_id.get(&item_id).cloned().unwrap_or_default();
     let available: i64 = stacks.iter().map(|s| s.remaining).sum();
     if available <= 0 {
@@ -628,9 +659,18 @@ mod tests {
     }
 
     #[test]
-    fn self_usable_only_dew() {
+    fn self_usable_whitelist_matches_bot() {
+        // 闪电变异瓶（自用元数据走通用土地判定，不要求描述含"好友/他人"）与鹊羽灵露可自用
+        assert!(is_self_interaction_metadata(&interaction_item(
+            5003,
+            "雨落成诗活动道具，使未成熟的作物立即发生闪电变异，种子、枯萎阶段和天工作物不可用。"
+        )));
         assert!(is_self_interaction_metadata(&interaction_item(301103, "")));
+        // 种草/黄金虫只能作用于好友农场，不在自用白名单
         assert!(!is_self_interaction_metadata(&interaction_item(301101, "")));
+        assert!(!is_self_interaction_metadata(&interaction_item(301102, "")));
+        // 自用白名单之外的同类型道具也不放行
+        assert!(!is_self_interaction_metadata(&interaction_item(999999, "仅自己可用的肥料")));
     }
 
     #[test]

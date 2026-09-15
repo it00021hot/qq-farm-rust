@@ -71,7 +71,7 @@ pub fn activity_windows_loaded() -> bool {
     WINDOWS.read().loaded
 }
 
-/// 失效缓存（ActivitiesChangedNotify 推送时调用，下次访问会重新拉取）。
+/// 失效缓存（ActiviesChangeNotify 推送时调用，下次访问会重新拉取）。
 pub fn invalidate_activity_windows() {
     WINDOWS.write().loaded_at = None;
 }

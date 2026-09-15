@@ -39,8 +39,6 @@ pub fn now_ms() -> ClockMs {
 
 #[cfg(test)]
 mod tests {
-    use crate::proto::generated::gamepb::plantpb::LandInfo;
-
     use super::*;
 
     #[test]
@@ -82,6 +80,21 @@ mod tests {
         assert_eq!(merged.steal_num, 2);
         assert_eq!(merged.dry_num, 1);
         assert_eq!(merged.weed_num, 3);
+    }
+
+    #[test]
+    fn apply_steal_hint_prefers_live_bubble_and_consumes() {
+        // 对齐 go 版 applyFriendPushHints：实时气泡 > 0 时用实时值并消费 hint
+        assert_eq!(apply_steal_hint(2, Some(3)), (2, true));
+        assert_eq!(apply_steal_hint(2, None), (2, true));
+    }
+
+    #[test]
+    fn apply_steal_hint_fills_from_hint_when_bubble_empty() {
+        // 气泡为 0：hint > 0 时用 hint 兜底且不消费（GetAll 漏气泡仍进偷菜队列）
+        assert_eq!(apply_steal_hint(0, Some(3)), (3, false));
+        assert_eq!(apply_steal_hint(0, Some(0)), (0, false));
+        assert_eq!(apply_steal_hint(0, None), (0, false));
     }
 
     #[test]
@@ -435,29 +448,6 @@ mod tests {
     }
 
     #[test]
-    fn is_activity_plant_unknown_returns_false() {
-        use crate::proto::generated::gamepb::plantpb::PlantInfo;
-        let land = LandInfo {
-            id: 1,
-            plant: Some(PlantInfo { id: 9999999, ..Default::default() }),
-            ..Default::default()
-        };
-        assert!(!is_activity_plant("acc-act", &land));
-    }
-
-    #[test]
-    fn mark_activity_plant_makes_it_active() {
-        use crate::proto::generated::gamepb::plantpb::PlantInfo;
-        mark_activity_plant("acc-act", 8888);
-        let land = LandInfo {
-            id: 1,
-            plant: Some(PlantInfo { id: 8888, ..Default::default() }),
-            ..Default::default()
-        };
-        assert!(is_activity_plant("acc-act", &land));
-    }
-
-    #[test]
     fn plant_phase_from_proto_mature_is_ripe() {
         assert_eq!(PlantPhase::from_i32(6), PlantPhase::Ripe);
         assert_eq!(PlantPhase::from_i32(7), PlantPhase::Dead);
@@ -506,7 +496,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        let result = analyze_friend_lands(&[land], 100, &[], false, "wx");
+        let result = analyze_friend_lands(&[land], 100, &[]);
         assert_eq!(result.stealable, vec![7]);
     }
 }

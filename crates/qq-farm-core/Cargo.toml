@@ -85,3 +85,6 @@ prost-build = { workspace = true }
 [dev-dependencies]
 serial_test = "4"
 axum = { workspace = true, features = ["ws"] }
+# 测试用虚拟时钟（#[tokio::test(start_paused = true)]）：8s 让路时限等
+# 长等待不必真实睡眠。只影响本 crate 的测试构建。
+tokio = { workspace = true, features = ["test-util"] }

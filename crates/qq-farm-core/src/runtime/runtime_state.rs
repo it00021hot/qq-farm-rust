@@ -190,12 +190,6 @@ pub struct WorkerInfo {
     pub stopping: bool,
     /// 已 terminal 处理
     pub terminal_handled: bool,
-    /// 最近一次判定为断开的时间
-    #[serde(default)]
-    pub disconnected_since: Option<i64>,
-    /// 离线超时自删是否已触发
-    #[serde(default)]
-    pub auto_delete_triggered: bool,
 }
 
 impl RuntimeState {

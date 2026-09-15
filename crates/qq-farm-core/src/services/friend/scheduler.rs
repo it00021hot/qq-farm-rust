@@ -786,13 +786,12 @@ impl FriendService {
                     steal_num = 0;
                 }
             }
-            if steal_num == 0 {
-                if let Some(hint) = self.push_steal_hints.lock().get(&summary.gid).copied() {
-                    if hint > 0 {
-                        steal_num = hint;
-                    }
-                }
-            } else {
+            // 气泡为 0 时用推送 hint 兜底，气泡已 > 0 则消费掉 hint（对齐 go applyFriendPushHints）
+            let hint = self.push_steal_hints.lock().get(&summary.gid).copied();
+            let (effective, consume_hint) =
+                crate::services::friend::visit_strategy::apply_steal_hint(steal_num, hint);
+            steal_num = effective;
+            if consume_hint {
                 self.push_steal_hints.lock().remove(&summary.gid);
             }
             let help_need =
@@ -1109,13 +1108,12 @@ impl FriendService {
                     steal_num = 0;
                 }
             }
-            if steal_num == 0 {
-                if let Some(hint) = self.push_steal_hints.lock().get(&summary.gid).copied() {
-                    if hint > 0 {
-                        steal_num = hint;
-                    }
-                }
-            } else {
+            // 气泡为 0 时用推送 hint 兜底，气泡已 > 0 则消费掉 hint（对齐 go applyFriendPushHints）
+            let hint = self.push_steal_hints.lock().get(&summary.gid).copied();
+            let (effective, consume_hint) =
+                crate::services::friend::visit_strategy::apply_steal_hint(steal_num, hint);
+            steal_num = effective;
+            if consume_hint {
                 self.push_steal_hints.lock().remove(&summary.gid);
             }
             let help_need =
@@ -1602,7 +1600,7 @@ impl FriendService {
             // 3e. 偷菜：分析哪些可偷 → 真调 steal_farm
             let land_snapshots: Vec<LandSnapshot> =
                 enter_reply.lands.iter().map(LandSnapshot::from_land).collect();
-            let status = analyze_friend_lands(&enter_reply.lands, host_gid, &[], false, account_id);
+            let status = analyze_friend_lands(&enter_reply.lands, host_gid, &[]);
             if !status.stealable.is_empty() {
                 let summary = FriendSummary {
                     pet_state: String::new(),
@@ -1967,14 +1965,15 @@ impl FriendService {
             return;
         }
         let now = now_ms();
-        {
-            let mut last = self.last_friend_push_ms.lock();
-            if let Some(prev) = last.get(&host_gid).copied() {
-                if now.saturating_sub(prev) < crate::constants::FRIEND_LANDS_NOTIFY_DEBOUNCE_MS {
-                    return;
-                }
-            }
-            last.insert(host_gid, now);
+        // 按 gid 去抖（对齐 go 版 manager.go `lastFriendPushAt`：同一 gid 500ms
+        // 内的重复推送只处理第一次，避免连发气泡打满 GetGameFriends）
+        if !friend_push_debounce_ok(
+            &mut self.last_friend_push_ms.lock(),
+            host_gid,
+            now,
+            crate::constants::FRIEND_LANDS_NOTIFY_DEBOUNCE_MS,
+        ) {
+            return;
         }
         let my_gid = *self.host_gid.lock();
         let from_lands =
@@ -2158,6 +2157,25 @@ impl FriendService {
 
 const BAD_DAILY_STATE_VERSION: i64 = 1;
 
+/// 好友田推送按 gid 去抖判定（纯函数，供 [`FriendService::on_friend_lands_notify`]
+/// 与单测复用）。对齐 go 版 manager.go `lastFriendPushAt`：距该 gid 上次放行
+/// 不足 `debounce_ms` 时丢弃本次推送；放行则刷新时间戳并返回 true。
+#[must_use]
+fn friend_push_debounce_ok(
+    last: &mut HashMap<i64, u64>,
+    gid: i64,
+    now_ms: u64,
+    debounce_ms: u64,
+) -> bool {
+    if let Some(prev) = last.get(&gid).copied() {
+        if now_ms.saturating_sub(prev) < debounce_ms {
+            return false;
+        }
+    }
+    last.insert(gid, now_ms);
+    true
+}
+
 /// 好友跨日状态键:服务器时间 + 系统配置时区(默认上海,对齐 bot getSystemDateKey)。
 fn beijing_date_key() -> String {
     crate::utils::time::today_system_date_key()
@@ -2233,5 +2251,30 @@ mod tests {
     fn run_one_cycle_no_friends_returns_zero() {
         // 阶段 1D.2 接入真实 visit_farm 后再扩展此测试
         // 这里只能测试纯函数逻辑
+    }
+
+    #[test]
+    fn friend_push_debounce_blocks_within_window() {
+        let mut last: HashMap<i64, u64> = HashMap::new();
+        // 首次推送放行并记录时间戳
+        assert!(friend_push_debounce_ok(&mut last, 7, 1_000, 500));
+        assert_eq!(last.get(&7), Some(&1_000));
+        // 500ms 窗口内的重复推送被丢弃（含边界值 499）
+        assert!(!friend_push_debounce_ok(&mut last, 7, 1_200, 500));
+        assert!(!friend_push_debounce_ok(&mut last, 7, 1_499, 500));
+        assert_eq!(last.get(&7), Some(&1_000), "被丢弃的推送不刷新时间戳");
+        // 跨过窗口后放行并刷新时间戳
+        assert!(friend_push_debounce_ok(&mut last, 7, 1_500, 500));
+        assert_eq!(last.get(&7), Some(&1_500));
+    }
+
+    #[test]
+    fn friend_push_debounce_is_per_gid() {
+        let mut last: HashMap<i64, u64> = HashMap::new();
+        assert!(friend_push_debounce_ok(&mut last, 7, 1_000, 500));
+        // 不同 gid 互不影响
+        assert!(friend_push_debounce_ok(&mut last, 8, 1_000, 500));
+        assert!(!friend_push_debounce_ok(&mut last, 8, 1_400, 500));
+        assert!(friend_push_debounce_ok(&mut last, 7, 1_600, 500));
     }
 }

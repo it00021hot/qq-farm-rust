@@ -789,12 +789,6 @@ declare namespace App {
             startConfirm: string;
             stopConfirm: string;
             deleteConfirm: string;
-            clearStopped: string;
-            clearStoppedTitle: string;
-            clearStoppedConfirm: string;
-            clearStoppedSuccess: string;
-            noStoppedAccounts: string;
-            batchDeleteStoppedOnly: string;
           };
           friends: {
             title: string;
@@ -1227,8 +1221,6 @@ declare namespace App {
             qqBotCredentialsMissing: string;
             reminderTitle: string;
             reminderMsg: string;
-            offlineDeleteSec: string;
-            offlineDeleteHint: string;
             offlineHint: string;
             system: string;
             runtimeEnv: string;

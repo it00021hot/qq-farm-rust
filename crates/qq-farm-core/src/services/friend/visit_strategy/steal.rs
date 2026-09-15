@@ -1,7 +1,6 @@
 //! 好友土地分析与偷菜操作。
 
 use std::collections::HashSet;
-use std::sync::Mutex as StdMutex;
 
 use crate::proto::generated::gamepb::plantpb::LandInfo;
 use crate::services::friend::api::FriendApi;
@@ -47,36 +46,6 @@ pub fn get_plant_name(plant_id: i64) -> Option<String> {
     } else {
         Some(name)
     }
-}
-
-static ACTIVITY_PLANTS: std::sync::OnceLock<
-    StdMutex<std::collections::HashMap<String, std::collections::HashSet<i64>>>,
-> = std::sync::OnceLock::new();
-
-fn activity_plants(
-) -> &'static StdMutex<std::collections::HashMap<String, std::collections::HashSet<i64>>> {
-    ACTIVITY_PLANTS.get_or_init(|| StdMutex::new(std::collections::HashMap::new()))
-}
-
-/// 是否活动植物（用于"仅偷活动植物"；按账号隔离）
-#[must_use]
-pub fn is_activity_plant(account_id: &str, land: &LandInfo) -> bool {
-    if account_id.is_empty() {
-        return false;
-    }
-    let plant_id = match land.plant.as_ref() {
-        Some(p) => p.id,
-        None => return false,
-    };
-    activity_plants().lock().unwrap().get(account_id).is_some_and(|set| set.contains(&plant_id))
-}
-
-/// 标记活动植物（在偷到带活动积分的植物时调用）
-pub fn mark_activity_plant(account_id: &str, plant_id: i64) {
-    if account_id.is_empty() {
-        return;
-    }
-    activity_plants().lock().unwrap().entry(account_id.to_string()).or_default().insert(plant_id);
 }
 
 /// 阶段枚举（与原 TS PlantPhase 对齐）
@@ -190,8 +159,6 @@ pub fn analyze_friend_lands(
     lands: &[LandInfo],
     my_gid: i64,
     plant_blacklist: &[i64],
-    steal_activity_only: bool,
-    account_id: &str,
 ) -> AnalyzeResult {
     let mut result = AnalyzeResult::default();
     let lands_map = crate::services::farm::land_analysis::build_land_map(lands);
@@ -223,9 +190,6 @@ pub fn analyze_friend_lands(
                     .unwrap_or(0);
                 if !plant_blacklist.is_empty() && seed_id > 0 && plant_blacklist.contains(&seed_id)
                 {
-                    continue;
-                }
-                if steal_activity_only && !is_activity_plant(account_id, land) {
                     continue;
                 }
                 result.stealable.push(id);
@@ -273,7 +237,7 @@ pub fn plant_summary_from_lands(
     lands: &[LandInfo],
     my_gid: i64,
 ) -> super::panel_dto::FriendPlantSummary {
-    let status = analyze_friend_lands(lands, my_gid, &[], false, "");
+    let status = analyze_friend_lands(lands, my_gid, &[]);
     super::panel_dto::FriendPlantSummary {
         steal_num: status.stealable.len() as i64,
         dry_num: status.need_water.len() as i64,
@@ -294,6 +258,22 @@ pub fn merge_partial_plant_summary(
         dry_num: old.dry_num.max(incoming.dry_num),
         weed_num: old.weed_num.max(incoming.weed_num),
         insect_num: old.insect_num.max(incoming.insect_num),
+    }
+}
+
+/// 偷菜气泡与推送 hint 归并（纯函数）。对齐 go 版 manager.go
+/// `applyFriendPushHints`：好友田 LandsNotify 补记的可偷数（`push_steal_hints`）
+/// 只在实时气泡为 0 时兜底——GetAll 漏气泡时该好友仍进偷菜队列；实时气泡
+/// 已 > 0 则用实时值并把 hint 消费掉（游戏数据已追上，hint 不再叠加）。
+/// 入参 `steal_num` 是 cleared 修正后的气泡值；返回 (生效可偷数, 是否消费 hint)。
+#[must_use]
+pub fn apply_steal_hint(steal_num: i64, hint: Option<i64>) -> (i64, bool) {
+    if steal_num > 0 {
+        return (steal_num, true);
+    }
+    match hint {
+        Some(h) if h > 0 => (h, false),
+        _ => (0, false),
     }
 }
 
@@ -496,7 +476,7 @@ pub async fn visit_friend_for_steal(
         };
         matches!(get_current_phase(land), Some(PlantPhase::Ripe)) && plant.stealable
     });
-    let mut status = analyze_friend_lands(&lands, my_gid, &plant_blacklist, false, account_id);
+    let mut status = analyze_friend_lands(&lands, my_gid, &plant_blacklist);
 
     if has_stealable_before_filter && status.stealable.is_empty() {
         let _ = api.leave_farm(friend_gid).await;
@@ -543,7 +523,7 @@ pub(crate) async fn do_steal_op(
     lands: &[LandInfo],
     my_gid: i64,
 ) -> serde_json::Value {
-    let status = analyze_friend_lands(lands, my_gid, &[], false, "");
+    let status = analyze_friend_lands(lands, my_gid, &[]);
     if status.stealable.is_empty() {
         return serde_json::json!({"ok": true, "opType": "steal", "count": 0, "message": "没有可偷取土地"});
     }

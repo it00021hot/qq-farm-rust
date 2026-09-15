@@ -105,7 +105,7 @@ pub async fn visit_friend_combined(
     }
 
     let plant_blacklist = get_plant_blacklist(account_id);
-    let mut status = analyze_friend_lands(&lands, my_gid, &plant_blacklist, false, account_id);
+    let mut status = analyze_friend_lands(&lands, my_gid, &plant_blacklist);
     let snapshot_key = RecentHelpCache::make_snapshot_key(
         &lands.iter().map(LandSnapshot::from_land).collect::<Vec<_>>(),
     );
