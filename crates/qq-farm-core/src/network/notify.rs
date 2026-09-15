@@ -118,10 +118,11 @@ pub fn parse_event(event: &EventMessage) -> NotifyEvent {
                 let basic = notify.basic;
                 // 昵称 / 头像只在非空时携带（proto3 空串等价于未携带；
                 // go applyBasicNotify 同样对空串直接跳过，避免清空已有值）
-                let nick =
-                    basic.as_ref().filter(|b| !b.name.is_empty()).map(|b| b.name.clone());
-                let avatar =
-                    basic.as_ref().filter(|b| !b.avatar_url.is_empty()).map(|b| b.avatar_url.clone());
+                let nick = basic.as_ref().filter(|b| !b.name.is_empty()).map(|b| b.name.clone());
+                let avatar = basic
+                    .as_ref()
+                    .filter(|b| !b.avatar_url.is_empty())
+                    .map(|b| b.avatar_url.clone());
                 NotifyEvent::BasicChanged {
                     event_type,
                     level: basic
@@ -173,7 +174,8 @@ pub fn parse_event(event: &EventMessage) -> NotifyEvent {
             Ok(notify) => NotifyEvent::BattlePassChanged { pass: notify.pass },
             Err(_) => NotifyEvent::BattlePassChanged { pass: None },
         }
-    } else if event_type.contains("ActiviesChangeNotify") || event_type.contains("ActivityChangeNotify")
+    } else if event_type.contains("ActiviesChangeNotify")
+        || event_type.contains("ActivityChangeNotify")
     {
         // proto 真实消息名是 ActiviesChangeNotify（proto/activitypb.proto，服务端
         // 就少拼一个 i），此前误写成 ActivitiesChangedNotify / ActivitiesNotify，

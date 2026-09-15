@@ -239,6 +239,7 @@ pub fn run() {
             // pets
             commands::pets::pet_info,
             commands::pets::pet_deploy,
+            commands::pets::pet_activate,
             commands::pets::pet_withdraw,
             commands::pets::pet_food_use,
             commands::pets::pet_protect_logs,
@@ -251,6 +252,8 @@ pub fn run() {
             commands::friend::farm_interaction_items_use,
             commands::friend::illustrated_snapshot,
             // settings
+            commands::settings::get_settings_panel,
+            commands::settings::save_settings,
             commands::settings::get_offline_reminder,
             commands::settings::set_offline_reminder,
             commands::settings::test_offline_reminder,

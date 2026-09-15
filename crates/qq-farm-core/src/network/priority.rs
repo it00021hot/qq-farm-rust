@@ -231,9 +231,8 @@ pub fn select_dispatch_index(
         if lane_busy {
             continue;
         }
-        if let Some(idx) = queue
-            .iter()
-            .position(|r| r.class == RequestClass::Critical && r.lane == Some(lane))
+        if let Some(idx) =
+            queue.iter().position(|r| r.class == RequestClass::Critical && r.lane == Some(lane))
         {
             return Some(idx);
         }
@@ -647,11 +646,8 @@ impl RpcScheduler {
     /// 队列压力日志：有业务请求在排队时节流告警（对齐 go logRequestPressureLocked，
     /// 5s 一次；纯 background 排队是常态，不告警）。
     fn maybe_log_pressure(&self, state: &mut SchedState) {
-        let blocking = state
-            .queue
-            .iter()
-            .filter(|slot| slot.class != RequestClass::Background)
-            .count();
+        let blocking =
+            state.queue.iter().filter(|slot| slot.class != RequestClass::Background).count();
         if blocking == 0 {
             return;
         }
@@ -721,8 +717,14 @@ mod tests {
     #[test]
     fn resolve_ambient_inherited_and_default_foreground() {
         // 有环境班次就继承（调度器注入；api 层默认 normal 在 rust 里不存在）
-        assert_eq!(resolve_request_class("GetAll", Some(RequestClass::Friend)).0, RequestClass::Friend);
-        assert_eq!(resolve_request_class("CheckFarm", Some(RequestClass::Farm)).0, RequestClass::Farm);
+        assert_eq!(
+            resolve_request_class("GetAll", Some(RequestClass::Friend)).0,
+            RequestClass::Friend
+        );
+        assert_eq!(
+            resolve_request_class("CheckFarm", Some(RequestClass::Farm)).0,
+            RequestClass::Farm
+        );
         // 没有环境班次（面板 HTTP / IPC 调用链）默认前台：那边确实有人在等结果
         assert_eq!(resolve_request_class("Purchase", None).0, RequestClass::Foreground);
     }
@@ -740,7 +742,11 @@ mod tests {
 
     #[test]
     fn heartbeat_and_ace_have_reserved_lanes_business_cannot_take() {
-        let queue = [queued(RequestClass::Farm), queued_lane(RequestClass::Critical, CriticalLane::Ace), queued_lane(RequestClass::Critical, CriticalLane::Heartbeat)];
+        let queue = [
+            queued(RequestClass::Farm),
+            queued_lane(RequestClass::Critical, CriticalLane::Ace),
+            queued_lane(RequestClass::Critical, CriticalLane::Heartbeat),
+        ];
         let busy_business = [
             flying(RequestClass::Farm),
             flying(RequestClass::Friend),
@@ -801,7 +807,11 @@ mod tests {
         // 前台已发完（不在队列里）时轮到自己农场，同班次内取更早入队的 farmA
         let without_foreground = [queue[0], queue[1], queue[3]];
         assert_eq!(
-            select_dispatch_index(&without_foreground, &[flying(RequestClass::Foreground)], 1_000_000),
+            select_dispatch_index(
+                &without_foreground,
+                &[flying(RequestClass::Foreground)],
+                1_000_000
+            ),
             Some(1)
         );
         // 自己农场还有活要干时（farm 每班次上限 1），好友农场就得等（4 秒后靠饥饿提升）
@@ -882,8 +892,13 @@ mod tests {
         .collect();
         // 配额按班次各自计算：background 排满不影响 critical / foreground 的名额
         assert_eq!(background_full.len(), max_queued_for_class(RequestClass::Background));
-        assert!(max_queued_for_class(RequestClass::Background) < max_queued_for_class(RequestClass::Foreground));
-        assert!(max_queued_for_class(RequestClass::Friend) <= max_queued_for_class(RequestClass::Farm));
+        assert!(
+            max_queued_for_class(RequestClass::Background)
+                < max_queued_for_class(RequestClass::Foreground)
+        );
+        assert!(
+            max_queued_for_class(RequestClass::Friend) <= max_queued_for_class(RequestClass::Farm)
+        );
         // 常量表与 bot 完全一致
         assert_eq!(max_queued_for_class(RequestClass::Critical), 8);
         assert_eq!(max_queued_for_class(RequestClass::Foreground), 60);
@@ -946,7 +961,10 @@ mod tests {
     #[test]
     fn stalled_pending_counts_as_gateway_silence() {
         // 服务端静默时主流程请求会挂十几秒，这种连接上一个后台请求都不该再加
-        let stalled = GatewayLoadSnapshot { oldest_pending_age_ms: GATEWAY_STALL_PENDING_MS, ..Default::default() };
+        let stalled = GatewayLoadSnapshot {
+            oldest_pending_age_ms: GATEWAY_STALL_PENDING_MS,
+            ..Default::default()
+        };
         assert!(!is_gateway_idle_for_low_priority(&stalled));
         assert!(!is_gateway_idle_for_low_priority(&GatewayLoadSnapshot {
             oldest_pending_age_ms: 18_136,
@@ -995,12 +1013,7 @@ mod tests {
         use super::*;
 
         async fn grant_of(scheduler: &Arc<RpcScheduler>, class: RequestClass) -> InFlightGuard {
-            scheduler
-                .try_enqueue(class, None)
-                .expect("enqueue")
-                .granted()
-                .await
-                .expect("grant")
+            scheduler.try_enqueue(class, None).expect("enqueue").granted().await.expect("grant")
         }
 
         #[tokio::test]
@@ -1045,8 +1058,9 @@ mod tests {
             // 把 background 的排队配额填满
             let mut tickets = Vec::new();
             for _ in 0..max_queued_for_class(RequestClass::Background) {
-                tickets
-                    .push(scheduler.try_enqueue(RequestClass::Background, None).expect("bg queued"));
+                tickets.push(
+                    scheduler.try_enqueue(RequestClass::Background, None).expect("bg queued"),
+                );
             }
             // background 配额满 → 拒绝；其它班次的名额不受影响
             assert!(scheduler.try_enqueue(RequestClass::Background, None).is_err());
@@ -1081,8 +1095,9 @@ mod tests {
             let wait = ticket.granted();
             assert_eq!(scheduler.queued_count(), 1);
             assert_eq!(scheduler.reject_all_queued(), 1);
-            let granted =
-                tokio::time::timeout(std::time::Duration::from_millis(100), wait).await.expect("woken");
+            let granted = tokio::time::timeout(std::time::Duration::from_millis(100), wait)
+                .await
+                .expect("woken");
             assert!(granted.is_none(), "reject_all 应让排队方拿到 None");
         }
 
@@ -1095,10 +1110,11 @@ mod tests {
             // 业务全满时心跳仍立即拿到保留通道
             let (class, lane) = resolve_request_class("Heartbeat", None);
             let ticket = scheduler.try_enqueue(class, lane).expect("hb queued");
-            let guard = tokio::time::timeout(std::time::Duration::from_millis(100), ticket.granted())
-                .await
-                .expect("heartbeat granted immediately")
-                .expect("guard");
+            let guard =
+                tokio::time::timeout(std::time::Duration::from_millis(100), ticket.granted())
+                    .await
+                    .expect("heartbeat granted immediately")
+                    .expect("guard");
             assert_eq!(scheduler.load().critical_pending, 1);
             drop(guard);
         }

@@ -126,10 +126,10 @@ message ActivityData {
     QingMeiDailySeedData qingmei_daily_seed = 103;
     QingMeiBrewData qingmei_brew = 108;
     ConstellationData constellation = 110;
+    ActivityBodyPetTreasureHunt pet_treasure_hunt = 115;
     QixiBridgeConfig qixi_bridge = 112;
     QixiGiftProgress qixi_gift = 113;
     QingMeiQuote qingmei_quote = 114;
-    ActivityBodyPetTreasureHunt pet_treasure_hunt = 115;
     WeatherBottleConfig weather_bottle = 105;
     CharityRedFlowerData charity_red_flower = 116;
     WeatherActivityTasks weather_tasks = 117;

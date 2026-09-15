@@ -13,7 +13,6 @@ use tokio_util::sync::CancellationToken;
 use crate::models::AccountSession;
 use crate::network::encryptor::Encryptor;
 use crate::network::gateway::{Gateway, GatewayConfig};
-use crate::proto::generated::gamepb::userpb::{DeviceInfo, ReportData};
 use crate::runtime::events::WorkerEvent;
 use crate::runtime::scheduler::Scheduler;
 use crate::runtime::worker_handle::WorkerHandle;
@@ -539,48 +538,41 @@ impl Worker {
 
                     let rt = crate::config::get_runtime_config();
                     let di = &rt.device_info;
-                    let device_info = DeviceInfo {
-                        client_version: if di.client_version.is_empty() {
-                            config.gateway.client_version.clone()
-                        } else {
-                            di.client_version.clone()
-                        },
-                        sys_software: if di.sys_software.is_empty() {
-                            "Windows".to_string()
-                        } else {
-                            di.sys_software.clone()
-                        },
-                        screen_width: 0,
-                        ..Default::default()
+                    let client_version = if di.client_version.is_empty() {
+                        config.gateway.client_version.clone()
+                    } else {
+                        di.client_version.clone()
                     };
-                    let report_data = ReportData {
-                        minigame_channel: "other-qq".to_string(),
-                        minigame_platid: 2,
-                        ..Default::default()
+                    let sys_software = if di.sys_software.is_empty() {
+                        "Windows".to_string()
+                    } else {
+                        di.sys_software.clone()
                     };
 
-                    let login_result =
-                        match or_cancel(&cancel, gateway.login(&device_info, &report_data, &tsdk))
-                            .await
-                        {
-                            Some(r) => r,
-                            None => {
-                                tracing::info!(
-                                    account_id = %account_id,
-                                    generation,
-                                    "启动过程中被取消（登录阶段），放弃登录并断开连接"
-                                );
-                                gateway.force_disconnect();
-                                crate::services::panel_log::unregister(&account_id);
-                                eng.release_worker_gen(&account_id, generation);
-                                let _ = event_tx.send(WorkerEvent::Stopped {
-                                    account_id: account_id.clone(),
-                                    reason: "主动取消".to_string(),
-                                    generation,
-                                });
-                                return;
-                            }
-                        };
+                    let login_result = match or_cancel(
+                        &cancel,
+                        gateway.login(&client_version, &sys_software, &tsdk),
+                    )
+                    .await
+                    {
+                        Some(r) => r,
+                        None => {
+                            tracing::info!(
+                                account_id = %account_id,
+                                generation,
+                                "启动过程中被取消（登录阶段），放弃登录并断开连接"
+                            );
+                            gateway.force_disconnect();
+                            crate::services::panel_log::unregister(&account_id);
+                            eng.release_worker_gen(&account_id, generation);
+                            let _ = event_tx.send(WorkerEvent::Stopped {
+                                account_id: account_id.clone(),
+                                reason: "主动取消".to_string(),
+                                generation,
+                            });
+                            return;
+                        }
+                    };
                     match login_result {
                         Ok(reply) => {
                             let login_msg = if let Some(basic) = &reply.basic {

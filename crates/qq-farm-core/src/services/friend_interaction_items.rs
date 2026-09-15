@@ -58,8 +58,7 @@ fn is_land_interaction_metadata(info: &ItemCfg) -> bool {
     if info.can_use.unwrap_or(0) <= 0 {
         return false;
     }
-    info.interaction_type.as_deref().unwrap_or("").trim().to_lowercase()
-        == SPECIAL_INTERACTION_TYPE
+    info.interaction_type.as_deref().unwrap_or("").trim().to_lowercase() == SPECIAL_INTERACTION_TYPE
 }
 
 fn is_self_interaction_metadata(info: &ItemCfg) -> bool {

@@ -2,6 +2,7 @@
 //!
 //! - [`api`] — 底层农场/商店 API（protobuf 请求 + 解码响应）
 //! - [`land_analysis`] — 土地状态分析（地块映射、阶段判断、布局）
+//! - [`layout_reservation`] — 多格作物的未来布局预留（bot 96fdb39）
 //! - [`scheduler`] — 调度循环（定时检查 + 触发操作）；[`FarmService`] 定义于此
 //! - [`planting`] — 种植引擎（选种子、拖动种植、按配置施肥）
 //!
@@ -11,6 +12,7 @@
 
 pub mod api;
 pub mod land_analysis;
+pub mod layout_reservation;
 pub mod planting;
 pub mod scheduler;
 

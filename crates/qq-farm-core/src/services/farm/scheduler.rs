@@ -577,7 +577,6 @@ impl FarmService {
         }
 
         if !all_dead.is_empty() || !all_empty.is_empty() {
-            let plant_count = all_dead.len() + all_empty.len();
             match planting
                 .lock()
                 .await
@@ -585,10 +584,11 @@ impl FarmService {
                 .await
             {
                 Ok(r) => {
+                    // 对齐 bot：种植数按实际种下的地块计（被预留的空地不算）
                     crate::services::stats::record_operation_for(
                         account_id,
                         "plant",
-                        plant_count as i64,
+                        r.planted_lands.len() as i64,
                     );
                     let _ = event_tx.send(FarmEvent::Planted { count: r.planted_lands.len() });
                     if !r.planted_lands.is_empty() {
@@ -605,6 +605,9 @@ impl FarmService {
                                 "landIds": r.planted_lands,
                             })),
                         );
+                    }
+                    if !r.deferred_land_ids.is_empty() {
+                        actions.push(format!("预留{}", r.deferred_land_ids.len()));
                     }
                 }
                 Err(e) => {

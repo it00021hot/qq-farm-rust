@@ -175,6 +175,7 @@ declare namespace Api {
       preferredSeedId?: number;
       bagSeedPriority?: number[];
       bagSeedFallbackStrategy?: string;
+      bagSeedMultiLandReservationEnabled?: boolean;
       plantOrderRandom?: boolean;
       plantDelaySeconds?: number;
       stealDelaySeconds?: number;
@@ -203,6 +204,7 @@ declare namespace Api {
       preferredSeedId?: number;
       bagSeedPriority?: number[];
       bagSeedFallbackStrategy?: string;
+      bagSeedMultiLandReservationEnabled?: boolean;
       plantOrderRandom?: boolean;
       plantDelaySeconds?: number;
       stealDelaySeconds?: number;

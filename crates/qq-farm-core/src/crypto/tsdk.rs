@@ -14,7 +14,7 @@
 //! 判定原则：凡不是 `A()` 分配的指针，一律不得传给 `B()`。node 版
 //! `tsdk-runtime.ts` 是唯一行为基准，改动此处前先对照它。
 //!
-//! 用 `wasmtime` 加载 157KB 的 `tsdk.wasm`，提供与原 Node.js 版本对齐的：
+//! 用 `wasmtime` 加载 161KB 的 `tsdk.wasm`，提供与原 Node.js 版本对齐的：
 //! - 初始化（host function 注入 + merged data 解密）
 //! - `transform` 加密/解密
 //!
@@ -54,7 +54,10 @@ pub const WASM_CONSECUTIVE_FAIL_THRESHOLD: u32 = 3;
 
 // ===== TSDK 元信息（与原项目保持一致） =====
 
-const TSDK_VERSION: &str = "v3.9.0.1788165223";
+const TSDK_VERSION: &str = "v3.9.0.1789137379";
+/// 随 wasm 二进制更新的 SHA256（对齐 bot `tsdk-runtime.ts` 的 `TSDK_SHA256`），
+/// 加载前校验，防止旧版/被替换的 wasm 静默参与加解密。
+const TSDK_WASM_SHA256: &str = "1744e339d43425f9f24834fd49b3239f824f57fe76242d5b3128ac55b3110ac5";
 const MINI_PROGRAM_APP_ID: &str = "wx5306c5978fdb76e4";
 /// QQ 小程序 App ID（QQ 平台宿主初始化，对齐 bot `MINI_PROGRAM_APP_IDS.qq`）
 const QQ_MINI_PROGRAM_APP_ID: &str = "1112386029";
@@ -191,10 +194,26 @@ fn shared_module(engine: &Engine, wasm_path: &Path) -> Result<&'static Module> {
     if let Some(m) = MODULE.get() {
         return Ok(m);
     }
-    let module = Module::from_file(engine, wasm_path)
+    let wasm_bytes =
+        std::fs::read(wasm_path).map_err(|e| Error::crypto(format!("read wasm failed: {e}")))?;
+    verify_wasm_sha256(&wasm_bytes)?;
+    let module = Module::new(engine, &wasm_bytes)
         .map_err(|e| Error::crypto(format!("load wasm failed: {e}")))?;
     let _ = MODULE.set(module);
     Ok(MODULE.get().expect("module initialized"))
+}
+
+/// 加载前校验 wasm 完整性（对齐 bot `tsdk-runtime.ts` 的 SHA256 校验）。
+fn verify_wasm_sha256(bytes: &[u8]) -> Result<()> {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(bytes);
+    let hex_digest = hex::encode(digest);
+    if hex_digest != TSDK_WASM_SHA256 {
+        return Err(Error::crypto(format!(
+            "tsdk.wasm SHA256 校验失败：期望 {TSDK_WASM_SHA256}，实际 {hex_digest}（版本 {TSDK_VERSION}）"
+        )));
+    }
+    Ok(())
 }
 
 // ===== TSDK 运行时 =====

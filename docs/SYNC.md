@@ -17,8 +17,8 @@
 
 | 仓库 | Commit | 日期 | 说明 |
 |------|--------|------|------|
-| **qq-farm-rust** | `main`（本提交：bot 9-11 协议/分析/萌宠素材增量） | 2026-09-11 | 协议 1.14.0.3_20260909 + 分析页排除白萝卜 + 萌宠手记/素材收敛 |
-| **qq-farm-bot** | `305c300` | 2026-09-11 | 萌宠日记自绘改版（PR #72）+ 分析页 Lv200/排除 29999 + 版本 20260911 |
+| **qq-farm-rust** | `main`（本提交：同步 bot 9-14 增量） | 2026-09-15 | 协议 1.14.0.4_20260911 + TSDK v3.9.0.1789137379 + Login/Heartbeat 逐字节对齐 + 宠物激活 + 多格种子预留 |
+| **qq-farm-bot** | `1d1edb3` | 2026-09-14 | TSDK 升级 + Login 包逐字节对齐 + AntiData 校验和解密（9709bcb）+ 宠物激活（9907ffd）+ 协议版本升级（f61b227）+ 版本 20260914 |
 
 文档范围：**业务行为 + 面板 HTTP/Socket 契约**（不含改 Vue 面板本身）。
 
@@ -26,8 +26,9 @@
 
 | 概念 | 当前值 | 用途 |
 |------|--------|------|
-| 客户端版本 `FARM_CLIENT_VERSION` | 默认 `1.14.0.3_20260909`（与 bot `config.ts` 默认一致，UPDATED_AT `1789111371648`） | 进游戏网关声明 |
-| bot `core` 包版本号 | `20260911` | 原项目发布标签，≠ 客户端版本字符串 |
+| 客户端版本 `FARM_CLIENT_VERSION` | 默认 `1.14.0.4_20260911`（与 bot `config.ts` 默认一致，UPDATED_AT `1789352998016`） | 进游戏网关声明 |
+| bot `core` 包版本号 | `20260914` | 原项目发布标签，≠ 客户端版本字符串 |
+| TSDK wasm | `v3.9.0.1789137379`（161,084 字节，SHA256 `1744e339…10ac5`；加载时校验） | 加解密/ACE |
 | 青梅活动 ID | 每日 `2026081201` / 酿造 `2026081202` | 活动协议 |
 | 公益小红花活动 ID | 活动组 `2026090900` / 活动 `2026090901` | 活动协议 |
 | 萌宠成长日记活动 ID | 活动组 `2026090100` / 养成 `2026090101` / 种子赠礼 `2026090102` / 拾物小铺 `2026090103` | 活动协议 |
@@ -65,7 +66,8 @@
 | 连网进游戏 | 齐 | 经 Gateway + TSDK 登录并维持心跳 | `network/*`, `crypto/tsdk.rs` |
 | QQ 小程序扫码拿码 | 齐 | 面板可走 QQ 码登录流程 | `services/qrlogin.rs` |
 | 微信扫码拿码并启动 | 齐 | 扫码 → 应用宝 login_buffer 落盘 → 换一次性网关 code 启动；掉线/重启可用授权再换码重连 | `services/wx_login/*`, `routes/wx_login.rs` |
-| 本田务农循环 | 齐 | 除草除虫浇水 → 收获 → 铲除 → 种植（含多格）→ 施肥/解锁升级；默认策略/skip_own_weed_bug/smart 秒数对齐 bot | `services/farm/*`, `runtime/worker_loop.rs` |
+| 本田务农循环 | 齐 | 除草除虫浇水 → 收获 → 铲除 → 种植（含多格 + `bagSeedMultiLandReservationEnabled` 优先多格种子预留空地，默认关）→ 施肥/解锁升级；默认策略/skip_own_weed_bug/smart 秒数对齐 bot | `services/farm/*`, `runtime/worker_loop.rs` |
+| 宠物（护主犬） | 齐 | 上场/收回/喂粮/守护记录 + `ActivateDog` 消耗背包卡片激活图鉴项；快照含 `activatable` 三态（field_6=1 或背包有未锁定同 ID 卡） | `services/pets.rs` |
 | 好友帮助 / 偷菜 / 捣乱 | 齐 | 列表、访问、帮助（经验门控）、偷菜（气泡+自巡/空访/一键 Harvest 主地回退/先偷后帮）、静默仅挡好友、黑名单落盘；捣乱按日限/启动筛选/`1001046` 停 | `services/friend/*` |
 | 背包展示与操作 | 齐 | 按 UID 堆分行；含 `key`/`uid`/`mutantTypes`/`groupKey`；系统物品分离 | `services/warehouse.rs` |
 | 自动/手动出售果实 | 齐 | 自动受 `sell` 开关；`sell_cond` 满足后用 `cond_sells`（活动结束后 / 道具过期后等）；手动预检拒绝不可售 | `warehouse` + `game_config` + `activity_windows` |
@@ -1308,3 +1310,44 @@
    与设置项，离线提醒推送本体保留
 4. **「一键清理已停止账号」按钮**（clearStopped）——功能取消；仅 desktop-ui，
    后端本就无对应批量命令；通用批量删除不再限制「仅已停止」
+
+### 2026-09-15 — 同步 bot 305c300..1d1edb3（协议 1.14.0.4 / TSDK 升级 / Login 逐字节对齐 / 宠物激活 / 多格预留）
+
+基准推进：bot `305c300`（09-11）→ `1d1edb3`（09-14）。基线间 12 个提交中仅 4 组真实代码变更
+（其余为 web 前端样式、行尾归一化、纯文档），全部同步如下：
+
+1. **协议版本升级**（bot `f61b227`）：默认 `1.14.0.3_20260909` → `1.14.0.4_20260911`，
+   UPDATED_AT `1789352998016`（`config/system_config.rs`）
+2. **TSDK wasm 升级**（bot `9709bcb`）：`assets/tsdk.wasm` → v3.9.0.1789137379
+   （161,084 字节，SHA256 `1744e339d43425f9f24834fd49b3239f824f57fe76242d5b3128ac55b3110ac5`）；
+   `TSDK_VERSION` 更新，并**新增加载前 SHA256 校验**（对齐 bot `TSDK_SHA256`；
+   mergewasm key/元数据/QQ 宿主表 bot 侧未变，无需改动）。
+   AntiData 载荷 FNV-1a32 校验和由 wasm 内部计算，宿主侧无需实现，换 wasm 即可
+3. **Login/Heartbeat 逐字节对齐**（bot `9709bcb`）：新增 `network/login_body.rs` 纯函数
+   `build_login_body`（官方 73 字节定长） / `build_heartbeat_body`（官方 27 字节定长），
+   以官方向量做 golden 测试钉死。关键点：官方客户端**显式写出** `sharer_id=0` /
+   `share_cfg_id=0` / `field_3=0` / 6 个空 `report_data` 字符串 / 空 `extra`，prost proto3
+   语义省略默认值字段产不出该字节流，故手写 wire-format 构造；`Gateway::login` 签名改为
+   `(client_version, sys_software)`，worker 不再构造 `DeviceInfo`/`ReportData`
+   （device_info 只留 client_version/sys_software，删 `screen_width`）
+4. **宠物激活 ActivateDog**（bot `9907ffd`）：`proto/dogpb.proto` 经 sync 工具整份镜像
+   （新增 `ActivateDogRequest/Reply`、DogInfo `field_10`）；`services/pets.rs` 新增
+   `activate_dog`（前置校验 → RPC → 回读确认 owned）与快照 `activatable` 三态
+   （未拥有 &&（field_6=1 || 背包有未锁定同 ID 卡））；DeployDog 错误按 field_6 细分
+   「尚未激活/未获得」；全链路接线 app `pet_activate` → desktop IPC `pet_activate`
+   （ACL 已加）→ PetPanel 激活按钮/可激活标签（i18n 中英）
+5. **多格种子预留**（bot `96fdb39` + `ee4de82`）：新增 `services/farm/layout_reservation.rs`
+   （`select_future_layout_reservation`，锚点最小且部分空出的布局，只预留当前空地）；
+   配置 `bagSeedMultiLandReservationEnabled`（默认 false，opt-in）三段式接线
+   （types/normalize/account_config 快照）；`plant_from_bag_seeds_ex` 仅对显式优先种子、
+   size>1、每轮一次触发预留，预留地从本轮可种地扣除且商店 fallback 不占用；
+   调度统计改按实际种下数计并新增「预留N」；设置页策略 tab 新增开关（i18n 中英）
+
+**附带修复（预存断裂）**：恢复 `get_settings_panel` / `save_settings` 两个 Tauri 命令
+（`474155a` 误删——当时认定无调用方，但设置页 `fetchGetFarmAutomationDetail` /
+`fetchModifyFarmAutomation` 实际仍在调用，设置页读写在 HEAD 上是坏的），
+`settings_panel` 聚合数据带上新开关字段。
+
+验证：`cargo test --workspace` 1024 通过（含 desktop ACL 防回归）、clippy 干净、
+`pnpm typecheck` 通过。待实机回归：登录（新 73 字节 Login 包）、anti_data 上报（新 wasm）、
+宠物激活、多格预留种植。

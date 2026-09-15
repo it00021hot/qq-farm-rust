@@ -31,6 +31,17 @@ pub async fn pet_deploy(
     pets::pet_deploy(&state.app, &account_id, dog_id).await.map_err(IpcError::from)
 }
 
+/// 激活宠物（消耗背包宠物卡）。
+#[tauri::command]
+pub async fn pet_activate(
+    state: State<'_, DesktopState>,
+    account_id: String,
+    dog_id: i64,
+) -> IpcResult<Value> {
+    ensure(&state, &account_id)?;
+    pets::pet_activate(&state.app, &account_id, dog_id).await.map_err(IpcError::from)
+}
+
 /// 收回宠物。
 #[tauri::command]
 pub async fn pet_withdraw(state: State<'_, DesktopState>, account_id: String) -> IpcResult<Value> {

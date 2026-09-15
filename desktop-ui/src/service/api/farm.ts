@@ -133,6 +133,7 @@ function toAutomationDetail(raw: any, accountId: number): Api.Farm.AccountAutoma
     preferredSeedId: Number(raw?.preferredSeedId ?? raw?.preferredSeed ?? 0),
     bagSeedPriority: Array.isArray(raw?.bagSeedPriority) ? raw.bagSeedPriority.map(Number) : [],
     bagSeedFallbackStrategy: String(raw?.bagSeedFallbackStrategy || 'level'),
+    bagSeedMultiLandReservationEnabled: !!raw?.bagSeedMultiLandReservationEnabled,
     plantOrderRandom: !!raw?.plantOrderRandom,
     plantDelaySeconds: Number(raw?.plantDelaySeconds ?? 0),
     stealDelaySeconds: Number(raw?.stealDelaySeconds ?? 1),
@@ -1048,6 +1049,10 @@ export function fetchGetPetInfo(accountId: number) {
 
 export function fetchPetDeploy(accountId: number, dogId: number) {
   return invokeFlat('pet_deploy', { accountId: aid(accountId), dogId: Number(dogId) });
+}
+
+export function fetchPetActivate(accountId: number, dogId: number) {
+  return invokeFlat('pet_activate', { accountId: aid(accountId), dogId: Number(dogId) });
 }
 
 export function fetchPetWithdraw(accountId: number) {

@@ -18,6 +18,7 @@ use crate::services::farm::land_analysis::{
     analyze_lands, build_planting_layouts, resolve_occupied_land_ids,
     select_non_overlapping_layouts,
 };
+use crate::services::farm::layout_reservation::select_future_layout_reservation;
 
 /// 种植策略
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -409,6 +410,8 @@ pub struct PlantSeedsResult {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AutoPlantResult {
     pub planted_lands: Vec<i64>,
+    /// 本轮为高优先级多格种子预留的空地（bot `deferredLandIds`）
+    pub deferred_land_ids: Vec<i64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -416,6 +419,8 @@ pub struct BagPlantResult {
     pub remaining_land_ids: Vec<i64>,
     pub fallback_allowed: bool,
     pub planted_land_ids: Vec<i64>,
+    /// 本轮为高优先级多格种子预留的空地（bot `deferredLandIds`）
+    pub deferred_land_ids: Vec<i64>,
     pub total_planted: usize,
     pub occupied_count: usize,
 }
@@ -953,17 +958,22 @@ impl PlantingEngine {
                 }
             };
             let mut planted = bag.planted_land_ids.clone();
+            let mut deferred = bag.deferred_land_ids.clone();
             if bag.fallback_allowed && !bag.remaining_land_ids.is_empty() {
                 let fallback = crate::models::store::account_config::get_bag_seed_fallback_strategy(
                     Some(account_id),
                 );
-                let shop = self
+                let mut shop = self
                     .plant_from_shop(&bag.remaining_land_ids, host_gid, account_id, Some(fallback))
                     .await?;
+                // 商店 fallback 不得种掉已预留的地
+                shop.planted_lands.retain(|id| !deferred.contains(id));
                 planted.extend(shop.planted_lands);
             }
             planted.sort_unstable();
             planted.dedup();
+            deferred.sort_unstable();
+            deferred.dedup();
             if !planted.is_empty() && !both_mode_deferred(account_id) {
                 let _ = self
                     .fertilize_by_config_ex(
@@ -974,7 +984,7 @@ impl PlantingEngine {
                     )
                     .await;
             }
-            return Ok(AutoPlantResult { planted_lands: planted });
+            return Ok(AutoPlantResult { planted_lands: planted, deferred_land_ids: deferred });
         }
 
         let shop =
@@ -989,7 +999,7 @@ impl PlantingEngine {
                 )
                 .await;
         }
-        Ok(AutoPlantResult { planted_lands: shop.planted_lands })
+        Ok(AutoPlantResult { planted_lands: shop.planted_lands, deferred_land_ids: Vec::new() })
     }
 
     /// 用背包种子种植（对齐 bot `plantFromBagSeeds`：bagSeedLandTypes 非空时
@@ -1005,12 +1015,28 @@ impl PlantingEngine {
             .resolve_land_type_map_for_bag_seeds(host_gid, account_id)
             .await
             .unwrap_or_default();
+        // 多格预留开关打开时才拉全量土地（未解锁的除外），开关默认关闭零额外请求
+        let all_unlocked_land_ids: Vec<i64> =
+            if crate::models::store::account_config::get_bag_seed_multi_land_reservation_enabled(
+                Some(account_id),
+            ) {
+                match self.api.get_all_lands(host_gid).await {
+                    Ok(reply) => reply.lands.iter().filter(|l| l.unlocked).map(|l| l.id).collect(),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "拉取全量土地失败，本轮不做多格预留");
+                        Vec::new()
+                    }
+                }
+            } else {
+                Vec::new()
+            };
         self.plant_from_bag_seeds_ex(
             lands_to_plant,
             host_gid,
             account_id,
             restrictions,
             land_type_by_id,
+            &all_unlocked_land_ids,
         )
         .await
     }
@@ -1046,7 +1072,8 @@ impl PlantingEngine {
         }
     }
 
-    /// 用背包种子种植（显式传入限制上下文；`land_type_by_id` 为空表示不限制）
+    /// 用背包种子种植（显式传入限制上下文；`land_type_by_id` 为空表示不限制；
+    /// `all_unlocked_land_ids` 为全部已解锁土地，供多格预留计算，空表示功能关闭）
     pub async fn plant_from_bag_seeds_ex(
         &self,
         lands_to_plant: &[i64],
@@ -1057,6 +1084,7 @@ impl PlantingEngine {
             i64,
             crate::services::farm::land_analysis::LandType,
         >,
+        all_unlocked_land_ids: &[i64],
     ) -> Result<BagPlantResult> {
         let mut target: Vec<i64> = {
             let mut seen = std::collections::HashSet::new();
@@ -1113,8 +1141,15 @@ impl PlantingEngine {
 
         let mut fallback_allowed = true;
         let mut planted_land_ids = Vec::new();
+        let mut deferred_land_ids: Vec<i64> = Vec::new();
         let mut occupied = std::collections::HashSet::new();
         let mut total_planted = 0usize;
+        // 多格预留每轮最多一次（bot `futureLayoutReserved`）
+        let mut future_layout_anchor: Option<i64> = None;
+        let multi_land_reservation_enabled =
+            crate::models::store::account_config::get_bag_seed_multi_land_reservation_enabled(
+                Some(account_id),
+            );
 
         for seed in ordered {
             if target.is_empty() || !fallback_allowed {
@@ -1158,6 +1193,57 @@ impl PlantingEngine {
                         );
                     }
                 }
+                // 多格预留（bot 96fdb39 + ee4de82）：为排在前面的多格种子保住
+                // 尚未凑齐布局的空地，只预留当前已空出的部分；每轮最多一次。
+                if multi_land_reservation_enabled
+                    && future_layout_anchor.is_none()
+                    && plant_size > 1
+                    && priority.contains(&seed.seed_id)
+                {
+                    let all_eligible: Vec<i64> = match &seed_land_types {
+                        Some(types) => {
+                            let analysis_types = fertilizer_types_to_analysis(types);
+                            all_unlocked_land_ids
+                                .iter()
+                                .copied()
+                                .filter(|id| {
+                                    land_type_by_id
+                                        .get(id)
+                                        .is_some_and(|t| analysis_types.contains(t))
+                                })
+                                .collect()
+                        }
+                        None => all_unlocked_land_ids.to_vec(),
+                    };
+                    if let Some(reservation) =
+                        select_future_layout_reservation(&allowed_target, &all_eligible, plant_size)
+                    {
+                        let reserved: std::collections::HashSet<i64> =
+                            reservation.reserved_land_ids.iter().copied().collect();
+                        target.retain(|id| !reserved.contains(id));
+                        deferred_land_ids.extend(reservation.reserved_land_ids.iter().copied());
+                        future_layout_anchor = Some(reservation.layout.anchor_land_id);
+                        crate::services::panel_log::log(
+                            account_id,
+                            "种植",
+                            format!(
+                                "背包种子 {} 预留 {} 块空地等待凑齐 {}x{} 布局",
+                                seed.name,
+                                reservation.reserved_land_ids.len(),
+                                plant_size,
+                                plant_size
+                            ),
+                            crate::constants::PanelEvent::PlantSeed,
+                            Some(serde_json::json!({
+                                "module": "farm", "event": "种植种子",
+                                "result": "reserve_future_layout", "seedId": seed.seed_id,
+                                "anchorLandId": reservation.layout.anchor_land_id,
+                                "layoutLandIds": reservation.layout.land_ids,
+                                "reservedLandIds": reservation.reserved_land_ids,
+                            })),
+                        );
+                    }
+                }
                 continue;
             }
             let result =
@@ -1178,10 +1264,13 @@ impl PlantingEngine {
         }
         planted_land_ids.sort_unstable();
         planted_land_ids.dedup();
+        deferred_land_ids.sort_unstable();
+        deferred_land_ids.dedup();
         Ok(BagPlantResult {
             remaining_land_ids: target,
             fallback_allowed,
             planted_land_ids,
+            deferred_land_ids,
             total_planted,
             occupied_count: occupied.len(),
         })

@@ -20,6 +20,12 @@ pub async fn pet_deploy(ctx: &AppContext, account_id: &str, dog_id: i64) -> AppR
     PetService::new(loop_.gateway().clone()).deploy_dog(dog_id).await.map_err(AppError::from_core)
 }
 
+/// 激活宠物（消耗背包宠物卡）。
+pub async fn pet_activate(ctx: &AppContext, account_id: &str, dog_id: i64) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    PetService::new(loop_.gateway().clone()).activate_dog(dog_id).await.map_err(AppError::from_core)
+}
+
 /// 收回宠物。
 pub async fn pet_withdraw(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;

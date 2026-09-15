@@ -199,6 +199,12 @@ pub fn get_bag_seed_fallback_strategy(account_id: Option<&str>) -> BagSeedFallba
     normalize_bag_seed_fallback_strategy(Some(s), s)
 }
 
+/// 是否为排在前面的多格背包种子预留空地（对齐 bot `getBagSeedMultiLandReservationEnabled`）
+#[must_use]
+pub fn get_bag_seed_multi_land_reservation_enabled(account_id: Option<&str>) -> bool {
+    get_account_config_snapshot(account_id).bag_seed_multi_land_reservation_enabled
+}
+
 /// intervals
 #[must_use]
 pub fn get_intervals(account_id: Option<&str>) -> IntervalConfig {
@@ -574,6 +580,10 @@ pub fn apply_config_snapshot(
         }
     }
 
+    if let Some(b) = snapshot.get("bagSeedMultiLandReservationEnabled").and_then(|v| v.as_bool()) {
+        next.bag_seed_multi_land_reservation_enabled = b;
+    }
+
     if let Some(n) = snapshot.get("autoAcceptFriendMinLevel").and_then(|v| v.as_i64()) {
         next.auto_accept_friend_min_level = n.clamp(0, 200);
     }
@@ -754,6 +764,30 @@ mod tests {
         let v = apply_config_snapshot(serde_json::Value::Object(s), Some("acc4"), false);
         let cfg: AccountConfig = serde_json::from_value(v).expect("parse");
         assert!(cfg.intervals.farm >= 1, "farm={}", cfg.intervals.farm);
+    }
+
+    /// 对齐 bot `farm-multiland-reservation.test.js`：默认 opt-in（false），
+    /// 快照 round-trip true/false 都要生效。
+    #[test]
+    #[serial(account_config)]
+    #[serial(farm_data_dir)]
+    fn bag_seed_multi_land_reservation_round_trips() {
+        reset();
+        let fresh = get_account_config_snapshot(Some("acc_multi"));
+        assert!(!fresh.bag_seed_multi_land_reservation_enabled, "新配置默认关闭（opt-in）");
+
+        let mut s = serde_json::Map::new();
+        s.insert("bagSeedMultiLandReservationEnabled".to_string(), serde_json::json!(true));
+        let v = apply_config_snapshot(serde_json::Value::Object(s), Some("acc_multi"), false);
+        let cfg: AccountConfig = serde_json::from_value(v).expect("parse");
+        assert!(cfg.bag_seed_multi_land_reservation_enabled);
+        assert!(get_bag_seed_multi_land_reservation_enabled(Some("acc_multi")));
+
+        let mut s = serde_json::Map::new();
+        s.insert("bagSeedMultiLandReservationEnabled".to_string(), serde_json::json!(false));
+        let v = apply_config_snapshot(serde_json::Value::Object(s), Some("acc_multi"), false);
+        let cfg: AccountConfig = serde_json::from_value(v).expect("parse");
+        assert!(!cfg.bag_seed_multi_land_reservation_enabled);
     }
 
     #[test]

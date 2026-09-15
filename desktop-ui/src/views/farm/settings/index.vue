@@ -139,6 +139,7 @@ const plantingStrategy = ref('bag_priority');
 const preferredSeedId = ref<number | null>(0);
 const bagSeedPriority = ref<number[]>([29003, 20129, 21380, 20108, 26032]);
 const bagSeedFallbackStrategy = ref('preferred');
+const bagSeedMultiLandReservation = ref(false);
 const plantOrderRandom = ref(true);
 const plantDelaySeconds = ref(2);
 const stealDelaySeconds = ref(1);
@@ -641,6 +642,7 @@ function applyDetail(data: Api.Farm.AccountAutomationDetail) {
   preferredSeedId.value = data.preferredSeedId ?? 0;
   bagSeedPriority.value = [...(data.bagSeedPriority || [])];
   bagSeedFallbackStrategy.value = data.bagSeedFallbackStrategy || 'preferred';
+  bagSeedMultiLandReservation.value = !!data.bagSeedMultiLandReservationEnabled;
   plantOrderRandom.value = !!data.plantOrderRandom;
   plantDelaySeconds.value = data.plantDelaySeconds ?? 0;
   stealDelaySeconds.value = data.stealDelaySeconds ?? 1;
@@ -691,6 +693,7 @@ async function handleSaveStrategy() {
       preferredSeedId: preferredSeedId.value ?? 0,
       bagSeedPriority: priority,
       bagSeedFallbackStrategy: bagSeedFallbackStrategy.value,
+      bagSeedMultiLandReservationEnabled: bagSeedMultiLandReservation.value,
       plantOrderRandom: plantOrderRandom.value,
       plantDelaySeconds: plantDelaySeconds.value,
       stealDelaySeconds: stealDelaySeconds.value,
@@ -1169,6 +1172,10 @@ onUnmounted(() => {
                   :options="bagFallbackStrategyOptions"
                   @update:value="handleBagFallbackStrategyChange"
                 />
+              </NFormItem>
+
+              <NFormItem :label="$t('page.farm.settings.bagSeedMultiLandReservation')">
+                <NSwitch v-model:value="bagSeedMultiLandReservation" />
               </NFormItem>
 
               <div

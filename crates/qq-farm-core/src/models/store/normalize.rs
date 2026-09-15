@@ -252,6 +252,7 @@ pub fn default_account_config() -> AccountConfig {
         bag_seed_priority: DEFAULT_BAG_SEED_PRIORITY.to_vec(),
         bag_seed_fallback_strategy: BagSeedFallbackStrategy::Preferred,
         bag_seed_land_types: Default::default(),
+        bag_seed_multi_land_reservation_enabled: false,
         auto_accept_friend_min_level: 0,
         auto_accept_require_own_level: false,
         auto_accept_harvest_steal_enabled: true,

@@ -22,6 +22,7 @@ import {
   fetchGetDogSkillGifts,
   fetchGetPetInfo,
   fetchGetPetProtectLogs,
+  fetchPetActivate,
   fetchPetDeploy,
   fetchPetFoodUse,
   fetchPetWithdraw
@@ -42,6 +43,7 @@ const pendingGifts = ref(0);
 const logsVisible = ref(false);
 const logs = ref<any[]>([]);
 const foodCounts = ref<Record<number, number>>({});
+const activating = ref(false);
 
 function days(seconds: number): string {
   if (!seconds || seconds <= 0) return '0 天';
@@ -69,6 +71,21 @@ async function deploy(dogId: number) {
   if (!error) {
     window.$message?.success($t('page.farm.personal.pet.deploySuccess'));
     await load();
+  }
+}
+
+async function activate(dogId: number) {
+  if (!farmAccountStore.currentAccountId) return;
+  activating.value = true;
+  try {
+    const { error } = await fetchPetActivate(farmAccountStore.currentAccountId, dogId);
+    if (!error) {
+      window.$message?.success($t('page.farm.personal.pet.activateSuccess'));
+      await load();
+      emit('refresh');
+    }
+  } finally {
+    activating.value = false;
   }
 }
 
@@ -170,6 +187,13 @@ void load();
                         : $t('page.farm.personal.pet.locked')
                   }}
                 </NTag>
+                <NTag
+                  v-if="!dog.active && !dog.owned && dog.activatable"
+                  size="small"
+                  type="warning"
+                >
+                  {{ $t('page.farm.personal.pet.activatable') }}
+                </NTag>
                 <NTag size="small" :bordered="false">{{ dog.rarityLabel }}</NTag>
                 <NTooltip trigger="hover">
                   <template #trigger>
@@ -178,9 +202,20 @@ void load();
                   {{ dog.skillDescription }}
                 </NTooltip>
               </div>
-              <NButton v-if="dog.owned && !dog.active" size="tiny" type="primary" @click="deploy(dog.id)">
-                {{ $t('page.farm.personal.pet.deploy') }}
-              </NButton>
+              <NSpace :size="4" :wrap="false">
+                <NButton
+                  v-if="!dog.owned && dog.activatable"
+                  size="tiny"
+                  type="warning"
+                  :loading="activating"
+                  @click="activate(dog.id)"
+                >
+                  {{ $t('page.farm.personal.pet.activate') }}
+                </NButton>
+                <NButton v-if="dog.owned && !dog.active" size="tiny" type="primary" @click="deploy(dog.id)">
+                  {{ $t('page.farm.personal.pet.deploy') }}
+                </NButton>
+              </NSpace>
             </div>
           </NListItem>
         </NList>

@@ -37,9 +37,7 @@ use crate::network::frame::{FrameBuilder, FrameParser};
 use crate::network::notify::NotifyEvent;
 use crate::network::priority::{CriticalLane, InFlightGuard, RequestClass, RpcScheduler};
 use crate::network::request::RequestManager;
-use crate::proto::generated::gamepb::userpb::{
-    DeviceInfo, HeartbeatReply, HeartbeatRequest, LoginReply, LoginRequest, ReportData,
-};
+use crate::proto::generated::gamepb::userpb::{HeartbeatReply, LoginReply};
 use crate::proto::generated::gatepb::MessageType;
 
 /// 连接阶段
@@ -170,7 +168,10 @@ fn ambient_rpc_class() -> Option<RequestClass> {
 
 /// 把 future 标记为指定 RPC 班次（对齐 bot `runWithRequestClass`）：定时任务入口
 /// 打一次标记，任务内所有请求自动继承该班次，不必把班次参数一路透传到每个 API。
-pub fn request_class_scope<F: Future>(class: RequestClass, fut: F) -> impl Future<Output = F::Output> {
+pub fn request_class_scope<F: Future>(
+    class: RequestClass,
+    fut: F,
+) -> impl Future<Output = F::Output> {
     AMBIENT_RPC_CLASS.scope(class, fut)
 }
 
@@ -510,7 +511,8 @@ impl Gateway {
         }
         // 对齐 go SendNoReply / bot sendMsgNoReply：no-reply 帧也过五班次调度器
         // （发送完成即还槽，不等待回包）
-        let (class, lane) = crate::network::priority::resolve_request_class(method, ambient_rpc_class());
+        let (class, lane) =
+            crate::network::priority::resolve_request_class(method, ambient_rpc_class());
         let _slot = self.acquire_dispatch(class, lane, service, method).await?;
         // 与 send_rpc 同一把发送顺序锁，保证 no-reply 帧也不破坏 seq 递增
         let _order = self.inner.send_order.lock().await;
@@ -565,11 +567,8 @@ impl Gateway {
         } else {
             crate::constants::RPC_QUEUE_TIMEOUT_MS
         };
-        match tokio::time::timeout(
-            std::time::Duration::from_millis(wait_ms),
-            ticket.granted(),
-        )
-        .await
+        match tokio::time::timeout(std::time::Duration::from_millis(wait_ms), ticket.granted())
+            .await
         {
             Ok(Some(guard)) => Ok(guard),
             // 队列被清空（连接断开 / 会话结束）：对齐 go「连接未打开: %s」
@@ -613,7 +612,8 @@ impl Gateway {
         // critical 的两条保留通道；面板 / 登录链路默认 foreground；定时任务由
         // scheduler 注入 farm / friend；补数据任务注入 background。业务高峰时
         // 心跳和 AntiData 依然有保留槽位，不会被业务流量挤到超时掉线。
-        let (class, lane) = crate::network::priority::resolve_request_class(method, ambient_rpc_class());
+        let (class, lane) =
+            crate::network::priority::resolve_request_class(method, ambient_rpc_class());
         let _slot = self.acquire_dispatch(class, lane, service, method).await?;
 
         // 发送顺序锁：seq → 加密 → 入队原子化，保证上 wire 的帧严格按
@@ -754,16 +754,17 @@ impl Gateway {
 
     /// 完整登录流程：发 LoginRequest → 等 LoginReply → bindUser → mark_online
     ///
-    /// 1:1 对应原 `network.ts:sendLogin()`
+    /// 1:1 对应原 `network.ts:sendLogin()`。请求体由
+    /// [`crate::network::login_body::build_login_body`] 逐字节对齐官方抓包。
     ///
     /// # Arguments
-    /// - `device_info`: 客户端版本 / 系统 / 屏幕等
-    /// - `report_data`: 上报数据（minigame_channel / minigame_platid）
+    /// - `client_version`: 生效的客户端版本（如 `1.14.0.4_20260911`）
+    /// - `sys_software`: 系统标识（如 `Windows`）
     /// - `tsdk`: TSDK runtime（用于 bindUser）
     pub async fn login(
         &self,
-        device_info: &DeviceInfo,
-        report_data: &ReportData,
+        client_version: &str,
+        sys_software: &str,
         tsdk: &Arc<crate::crypto::tsdk::TsdkRuntime>,
     ) -> Result<LoginReply> {
         // 1. 阶段检查：必须在 Login 阶段
@@ -776,17 +777,8 @@ impl Gateway {
             }
         }
 
-        // 2. 构造 LoginRequest
-        let req = LoginRequest {
-            sharer_id: 0,
-            sharer_open_id: String::new(),
-            device_info: Some(device_info.clone()),
-            share_cfg_id: 0,
-            scene_id: "1234567".to_string(),
-            report_data: Some(report_data.clone()),
-            extra: Default::default(),
-        };
-        let body = prost::Message::encode_to_vec(&req);
+        // 2. 构造 LoginRequest（逐字节对齐官方 73 字节抓包）
+        let body = crate::network::login_body::build_login_body(client_version, sys_software);
 
         // 3. 对齐 sendLogin：用 sendMsg（Login 阶段可发），不是 sendMsgAsync
         let reply_bytes = self
@@ -876,8 +868,8 @@ impl Gateway {
 
     /// 发 Heartbeat 请求（同步服务器时间 + 维持连接）
     pub async fn heartbeat(&self, gid: i64, client_version: &str) -> Result<HeartbeatReply> {
-        let req = HeartbeatRequest { gid, client_version: client_version.to_string(), field_3: 0 };
-        let body = prost::Message::encode_to_vec(&req);
+        // 逐字节对齐官方 27 字节抓包（field_3 显式写 0）
+        let body = crate::network::login_body::build_heartbeat_body(gid, client_version);
         // 对齐 network.ts：Heartbeat 走 sendMsgAsync 默认 20s，不能用 5s（忙时易误超时→掉线）
         let reply_bytes = self
             .request_with_timeout(
@@ -1158,15 +1150,11 @@ mod tests {
         // 缺省（面板 / IPC / 登录链路）= foreground
         assert_eq!(ambient_rpc_class(), None);
         assert_eq!(
-            crate::network::priority::resolve_request_class("Purchase", ambient_rpc_class())
-                .0,
+            crate::network::priority::resolve_request_class("Purchase", ambient_rpc_class()).0,
             RequestClass::Foreground
         );
         // request_class_scope 注入后整条调用链继承班次
-        let seen = request_class_scope(RequestClass::Friend, async {
-            ambient_rpc_class()
-        })
-        .await;
+        let seen = request_class_scope(RequestClass::Friend, async { ambient_rpc_class() }).await;
         assert_eq!(seen, Some(RequestClass::Friend));
         // background_scope 标记补数据任务
         let seen = background_scope(async { ambient_rpc_class() }).await;

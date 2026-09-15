@@ -407,6 +407,10 @@ pub struct AccountConfig {
     /// 对齐 bot `bagSeedLandTypes`（缺 key / 空数组 / 勾满全部等价不限制）。
     #[serde(default)]
     pub bag_seed_land_types: std::collections::HashMap<i64, Vec<FertilizerLandType>>,
+    /// 是否为明确排在前面的多格背包种子保留尚未连成布局的空地
+    /// （对齐 bot `bagSeedMultiLandReservationEnabled`，默认 false / opt-in）。
+    #[serde(default)]
+    pub bag_seed_multi_land_reservation_enabled: bool,
     /// 好友申请自动通过：最低等级（0 = 不限）
     #[serde(default)]
     pub auto_accept_friend_min_level: i64,
