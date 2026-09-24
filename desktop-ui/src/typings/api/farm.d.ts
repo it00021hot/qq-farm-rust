@@ -860,6 +860,13 @@ declare namespace Api {
       isFree: boolean;
       limit: PurchaseLimit | null;
       isLimited: boolean;
+      /** 1=common / 2=pet / 3=adornment */
+      productType: number;
+      /** owned / sold_out / ad_required / share_required / unavailable / available / svip_required */
+      purchaseStatus: string;
+      unavailableReason: string;
+      /** 促销生效时的划线原价 */
+      originalPrice: number | null;
       discountText: string;
       isDiscounted: boolean;
       discountEndTime: number;
@@ -871,9 +878,15 @@ declare namespace Api {
       balanceKnown: boolean;
     };
 
+    type MallMembership = {
+      isSvip: boolean;
+      remainingDays: number;
+    };
+
     type MallCatalog = {
       slotType: number;
       subSlotType: number;
+      membership: MallMembership | null;
       serverTime: number;
       refreshCountdown: number;
       currencies: MallCurrency[];
@@ -887,7 +900,8 @@ declare namespace Api {
         rewards: CommerceItem[];
         limit: PurchaseLimit | null;
       };
-      catalog: MallCatalog;
+      catalog: MallCatalog | null;
+      refreshRequired: boolean;
     };
 
     type MysteryShop = {

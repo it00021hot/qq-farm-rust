@@ -17,8 +17,8 @@
 
 | 仓库 | Commit | 日期 | 说明 |
 |------|--------|------|------|
-| **qq-farm-rust** | `main`（本提交：同步 bot 9-14 增量） | 2026-09-15 | 协议 1.14.0.4_20260911 + TSDK v3.9.0.1789137379 + Login/Heartbeat 逐字节对齐 + 宠物激活 + 多格种子预留 |
-| **qq-farm-bot** | `1d1edb3` | 2026-09-14 | TSDK 升级 + Login 包逐字节对齐 + AntiData 校验和解密（9709bcb）+ 宠物激活（9907ffd）+ 协议版本升级（f61b227）+ 版本 20260914 |
+| **qq-farm-rust** | `main`（本提交：bot 9-24 秋日/SVIP/施肥增量） | 2026-09-24 | 协议 1.14.2.11_20260922 + 秋日活动 + SVIP 商城 + 施肥配额语义 + 扫码昵称（宠物激活/布局预留已随 9-14 批次） |
+| **qq-farm-bot** | `9c30b05` | 2026-09-24 | 秋日活动与 SVIP 商城（PR #82）+ 商城不限购状态机（PR #79/80/73）+ 施肥语义修复（PR #75/77） |
 
 文档范围：**业务行为 + 面板 HTTP/Socket 契约**（不含改 Vue 面板本身）。
 
@@ -26,12 +26,13 @@
 
 | 概念 | 当前值 | 用途 |
 |------|--------|------|
-| 客户端版本 `FARM_CLIENT_VERSION` | 默认 `1.14.0.4_20260911`（与 bot `config.ts` 默认一致，UPDATED_AT `1789352998016`） | 进游戏网关声明 |
-| bot `core` 包版本号 | `20260914` | 原项目发布标签，≠ 客户端版本字符串 |
-| TSDK wasm | `v3.9.0.1789137379`（161,084 字节，SHA256 `1744e339…10ac5`；加载时校验） | 加解密/ACE |
+| 客户端版本 `FARM_CLIENT_VERSION` | 默认 `1.14.2.11_20260922`（与 bot `config.ts` 默认一致，UPDATED_AT `1790215551955`） | 进游戏网关声明 |
+| bot `core` 包版本号 | `20260924` | 原项目发布标签，≠ 客户端版本字符串 |
+| TSDK wasm | `v3.9.0.1790160550`（161081 字节，SHA-256 `2c9e377ecc9a4fd9…`；加载时校验） | 网关加密 + ACE |
 | 青梅活动 ID | 每日 `2026081201` / 酿造 `2026081202` | 活动协议 |
 | 公益小红花活动 ID | 活动组 `2026090900` / 活动 `2026090901` | 活动协议 |
 | 萌宠成长日记活动 ID | 活动组 `2026090100` / 养成 `2026090101` / 种子赠礼 `2026090102` / 拾物小铺 `2026090103` | 活动协议 |
+| 秋日活动 ID | 秋祈良愿 组 `2026092400` / 活动 `2026092401`；快乐不独享 组 `2026092500` / 活动 `2026092501` | 活动协议 |
 
 ---
 
@@ -63,7 +64,7 @@
 
 | 能力 | 状态 | 期望行为（摘要） | 定位（非验收标准） |
 |------|------|------------------|-------------------|
-| 连网进游戏 | 齐 | 经 Gateway + TSDK 登录并维持心跳 | `network/*`, `crypto/tsdk.rs` |
+| 连网进游戏 | 齐 | 经 Gateway + TSDK 登录并维持心跳；登录/心跳包字节级对齐官方抓包（73/27 字节向量） | `network/*`, `crypto/tsdk.rs` |
 | QQ 小程序扫码拿码 | 齐 | 面板可走 QQ 码登录流程 | `services/qrlogin.rs` |
 | 微信扫码拿码并启动 | 齐 | 扫码 → 应用宝 login_buffer 落盘 → 换一次性网关 code 启动；掉线/重启可用授权再换码重连 | `services/wx_login/*`, `routes/wx_login.rs` |
 | 本田务农循环 | 齐 | 除草除虫浇水 → 收获 → 铲除 → 种植（含多格 + `bagSeedMultiLandReservationEnabled` 优先多格种子预留空地，默认关）→ 施肥/解锁升级；默认策略/skip_own_weed_bug/smart 秒数对齐 bot | `services/farm/*`, `runtime/worker_loop.rs` |
@@ -71,9 +72,9 @@
 | 好友帮助 / 偷菜 / 捣乱 | 齐 | 列表、访问、帮助（经验门控）、偷菜（气泡+自巡/空访/一键 Harvest 主地回退/先偷后帮）、静默仅挡好友、黑名单落盘；捣乱按日限/启动筛选/`1001046` 停 | `services/friend/*` |
 | 背包展示与操作 | 齐 | 按 UID 堆分行；含 `key`/`uid`/`mutantTypes`/`groupKey`；系统物品分离 | `services/warehouse.rs` |
 | 自动/手动出售果实 | 齐 | 自动受 `sell` 开关；`sell_cond` 满足后用 `cond_sells`（活动结束后 / 道具过期后等）；手动预检拒绝不可售 | `warehouse` + `game_config` + `activity_windows` |
-| 商城 / 神秘商店 / 月卡 / 钻石 | 齐 | 列表、购买（神秘 Buy 无回包）、月卡、充值信息 | `mall`, `mystery_shop`, `monthcard`, `pay`, `commerce` |
+| 商城 / 神秘商店 / 月卡 / 钻石 | 齐 | 列表（slot 1 普通 + slot 4 SVIP，非会员禁购 + expectedPrice 防涨价）、购买（回包 success 校验 + 不限购/售罄/广告/分享状态机）、神秘商人并入商城 tab、月卡、充值信息 | `mall`, `mystery_shop`, `monthcard`, `pay`, `commerce` |
 | 日常领取 | 齐 | 任务（成长 claim 后刷新 TaskInfo + `currentTask`）、邮件、分享等 | `task`, `email`, `share`, … |
-| 活动中心 | 齐 | 千星游记、观星、星砂、节令、青梅（含已领幂等）、鹊桥寄情（筑桥领取 + 赠香囊）、公益小红花（领种子/捐爱心/每日礼包）、萌宠成长日记（养成/寻宝/锦囊/夺宝/种子/小铺/节令/记录） | `activity_center*` |
+| 活动中心 | 齐 | 千星游记、观星、星砂、节令、青梅（含已领幂等）、鹊桥寄情（筑桥领取 + 赠香囊）、公益小红花（领种子/捐爱心/每日礼包）、萌宠成长日记（养成/寻宝/锦囊/夺宝/种子/小铺/节令/记录）、秋日活动（秋祈良愿抽签/领奖 + 快乐不独享分享/每日/档位/日志） | `activity_center*` |
 | 面板鉴权与账号 | 齐 | 登录注册（无卡密）、账号 CRUD、设置 | `routes/auth`, `account`, `admin` |
 | 面板农场/好友/活动/商业 API | 已随 server 删除 | **只维护桌面版**（Tauri IPC 语义对齐原 HTTP 契约） | `qq-farm-desktop/src/commands/*` |
 | Socket 状态/日志推送 | 齐 | `status:update` / `log:new` 等 | `socket.rs` |
@@ -1351,3 +1352,43 @@
 验证：`cargo test --workspace` 1024 通过（含 desktop ACL 防回归）、clippy 干净、
 `pnpm typecheck` 通过。待实机回归：登录（新 73 字节 Login 包）、anti_data 上报（新 wasm）、
 宠物激活、多格预留种植。
+### 2026-09-24 — 增量同步 bot 1d1edb3..9c30b05（协议 1.14.2.11 / 秋日活动 / SVIP 商城 / 施肥语义 / 扫码昵称）
+
+（rebase 到 9-15 的 9-14 批次提交之上；宠物激活、多格种子预留、Login 逐字节对齐、
+TSDK 升级在 b686694 已完成，本提交不再重复，配置开关沿用其
+`bagSeedMultiLandReservationEnabled` 命名与设置面板开关）
+
+- **协议与版本**：proto 整份重镜像至 bot 9c30b05（activitypb 加 wish_sign=119 /
+  share_reward=120 / Operate field 151-157；mallpb 字段重排；新增
+  autumn-activities.proto）；版本成对升 `1.14.2.11_20260922` / `1790215551955`；
+  tsdk.wasm 升 `v3.9.0.1790160550`（161081B，SHA-256 校验一致）
+- **秋日活动**（新增 `activity_center/autumn.rs`）：秋祈良愿（GetGroup field 119 +
+  Operate 51/52）+ 快乐不独享（field 120 + Operate 69/70/71/73）；mutation_lock 串行 +
+  回包三重校验 + 回读失败降级 refreshRequired；`autumn-20260924.json` include_str!；
+  目录绑定 gameplayKey autumnWish/autumnHappy（priority 1/2）；前端 `autumn-view.vue`
+  自加载；素材 `public/activity-assets/autumn/`
+- **商城 + SVIP**（mall/commerce/qqvip 重写）：MallGoods 新字段、GetMallListBySlotType
+  field 2 改 is_manual_open、PurchaseResponse success 校验；SVIP slot 4 目录注入
+  membership、非会员禁购、expectedPrice 防涨价（MALL_PRICE_CHANGED）；limit_type=0
+  不限购 + slot 1 无 limit 视为可购的 mallAvailability 状态机；促销划线价按服务器时间
+  复验；qqvip 字段语义重写 + claimSvipMallFreeGift；前端商城页改「普通 / SVIP /
+  神秘商人」三 tab（神秘商人菜单项删除、旧路径重定向 `?tab=mystery`）；非会员
+  RefreshVipInfo/GetQQVipRewardsStatus 回 1021001 时按非会员降级，目录不再整体报错
+- **施肥语义**（bot a68b187 + d1a7562）：`left_inorc_fert_times` 修正为「本季普通肥
+  剩余次数」，普通肥目标改配额 >0 判定；新增巡田补肥 `run_patrol_refill`（multi_season
+  开关 + 含普通肥策略时补一轮）；Both「无机一次+有机催熟」偏离保留
+- **扫码登录昵称**（bot a989a8e）：微信 confirm 后尽力而为调 `pcyyb_get_user_info`
+  （Ual-Access-* 头 + md5(timestamp+nonce)，OAuth 回包解析作 fallback）；
+  wx_login_code 返回 nickname 用于账号表单预填（QQ 侧随 NapCat 删除不适用）
+- **游戏配置镜像**：ItemInfo/Plant/Illustrated 整份拷 bot 9c30b05；11 张新种子图转
+  WebP（1901/1902/20435/2121/26030/101613/204010/401006/6002/90042 新增 + 6001 更新）
+- **NTabPane 标签空白修复**：naive-ui 2.45 `normalizeSlots` 把 undefined children 包装
+  成空默认插槽，自闭合 `<NTabPane tab="x" />` 的 label 渲染成空注释；改 `#tab` 具名
+  插槽（商城三 tab + autumn 日志 tab）
+- 验证：`RUSTFLAGS="-D warnings" cargo check --workspace --all-targets` 0 错 0 警；
+  `cargo test --workspace` 全过；`cargo fmt --all --check`、`corepack pnpm typecheck`、
+  `corepack pnpm build` 通过；无账号静态页浏览器实测：商城三 tab 名称渲染 + 点击切换
+  正常、菜单无神秘商人项
+- **实机待验**：新版本号 + 新 wasm 登录；秋日两个活动；商城 SVIP 浏览/禁购/促销划线价；
+  巡田补肥触发
+

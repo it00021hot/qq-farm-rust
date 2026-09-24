@@ -32,13 +32,22 @@ pub async fn commerce_mall_catalog(
 pub async fn commerce_mall_purchase(
     state: State<'_, DesktopState>,
     account_id: String,
-    goods_id: i32,
-    count: Option<i32>,
+    goods_id: i64,
+    count: Option<i64>,
+    slot_type: Option<i32>,
+    expected_price: Option<qq_farm_core::services::commerce::ExpectedPrice>,
 ) -> IpcResult<Value> {
     ensure(&state, &account_id)?;
-    commerce::purchase_mall(&state.app, &account_id, goods_id, count.unwrap_or(1))
-        .await
-        .map_err(IpcError::from)
+    commerce::purchase_mall(
+        &state.app,
+        &account_id,
+        goods_id,
+        count.unwrap_or(1),
+        slot_type,
+        expected_price,
+    )
+    .await
+    .map_err(IpcError::from)
 }
 
 /// 神秘商人。

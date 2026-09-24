@@ -363,6 +363,7 @@ pub async fn fertilizer_check_and_buy(ctx: &AppContext, account_id: &str) -> App
         loop_.mall().clone(),
         Arc::new(mystery),
         loop_.warehouse().clone(),
+        loop_.qqvip().clone(),
     );
     let opts = qq_farm_core::services::commerce::FertilizerBothOptions {
         buy_organic: true,

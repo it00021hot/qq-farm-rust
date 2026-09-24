@@ -108,6 +108,28 @@ pub fn build_activity_directory(
         5,
     );
 
+    // 秋日活动 · 秋祈良愿（bot 注册表 priority 1）+ 快乐不独享（priority 2）
+    push_binding(
+        &mut bindings,
+        [
+            crate::constants::AUTUMN_WISH_GROUP_ID.to_string(),
+            crate::constants::AUTUMN_WISH_ACTIVITY_ID.to_string(),
+        ],
+        "autumnWish",
+        "wish",
+        1,
+    );
+    push_binding(
+        &mut bindings,
+        [
+            crate::constants::AUTUMN_HAPPY_GROUP_ID.to_string(),
+            crate::constants::AUTUMN_HAPPY_ACTIVITY_ID.to_string(),
+        ],
+        "autumnHappy",
+        "happy",
+        2,
+    );
+
     // 雨落成诗（静态活动 ID 对齐 bot 注册表；绑定后目录条目继承 List 窗口的
     // 真实起止时间，活动结束后显示「已结束」而不是前端兜底入口的「进行中」）
     push_binding(

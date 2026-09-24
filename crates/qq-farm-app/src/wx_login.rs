@@ -119,6 +119,8 @@ pub struct WxCodeResult {
     pub openid: String,
     pub app_id: String,
     pub code: String,
+    /// 账号昵称（best-effort，扫码后用于预填）
+    pub nickname: Option<String>,
 }
 
 fn now_ms() -> i64 {
@@ -301,10 +303,11 @@ pub async fn confirm_quick_session_for(
         .map_err(|e| AppError::BadRequest(e.to_string()))?;
     let creds = hub.service.exchange_oauth_code(&oauth_code).await.map_err(map_wx_auth_err)?;
     let openid = creds.openid.clone();
+    let nickname = creds.nickname.clone();
     let (gateway_code, updated) =
         hub.service.mint_gateway_code(&creds, WX_MINI_APP_ID).await.map_err(map_wx_auth_err)?;
     store_pending_auth(hub, &gateway_code, WxAuth::from(updated));
-    Ok(WxCodeResult { openid, app_id: WX_MINI_APP_ID.to_string(), code: gateway_code })
+    Ok(WxCodeResult { openid, app_id: WX_MINI_APP_ID.to_string(), code: gateway_code, nickname })
 }
 
 fn map_wx_auth_err(e: qq_farm_core::services::wx_login::WxAuthError) -> AppError {
@@ -386,6 +389,7 @@ pub async fn issue_code_for(
     let access_token = session.access_token.clone().unwrap_or_default();
     let refresh_token = session.refresh_token.clone().unwrap_or_default();
     let token_expires_at = session.expires_at.unwrap_or(0);
+    let nickname = session.nickname.clone();
     let app_id = task.app_id.clone();
     drop(session);
 
@@ -404,7 +408,7 @@ pub async fn issue_code_for(
         store_pending_auth(hub, &code, WxAuth::from(updated));
     }
     destroy_task(hub, task_id);
-    Ok(WxCodeResult { openid, app_id, code })
+    Ok(WxCodeResult { openid, app_id, code, nickname })
 }
 
 fn prune_pending_auth(hub: &WxLoginHub, now: i64) {

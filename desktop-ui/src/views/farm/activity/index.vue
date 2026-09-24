@@ -40,6 +40,7 @@ import ActivityRulesDialog from './activity-rules-dialog.vue';
 import { normalizeActivityRules } from './rules';
 import { $t } from '@/locales';
 import CharityView, { type CharityActivity } from './charity-view.vue';
+import AutumnView from './autumn-view.vue';
 import PetDiaryView from './pet-diary-view.vue';
 import QixiView from './qixi-view.vue';
 import WeatherView from './weather-view.vue';
@@ -49,7 +50,7 @@ defineOptions({
 });
 
 type ActivityTab = 'travel' | 'constellation' | 'shop' | 'solar';
-type GameplayKey = 'stellar' | 'qixi' | 'greenPlum' | 'weather' | 'charity' | 'pet';
+type GameplayKey = 'stellar' | 'qixi' | 'greenPlum' | 'weather' | 'charity' | 'pet' | 'autumnWish' | 'autumnHappy';
 type ActivityStatus = 'active' | 'upcoming' | 'ended';
 type ActivityDirectoryItem = {
   id?: string;
@@ -404,16 +405,22 @@ function resolveGameplay(activity: ActivityDirectoryItem): GameplayKey | null {
             ? 'charity'
             : activity.detailTarget === 'pet'
               ? 'pet'
-              : activity.detailTarget
-                ? 'stellar'
-                : null);
+              : activity.detailTarget === 'wish'
+                ? 'autumnWish'
+                : activity.detailTarget === 'happy'
+                  ? 'autumnHappy'
+                  : activity.detailTarget
+                    ? 'stellar'
+                    : null);
   if (
     key === 'qixi' ||
     key === 'stellar' ||
     key === 'greenPlum' ||
     key === 'weather' ||
     key === 'charity' ||
-    key === 'pet'
+    key === 'pet' ||
+    key === 'autumnWish' ||
+    key === 'autumnHappy'
   ) {
     return key;
   }
@@ -1575,6 +1582,11 @@ onMounted(async () => {
         />
         <!-- 雨落成诗（天气活动） -->
         <WeatherView v-else-if="selectedGameplay === 'weather'" />
+        <!-- 秋日活动：秋祈良愿 / 快乐不独享（快照自加载） -->
+        <AutumnView
+          v-else-if="selectedGameplay === 'autumnWish' || selectedGameplay === 'autumnHappy'"
+          :gameplay="selectedGameplay"
+        />
         <!-- 青梅 -->
         <NCard v-else-if="selectedGameplay === 'greenPlum'" :bordered="false" size="small" class="card-wrapper">
           <div class="mb-12px rounded-8px bg-emerald-50 px-14px py-12px dark:bg-emerald-900/20">

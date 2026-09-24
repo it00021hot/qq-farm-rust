@@ -323,8 +323,13 @@ async function getWxCodeAndSave() {
   if (error || !data?.code) {
     throw new Error((error as any)?.message || '未获取到登录 Code');
   }
+  const nickname = String((data as any)?.nickname || '').trim();
+  if (nickname && !String(model.value.name || '').trim()) {
+    model.value.name = nickname;
+  }
   await saveWxCode(String(data.code));
 }
+
 
 async function detectLocalWechat() {
   wxLoading.value = true;

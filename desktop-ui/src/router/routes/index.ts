@@ -86,14 +86,14 @@ const flatAuthRoutes: ElegantRoute[] = [
         }
       },
       {
+        // 神秘商人已并入游戏商城 tab（对齐 bot d5a50cc）；旧路径重定向，不再进菜单
         name: 'farm_mystery-shop',
         path: '/farm/mystery-shop',
-        component: 'view.farm_mystery-shop',
+        redirect: '/farm/game-mall?tab=mystery',
         meta: {
           title: 'farm_mystery-shop',
           i18nKey: 'route.farm_mystery-shop',
-          icon: 'mdi:account-question',
-          order: 7
+          hideInMenu: true
         }
       },
       {

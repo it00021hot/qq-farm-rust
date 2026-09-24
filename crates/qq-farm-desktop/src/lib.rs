@@ -221,6 +221,9 @@ pub fn run() {
             commands::activity::activity_operate_pet_diary,
             commands::activity::activity_get_pet_diary_records,
             commands::activity::activity_get_pet_diary_friend,
+            // autumn activities
+            commands::activity::activity_get_autumn,
+            commands::activity::activity_operate_autumn,
             // weather
             commands::weather::weather_snapshot,
             commands::weather::weather_friends,

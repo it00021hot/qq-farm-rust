@@ -57,7 +57,7 @@ pub const WASM_CONSECUTIVE_FAIL_THRESHOLD: u32 = 3;
 const TSDK_VERSION: &str = "v3.9.0.1789137379";
 /// 随 wasm 二进制更新的 SHA256（对齐 bot `tsdk-runtime.ts` 的 `TSDK_SHA256`），
 /// 加载前校验，防止旧版/被替换的 wasm 静默参与加解密。
-const TSDK_WASM_SHA256: &str = "1744e339d43425f9f24834fd49b3239f824f57fe76242d5b3128ac55b3110ac5";
+const TSDK_WASM_SHA256: &str = "2c9e377ecc9a4fd9019f12191b589d543a60d6654580eb3e237b35f1fa5b1cb7";
 const MINI_PROGRAM_APP_ID: &str = "wx5306c5978fdb76e4";
 /// QQ 小程序 App ID（QQ 平台宿主初始化，对齐 bot `MINI_PROGRAM_APP_IDS.qq`）
 const QQ_MINI_PROGRAM_APP_ID: &str = "1112386029";

@@ -301,8 +301,9 @@ export function fetchConfirmFarmWxLogin(taskId: string) {
 }
 
 export function fetchFarmWxLoginCode(taskId: string) {
-  return invokeFlat<{ code: string }>('wx_login_code', { taskId });
+  return invokeFlat<{ code: string; nickname?: string | null }>('wx_login_code', { taskId });
 }
+
 
 export function fetchCreateFarmWxQuickLoginSession() {
   return invokeFlat<{
@@ -901,6 +902,19 @@ export function fetchGetFarmActivityPetDiaryFriend(accountId: number, gid: strin
   return invokeFlat('activity_get_pet_diary_friend', { accountId: aid(accountId), gid });
 }
 
+export function fetchGetFarmActivityAutumn(accountId: number, key: 'wish' | 'happy') {
+  return invokeFlat('activity_get_autumn', { accountId: aid(accountId), key });
+}
+
+export function fetchOperateFarmActivityAutumn(
+  accountId: number,
+  key: 'wish' | 'happy',
+  action: string,
+  params: Record<string, unknown>
+) {
+  return invokeFlat('activity_operate_autumn', { accountId: aid(accountId), key, action, params });
+}
+
 export function fetchClaimFarmActivityCharityProgressReward(data: Api.Farm.ActivityClaimParams) {
   const body = data as any;
   return invokeFlat('activity_claim_charity_progress_reward', {
@@ -1019,7 +1033,12 @@ export function fetchPurchaseFarmGameMall(data: any) {
   return invokeFlat('commerce_mall_purchase', {
     accountId: aid(data.accountId),
     goodsId: Number(data.goodsId ?? data.id ?? 0),
-    count: Number(data.count ?? 1)
+    count: Number(data.count ?? 1),
+    slotType: data.slotType ?? null,
+    expectedPrice:
+      data.expectedPrice && typeof data.expectedPrice === 'object'
+        ? { id: Number(data.expectedPrice.id ?? 0), count: Number(data.expectedPrice.count ?? 0) }
+        : null
   });
 }
 

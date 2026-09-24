@@ -265,3 +265,29 @@ pub async fn activity_get_pet_diary_friend(
     };
     activity::pet_diary_friend(&state.app, &account_id, &gid).await.map_err(IpcError::from)
 }
+
+/// 秋日活动状态。
+#[tauri::command]
+pub async fn activity_get_autumn(
+    state: State<'_, DesktopState>,
+    account_id: String,
+    key: String,
+) -> IpcResult<Value> {
+    ensure(&state, &account_id)?;
+    activity::autumn(&state.app, &account_id, &key).await.map_err(IpcError::from)
+}
+
+/// 秋日活动操作。
+#[tauri::command]
+pub async fn activity_operate_autumn(
+    state: State<'_, DesktopState>,
+    account_id: String,
+    key: String,
+    action: String,
+    params: Option<Value>,
+) -> IpcResult<Value> {
+    ensure(&state, &account_id)?;
+    activity::operate_autumn(&state.app, &account_id, &key, &action, &params.unwrap_or(Value::Null))
+        .await
+        .map_err(IpcError::from)
+}

@@ -738,6 +738,38 @@ impl FarmService {
 
         let fertilizer_mode =
             crate::models::store::account_config::get_automation(Some(account_id)).fertilizer;
+
+        // 巡田补肥（1:1 对齐 bot scheduler.ts:345-389，a68b187 + d1a7562）：
+        // 多季开关开启且策略含普通肥时，重查土地取「普通肥配额仍 >0」的地补一轮普通肥；
+        // 土地类型过滤由 fertilize_by_config_ex 内部完成（勾满视为不限制，确认不了类型跳过）。
+        if crate::services::automation::is_automation_on_for(account_id, "fertilizer_multi_season")
+            && matches!(
+                fertilizer_mode,
+                crate::models::types::FertilizerMode::Normal
+                    | crate::models::types::FertilizerMode::Both
+                    | crate::models::types::FertilizerMode::Smart
+            )
+        {
+            match planting.lock().await.run_patrol_refill(host_gid, account_id).await {
+                Ok(normal) if normal > 0 => {
+                    actions.push(format!("补肥{normal}"));
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    crate::services::panel_log::log_warn(
+                        account_id,
+                        "施肥",
+                        format!("巡田补肥失败: {e}"),
+                        crate::constants::PanelEvent::Fertilize,
+                        Some(serde_json::json!({
+                            "module": "farm",
+                            "result": "error",
+                        })),
+                    );
+                }
+            }
+        }
+
         if matches!(
             fertilizer_mode,
             crate::models::types::FertilizerMode::Smart

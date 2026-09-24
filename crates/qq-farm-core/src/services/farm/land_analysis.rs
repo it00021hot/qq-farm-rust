@@ -597,7 +597,10 @@ pub fn filter_ids_by_land_types(ids: &[i64], lands: &[LandInfo], types: &[LandTy
         .collect()
 }
 
-/// 当前作物是否已用过普通化肥（任一阶段 `ferts_used` 含 1011）。
+/// 当前作物本季是否已用过普通化肥（任一阶段 `ferts_used` 含 1011）。
+///
+/// 注：普通肥目标判定已改用服务端配额 `left_inorc_fert_times`（见
+/// [`get_normal_fertilizer_targets_from_lands`]），此函数保留作观测用途。
 #[must_use]
 pub fn has_used_normal_fertilizer(land: &LandInfo) -> bool {
     let Some(plant) = land.plant.as_ref() else {
@@ -624,12 +627,17 @@ pub fn is_immature_crop(land: &LandInfo) -> bool {
     !matches!(current_phase(land), PlantPhase::Dead | PlantPhase::Ripe)
 }
 
-/// 还能施一次普通化肥的地：未成熟且本季尚未用过 1011。
+/// 还能施普通化肥的地（1:1 对齐 bot `getNormalFertilizerTargetsFromLands`，
+/// 2026-09-17 a68b187 语义修正：`left_inorc_fert_times` 是「本季普通肥剩余次数」，
+/// 只有它 >0 的地才能施普通肥；bot `canApplyNormalFertilizer` 把字段缺失按 0 处理
+/// ——prost 普通字段缺省同为 0，判定等价，无需 presence）。
 #[must_use]
 pub fn get_normal_fertilizer_targets_from_lands(lands: &[LandInfo]) -> Vec<i64> {
     lands
         .iter()
-        .filter(|l| is_immature_crop(l) && !has_used_normal_fertilizer(l))
+        .filter(|l| {
+            is_immature_crop(l) && l.plant.as_ref().is_some_and(|p| p.left_inorc_fert_times > 0)
+        })
         .map(|l| l.id)
         .collect()
 }
@@ -657,11 +665,10 @@ pub fn get_organic_fertilizer_targets_from_lands(lands: &[LandInfo]) -> Vec<i64>
         if matches!(current_phase(land), PlantPhase::Dead) {
             continue;
         }
-        // 注意：不按 left_inorc_fert_times 过滤。bot 用 Object.hasOwn 区分
-        // 「服务端未下发=可施」，prost 普通 int64 看不到 presence；官方向量
-        // （bot core/tests/farm-fertilize-proto.test.js）证实服务端额度>0 时
-        // 下发该字段、=0 时省略，从不显式发 0，故 bot 的 hasOwn≤0 分支在真实
-        // 报文上不可达——「不过滤」与 bot 实际行为 wire 等价。
+        // 注意：不按 left_inorc_fert_times 过滤。a68b187 修正了它的语义——这是
+        // 「本季普通肥剩余次数」，只作用于普通肥目标（见
+        // [`get_normal_fertilizer_targets_from_lands`]），有机肥目标已彻底移除该过滤；
+        // 本函数的「不过滤」与 bot 现行为一致。
         targets.push(land.id);
     }
     targets
@@ -720,7 +727,7 @@ pub fn get_fast_mature_lands(lands: &[LandInfo], threshold_secs: i64) -> Vec<i64
             continue;
         }
         // 同 get_organic_fertilizer_targets_from_lands：不按 left_inorc_fert_times
-        // 过滤（服务端从不显式发 0，不过滤与 bot hasOwn 行为 wire 等价）
+        // 过滤（该字段只约束普通肥目标，与有机肥无关）
         out.push(land.id);
     }
     out
@@ -1029,6 +1036,49 @@ pub fn select_non_overlapping_layouts(
     }
     visit(0, layouts, &mut Vec::new(), &mut HashSet::new(), max_count, &mut best);
     best
+}
+
+/// 为暂时凑不齐的多格作物选择一组未来布局，并只预留其中当前已经空出的土地。
+///
+/// 1:1 对齐 bot `layout-reservation.ts:selectFutureLayoutReservation`（96fdb39）：
+/// 始终选择锚点最小且已经部分空出的布局，使后续轮次只会向更早布局收敛，避免来回切换。
+/// 单格作物 / 当前已能凑齐布局 / 没有空地时返回 `None`。
+///
+/// 返回 `(选中的未来布局, 其中当前已空出需预留的地块)`。
+#[must_use]
+pub fn select_future_layout_reservation(
+    current_empty_land_ids: &[i64],
+    all_eligible_land_ids: &[i64],
+    plant_size: usize,
+) -> Option<(PlantingLayout, Vec<i64>)> {
+    let size = plant_size.max(1);
+    if size <= 1 {
+        return None;
+    }
+    let empty_ids: HashSet<i64> =
+        current_empty_land_ids.iter().copied().filter(|id| *id > 0).collect();
+    if empty_ids.is_empty() {
+        return None;
+    }
+    let empty_vec: Vec<i64> = empty_ids.iter().copied().collect();
+    // 当前空地已能凑出布局，无需预留
+    if !build_planting_layouts(&empty_vec, size).is_empty() {
+        return None;
+    }
+    let mut candidates: Vec<(PlantingLayout, Vec<i64>)> =
+        build_planting_layouts(all_eligible_land_ids, size)
+            .into_iter()
+            .map(|layout| {
+                let reserved: Vec<i64> =
+                    layout.land_ids.iter().copied().filter(|id| empty_ids.contains(id)).collect();
+                (layout, reserved)
+            })
+            .filter(|(layout, reserved)| {
+                !reserved.is_empty() && reserved.len() < layout.land_ids.len()
+            })
+            .collect();
+    candidates.sort_by_key(|(layout, _)| layout.anchor_land_id);
+    candidates.into_iter().next()
 }
 
 /// 解析某锚点实际占用的土地
@@ -1804,8 +1854,42 @@ mod tests {
     }
 
     #[test]
+    fn normal_targets_require_positive_inorc_quota() {
+        // a68b187 语义修正：left_inorc_fert_times 是「本季普通肥剩余次数」，
+        // 普通肥目标必须配额 >0（bot canApplyNormalFertilizer 把字段缺失按 0 处理，
+        // prost 缺省同为 0，判定等价）。
+        let mut has_quota = make_land(1, true, Some(PlantPhase::Growing));
+        if let Some(p) = has_quota.plant.as_mut() {
+            p.left_inorc_fert_times = 2;
+        }
+        // 缺省（=0，等价于字段缺失）→ 配额耗尽，不再是普通肥目标
+        let exhausted = make_land(2, true, Some(PlantPhase::Growing));
+        // 枯死 / 成熟 / 未解锁即使有配额也不施
+        let mut dead = make_land(3, true, Some(PlantPhase::Dead));
+        if let Some(p) = dead.plant.as_mut() {
+            p.left_inorc_fert_times = 5;
+        }
+        let mut ripe = make_land(4, true, Some(PlantPhase::Ripe));
+        if let Some(p) = ripe.plant.as_mut() {
+            p.left_inorc_fert_times = 5;
+        }
+        let mut locked = make_land(5, false, Some(PlantPhase::Growing));
+        if let Some(p) = locked.plant.as_mut() {
+            p.left_inorc_fert_times = 5;
+        }
+        let targets =
+            get_normal_fertilizer_targets_from_lands(&[has_quota, exhausted, dead, ripe, locked]);
+        assert_eq!(targets, vec![1]);
+    }
+
+    #[test]
     fn normal_targets_skip_used_ripe_dead() {
-        let growing = make_land(1, true, Some(PlantPhase::Growing));
+        // 配额 >0 的成长地是唯一目标；ferts_used 已用过 1011 的地配额必然耗尽（0）；
+        // 枯死 / 成熟 / 空地一律排除
+        let mut growing = make_land(1, true, Some(PlantPhase::Growing));
+        if let Some(p) = growing.plant.as_mut() {
+            p.left_inorc_fert_times = 1;
+        }
         let mut used = make_land(2, true, Some(PlantPhase::Growing));
         if let Some(p) = used.plant.as_mut() {
             if let Some(phase) = p.phases.first_mut() {
@@ -1829,6 +1913,24 @@ mod tests {
             make_land(5, true, None),
         ];
         assert_eq!(get_immature_crop_targets_from_lands(&lands), vec![1, 2]);
+    }
+
+    #[test]
+    fn future_layout_reservation_picks_min_anchor_partial_empty() {
+        // 真实网格：5(0,4) 6(1,4) / 1(0,5) 2(1,5) 恰好组成 2x2，锚点 5。
+        // 当前空地只剩 {1, 6}（该布局的一部分但凑不齐）→ 选锚点 5 的未来布局，
+        // 只预留其中已空出的 [6, 1]（按布局足迹顺序）。
+        let empty = vec![1, 6];
+        let all = vec![1, 2, 5, 6];
+        let (layout, reserved) =
+            select_future_layout_reservation(&empty, &all, 2).expect("应有候选布局");
+        assert_eq!(layout.anchor_land_id, 5);
+        assert_eq!(layout.land_ids, vec![5, 6, 1, 2]);
+        assert_eq!(reserved, vec![6, 1]);
+        // 空地本身已能凑齐 2x2 → 无需预留
+        assert!(select_future_layout_reservation(&vec![5, 6, 1, 2], &all, 2).is_none());
+        // 单格不预留
+        assert!(select_future_layout_reservation(&empty, &all, 1).is_none());
     }
 
     // ===== 多季作物阶段识别（对齐 bot farm-multi-season.test.js，PR #68）=====

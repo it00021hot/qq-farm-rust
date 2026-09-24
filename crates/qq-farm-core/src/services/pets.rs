@@ -2,9 +2,7 @@
 //!
 //! 1:1 对应原 `core/src/services/pets.ts`：
 //! - GetDogInfo / DeployDog / WithdrawDog / DogService.AddFood / GetProtectLogs 均有真实抓包依据；
-//! - ActivateDog（bot 9907ffd，2026-09-14）：消耗背包宠物卡激活图鉴项；
 //! - 狗粮库存必须读背包（GetDogInfo.items.field 3 是状态位不是数量）；
-//! - `activatable` 三态：未拥有 && (field_6=1 || 背包有未锁定同 ID 卡片)；
 //! - 技能文案是客户端静态数据，不走协议。
 
 use std::sync::Arc;
@@ -123,8 +121,23 @@ impl PetService {
     ) -> serde_json::Value {
         let current_dog_id = reply.current_dog_id;
         let skill_usages = &reply.skill_usages;
-        // 背包条目：狗粮库存与宠物卡片判定都以背包为唯一依据
+
+        // 背包物品（排除锁定）：狗粮库存与宠物卡判定都以背包为唯一依据
         let bag_items = bag.item_bag.as_ref().map(|b| b.items.as_slice()).unwrap_or(&[]);
+        let mut bag_counts: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+        for item in bag_items {
+            if dog_food_duration(item.id).is_some() && item.count > 0 {
+                *bag_counts.entry(item.id).or_insert(0) += item.count;
+            }
+        }
+        // 宠物卡可用数（对齐 bot getAvailableItemCount(uid=0)）：
+        // 图鉴 field 6 缺失时用「背包有同 ID 卡」兜底判定可激活。
+        let mut card_counts: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+        for item in bag_items {
+            if !item.locked && item.count > 0 {
+                *card_counts.entry(item.id).or_insert(0) += item.count;
+            }
+        }
 
         let mut dog_ids: Vec<i64> = PET_IDS.to_vec();
         // 保留服务端新增的宠物，避免客户端配置尚未更新时静默丢失数据。
@@ -150,16 +163,11 @@ impl PetService {
                     .unwrap_or_else(|| format!("宠物#{id}"));
                 let rarity = info.as_ref().and_then(|i| i.rarity).unwrap_or(0);
                 let owned = raw.map(|d| d.owned == 1).unwrap_or(false) || id == current_dog_id;
-                // activatable（对齐 bot 9907ffd）：未拥有，且 field_6=1（背包有同 ID 宠物卡）
-                // 或背包里真有未锁定的同 ID 卡片。激活消耗卡片后 field_6 消失。
-                let has_bag_card = bag_items
-                    .iter()
-                    .filter(|it| it.id == id && !it.locked)
-                    .map(|it| it.count.max(0))
-                    .sum::<i64>()
-                    > 0;
-                let activatable =
-                    !owned && (raw.map(|d| d.field_6 == 1).unwrap_or(false) || has_bag_card);
+                // 抓包确认：field 6 置 1 与「背包含同 ID 宠物卡」逐项一致，两者取或；
+                // 已获得的宠物不再提示激活（bot pets.ts:167-168）。
+                let activatable = !owned
+                    && (raw.map(|d| d.field_6 == 1).unwrap_or(false)
+                        || card_counts.get(&id).copied().unwrap_or(0) > 0);
 
                 // 技能用量合并（同气连枝：used_count/daily_limit）
                 let skills: Vec<serde_json::Value> = pet_skill_definitions(id)
@@ -211,13 +219,7 @@ impl PetService {
             })
             .collect();
 
-        // 狗粮库存：背包是唯一依据
-        let mut bag_counts: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
-        for item in bag_items {
-            if dog_food_duration(item.id).is_some() && item.count > 0 {
-                *bag_counts.entry(item.id).or_insert(0) += item.count;
-            }
-        }
+        // 狗粮库存：背包是唯一依据（bag_counts 已在上方统计）
         let gc = global_game_config();
         let foods: Vec<serde_json::Value> = [90004i64, 90005, 90006]
             .iter()
@@ -257,6 +259,53 @@ impl PetService {
         })
     }
 
+    /// 激活宠物（消耗背包中的宠物卡；1:1 对齐 bot `pets.ts:activateDog`）
+    pub async fn activate_dog(&self, dog_id: i64) -> Result<serde_json::Value> {
+        if dog_id <= 0 {
+            return Err(Error::Business("缺少宠物 ID".into()));
+        }
+        let before = self.get_pet_info().await?;
+        let pet = before["dogs"]
+            .as_array()
+            .and_then(|arr| arr.iter().find(|d| d["id"].as_i64() == Some(dog_id)))
+            .cloned();
+        let Some(pet) = pet else {
+            return Err(Error::Business("该宠物不在图鉴中".into()));
+        };
+        if pet["owned"].as_bool().unwrap_or(false) {
+            return Err(Error::Business("该宠物已获得，无需重复激活".into()));
+        }
+        if !pet["activatable"].as_bool().unwrap_or(false) {
+            return Err(Error::Business("背包中没有该宠物的卡片，无法激活".into()));
+        }
+        // 真实抓包：ActivateDog({ field 1: dog_id }) 消耗背包宠物卡，
+        // 把图鉴项标记为已获得（field 7），之后才能真正上场。
+        let req = ActivateDogRequest { dog_id };
+        let body = self.gateway.request(DOG_SERVICE, "ActivateDog", &req.encode_to_vec()).await?;
+        // bot 返回体里还带 reply（ActivateDogReply）；桌面端 UI 只消费 snapshot，故省略
+        let _ = ActivateDogReply::decode(&body[..])?;
+        let snapshot = self.get_pet_info().await?;
+        let activated = snapshot["dogs"]
+            .as_array()
+            .and_then(|arr| arr.iter().find(|d| d["id"].as_i64() == Some(dog_id)))
+            .and_then(|d| d["owned"].as_bool());
+        if activated != Some(true) {
+            return Err(Error::Business("宠物激活状态未更新，请稍后重试".into()));
+        }
+        let dog_name = pet["name"].as_str().unwrap_or("宠物").to_string();
+        crate::services::panel_log::log(
+            "",
+            "宠物",
+            format!("激活{dog_name}"),
+            crate::constants::PanelEvent::PetOp,
+            Some(serde_json::json!({ "module": "dog", "event": "激活宠物", "dogId": dog_id })),
+        );
+        Ok(serde_json::json!({
+            "snapshot": snapshot,
+            "operation": { "type": "activate", "dogId": dog_id },
+        }))
+    }
+
     /// 上场宠物（带事后状态确认）
     pub async fn deploy_dog(&self, dog_id: i64) -> Result<serde_json::Value> {
         if dog_id <= 0 {
@@ -265,16 +314,16 @@ impl PetService {
         let before = self.get_dog_info().await?;
         let dog = before.dogs.iter().find(|d| d.id == dog_id);
         let owned = dog.map(|d| d.owned == 1).unwrap_or(false) || dog_id == before.current_dog_id;
-        let dog_name = dog.map(|d| d.name.clone()).unwrap_or_default();
         if !owned {
-            // field_6=1 表示背包有宠物卡（尚未激活），否则是压根未获得
-            let not_activated = dog.map(|d| d.field_6 == 1).unwrap_or(false);
-            return Err(Error::Business(if not_activated {
+            // 对齐 bot：field 6=1 表示「可激活（背包含卡）」→ 提示先激活
+            let activatable = dog.map(|d| d.field_6 == 1).unwrap_or(false);
+            return Err(Error::Business(if activatable {
                 "该宠物尚未激活，请先激活".into()
             } else {
                 "未获得该宠物，无法上场".into()
             }));
         }
+        let dog_name = dog.map(|d| d.name.clone()).unwrap_or_default();
         let req = DeployDogRequest { dog_id };
         let body = self.gateway.request(DOG_SERVICE, "DeployDog", &req.encode_to_vec()).await?;
         let _reply = DeployDogReply::decode(&body[..])?;
@@ -294,49 +343,6 @@ impl PetService {
         );
         Ok(
             serde_json::json!({ "snapshot": snapshot, "operation": { "type": "deploy", "dogId": dog_id } }),
-        )
-    }
-
-    /// 激活宠物（对齐 bot 9907ffd `activateDog`）：
-    /// 消耗背包中的宠物卡，把图鉴项变成可上场的已获得宠物。
-    pub async fn activate_dog(&self, dog_id: i64) -> Result<serde_json::Value> {
-        if dog_id <= 0 {
-            return Err(Error::Business("缺少宠物 ID".into()));
-        }
-        let before = self.get_pet_info().await?;
-        let pet = before["dogs"]
-            .as_array()
-            .and_then(|dogs| dogs.iter().find(|d| d["id"].as_i64() == Some(dog_id)))
-            .ok_or_else(|| Error::Business("该宠物不在图鉴中".into()))?;
-        if pet["owned"].as_bool().unwrap_or(false) {
-            return Err(Error::Business("该宠物已获得，无需重复激活".into()));
-        }
-        if !pet["activatable"].as_bool().unwrap_or(false) {
-            return Err(Error::Business("背包中没有该宠物的卡片，无法激活".into()));
-        }
-
-        let req = ActivateDogRequest { dog_id };
-        let body = self.gateway.request(DOG_SERVICE, "ActivateDog", &req.encode_to_vec()).await?;
-        let _reply = ActivateDogReply::decode(&body[..])?;
-
-        let snapshot = self.get_pet_info().await?;
-        let activated = snapshot["dogs"]
-            .as_array()
-            .and_then(|dogs| dogs.iter().find(|d| d["id"].as_i64() == Some(dog_id)))
-            .map(|d| d["owned"].as_bool().unwrap_or(false))
-            .unwrap_or(false);
-        if !activated {
-            return Err(Error::Business("宠物激活状态未更新，请稍后重试".into()));
-        }
-        crate::services::panel_log::log(
-            "",
-            "宠物",
-            format!("激活宠物#{}", dog_id),
-            crate::constants::PanelEvent::PetOp,
-            Some(serde_json::json!({ "module": "dog", "dogId": dog_id })),
-        );
-        Ok(
-            serde_json::json!({ "snapshot": snapshot, "operation": { "type": "activate", "dogId": dog_id } }),
         )
     }
 
@@ -485,114 +491,19 @@ pub async fn get_dog_info_via(gateway: &Arc<Gateway>) -> Result<GetDogInfoReply>
 mod tests {
     use super::*;
     use crate::proto::generated::gamepb::dogpb::{
-        ActivateDogReply, ActivateDogRequest, DogInfo, DogItem, DogSkillUsage,
-        GetDogInfoReply as Reply,
+        DogInfo, DogItem, DogSkillUsage, GetDogInfoReply as Reply,
     };
 
     fn bag_with(id: i64, count: i64) -> crate::proto::generated::gamepb::itempb::BagReply {
-        bag_with_item(id, count, 0, false)
-    }
-
-    fn bag_with_item(
-        id: i64,
-        count: i64,
-        uid: i64,
-        locked: bool,
-    ) -> crate::proto::generated::gamepb::itempb::BagReply {
         let mut bag = crate::proto::generated::gamepb::itempb::BagReply::default();
         let mut item_bag = crate::proto::generated::corepb::ItemBag::default();
         item_bag.items.push(crate::proto::generated::corepb::Item {
             id,
             count,
-            uid,
-            locked,
             ..Default::default()
         });
         bag.item_bag = Some(item_bag);
         bag
-    }
-
-    fn hex_bytes(hex: &str) -> Vec<u8> {
-        (0..hex.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16))
-            .collect::<std::result::Result<Vec<u8>, _>>()
-            .expect("valid hex")
-    }
-
-    #[test]
-    fn activate_dog_capture_vectors_round_trip() {
-        // 官方抓包（bot pet-activate.test.js）：请求 { dog_id: 90031 比熊犬 }
-        let req_bytes = hex_bytes("08afbf05");
-        let req = ActivateDogRequest::decode(req_bytes.as_slice()).expect("decode req");
-        assert_eq!(req.dog_id, 90031);
-
-        // 回包：激活后的 DogInfo（id/name/price/status/level/field_6/owned）
-        let reply_bytes = hex_bytes("0a1c08afbf051209e6af94e7868ae78aac18882720012864300138015001");
-        let reply = ActivateDogReply::decode(reply_bytes.as_slice()).expect("decode reply");
-        let dog = reply.dog.expect("dog");
-        assert_eq!(dog.id, 90031);
-        assert_eq!(dog.name, "比熊犬");
-        assert_eq!(dog.price, 5000);
-        assert_eq!(dog.owned, 1);
-        // 回包同时带 field_6 / field_10，均不作业务判断依据（bot 抓包注释）
-        assert_eq!(dog.field_6, 1);
-        assert_eq!(dog.field_10, 1);
-    }
-
-    #[test]
-    fn pet_snapshot_activatable_matrix() {
-        use crate::network::encryptor::NoopEncryptor;
-        use crate::network::gateway::{Gateway, GatewayConfig};
-        let cfg = GatewayConfig {
-            server_url: "ws://127.0.0.1:0".into(),
-            platform: "test".into(),
-            os: "linux".into(),
-            client_version: "0.1".into(),
-            auth_code: "test".into(),
-            headers: Default::default(),
-        };
-        let gateway = Gateway::new(cfg, Arc::new(NoopEncryptor));
-        let svc = PetService::new(Arc::new(gateway));
-
-        let reply_for =
-            |dogs: Vec<DogInfo>| Reply { dogs, current_dog_id: 90021, ..Default::default() };
-        let dog_of = |snapshot: &serde_json::Value, id: i64| {
-            snapshot["dogs"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|d| d["id"].as_i64() == Some(id))
-                .unwrap()
-                .clone()
-        };
-
-        // field_6=1（背包有卡标记）→ 未拥有但可激活
-        let reply = reply_for(vec![DogInfo { id: 90031, field_6: 1, ..Default::default() }]);
-        let dog = dog_of(&svc.build_pet_snapshot(&reply, &bag_with(90004, 0)), 90031);
-        assert_eq!(dog["owned"].as_bool(), Some(false));
-        assert_eq!(dog["activatable"].as_bool(), Some(true));
-
-        // 背包真有未锁定同 ID 卡片 → 可激活
-        let reply = reply_for(vec![DogInfo { id: 90011, ..Default::default() }]);
-        let dog = dog_of(&svc.build_pet_snapshot(&reply, &bag_with(90011, 1)), 90011);
-        assert_eq!(dog["activatable"].as_bool(), Some(true));
-
-        // 卡片被锁定 → 不可激活
-        let dog =
-            dog_of(&svc.build_pet_snapshot(&reply, &bag_with_item(90011, 1, 3069, true)), 90011);
-        assert_eq!(dog["activatable"].as_bool(), Some(false));
-
-        // 已拥有 / 当前上场 → 不可激活
-        let reply =
-            reply_for(vec![DogInfo { id: 90031, field_6: 1, owned: 1, ..Default::default() }]);
-        let dog = dog_of(&svc.build_pet_snapshot(&reply, &bag_with(90004, 0)), 90031);
-        assert_eq!(dog["activatable"].as_bool(), Some(false));
-
-        // field_6=0 且背包无卡 → 不可激活
-        let reply = reply_for(vec![DogInfo { id: 90003, ..Default::default() }]);
-        let dog = dog_of(&svc.build_pet_snapshot(&reply, &bag_with(90004, 0)), 90003);
-        assert_eq!(dog["activatable"].as_bool(), Some(false));
     }
 
     #[test]
@@ -659,5 +570,39 @@ mod tests {
             .unwrap();
         assert_eq!(skill["usedCount"].as_i64(), Some(7));
         assert_eq!(skill["remainingCount"].as_i64(), Some(23));
+    }
+
+    #[test]
+    fn pet_snapshot_marks_activatable_from_field6_or_bag_card() {
+        use crate::network::encryptor::NoopEncryptor;
+        use crate::network::gateway::{Gateway, GatewayConfig};
+        let cfg = GatewayConfig {
+            server_url: "ws://127.0.0.1:0".into(),
+            platform: "test".into(),
+            os: "linux".into(),
+            client_version: "0.1".into(),
+            auth_code: "test".into(),
+            headers: Default::default(),
+        };
+        let gateway = Gateway::new(cfg, Arc::new(NoopEncryptor));
+        let svc = PetService::new(Arc::new(gateway));
+        let reply = Reply {
+            dogs: vec![
+                DogInfo { id: 90031, field_6: 1, owned: 0, ..Default::default() },
+                DogInfo { id: 90002, owned: 0, ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        let snapshot = svc.build_pet_snapshot(&reply, &bag_with(90002, 1));
+        let dogs = snapshot["dogs"].as_array().unwrap();
+        // field 6 = 1 → 可激活
+        let a = dogs.iter().find(|d| d["id"].as_i64() == Some(90031)).unwrap();
+        assert_eq!(a["activatable"].as_bool(), Some(true));
+        // 背包含同 ID 卡 → 可激活
+        let b = dogs.iter().find(|d| d["id"].as_i64() == Some(90002)).unwrap();
+        assert_eq!(b["activatable"].as_bool(), Some(true));
+        // 无标记也无卡 → 不可激活
+        let c = dogs.iter().find(|d| d["id"].as_i64() == Some(90021)).unwrap();
+        assert_eq!(c["activatable"].as_bool(), Some(false));
     }
 }

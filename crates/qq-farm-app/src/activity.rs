@@ -204,3 +204,25 @@ pub async fn pet_diary_friend(ctx: &AppContext, account_id: &str, gid: &str) -> 
     let loop_ = require_worker_loop(ctx, account_id)?;
     loop_.activity_center().get_pet_diary_friend(gid).await.map_err(AppError::from_core)
 }
+
+/// 秋日活动状态（key: `wish` / `happy`）。
+pub async fn autumn(ctx: &AppContext, account_id: &str, key: &str) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    loop_.activity_center().get_autumn_activity(key).await.map_err(AppError::from_core)
+}
+
+/// 秋日活动操作（action: draw / claim / daily / milestones / share / logs）。
+pub async fn operate_autumn(
+    ctx: &AppContext,
+    account_id: &str,
+    key: &str,
+    action: &str,
+    params: &Value,
+) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    loop_
+        .activity_center()
+        .operate_autumn_activity(key, action, params)
+        .await
+        .map_err(AppError::from_core)
+}

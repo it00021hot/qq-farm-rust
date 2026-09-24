@@ -1,6 +1,6 @@
 //! 商业层 — 商城 + 神秘商店的业务编排与 DTO 转换。
 //!
-//! 1:1 翻译原 `core/src/services/commerce.ts`（213 行）。
+//! 1:1 翻译原 `core/src/services/commerce.ts`（274 行，2026-09-24 SVIP 商城版）。
 //!
 //! ## 职责
 //!
@@ -52,6 +52,9 @@ pub struct ItemDto {
 }
 
 /// 购买限制 DTO
+///
+/// bot `limitDto`：`limit_type === 0` 视为不限购，整体返回 `null`（见 [`limit_dto`]）；
+/// 存在时 `remaining` 恒为数字（`max - bought` 截断到 0）。
 #[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PurchaseLimitDto {
@@ -59,8 +62,15 @@ pub struct PurchaseLimitDto {
     pub kind: i64,
     pub bought: i64,
     pub max: i64,
-    /// 剩余可购买次数；`None` 表示无限
-    pub remaining: Option<i64>,
+    pub remaining: i64,
+}
+
+/// SVIP 会员身份（bot `getMallCatalog` 注入的 membership）
+#[derive(Debug, Clone, Serialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MembershipDto {
+    pub is_svip: bool,
+    pub remaining_days: i64,
 }
 
 /// 商城商品 DTO
@@ -76,6 +86,14 @@ pub struct MallGoodsDto {
     pub is_free: bool,
     pub limit: Option<PurchaseLimitDto>,
     pub is_limited: bool,
+    /// 1=common / 2=pet / 3=adornment（协议 field 12，与可用性无关）
+    pub product_type: i64,
+    /// 购买状态机：owned / sold_out / ad_required / share_required / unavailable /
+    /// available / svip_required（bot `mallAvailability` + 非会员覆盖）
+    pub purchase_status: String,
+    pub unavailable_reason: String,
+    /// 促销生效时的原价（划线价）；无促销为 `None`
+    pub original_price: Option<i64>,
     pub discount_text: String,
     pub is_discounted: bool,
     pub discount_end_time: i64,
@@ -89,6 +107,8 @@ pub struct MallGoodsDto {
 pub struct MallCatalogDto {
     pub slot_type: i32,
     pub sub_slot_type: i32,
+    /// 仅 SVIP 分页（slot 4）注入
+    pub membership: Option<MembershipDto>,
     pub server_time: i64,
     pub refresh_countdown: i64,
     pub currencies: Vec<ItemDto>,
@@ -108,7 +128,9 @@ pub struct PurchaseResultDto {
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct PurchaseResponseDto {
     pub purchase: PurchaseResultDto,
-    pub catalog: MallCatalogDto,
+    /// 目录回读失败时为 `None`，此时 `refresh_required = true`
+    pub catalog: Option<MallCatalogDto>,
+    pub refresh_required: bool,
 }
 
 /// 神秘商店 NPC DTO（UI 读 camelCase：originalPrice / unitPrice 等）
@@ -189,8 +211,12 @@ pub struct FertilizerBothOptions {
 pub enum CommerceErrorCode {
     InvalidGoodsId,
     InvalidPurchaseCount,
+    InvalidMallSlot,
     GoodsNotFound,
+    GoodsSoldOut,
     GoodsUnavailable,
+    MallPriceChanged,
+    MallBalanceUnavailable,
     PurchaseLimitExceeded,
     InsufficientBalance,
     InvalidMysteryNpcId,
@@ -205,8 +231,12 @@ impl CommerceErrorCode {
         match self {
             Self::InvalidGoodsId => "INVALID_GOODS_ID",
             Self::InvalidPurchaseCount => "INVALID_PURCHASE_COUNT",
+            Self::InvalidMallSlot => "INVALID_MALL_SLOT",
             Self::GoodsNotFound => "GOODS_NOT_FOUND",
+            Self::GoodsSoldOut => "GOODS_SOLD_OUT",
             Self::GoodsUnavailable => "GOODS_UNAVAILABLE",
+            Self::MallPriceChanged => "MALL_PRICE_CHANGED",
+            Self::MallBalanceUnavailable => "MALL_BALANCE_UNAVAILABLE",
             Self::PurchaseLimitExceeded => "PURCHASE_LIMIT_EXCEEDED",
             Self::InsufficientBalance => "INSUFFICIENT_BALANCE",
             Self::InvalidMysteryNpcId => "INVALID_MYSTERY_NPC_ID",
@@ -247,6 +277,8 @@ pub struct CommerceService {
     mall: Arc<MallService>,
     mystery_shop: Arc<MysteryShopService>,
     warehouse: Arc<WarehouseService>,
+    /// SVIP 分页（slot 4）目录需要先刷新会员信息（bot 里懒加载 `require('./qqvip')`）
+    qqvip: Arc<crate::services::qqvip::QQVipService>,
 
     /// 购买串行化队列
     purchase_lock: Arc<AsyncMutex<()>>,
@@ -258,13 +290,18 @@ impl CommerceService {
         mall: Arc<MallService>,
         mystery_shop: Arc<MysteryShopService>,
         warehouse: Arc<WarehouseService>,
+        qqvip: Arc<crate::services::qqvip::QQVipService>,
     ) -> Self {
-        Self { mall, mystery_shop, warehouse, purchase_lock: Arc::new(AsyncMutex::new(())) }
+        Self { mall, mystery_shop, warehouse, qqvip, purchase_lock: Arc::new(AsyncMutex::new(())) }
     }
 
     // ----- 商城 -----
 
     /// 获取商城目录（含货币余额 + 商品 DTO）
+    ///
+    /// 对齐 bot `getMallCatalog`：slot 4（SVIP）先 `refreshVipInfo` +
+    /// `getQQVipRewardsStatus` 注入 `membership`，非会员可浏览但禁购
+    /// （`purchaseStatus = 'svip_required'`）。
     ///
     /// # Errors
     /// - 拉取商城列表 / 背包失败
@@ -275,6 +312,34 @@ impl CommerceService {
     ) -> Result<MallCatalogDto> {
         let slot_type = bounded_integer(slot_type_input, 1, 1, 100);
         let sub_slot_type = bounded_integer(sub_slot_type_input, 0, 0, 100);
+        // bot：仅 SVIP 分页注入会员身份；subSlotType 只在显式为 1 时作为 is_manual_open。
+        // 实机确认：非 QQ 会员调 RefreshVipInfo / GetQQVipRewardsStatus 会回
+        // code=1021001 —— 此处按「非会员」降级（目录照常返回，商品全部标
+        // svip_required 禁购），不整体报错。
+        let membership = if slot_type == 4 {
+            let not_vip = |e: &crate::error::Error| {
+                crate::services::qqvip::is_not_qq_vip_error(&e.to_string())
+            };
+            if let Err(e) = self.qqvip.refresh_vip_info().await {
+                if !not_vip(&e) {
+                    return Err(e);
+                }
+                Some(MembershipDto { is_svip: false, remaining_days: 0 })
+            } else {
+                match self.qqvip.get_qq_vip_rewards_status().await {
+                    Ok(status) => Some(MembershipDto {
+                        is_svip: status.is_qq_vip,
+                        remaining_days: status.remaining_days.max(0),
+                    }),
+                    Err(e) if not_vip(&e) => {
+                        Some(MembershipDto { is_svip: false, remaining_days: 0 })
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+        } else {
+            None
+        };
         let reply = self.mall.get_mall_list_by_slot_type(slot_type, sub_slot_type).await?;
         let raw_goods: Vec<MallGoods> = reply.goods_list;
         let currency_ids: Vec<i64> = raw_goods
@@ -300,12 +365,26 @@ impl CommerceService {
                 dto
             })
             .collect();
-        let goods: Vec<MallGoodsDto> =
-            raw_goods.iter().map(|g| mall_goods_dto(g, &balances)).collect();
+        let now_secs = get_server_time_secs();
+        let non_svip = membership.as_ref().is_some_and(|m| !m.is_svip);
+        let goods: Vec<MallGoodsDto> = raw_goods
+            .iter()
+            .map(|g| {
+                let mut product = mall_goods_dto(g, &balances, slot_type, now_secs);
+                if non_svip {
+                    product.available = false;
+                    product.purchasable = false;
+                    product.purchase_status = "svip_required".to_string();
+                    product.unavailable_reason = "需要 SVIP 会员身份".to_string();
+                }
+                product
+            })
+            .collect();
         Ok(MallCatalogDto {
             slot_type,
             sub_slot_type,
-            server_time: get_server_time_secs() * 1000,
+            membership,
+            server_time: now_secs * 1000,
             refresh_countdown: reply.refresh_countdown,
             currencies,
             goods,
@@ -314,13 +393,20 @@ impl CommerceService {
 
     /// 购买商城商品（含前置校验）
     ///
+    /// 1:1 对齐 bot `purchaseMallProduct`：仅支持 slot 1 / 4；sold_out 与
+    /// 不可购买分开报错；`expected_price` 不符报 `MALL_PRICE_CHANGED`；
+    /// 余额未确认报 `MALL_BALANCE_UNAVAILABLE`；目录回读失败降级 `refresh_required`。
+    ///
     /// # Errors
-    /// - [`CommerceError`]：参数非法 / 商品不存在 / 库存不足 / 余额不足
+    /// - [`CommerceError`]：参数非法 / 商品不存在 / 售罄 / 不可购买 / 价格变化 /
+    ///   余额未确认 / 超限购 / 余额不足
     /// - 底层 RPC 错误
     pub async fn purchase_mall_product(
         &self,
         goods_id_input: &str,
         count_input: &str,
+        slot_type_input: Option<i32>,
+        expected_price: Option<ExpectedPrice>,
     ) -> Result<PurchaseResponseDto> {
         let goods_id =
             positive_integer(goods_id_input, CommerceErrorCode::InvalidGoodsId, "goodsId")?;
@@ -336,14 +422,29 @@ impl CommerceService {
 
         let _guard = self.purchase_lock.lock().await;
 
-        let before = self.get_mall_catalog(Some(1), Some(0)).await?;
-        let target =
-            before.goods.iter().find(|g| g.id == i64::from(goods_id)).ok_or_else(|| {
-                CommerceError {
-                    code: CommerceErrorCode::GoodsNotFound,
-                    message: "Mall goods not found".to_string(),
+        let slot_type = match slot_type_input.unwrap_or(1) {
+            1 | 4 => slot_type_input.unwrap_or(1),
+            _ => {
+                return Err(CommerceError {
+                    code: CommerceErrorCode::InvalidMallSlot,
+                    message: "不支持的商城分页".to_string(),
                 }
+                .into());
+            }
+        };
+        let before = self.get_mall_catalog(Some(slot_type), Some(0)).await?;
+        let target =
+            before.goods.iter().find(|g| g.id == goods_id).ok_or_else(|| CommerceError {
+                code: CommerceErrorCode::GoodsNotFound,
+                message: "Mall goods not found".to_string(),
             })?;
+        if target.purchase_status == "sold_out" {
+            return Err(CommerceError {
+                code: CommerceErrorCode::GoodsSoldOut,
+                message: target.unavailable_reason.clone(),
+            }
+            .into());
+        }
         if !target.purchasable {
             return Err(CommerceError {
                 code: CommerceErrorCode::GoodsUnavailable,
@@ -351,20 +452,36 @@ impl CommerceService {
             }
             .into());
         }
-        if let Some(limit) = &target.limit {
-            if let Some(remaining) = limit.remaining {
-                if remaining < i64::from(count) {
-                    return Err(CommerceError {
-                        code: CommerceErrorCode::PurchaseLimitExceeded,
-                        message: "Purchase count exceeds the remaining limit".to_string(),
-                    }
-                    .into());
+        if let Some(expected) = &expected_price {
+            if expected.id != target.price.id || expected.count != target.price.count {
+                return Err(CommerceError {
+                    code: CommerceErrorCode::MallPriceChanged,
+                    message: "商品价格已变化，请刷新商城后重新确认".to_string(),
                 }
+                .into());
+            }
+        }
+        if !target.is_free
+            && (target.price.id <= 0 || target.price.count <= 0 || target.price.balance.is_none())
+        {
+            return Err(CommerceError {
+                code: CommerceErrorCode::MallBalanceUnavailable,
+                message: "商品价格或余额未确认，请刷新后重试".to_string(),
+            }
+            .into());
+        }
+        if let Some(limit) = &target.limit {
+            if limit.remaining < count {
+                return Err(CommerceError {
+                    code: CommerceErrorCode::PurchaseLimitExceeded,
+                    message: "Purchase count exceeds the remaining limit".to_string(),
+                }
+                .into());
             }
         }
         if !target.is_free {
-            if let (Some(balance), price_count) = (target.price.balance, target.price.count) {
-                if balance < price_count * i64::from(count) {
+            if let Some(balance) = target.price.balance {
+                if balance < target.price.count * count {
                     return Err(CommerceError {
                         code: CommerceErrorCode::InsufficientBalance,
                         message: "Insufficient currency balance".to_string(),
@@ -374,15 +491,20 @@ impl CommerceService {
             }
         }
 
-        let reply = self.mall.purchase_mall_goods(goods_id, count).await?;
+        let reply = self.mall.purchase_mall_goods(goods_id, i64::from(count)).await?;
         let purchase = PurchaseResultDto {
-            goods_id: i64::from(reply.goods_id),
-            count: i64::from(reply.count),
+            goods_id: reply.goods_id,
+            count,
             rewards: reply.reward_items.iter().map(item_dto).collect(),
-            limit: reply.purchase_limit.as_ref().map(limit_dto),
+            limit: reply.purchase_limit.as_ref().and_then(limit_dto),
         };
-        let catalog = self.get_mall_catalog(Some(1), Some(0)).await?;
-        Ok(PurchaseResponseDto { purchase, catalog })
+        // bot：回读目录失败降级为 refreshRequired，不整体报错
+        let catalog = match self.get_mall_catalog(Some(slot_type), Some(0)).await {
+            Ok(c) => Some(c),
+            Err(_) => None,
+        };
+        let refresh_required = catalog.is_none();
+        Ok(PurchaseResponseDto { purchase, catalog, refresh_required })
     }
 
     // ----- 神秘商店 -----
@@ -469,7 +591,7 @@ impl CommerceService {
             code: CommerceErrorCode::MysteryOfferStale,
             message: "Mystery shop offer is no longer available".to_string(),
         })?;
-        if offer.id != i64::from(npc_id) {
+        if offer.id != npc_id {
             return Err(CommerceError {
                 code: CommerceErrorCode::MysteryOfferStale,
                 message: "Mystery shop offer is no longer available".to_string(),
@@ -493,10 +615,10 @@ impl CommerceService {
             }
         }
 
-        self.mystery_shop.buy(npc_id as i64).await?;
+        self.mystery_shop.buy(npc_id).await?;
         let shop = self.get_mystery_shop().await?;
         if shop.active
-            && shop.npc.as_ref().is_some_and(|n| n.id == i64::from(npc_id))
+            && shop.npc.as_ref().is_some_and(|n| n.id == npc_id)
             && shop.npc.as_ref().is_some_and(|n| n.stock >= offer.stock)
         {
             return Err(CommerceError {
@@ -703,40 +825,117 @@ pub fn item_dto_with_fallback(item: &CoreItem, fallback_name: &str) -> ItemDto {
     }
 }
 
-/// 把 `PurchaseLimit` 转换为 DTO
+/// 把 `PurchaseLimit` 转换为 DTO（1:1 对齐 bot `limitDto`）
+///
+/// `limit_type === 0` 视为不限购返回 `None`；存在时 `remaining` 恒为数字。
+#[must_use]
 pub fn limit_dto(
     limit: &crate::proto::generated::gamepb::mallpb::PurchaseLimit,
-) -> PurchaseLimitDto {
-    let bought = limit.bought_count as i64;
-    let max = limit.limit_count as i64;
-    let remaining = if max > 0 { Some((max - bought).max(0)) } else { None };
-    PurchaseLimitDto { kind: limit.limit_type as i64, bought, max, remaining }
+) -> Option<PurchaseLimitDto> {
+    if limit.limit_type == 0 {
+        return None;
+    }
+    let bought = limit.bought_count.max(0);
+    let max = limit.limit_count.max(0);
+    Some(PurchaseLimitDto {
+        kind: i64::from(limit.limit_type).max(0),
+        bought,
+        max,
+        remaining: (max - bought).max(0),
+    })
 }
 
-/// 把 `MallGoods` 转换为 DTO
-pub fn mall_goods_dto(goods: &MallGoods, balances: &HashMap<i64, i64>) -> MallGoodsDto {
-    let price = item_dto(goods.price.as_ref().unwrap_or(&CoreItem::default()));
-    let limit = goods.purchase_limit.as_ref().map(limit_dto);
-    let is_free = goods.is_free || price.id == 0 || price.count == 0;
-    let available = goods.is_available;
+/// 购买状态 + 原因（bot `mallAvailability`）
+#[must_use]
+pub fn mall_availability(
+    goods: &MallGoods,
+    limit: Option<&PurchaseLimitDto>,
+    slot_type: i32,
+) -> (&'static str, &'static str) {
+    if goods.is_owned {
+        return ("owned", "已拥有该商品");
+    }
+    if limit.is_some_and(|l| l.remaining == 0) {
+        return (
+            "sold_out",
+            if goods.is_free {
+                "奖励已领取"
+            } else {
+                "商品已售罄，已达到限购上限"
+            },
+        );
+    }
+    if goods.ad_only {
+        return ("ad_required", "请在游戏内观看广告领取");
+    }
+    if goods.share.as_ref().is_some_and(|s| s.share_only && s.share_status != 2) {
+        return ("share_required", "请在游戏内完成分享条件");
+    }
+    // 官方在正常可不限购的商品上省略 field 8；普通商城（slot 1）无 limit 时
+    // 按「限制存在与否」区分不限购（bot commerce.ts:88-93 注释）。
+    // SVIP 分页仍要求自身可用标记。
+    if !goods.is_available && !(slot_type == 1 && limit.is_none()) {
+        return ("unavailable", "商品当前不可购买");
+    }
+    ("available", "")
+}
+
+/// 购买确认用的期望价格（前端从目录带入，防服务端涨价）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+pub struct ExpectedPrice {
+    pub id: i64,
+    pub count: i64,
+}
+
+/// 把 `MallGoods` 转换为 DTO（1:1 对齐 bot `mallGoodsDto`）
+#[must_use]
+pub fn mall_goods_dto(
+    goods: &MallGoods,
+    balances: &HashMap<i64, i64>,
+    slot_type: i32,
+    now_secs: i64,
+) -> MallGoodsDto {
+    let mut price = item_dto(goods.price.as_ref().unwrap_or(&CoreItem::default()));
+    let original_price_count = price.count;
+    let discount_price = goods.discount_price.max(0);
+    let promotion_start = goods.promotion_start_time;
+    let promotion_end = goods.promotion_end_time;
+    // 促销窗口按服务器时间判定（bot commerce.ts:104）
+    let promotion_active =
+        discount_price > 0 && promotion_start <= now_secs && promotion_end > now_secs;
+    if promotion_active {
+        price.count = discount_price;
+    }
+    let limit = goods.purchase_limit.as_ref().and_then(limit_dto);
+    let is_free = goods.is_free && price.count == 0;
+    let (status, reason) = mall_availability(goods, limit.as_ref(), slot_type);
     let balance = if price.id > 0 { balances.get(&price.id).copied() } else { None };
-    let mut price_dto = price;
-    price_dto.balance = balance;
-    let purchasable = available && limit.as_ref().is_none_or(|l| l.remaining.is_none_or(|r| r > 0));
+    price.balance = balance;
     MallGoodsDto {
-        id: goods.goods_id as i64,
+        id: goods.goods_id,
         name: goods.name.clone(),
-        kind: goods.goods_type as i64,
+        kind: i64::from(goods.goods_type),
         rewards: goods.reward_items.iter().map(item_dto).collect(),
-        price: price_dto,
         is_free,
-        limit,
-        is_limited: goods.is_limited,
-        discount_text: goods.discount_text.clone(),
-        is_discounted: goods.is_discounted,
-        discount_end_time: goods.discount_end_time * 1000,
-        available,
-        purchasable,
+        limit: limit.clone(),
+        is_limited: limit.is_some(),
+        product_type: i64::from(goods.product_type),
+        purchase_status: status.to_string(),
+        unavailable_reason: reason.to_string(),
+        original_price: promotion_active.then_some(original_price_count),
+        // 促销未生效时不展示折扣文案（bot commerce.ts:125）
+        discount_text: if discount_price > 0 && !promotion_active {
+            String::new()
+        } else {
+            goods.discount_text.clone()
+        },
+        is_discounted: if discount_price > 0 { promotion_active } else { goods.is_discounted },
+        discount_end_time: if discount_price > 0 { promotion_end } else { goods.discount_end_time }
+            .max(0)
+            * 1000,
+        price,
+        available: status == "available",
+        purchasable: status == "available",
     }
 }
 
@@ -755,11 +954,14 @@ where
 }
 
 /// 把字符串解析为正整数，非法则返回业务错误
+///
+/// 对齐 bot `positiveInteger`：`/^[1-9]\d*$/` 且不超过 JS 安全整数（2^53-1）。
 pub fn positive_integer(
     value: &str,
     code: CommerceErrorCode,
     label: &str,
-) -> std::result::Result<i32, CommerceError> {
+) -> std::result::Result<i64, CommerceError> {
+    const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
     let text = value.trim();
     if text.is_empty() {
         return Err(CommerceError {
@@ -783,10 +985,10 @@ pub fn positive_integer(
             message: format!("{} must be a positive integer", label),
         });
     }
-    if n > i32::MAX as i64 {
+    if n > MAX_SAFE_INTEGER {
         return Err(CommerceError { code, message: format!("{} is too large", label) });
     }
-    Ok(n as i32)
+    Ok(n)
 }
 
 // =====================================================================
@@ -841,12 +1043,19 @@ mod tests {
     }
 
     #[test]
-    fn positive_integer_accepts_max_i32() {
+    fn positive_integer_accepts_large_ids() {
         assert_eq!(
-            positive_integer(&i32::MAX.to_string(), CommerceErrorCode::InvalidGoodsId, "goodsId")
-                .unwrap(),
-            i32::MAX
+            positive_integer(
+                &i64::from(i32::MAX).to_string(),
+                CommerceErrorCode::InvalidGoodsId,
+                "goodsId"
+            )
+            .unwrap(),
+            i64::from(i32::MAX)
         );
+        // 超过 JS 安全整数报 too large
+        assert!(positive_integer("9007199254740992", CommerceErrorCode::InvalidGoodsId, "goodsId")
+            .is_err());
     }
 
     #[test]
@@ -876,8 +1085,12 @@ mod tests {
     fn error_codes_match_ts() {
         assert_eq!(CommerceErrorCode::InvalidGoodsId.as_str(), "INVALID_GOODS_ID");
         assert_eq!(CommerceErrorCode::InvalidPurchaseCount.as_str(), "INVALID_PURCHASE_COUNT");
+        assert_eq!(CommerceErrorCode::InvalidMallSlot.as_str(), "INVALID_MALL_SLOT");
         assert_eq!(CommerceErrorCode::GoodsNotFound.as_str(), "GOODS_NOT_FOUND");
+        assert_eq!(CommerceErrorCode::GoodsSoldOut.as_str(), "GOODS_SOLD_OUT");
         assert_eq!(CommerceErrorCode::GoodsUnavailable.as_str(), "GOODS_UNAVAILABLE");
+        assert_eq!(CommerceErrorCode::MallPriceChanged.as_str(), "MALL_PRICE_CHANGED");
+        assert_eq!(CommerceErrorCode::MallBalanceUnavailable.as_str(), "MALL_BALANCE_UNAVAILABLE");
         assert_eq!(CommerceErrorCode::PurchaseLimitExceeded.as_str(), "PURCHASE_LIMIT_EXCEEDED");
         assert_eq!(CommerceErrorCode::InsufficientBalance.as_str(), "INSUFFICIENT_BALANCE");
         assert_eq!(CommerceErrorCode::InvalidMysteryNpcId.as_str(), "INVALID_MYSTERY_NPC_ID");
@@ -922,24 +1135,121 @@ mod tests {
     fn limit_dto_with_max() {
         use crate::proto::generated::gamepb::mallpb::PurchaseLimit;
         let l = PurchaseLimit { limit_type: 1, bought_count: 3, limit_count: 10 };
-        let dto = limit_dto(&l);
+        let dto = limit_dto(&l).expect("limit_type=1 应有限制");
         assert_eq!(dto.kind, 1);
         assert_eq!(dto.bought, 3);
         assert_eq!(dto.max, 10);
-        assert_eq!(dto.remaining, Some(7));
+        assert_eq!(dto.remaining, 7);
     }
 
     #[test]
-    fn limit_dto_with_zero_max_returns_none_remaining() {
+    fn limit_dto_unlimited_returns_none() {
         use crate::proto::generated::gamepb::mallpb::PurchaseLimit;
-        let l = PurchaseLimit { limit_type: 1, bought_count: 0, limit_count: 0 };
-        let dto = limit_dto(&l);
-        assert_eq!(dto.remaining, None);
+        // bot：limit_type === 0 视为不限购，整体返回 null
+        let l = PurchaseLimit { limit_type: 0, bought_count: 0, limit_count: 0 };
+        assert!(limit_dto(&l).is_none());
+    }
+
+    #[test]
+    fn limit_dto_remaining_clamped_to_zero() {
+        use crate::proto::generated::gamepb::mallpb::PurchaseLimit;
+        let l = PurchaseLimit { limit_type: 1, bought_count: 10, limit_count: 10 };
+        let dto = limit_dto(&l).expect("limit_type=1 应有限制");
+        assert_eq!(dto.remaining, 0);
+    }
+
+    #[test]
+    fn availability_slot1_no_limit_means_available() {
+        // 普通商城（slot 1）无 limit 且 field 8 缺省（false）→ 官方视为可购买
+        let goods = MallGoods { goods_id: 1002, ..Default::default() };
+        let (status, _) = mall_availability(&goods, None, 1);
+        assert_eq!(status, "available");
+        // 同样条件在 SVIP 分页（slot 4）→ 不可购买
+        let (status, _) = mall_availability(&goods, None, 4);
+        assert_eq!(status, "unavailable");
+    }
+
+    #[test]
+    fn availability_state_machine() {
+        use crate::proto::generated::gamepb::mallpb::MallShareInfo;
+        let base = MallGoods { goods_id: 1002, is_available: true, ..Default::default() };
+        // owned 优先级最高
+        let (s, r) = mall_availability(&MallGoods { is_owned: true, ..base.clone() }, None, 1);
+        assert_eq!(s, "owned");
+        assert_eq!(r, "已拥有该商品");
+        // 售罄：limit.remaining == 0；免费品文案不同
+        let limit_exhausted = PurchaseLimitDto { kind: 1, bought: 1, max: 1, remaining: 0 };
+        let (s, r) = mall_availability(
+            &MallGoods { is_free: true, ..base.clone() },
+            Some(&limit_exhausted),
+            1,
+        );
+        assert_eq!(s, "sold_out");
+        assert_eq!(r, "奖励已领取");
+        let (s, r) = mall_availability(&base.clone(), Some(&limit_exhausted), 1);
+        assert_eq!(s, "sold_out");
+        assert_eq!(r, "商品已售罄，已达到限购上限");
+        // 广告领取
+        let (s, r) = mall_availability(&MallGoods { ad_only: true, ..base.clone() }, None, 1);
+        assert_eq!(s, "ad_required");
+        assert_eq!(r, "请在游戏内观看广告领取");
+        // 需分享（share_status != 2）
+        let (s, _) = mall_availability(
+            &MallGoods {
+                share: Some(MallShareInfo {
+                    share_only: true,
+                    share_status: 1,
+                    ..Default::default()
+                }),
+                ..base.clone()
+            },
+            None,
+            1,
+        );
+        assert_eq!(s, "share_required");
+        // 分享已完成（share_status == 2）→ 不再拦截
+        let (s, _) = mall_availability(
+            &MallGoods {
+                share: Some(MallShareInfo {
+                    share_only: true,
+                    share_status: 2,
+                    ..Default::default()
+                }),
+                ..base.clone()
+            },
+            None,
+            1,
+        );
+        assert_eq!(s, "available");
+    }
+
+    #[test]
+    fn promotion_price_substitution() {
+        let now = 1_790_179_300; // 窗口内
+        let mut goods = MallGoods {
+            goods_id: 1060,
+            is_available: true,
+            discount_price: 780,
+            promotion_start_time: 1_790_179_200,
+            promotion_end_time: 1_790_783_999,
+            price: Some(CoreItem { id: 1002, count: 880, ..Default::default() }),
+            ..Default::default()
+        };
+        let balances = HashMap::new();
+        let dto = mall_goods_dto(&goods, &balances, 1, now);
+        assert_eq!(dto.price.count, 780, "促销期内按折扣价展示");
+        assert_eq!(dto.original_price, Some(880), "划线价");
+        assert!(dto.is_discounted);
+        // 窗口外：原价 + 不展示折扣文案
+        goods.promotion_end_time = now - 1;
+        let dto = mall_goods_dto(&goods, &balances, 1, now);
+        assert_eq!(dto.price.count, 880);
+        assert_eq!(dto.original_price, None);
+        assert!(!dto.is_discounted);
     }
 
     #[test]
     fn mall_goods_dto_free() {
-        use crate::proto::generated::corepb::Item as CoreItem;
         let goods = MallGoods {
             goods_id: 1,
             is_free: true,
@@ -948,15 +1258,15 @@ mod tests {
             ..Default::default()
         };
         let balances = HashMap::new();
-        let dto = mall_goods_dto(&goods, &balances);
+        let dto = mall_goods_dto(&goods, &balances, 1, 0);
         assert!(dto.is_free);
         assert!(dto.available);
         assert!(dto.purchasable);
+        assert_eq!(dto.purchase_status, "available");
     }
 
     #[test]
     fn mall_goods_dto_paid_no_balance_known() {
-        use crate::proto::generated::corepb::Item as CoreItem;
         let goods = MallGoods {
             goods_id: 1002,
             is_free: false,
@@ -965,7 +1275,7 @@ mod tests {
             ..Default::default()
         };
         let balances = HashMap::new();
-        let dto = mall_goods_dto(&goods, &balances);
+        let dto = mall_goods_dto(&goods, &balances, 1, 0);
         assert!(!dto.is_free);
         assert!(dto.purchasable);
         assert_eq!(dto.price.id, 1002);
@@ -975,10 +1285,18 @@ mod tests {
 
     #[test]
     fn mall_goods_dto_unavailable() {
-        let goods = MallGoods { goods_id: 1002, is_available: false, ..Default::default() };
+        use crate::proto::generated::gamepb::mallpb::PurchaseLimit;
+        // field 8 为 false 且有限制 → 不可购买（无限制的 slot 1 商品视为可购）
+        let goods = MallGoods {
+            goods_id: 1002,
+            is_available: false,
+            purchase_limit: Some(PurchaseLimit { limit_type: 1, bought_count: 0, limit_count: 5 }),
+            ..Default::default()
+        };
         let balances = HashMap::new();
-        let dto = mall_goods_dto(&goods, &balances);
+        let dto = mall_goods_dto(&goods, &balances, 1, 0);
         assert!(!dto.purchasable);
+        assert_eq!(dto.purchase_status, "unavailable");
     }
 
     #[test]
@@ -995,8 +1313,9 @@ mod tests {
             ..Default::default()
         };
         let balances = HashMap::new();
-        let dto = mall_goods_dto(&goods, &balances);
+        let dto = mall_goods_dto(&goods, &balances, 1, 0);
         assert!(!dto.purchasable);
+        assert_eq!(dto.purchase_status, "sold_out");
     }
 
     #[test]

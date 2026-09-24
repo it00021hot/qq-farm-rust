@@ -715,6 +715,37 @@ impl PlantingEngine {
         Ok(result.build())
     }
 
+    /// 巡田补肥（1:1 对齐 bot scheduler.ts:345-389，a68b187 + d1a7562）：
+    /// 重查土地 → 取「本季普通肥配额仍 >0」的地 → 按账号施肥配置跑一轮
+    /// （普通肥打配额地；有机肥按配置随之执行）。土地类型过滤在
+    /// [`Self::fertilize_by_config_ex`] 内部完成。
+    ///
+    /// # Errors
+    /// - 拉取土地 / 施肥 RPC 失败
+    pub async fn run_patrol_refill(&self, host_gid: i64, account_id: &str) -> Result<usize> {
+        let latest = self.api.get_all_lands(0).await?;
+        let targets =
+            crate::services::farm::land_analysis::get_normal_fertilizer_targets_from_lands(
+                &latest.lands,
+            );
+        if targets.is_empty() {
+            return Ok(0);
+        }
+        tracing::info!("[施肥] 巡田补肥：检测到 {} 块地仍可施普通化肥", targets.len());
+        let result = self
+            .fertilize_by_config_ex(
+                &targets,
+                host_gid,
+                account_id,
+                crate::services::farm::planting::FertilizeOptions {
+                    skip_normal: false,
+                    multi_season: true,
+                },
+            )
+            .await?;
+        Ok(result.normal)
+    }
+
     /// 有机肥分支：organic 用「还能施有机肥的地」，Both 催熟未成熟地，smart 用即将成熟地
     async fn fertilize_organic_step(
         &self,

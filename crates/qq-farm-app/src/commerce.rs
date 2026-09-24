@@ -17,6 +17,7 @@ fn commerce_from_loop(
         loop_.mall().clone(),
         Arc::new(mystery),
         loop_.warehouse().clone(),
+        loop_.qqvip().clone(),
     )
 }
 
@@ -38,13 +39,15 @@ pub async fn mall_catalog(
 pub async fn purchase_mall(
     ctx: &AppContext,
     account_id: &str,
-    goods_id: i32,
-    count: i32,
+    goods_id: i64,
+    count: i64,
+    slot_type: Option<i32>,
+    expected_price: Option<qq_farm_core::services::commerce::ExpectedPrice>,
 ) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
     let commerce = commerce_from_loop(loop_.as_ref());
     let dto = commerce
-        .purchase_mall_product(&goods_id.to_string(), &count.to_string())
+        .purchase_mall_product(&goods_id.to_string(), &count.to_string(), slot_type, expected_price)
         .await
         .map_err(AppError::from_core)?;
     serde_json::to_value(dto).map_err(|e| AppError::Internal(e.to_string()))

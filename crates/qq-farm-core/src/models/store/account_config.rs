@@ -587,6 +587,7 @@ pub fn apply_config_snapshot(
     if let Some(n) = snapshot.get("autoAcceptFriendMinLevel").and_then(|v| v.as_i64()) {
         next.auto_accept_friend_min_level = n.clamp(0, 200);
     }
+
     if let Some(b) = snapshot.get("autoAcceptRequireOwnLevel").and_then(|v| v.as_bool()) {
         next.auto_accept_require_own_level = b;
     }

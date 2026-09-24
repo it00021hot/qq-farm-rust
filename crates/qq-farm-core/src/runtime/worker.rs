@@ -288,9 +288,11 @@ impl Worker {
                     let monthcard = Arc::new(crate::services::monthcard::MonthCardService::new(
                         gateway.clone(),
                     ));
-                    let qqvip =
-                        Arc::new(crate::services::qqvip::QQVipService::new(gateway.clone()));
                     let mall = Arc::new(crate::services::mall::MallService::new(gateway.clone()));
+                    let qqvip = Arc::new(crate::services::qqvip::QQVipService::new(
+                        gateway.clone(),
+                        mall.clone(),
+                    ));
                     let task = Arc::new(crate::services::task::TaskService::new(gateway.clone()));
                     let warehouse = Arc::new(crate::services::warehouse::WarehouseService::new(
                         gateway.clone(),

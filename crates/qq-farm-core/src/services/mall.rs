@@ -37,9 +37,9 @@ use crate::proto::generated::gamepb::mallpb::{
 const MALL_SERVICE: &str = "gamepb.mallpb.MallService";
 
 /// 有机化肥商品 ID
-pub const ORGANIC_FERTILIZER_MALL_GOODS_ID: i32 = 1002;
+pub const ORGANIC_FERTILIZER_MALL_GOODS_ID: i64 = 1002;
 /// 无机化肥商品 ID
-pub const INORGANIC_FERTILIZER_MALL_GOODS_ID: i32 = 1003;
+pub const INORGANIC_FERTILIZER_MALL_GOODS_ID: i64 = 1003;
 /// 购买主流程冷却 10 分钟
 pub const BUY_COOLDOWN_MS: i64 = 10 * 60 * 1000;
 /// 免费礼包检查冷却 10 分钟
@@ -47,7 +47,7 @@ pub const CHECK_BUY_COOLDOWN_MS: i64 = 60 * 1000;
 /// 单次最大轮次
 pub const MAX_ROUNDS: usize = 100;
 /// 单批购买数
-pub const BUY_PER_ROUND: i32 = 10;
+pub const BUY_PER_ROUND: i64 = 10;
 /// 免费礼包每日 key
 pub const FREE_GIFTS_DAILY_KEY: &str = "mall_free_gifts";
 
@@ -146,6 +146,10 @@ impl MallService {
 
     /// 拉取指定 slot 的商城商品列表
     ///
+    /// `sub_slot_type` 沿用 bot 入参语义：仅当显式传 1 时置请求的
+    /// `is_manual_open = true`（bot mall.ts:31：`is_manual_open: Number(subSlotType) === 1`，
+    /// 协议 field 2 已从 sub_slot_type 改为 bool）。
+    ///
     /// # Errors
     /// - 网络 / 网关错误
     /// - protobuf 解码失败
@@ -154,7 +158,7 @@ impl MallService {
         slot_type: i32,
         sub_slot_type: i32,
     ) -> Result<GetMallListBySlotTypeResponse> {
-        let req = GetMallListBySlotTypeRequest { slot_type, sub_slot_type };
+        let req = GetMallListBySlotTypeRequest { slot_type, is_manual_open: sub_slot_type == 1 };
         let body = self
             .gateway
             .request(MALL_SERVICE, "GetMallListBySlotType", &req.encode_to_vec())
@@ -173,14 +177,23 @@ impl MallService {
 
     /// 购买商品
     ///
+    /// 对齐 bot `purchaseMallGoods`：回包 `success != true` 视为购买未确认，直接报错。
+    ///
     /// # Errors
     /// - 网络 / 网关错误
     /// - protobuf 解码失败
+    /// - 「商城未确认购买成功，请刷新核对」（回包 success 缺失）
     /// - 余额不足等业务错误（`code=1000019`）— 由调用方识别
-    pub async fn purchase_mall_goods(&self, goods_id: i32, count: i32) -> Result<PurchaseResponse> {
+    pub async fn purchase_mall_goods(&self, goods_id: i64, count: i64) -> Result<PurchaseResponse> {
         let req = PurchaseRequest { goods_id, count };
         let body = self.gateway.request(MALL_SERVICE, "Purchase", &req.encode_to_vec()).await?;
-        Ok(PurchaseResponse::decode(&body[..])?)
+        let reply = PurchaseResponse::decode(&body[..])?;
+        if !reply.success {
+            return Err(crate::error::Error::Business(
+                "商城未确认购买成功，请刷新核对".to_string(),
+            ));
+        }
+        Ok(reply)
     }
 
     // ----- 化肥自动购买 -----
@@ -214,9 +227,10 @@ impl MallService {
             return Ok(0);
         }
         let single_price = parse_mall_price_value(goods.price.as_ref());
-        let mut total_bought: i32 = 0;
-        let mut per_round: i32 = BUY_PER_ROUND;
-        let remaining_to_buy: i32 = if target_count > 0 { target_count } else { i32::MAX };
+        let mut total_bought: i64 = 0;
+        let mut per_round: i64 = BUY_PER_ROUND;
+        let remaining_to_buy: i64 =
+            if target_count > 0 { i64::from(target_count) } else { i64::MAX };
 
         for _ in 0..MAX_ROUNDS {
             if total_bought >= remaining_to_buy {
@@ -259,7 +273,7 @@ impl MallService {
             tracing::info!("[商城] 购买化肥成功，共购买 {} 个", total_bought);
         }
 
-        Ok(total_bought)
+        Ok(total_bought.min(i32::MAX as i64) as i32)
     }
 
     /// 主入口：自动购买有机化肥（带冷却）
@@ -330,8 +344,7 @@ impl MallService {
             }
         };
 
-        let free: Vec<&MallGoods> =
-            goods_list.iter().filter(|g| g.is_free && g.goods_id > 0).collect();
+        let free: Vec<&MallGoods> = goods_list.iter().filter(|g| is_free_gift_goods(g)).collect();
 
         if free.is_empty() {
             *self.free_gift_done_date_key.lock() = get_date_key();
@@ -471,6 +484,27 @@ pub fn find_fertilizer_mall_goods(
     goods_list.iter().find(|g| g.goods_id == target).cloned()
 }
 
+/// 普通商城免费礼包判定（1:1 对齐 bot `mall.ts:buyFreeGifts` 的过滤条件）
+#[must_use]
+pub fn is_free_gift_goods(g: &MallGoods) -> bool {
+    g.is_free
+        && g.is_available
+        && !g.ad_only
+        && !g.share.as_ref().is_some_and(|s| s.share_only)
+        && g.price.as_ref().is_none_or(|p| p.count == 0)
+        && g.goods_id > 0
+}
+
+/// SVIP 商城免费礼包判定（1:1 对齐 bot `qqvip.ts:claimSvipMallFreeGift` 的过滤条件）
+#[must_use]
+pub fn is_svip_free_gift_goods(g: &MallGoods) -> bool {
+    let limit_ok = g
+        .purchase_limit
+        .as_ref()
+        .is_none_or(|l| l.limit_count <= 0 || l.bought_count < l.limit_count);
+    is_free_gift_goods(g) && !g.is_owned && limit_ok
+}
+
 /// 判断错误信息是否表示"余额不足"
 fn is_insufficient_balance(msg: &str) -> bool {
     msg.contains("余额不足") || msg.contains("点券不足") || msg.contains("code=1000019")
@@ -604,6 +638,53 @@ mod tests {
         let back = PurchaseRequest::decode(&bytes[..]).unwrap();
         assert_eq!(back.goods_id, 1002);
         assert_eq!(back.count, 10);
+    }
+
+    #[test]
+    fn free_gift_predicate_matches_ts_filter() {
+        // bot buyFreeGifts：is_free && is_available && !ad_only && !share_only && price=0
+        let g =
+            MallGoods { goods_id: 1053, is_free: true, is_available: true, ..Default::default() };
+        assert!(is_free_gift_goods(&g));
+        // 不可用 / 广告领取 / 需分享 / 有价 / 无 id 均不算免费礼包
+        assert!(!is_free_gift_goods(&MallGoods { is_available: false, ..g.clone() }));
+        assert!(!is_free_gift_goods(&MallGoods { ad_only: true, ..g.clone() }));
+        assert!(!is_free_gift_goods(&MallGoods {
+            share: Some(crate::proto::generated::gamepb::mallpb::MallShareInfo {
+                share_only: true,
+                ..Default::default()
+            }),
+            ..g.clone()
+        }));
+        assert!(!is_free_gift_goods(&MallGoods {
+            price: Some(CoreItem { id: 1002, count: 100, ..Default::default() }),
+            ..g.clone()
+        }));
+        assert!(!is_free_gift_goods(&MallGoods { goods_id: 0, ..g }));
+    }
+
+    #[test]
+    fn svip_free_gift_predicate_matches_ts_filter() {
+        use crate::proto::generated::gamepb::mallpb::PurchaseLimit;
+        let g =
+            MallGoods { goods_id: 1053, is_free: true, is_available: true, ..Default::default() };
+        assert!(is_svip_free_gift_goods(&g));
+        // 已拥有：不再领取
+        assert!(!is_svip_free_gift_goods(&MallGoods { is_owned: true, ..g.clone() }));
+        // 限购已满：不再领取
+        assert!(!is_svip_free_gift_goods(&MallGoods {
+            purchase_limit: Some(PurchaseLimit { limit_type: 1, bought_count: 1, limit_count: 1 }),
+            ..g.clone()
+        }));
+        // 限购未满 / 无限制次数：可领取
+        assert!(is_svip_free_gift_goods(&MallGoods {
+            purchase_limit: Some(PurchaseLimit { limit_type: 1, bought_count: 0, limit_count: 2 }),
+            ..g.clone()
+        }));
+        assert!(is_svip_free_gift_goods(&MallGoods {
+            purchase_limit: Some(PurchaseLimit { limit_type: 1, bought_count: 3, limit_count: 0 }),
+            ..g
+        }));
     }
 
     #[test]

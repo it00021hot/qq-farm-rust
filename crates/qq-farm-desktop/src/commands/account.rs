@@ -106,7 +106,9 @@ pub async fn wx_login_confirm(
 pub async fn wx_login_code(state: State<'_, DesktopState>, task_id: String) -> IpcResult<Value> {
     let _ = &state.acl;
     let r = wx_login::issue_code(&state.app.wx_login, &task_id).await.map_err(IpcError::from)?;
-    Ok(serde_json::json!({ "code": r.code, "openid": r.openid, "appId": r.app_id }))
+    Ok(
+        serde_json::json!({ "code": r.code, "openid": r.openid, "appId": r.app_id, "nickname": r.nickname }),
+    )
 }
 
 /// 创建本机微信快速授权会话。

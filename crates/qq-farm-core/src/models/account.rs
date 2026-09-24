@@ -147,6 +147,7 @@ impl AccountSession {
             expires_in: 7200,
             refresh_token_observed_at: self.wx_refresh_token_observed_at,
             buffer_consumed: self.wx_buffer_consumed,
+            nickname: None,
         }
     }
 

@@ -79,6 +79,21 @@ pub const PET_DIARY_CHALLENGE_ITEM_IDS: [i64; 3] = [80101, 80102, 80103];
 /// 比熊幼崽培育至成年后永久获得的宠物
 pub const PET_DIARY_DOG_ID: i64 = 90031;
 
+/// 秋日活动 · 秋祈良愿（wish，ActivityData field 119 wish_sign）
+pub const AUTUMN_WISH_GROUP_ID: i64 = 2_026_092_400;
+pub const AUTUMN_WISH_ACTIVITY_ID: i64 = 2_026_092_401;
+/// 秋日活动 · 快乐不独享（happy，ActivityData field 120 share_reward）
+pub const AUTUMN_HAPPY_GROUP_ID: i64 = 2_026_092_500;
+pub const AUTUMN_HAPPY_ACTIVITY_ID: i64 = 2_026_092_501;
+/// 秋祈良愿操作码：抽签 / 领奖（AutumnOperateRequest.field 151 / 152）
+pub const AUTUMN_WISH_DRAW_OPERATE_TYPE: i64 = 51;
+pub const AUTUMN_WISH_CLAIM_OPERATE_TYPE: i64 = 52;
+/// 快乐不独享操作码：分享 / 档位领奖 / 日志 / 每日奖励（field 153 / 154 / 155 / 157）
+pub const AUTUMN_HAPPY_SHARE_OPERATE_TYPE: i64 = 69;
+pub const AUTUMN_HAPPY_CLAIM_MILESTONES_OPERATE_TYPE: i64 = 70;
+pub const AUTUMN_HAPPY_GET_LOGS_OPERATE_TYPE: i64 = 71;
+pub const AUTUMN_HAPPY_CLAIM_DAILY_OPERATE_TYPE: i64 = 73;
+
 /// 仓库 / 化肥容器
 pub const SELL_BATCH_SIZE: usize = 15;
 pub const FERTILIZER_CONTAINER_LIMIT_HOURS: i64 = 990;

@@ -53,6 +53,8 @@ pub struct YybCredentials {
     /// login_buffer 是否已被原生协议消费过（单个 buffer 只能用一次；
     /// 已消费则 mint 前必须重新签发，避免每次都先撞 ManualAuth rejected）。
     pub buffer_consumed: bool,
+    /// 账号昵称（best-effort，bot a989a8e：OAuth 回包解析 + pcyyb_get_user_info）
+    pub nickname: Option<String>,
 }
 
 impl YybCredentials {
@@ -147,6 +149,7 @@ mod tests {
             expires_in: 7200,
             refresh_token_observed_at: 0,
             buffer_consumed: false,
+            nickname: None,
         };
         assert!(!c.token_due_for_refresh(0), "token with 30m left should not refresh when ahead=0");
         assert!(

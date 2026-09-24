@@ -1139,6 +1139,7 @@ impl WorkerLoop {
             self.mall.clone(),
             self.mystery_shop.clone(),
             self.warehouse.clone(),
+            self.qqvip.clone(),
         );
         let opts = crate::services::commerce::FertilizerBothOptions {
             buy_organic: snap.automation.fertilizer_buy_organic,
@@ -1211,6 +1212,7 @@ impl WorkerLoop {
                     this.mall.clone(),
                     this.mystery_shop.clone(),
                     this.warehouse.clone(),
+                    this.qqvip.clone(),
                 ));
                 // 克隆去重状态，避免 guard 跨 await（Future 需要 Send）
                 let mut state = this.mystery_auto_state.lock().clone();
@@ -1694,8 +1696,8 @@ mod tests {
         let email = Arc::new(EmailService::new(gateway.clone()));
         let share = Arc::new(ShareService::new(gateway.clone()));
         let monthcard = Arc::new(MonthCardService::new(gateway.clone()));
-        let qqvip = Arc::new(QQVipService::new(gateway.clone()));
         let mall = Arc::new(MallService::new(gateway.clone()));
+        let qqvip = Arc::new(QQVipService::new(gateway.clone(), mall.clone()));
         let task = Arc::new(TaskService::new(gateway.clone()));
         let warehouse = Arc::new(WarehouseService::new(gateway.clone()));
         let mystery_shop = Arc::new(MysteryShopService::new(gateway.clone()));

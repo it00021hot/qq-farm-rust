@@ -116,7 +116,8 @@ export const generatedRoutes: GeneratedRoute[] = [
         component: 'view.farm_mystery-shop',
         meta: {
           title: 'farm_mystery-shop',
-          i18nKey: 'route.farm_mystery-shop'
+          i18nKey: 'route.farm_mystery-shop',
+          hideInMenu: true
         }
       },
       {

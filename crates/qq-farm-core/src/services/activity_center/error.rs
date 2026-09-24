@@ -43,6 +43,17 @@ pub enum ActivityErrorCode {
     InvalidPetFriendGid,
     InvalidPetChallenge,
     InvalidPetSolarTerm,
+    InvalidAutumnActivity,
+    AutumnStateUnavailable,
+    InvalidAutumnOperation,
+    AutumnActivityEnded,
+    WishDrawUnavailable,
+    InvalidWishChoice,
+    WishClaimUnavailable,
+    HappyDailyClaimed,
+    HappyShareClaimed,
+    HappyMilestoneUnavailable,
+    AutumnResponseInvalid,
 }
 
 impl ActivityErrorCode {
@@ -89,6 +100,17 @@ impl ActivityErrorCode {
             Self::InvalidPetFriendGid => "INVALID_FRIEND_GID",
             Self::InvalidPetChallenge => "INVALID_CHALLENGE",
             Self::InvalidPetSolarTerm => "INVALID_SOLAR_TERM",
+            Self::InvalidAutumnActivity => "INVALID_AUTUMN_ACTIVITY",
+            Self::AutumnStateUnavailable => "AUTUMN_STATE_UNAVAILABLE",
+            Self::InvalidAutumnOperation => "INVALID_AUTUMN_OPERATION",
+            Self::AutumnActivityEnded => "AUTUMN_ACTIVITY_ENDED",
+            Self::WishDrawUnavailable => "WISH_DRAW_UNAVAILABLE",
+            Self::InvalidWishChoice => "INVALID_WISH_CHOICE",
+            Self::WishClaimUnavailable => "WISH_CLAIM_UNAVAILABLE",
+            Self::HappyDailyClaimed => "HAPPY_DAILY_CLAIMED",
+            Self::HappyShareClaimed => "HAPPY_SHARE_CLAIMED",
+            Self::HappyMilestoneUnavailable => "HAPPY_MILESTONE_UNAVAILABLE",
+            Self::AutumnResponseInvalid => "AUTUMN_RESPONSE_INVALID",
         }
     }
 }

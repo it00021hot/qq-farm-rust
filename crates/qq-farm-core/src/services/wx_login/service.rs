@@ -52,6 +52,8 @@ pub struct WxLoginSession {
     pub access_token: Option<String>,
     pub refresh_token: Option<String>,
     pub expires_at: Option<i64>,
+    /// 账号昵称（best-effort，扫码后用于预填；对齐 bot a989a8e）
+    pub nickname: Option<String>,
 }
 
 impl WxLoginSession {
@@ -75,6 +77,8 @@ const QR_CONNECT_URL: &str = "https://open.weixin.qq.com/connect/qrconnect";
 const QR_IMAGE_BASE: &str = "https://open.weixin.qq.com/connect/qrcode/";
 const QR_POLL_URL: &str = "https://long.open.weixin.qq.com/connect/l/qrconnect";
 const CALLBACK_URL: &str = "https://yybadaccess.3g.qq.com/pc_yyb/pcyyb_oauth";
+/// 应用宝用户信息接口（bot a989a8e：扫码确认后取权威昵称，尽力而为不阻塞登录）
+const USER_INFO_URL: &str = "https://yybadaccess.3g.qq.com/pc_yyb/pcyyb_get_user_info";
 const LOGIN_BUFFER_URL: &str =
     "https://yybadaccess.3g.qq.com/pc_yyb_auth/pcyyb_get_wx_login_buffer_auth";
 const REFRESH_TOKEN_URL: &str =
@@ -206,6 +210,7 @@ impl WxLoginService {
         session.refresh_token = Some(creds.refresh_token.clone());
         session.login_buffer = Some(creds.login_buffer.clone());
         session.expires_at = Some(creds.expires_at);
+        session.nickname = creds.nickname.clone();
         Ok((creds.openid, creds.login_buffer))
     }
 
@@ -240,6 +245,8 @@ impl WxLoginService {
             .filter(|v| *v > 0)
             .unwrap_or(7200);
         let expires_at = now_unix() + expires_in;
+        // 保留回调响应体供昵称解析（bot `extractNickname` fallback）
+        let callback_body = callback.body.clone();
         let mut creds = YybCredentials {
             openid: openid.clone(),
             access_token,
@@ -249,7 +256,55 @@ impl WxLoginService {
             ..Default::default()
         };
         creds.login_buffer = self.post_login_buffer_for(&creds, &mut cookies).await?;
+        // 昵称获取（bot a989a8e）：OAuth 回调解析作 fallback，pcyyb_get_user_info
+        // 为权威来源；整体尽力而为，失败不阻塞登录。
+        let callback_nickname = extract_callback_nickname(&callback_body);
+        let user_info_nickname = self
+            .fetch_user_info_nickname(&mut cookies, &creds.openid, &creds.access_token)
+            .await
+            .ok();
+        creds.nickname = user_info_nickname.or(callback_nickname);
         Ok(creds.ensure_observed_at(now_unix()))
+    }
+
+    /// `pcyyb_get_user_info` 取权威昵称（头 `Ual-Access-*`，
+    /// Signature = md5(timestamp + nonce)；1:1 对齐 bot `fetchUserInfo`）。
+    async fn fetch_user_info_nickname(
+        &self,
+        cookies: &mut HashMap<String, String>,
+        openid: &str,
+        access_token: &str,
+    ) -> Result<String, String> {
+        let timestamp = now_unix().to_string();
+        let nonce = random_int(0, 10_000).to_string();
+        let request_id = random_int(1_000, 10_000).to_string();
+        let signature = md5_hex(format!("{timestamp}{nonce}").as_bytes());
+        let headers = [
+            ("Ual-Access-Access-Token", access_token.to_string()),
+            ("Ual-Access-Login-Type", "2".to_string()),
+            ("Ual-Access-Openid", openid.to_string()),
+            ("Ual-Access-Businessid", "pc_yyb".to_string()),
+            ("Ual-Access-Guid", "web".to_string()),
+            ("Ual-Access-Nonce", nonce),
+            ("Ual-Access-Requestid", request_id),
+            ("Ual-Access-Signature", signature),
+            ("Ual-Access-Timestamp", timestamp),
+        ];
+        let input = RequestInput {
+            method: "GET",
+            body: None,
+            extra_headers: headers.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+        };
+        let response = self
+            .request(USER_INFO_URL, cookies, Some(input))
+            .await
+            .map_err(|e| format!("user info request failed: {e}"))?;
+        if !response.status.to_string().starts_with('2') {
+            return Err(format!("Unable to obtain WeChat user info (HTTP {})", response.status));
+        }
+        let parsed: serde_json::Value = serde_json::from_slice(&response.body)
+            .map_err(|e| format!("user info decode failed: {e}"))?;
+        extract_user_info_nickname(&parsed).ok_or_else(|| "nickname missing".to_string())
     }
 
     /// 校验本机微信 fast_login 回调 URL，提取 OAuth code。
@@ -565,6 +620,47 @@ pub struct RequestInput {
 // =====================================================================
 // 工具
 // =====================================================================
+
+/// OAuth 回调体里的昵称（bot `extractNickname`）：user_info 可能是对象或 JSON 字符串。
+fn extract_callback_nickname(body: &[u8]) -> Option<String> {
+    let parsed: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let user_info = parsed.get("user_info")?;
+    let info = if let Some(s) = user_info.as_str() {
+        serde_json::from_str::<serde_json::Value>(s).ok()?
+    } else {
+        user_info.clone()
+    };
+    nickname_from_object(&info, &["nickname", "nick_name", "nickName"])
+}
+
+/// `pcyyb_get_user_info` 响应里的昵称（bot `extractUserInfoNickname`）：
+/// 顶层 nick_name 优先，兼容嵌套 user_info（对象或 JSON 字符串）。
+fn extract_user_info_nickname(data: &serde_json::Value) -> Option<String> {
+    if let Some(n) = nickname_from_object(data, &["nick_name", "nickname", "nickName"]) {
+        return Some(n);
+    }
+    let nested = data.get("user_info")?;
+    if let Some(s) = nested.as_str() {
+        let parsed: serde_json::Value = serde_json::from_str(s).ok()?;
+        return extract_user_info_nickname(&parsed);
+    }
+    extract_user_info_nickname(nested)
+}
+
+fn nickname_from_object(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    if !value.is_object() {
+        return None;
+    }
+    for key in keys {
+        if let Some(v) = value.get(*key).and_then(serde_json::Value::as_str) {
+            let trimmed = v.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
 
 fn cookie_header(cookies: &HashMap<String, String>) -> String {
     cookies.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("; ")

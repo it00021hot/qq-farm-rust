@@ -7,6 +7,7 @@
 //! - 256 行 `activity-center-state.ts` JSON 状态合并（见 `activity_center_state` 模块）
 //! - `serializeMutation` 复杂并发（defer，rate limiter 已在 1F-6 覆盖）
 
+mod autumn;
 mod charity;
 mod constellation;
 mod directory;
