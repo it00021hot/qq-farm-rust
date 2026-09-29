@@ -26,8 +26,6 @@ pub struct WorkerConfig {
     pub gateway: GatewayConfig,
     /// 状态上报间隔
     pub status_interval: Duration,
-    /// TSDK wasm 路径
-    pub tsdk_wasm_path: std::path::PathBuf,
     /// 数据目录
     pub data_dir: std::path::PathBuf,
 }
@@ -130,10 +128,11 @@ impl Worker {
                 }
 
                 let tsdk_data_dir = config.data_dir.join(account_id.as_str());
-                let wasm_path = config.tsdk_wasm_path.clone();
                 let data_dir_s = tsdk_data_dir.to_string_lossy().to_string();
-                // TSDK 宿主按账号平台初始化（QQ 账号走 QQ 宿主，对齐 bot b0a4405）
+                // TSDK 宿主与 wasm 构建都按账号平台选择（QQ→tsdk.wasm、微信→tsdk-wx.wasm，
+                // 对齐 bot TSDK_BUILDS；路径由 tsdk 模块按平台解析，含 env 覆盖）
                 let tsdk_platform = config.gateway.platform.clone();
+                let wasm_path = crate::crypto::tsdk::resolve_wasm_path(&tsdk_platform);
                 let tsdk_load = tokio::task::spawn_blocking(move || {
                     crate::crypto::tsdk::TsdkRuntime::load_for_platform(
                         &wasm_path,
@@ -414,12 +413,20 @@ impl Worker {
                             while let Some(ev) = notify_rx.recv().await {
                                 match ev {
                                     crate::network::notify::NotifyEvent::Kickout {
-                                        reason, ..
+                                        reason,
+                                        reason_code,
+                                        ..
                                     } => {
                                         let why = if reason.is_empty() {
                                             "未知".to_string()
                                         } else {
                                             reason
+                                        };
+                                        // 对齐 bot 掉线诊断：数字原因码（reasonCode）随日志保留
+                                        let code_note = if reason_code != 0 {
+                                            format!("（reasonCode: {reason_code}）")
+                                        } else {
+                                            String::new()
                                         };
                                         let _ = tx.send(WorkerEvent::Log {
                                             account_id: acc_id.clone(),
@@ -427,7 +434,7 @@ impl Worker {
                                             level: "info".to_string(),
                                             module: "system".to_string(),
                                             message: format!(
-                                                "检测到踢下线，准备自动停止账号。原因: {why}"
+                                                "检测到踢下线，准备自动停止账号。原因: {why}{code_note}"
                                             ),
                                         });
                                         wl.on_kickout(&why);
@@ -550,10 +557,17 @@ impl Worker {
                     } else {
                         di.sys_software.clone()
                     };
+                    // 微信平台 device_info 扩展字段（bot getLoginDeviceInfo：有值才写；
+                    // memory 解析失败按 0 处理 → 不写，与 bot Number() 语义一致）
+                    let wx_extras = crate::network::login_body::WxDeviceExtras {
+                        network: di.network.clone(),
+                        device_id: di.device_id.clone(),
+                        memory: di.memory.trim().parse::<i64>().unwrap_or(0),
+                    };
 
                     let login_result = match or_cancel(
                         &cancel,
-                        gateway.login(&client_version, &sys_software, &tsdk),
+                        gateway.login(&client_version, &sys_software, &wx_extras, &tsdk),
                     )
                     .await
                     {
@@ -885,6 +899,15 @@ async fn run_worker_loop(
                         wl.quiesce_bot(&source);
                     }
                 }
+                // 对齐 bot network.ts:1047-1064：会话结束时输出 connection_summary 汇总诊断
+                emit_connection_summary(
+                    &event_tx,
+                    &session_gw,
+                    engine.as_ref().and_then(|eng| eng.worker_loop(&account.id)),
+                    &account.id,
+                    &account.display_name,
+                    &source,
+                );
                 emit_disconnect_log(
                     &event_tx,
                     &account.id,
@@ -1024,6 +1047,102 @@ fn emit_wx_failure_stop(
         account_id: account_id.to_string(),
         reason: format!("disconnect:{source}"),
         generation,
+    });
+}
+
+/// 会话结束的 connection_summary 汇总诊断（对齐 bot `getConnectionDiagnostics` +
+/// `connection_summary` 日志事件）：platform / clientVersion / 连接与在线时长 /
+/// 心跳计数 / pending+queued / ACE 与 TSDK（含 ACEVM 触发）诊断 / 断开原因。
+/// 掉线排查的单一入口，tracing 结构化字段 + 面板日志各一份。
+fn emit_connection_summary(
+    event_tx: &tokio::sync::broadcast::Sender<WorkerEvent>,
+    gateway: &crate::network::gateway::Gateway,
+    worker_loop: Option<std::sync::Arc<crate::runtime::worker_loop::WorkerLoop>>,
+    account_id: &str,
+    account_name: &str,
+    source: &str,
+) {
+    let conn = gateway.connection_diagnostics();
+    let ace = worker_loop.as_ref().and_then(|wl| wl.ace_diagnostics());
+    let tsdk = gateway.tsdk_diagnostics();
+
+    tracing::info!(
+        event = "connection_summary",
+        account_id = %account_id,
+        platform = %conn.platform,
+        client_version = %conn.client_version,
+        connection_age_ms = conn.connection_age_ms,
+        online_age_ms = conn.online_age_ms,
+        heartbeat_attempts = conn.heartbeat_attempts,
+        heartbeat_replies = conn.heartbeat_replies,
+        heartbeat_failures = conn.heartbeat_failures,
+        pending = conn.pending,
+        queued = conn.queued,
+        last_inbound_age_ms = conn.last_inbound_age_ms,
+        disconnect = %source,
+        ace_requests = ace.as_ref().map_or(0, |a| a.requests),
+        ace_replies = ace.as_ref().map_or(0, |a| a.replies),
+        ace_nonempty_replies = ace.as_ref().map_or(0, |a| a.nonempty_replies),
+        ace_failures = ace.as_ref().map_or(0, |a| a.failures),
+        ace_last_failure_stage = %ace.as_ref().map_or(String::new(), |a| a.last_failure_stage.clone()),
+        ace_task_failures = ace.as_ref().map_or(0, |a| a.task_failures),
+        tsdk_version = tsdk.as_ref().map_or("", |t| t.version),
+        tsdk_unsupported_acevm_calls = tsdk.as_ref().map_or(0, |t| t.unsupported_acevm_calls),
+        tsdk_last_acevm_task_read_failed = tsdk.as_ref().is_some_and(|t| t.last_unsupported_acevm_task_read_failed),
+        "会话连接汇总"
+    );
+
+    let ace_note = ace.as_ref().map_or_else(
+        || "ace=未挂载".to_string(),
+        |a| {
+            format!(
+                "ace(请求{}/回包{}/非空回灌{}/失败{}/任务失败{}{})",
+                a.requests,
+                a.replies,
+                a.nonempty_replies,
+                a.failures,
+                a.task_failures,
+                if a.last_failure_stage.is_empty() {
+                    String::new()
+                } else {
+                    format!("/最后失败于 {}", a.last_failure_stage)
+                }
+            )
+        },
+    );
+    let tsdk_note = tsdk.as_ref().map_or_else(
+        || "tsdk=不可用".to_string(),
+        |t| {
+            format!(
+                "tsdk({}，{}ACEVM 触发 {} 次)",
+                t.version,
+                if t.last_unsupported_acevm_task_read_failed {
+                    "任务读取失败，"
+                } else {
+                    ""
+                },
+                t.unsupported_acevm_calls
+            )
+        },
+    );
+    let _ = event_tx.send(WorkerEvent::Log {
+        account_id: account_id.to_string(),
+        account_name: account_name.to_string(),
+        level: "info".to_string(),
+        module: "network".to_string(),
+        message: format!(
+            "会话汇总: 平台={} 版本={} 连接 {}s/在线 {}s，心跳 {}/{}（失败 {}），pending={} queued={} 入站静默 {}s，{ace_note}，{tsdk_note}，原因: {source}",
+            conn.platform,
+            conn.client_version,
+            conn.connection_age_ms / 1000,
+            conn.online_age_ms / 1000,
+            conn.heartbeat_replies,
+            conn.heartbeat_attempts,
+            conn.heartbeat_failures,
+            conn.pending,
+            conn.queued,
+            conn.last_inbound_age_ms / 1000,
+        ),
     });
 }
 

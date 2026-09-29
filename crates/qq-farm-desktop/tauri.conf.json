@@ -60,6 +60,7 @@
     ],
     "resources": {
       "../../assets/tsdk.wasm": "assets/tsdk.wasm",
+      "../../assets/tsdk-wx.wasm": "assets/tsdk-wx.wasm",
       "../../assets/game_config": "assets/game_config"
     },
     "windows": {

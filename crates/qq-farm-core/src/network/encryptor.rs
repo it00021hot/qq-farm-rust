@@ -35,6 +35,12 @@ pub trait Encryptor: Send + Sync {
     fn encrypt_or_empty(&self, plaintext: &[u8]) -> Vec<u8> {
         self.encrypt(plaintext).unwrap_or_default()
     }
+
+    /// 掉线诊断：底层是 TSDK 加密器时返回其运行时
+    /// （供会话结束的 connection_summary 读取 TSDK/ACEVM 诊断；默认 None）
+    fn tsdk_runtime(&self) -> Option<std::sync::Arc<crate::crypto::tsdk::TsdkRuntime>> {
+        None
+    }
 }
 
 /// 基于 [`TsdkRuntime`] 的加密器实现
@@ -58,6 +64,9 @@ impl Encryptor for TsdkEncryptor {
     }
     fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
         self.runtime.decrypt(ciphertext)
+    }
+    fn tsdk_runtime(&self) -> Option<std::sync::Arc<crate::crypto::tsdk::TsdkRuntime>> {
+        Some(self.runtime.clone())
     }
 }
 
@@ -108,8 +117,10 @@ mod tests {
                 let wasm_path = std::env::var("TSDK_WASM_PATH")
                     .map(std::path::PathBuf::from)
                     .unwrap_or(default_path);
-                let rt = TsdkRuntime::load(&wasm_path, "./data/tsdk-encryptor-test")
-                    .expect("load tsdk.wasm");
+                // 加载的是 QQ 构建，宿主与 SHA 校验都须按 qq 平台（与 wasm 文件成组，对齐 bot TSDK_BUILDS）
+                let rt =
+                    TsdkRuntime::load_for_platform(&wasm_path, "./data/tsdk-encryptor-test", "qq")
+                        .expect("load tsdk.wasm");
                 Arc::new(TsdkEncryptor::new(Arc::new(rt)))
             })
             .clone()

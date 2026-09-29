@@ -14,7 +14,7 @@ qq-farm 工作区（本机：C:\Users\liu13\projects\qq-farm\）
 ├── qq-farm-bot\     # 参照实现（TypeScript monorepo：core 后端 + web 面板）。业务逻辑唯一真源，只读。
 └── qq-farm-rust\    # 本仓库（Rust 重写）。qq-farm-rust 内部：
     ├── proto/                  # 36+ 个 .proto，prost 编译（需本机 protoc）
-    ├── assets/                 # game_config（游戏配置+978张种子图）、activity-data、tsdk.wasm
+    ├── assets/                 # game_config（游戏配置+1006张种子图 webp）、activity-data、tsdk.wasm + tsdk-wx.wasm
     ├── crates/
     │   ├── qq-farm-core/       # 业务核心（零 UI、零进程入口；协议/服务/自动化全在这）
     │   ├── qq-farm-app/        # UI 无关门面（只依赖 core，禁止 tauri）

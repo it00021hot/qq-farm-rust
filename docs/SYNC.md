@@ -17,8 +17,8 @@
 
 | 仓库 | Commit | 日期 | 说明 |
 |------|--------|------|------|
-| **qq-farm-rust** | `main`（本提交：bot 9-24 秋日/SVIP/施肥增量） | 2026-09-24 | 协议 1.14.2.11_20260922 + 秋日活动 + SVIP 商城 + 施肥配额语义 + 扫码昵称（宠物激活/布局预留已随 9-14 批次） |
-| **qq-farm-bot** | `9c30b05` | 2026-09-24 | 秋日活动与 SVIP 商城（PR #82）+ 商城不限购状态机（PR #79/80/73）+ 施肥语义修复（PR #75/77） |
+| **qq-farm-rust** | `main`（本提交：bot 9-28 协议/微信 TSDK/掉线诊断增量） | 2026-09-29 | 协议 1.14.2.15_20260922（QQ/微信统一）+ 微信 TSDK 双 wasm + 微信登录分支 + 掉线诊断（reasonCode/connection_summary/ACE·TSDK 诊断）+ 18 张新种子图（重登 UI 按用户决策不对齐，后端能力本已等价） |
+| **qq-farm-bot** | `864caf3` | 2026-09-28 | 协议升级 + 微信协议对齐（PR #84）+ 会话保活诊断（PR #85）+ 重登 UX（PR #83，不移植）+ 18 张种子图 |
 
 文档范围：**业务行为 + 面板 HTTP/Socket 契约**（不含改 Vue 面板本身）。
 
@@ -26,9 +26,10 @@
 
 | 概念 | 当前值 | 用途 |
 |------|--------|------|
-| 客户端版本 `FARM_CLIENT_VERSION` | 默认 `1.14.2.11_20260922`（与 bot `config.ts` 默认一致，UPDATED_AT `1790215551955`） | 进游戏网关声明 |
-| bot `core` 包版本号 | `20260924` | 原项目发布标签，≠ 客户端版本字符串 |
-| TSDK wasm | `v3.9.0.1790160550`（161081 字节，SHA-256 `2c9e377ecc9a4fd9…`；加载时校验） | 网关加密 + ACE |
+| 客户端版本 `FARM_CLIENT_VERSION` | 默认 `1.14.2.15_20260922`（与 bot `config.ts` 默认一致，UPDATED_AT `1790568000000`；QQ/微信统一） | 进游戏网关声明 |
+| bot `core` 包版本号 | `20260928` | 原项目发布标签，≠ 客户端版本字符串 |
+| TSDK wasm（QQ） | `v3.9.0.1790160550`（161081 字节，SHA-256 `2c9e377ecc9a4fd9…`；加载时校验） | QQ 账号网关加密 + ACE |
+| TSDK wasm（微信） | `v3.9.0.1790237209`（160992 字节，SHA-256 `4bf6aa0ede9677fe…`；加载时校验） | 微信账号网关加密 + ACE（bot 864caf3 新增，`assets/tsdk-wx.wasm`） |
 | 青梅活动 ID | 每日 `2026081201` / 酿造 `2026081202` | 活动协议 |
 | 公益小红花活动 ID | 活动组 `2026090900` / 活动 `2026090901` | 活动协议 |
 | 萌宠成长日记活动 ID | 活动组 `2026090100` / 养成 `2026090101` / 种子赠礼 `2026090102` / 拾物小铺 `2026090103` | 活动协议 |
@@ -64,9 +65,9 @@
 
 | 能力 | 状态 | 期望行为（摘要） | 定位（非验收标准） |
 |------|------|------------------|-------------------|
-| 连网进游戏 | 齐 | 经 Gateway + TSDK 登录并维持心跳；登录/心跳包字节级对齐官方抓包（73/27 字节向量） | `network/*`, `crypto/tsdk.rs` |
+| 连网进游戏 | 齐 | 经 Gateway + TSDK 登录并维持心跳；登录/心跳包字节级对齐官方抓包（QQ 73/27 字节向量）；微信登录分支对齐 bot（device_info 扩展 network/device_id/memory、scene_id 省略、channel `other`）；会话结束输出 connection_summary 汇总诊断（心跳计数/pending/queued/ACE·TSDK 诊断/断开原因），踢下线日志带 reasonCode | `network/*`, `crypto/tsdk.rs` |
 | QQ 小程序扫码拿码 | 齐 | 面板可走 QQ 码登录流程 | `services/qrlogin.rs` |
-| 微信扫码拿码并启动 | 齐 | 扫码 → 应用宝 login_buffer 落盘 → 换一次性网关 code 启动；掉线/重启可用授权再换码重连 | `services/wx_login/*`, `routes/wx_login.rs` |
+| 微信扫码拿码并启动 | 齐 | 扫码 → 应用宝 login_buffer 落盘 → 换一次性网关 code 启动；掉线/重启可用授权再换码重连；TSDK 按平台选 wasm（QQ `tsdk.wasm` / 微信 `tsdk-wx.wasm`，各自 SHA-256 校验，bot 864caf3 双构建） | `services/wx_login/*`, `routes/wx_login.rs` |
 | 本田务农循环 | 齐 | 除草除虫浇水 → 收获 → 铲除 → 种植（含多格 + `bagSeedMultiLandReservationEnabled` 优先多格种子预留空地，默认关）→ 施肥/解锁升级；默认策略/skip_own_weed_bug/smart 秒数对齐 bot | `services/farm/*`, `runtime/worker_loop.rs` |
 | 宠物（护主犬） | 齐 | 上场/收回/喂粮/守护记录 + `ActivateDog` 消耗背包卡片激活图鉴项；快照含 `activatable` 三态（field_6=1 或背包有未锁定同 ID 卡） | `services/pets.rs` |
 | 好友帮助 / 偷菜 / 捣乱 | 齐 | 列表、访问、帮助（经验门控）、偷菜（气泡+自巡/空访/一键 Harvest 主地回退/先偷后帮）、静默仅挡好友、黑名单落盘；捣乱按日限/启动筛选/`1001046` 停 | `services/friend/*` |
@@ -1392,3 +1393,52 @@ TSDK 升级在 b686694 已完成，本提交不再重复，配置开关沿用其
 - **实机待验**：新版本号 + 新 wasm 登录；秋日两个活动；商城 SVIP 浏览/禁购/促销划线价；
   巡田补肥触发
 
+
+### 2026-09-29 — 增量同步 bot 9c30b05..864caf3（协议 1.14.2.15 / 微信 TSDK 双构建 / 掉线诊断 / 种子图）
+
+bot 本轮 13 个提交**玩法层零变化**（活动/商城/日常自动化均未动）；核心是连接层：
+协议升级、微信协议对齐（PR #84）、会话保活诊断（PR #85）、18 张种子图、web 重登 UX（PR #83）。
+**重登 UI 不移植（用户决策 2026-09-29）**：rust 后端重登能力本已等价
+（upsert 带 id code_changed 必重启 + 不带 id 名字匹配 remark_relogin，均已实现），
+桌面端无对应缺陷，bot web 其余改动是修自家 tab 覆盖/表单 bug。
+
+- **协议与版本**：版本成对升 `1.14.2.15_20260922` / `1790568000000`（bot `864caf3`，
+  QQ/微信统一版本号；旧存档 updatedAt 更小会正确回落新默认）；握手 ver/heartbeat 挂同一常量链
+- **微信 TSDK 双构建**（bot `TSDK_BUILDS`）：新增 `assets/tsdk-wx.wasm`
+  （160992B，SHA-256 `4bf6aa0e…`，加载时校验）；`crypto/tsdk.rs` 构建表
+  qq(`tsdk.wasm`/`v3.9.0.1790160550`)/wx(`tsdk-wx.wasm`/`v3.9.0.1790237209`) 成组校验，
+  Module 缓存按平台分槽；顺带修正 `TSDK_VERSION` 常量停滞 `v3.9.0.1789137379` 的旧账
+  （该字符串经 host import `d` 编入 AntiData 特征）；`HostProfile::resolve` 方向反转
+  对齐 bot（`wx`/`wechat`→微信宿主，**其余含空/未知→QQ 宿主**，rust 原实现恰好相反）；
+  wasm 路径收敛到 `tsdk::resolve_wasm_path(platform)`（`TSDK_WASM_PATH` 覆盖 QQ、
+  新增 `TSDK_WX_WASM_PATH` 覆盖微信；删 EngineConfig/WorkerConfig 的单路径字段；
+  tauri resources 补 `assets/tsdk-wx.wasm`）；`read_cstring` 默认上限 64KB→1MB
+  （对齐 bot readCString；`get_encrypted_init_info` 保持显式 64KB）
+- **ACEVM 诊断**（bot `recordUnsupportedAceVm`）：host import `e` 仍返回 0 不 trap，
+  新增调用计数/时间/任务原文 SHA-256（64KiB+1 上限只哈希不解码）/读取失败标志，
+  once 告警 `event=tsdk_host_limitation`；`TsdkRuntime::diagnostics()` 对齐 bot `getDiagnostics`
+- **微信登录分支**（bot `client-profile.ts` + `network.ts`）：`build_login_body_for_platform`
+  微信 device_info 追加 network(5)/memory(10)/device_id(13)（有值才写，memory 解析失败按 0
+  不写，protobufjs 字段号升序）、scene_id 整字段省略、minigame_channel=`other`；
+  QQ 保持 73 字节 golden 不变；单测对齐 bot `wechat-connection.test.js` 断言点
+  （wire 层验 field 缺席，prost 表达不了 presence）
+- **掉线诊断**（PR #84/85 业务可见面）：KickoutNotify 数字 reason（reasonCode）保留进
+  踢下线日志；会话结束输出 `connection_summary` 汇总（platform/version/连接与在线时长/
+  心跳 attempts·replies·failures/pending/queued/入站静默/ACE·TSDK 诊断/断开原因，
+  tracing 结构化 + 面板 `network` 模块日志各一份）；ACE 统计对齐 bot `getAceDiagnostics`
+  （requests/replies/nonempty/failures/lastFailureStage/taskFailures + `antidata_roundtrip`/
+  `antidata_received`/`tsdk_task_failed` 事件）；logger 诊断码白名单对齐
+  `DIAGNOSTIC_CODE_KEY_RE`（disconnect/close/error/http/status/exit/reason*Code 且值为
+  整数才放行）。bot worker→master 的 `account_kicked`/`account_disconnected` IPC 消息与
+  `code`→`disconnectCode` 改名不移植（rust 无多进程层，按对齐原则不记缺口）；
+  ACE generation 隔离同理（rust 每次 worker 重启全新 AceShared+TSDK 实例）
+- **种子图**：18 张新种子图转 WebP 落 `assets/game_config/seed_images_named/seed_images/`
+  （1020435/1026030/1040435/1046030/1120435/1126030/201011/202010/203011/204011/204012/
+  205010/206010/207011/208011/40435/46030/90035，cwebp -lossless 与存量参数一致，
+  目录 988→1006 与 bot 打平）；未跑 images 整目录镜像（防抹掉 webp）
+- 验证：`RUSTFLAGS="-D warnings" cargo check --workspace --all-targets` 0 错 0 警；
+  `cargo test --workspace` 全过（core 1042 项，含新增 wx wasm SHA/体积、双构建字面量、
+  平台归一方向、微信 Login wire、reasonCode、诊断码白名单断言）；`cargo fmt --all --check`、
+  `corepack pnpm typecheck`、`corepack pnpm build` 通过（前端零改动）
+- **实机待验**：QQ 新版本号 1.14.2.15 登录；微信扫码全流程（tsdk-wx.wasm + 微信 Login 体）；
+  被踢日志 reasonCode 与 connection_summary 汇总；新种子图在前端正常显示

@@ -58,8 +58,6 @@ pub struct EngineConfig {
     pub max_workers: usize,
     /// 状态上报间隔
     pub status_interval: Duration,
-    /// TSDK wasm 路径
-    pub tsdk_wasm_path: PathBuf,
     /// 数据根目录（每个 worker 一个子目录）
     pub data_root: PathBuf,
     /// 网关配置模板（每个 worker 的 `GatewayConfig` 由模板 + 账号 code 组合）
@@ -71,9 +69,6 @@ impl Default for EngineConfig {
         Self {
             max_workers: 16,
             status_interval: Duration::from_secs(3),
-            tsdk_wasm_path: std::env::var("TSDK_WASM_PATH").map(PathBuf::from).unwrap_or_else(
-                |_| crate::config::paths::get_resource_path(&["assets", "tsdk.wasm"]),
-            ),
             data_root: crate::config::paths::get_data_dir(),
             gateway_template: GatewayConfigTemplate::default(),
         }
@@ -886,7 +881,6 @@ impl RuntimeEngine {
         let worker_config = WorkerConfig {
             gateway: gateway_config,
             status_interval: self.config.status_interval,
-            tsdk_wasm_path: self.config.tsdk_wasm_path.clone(),
             data_dir: self.config.data_root.clone(),
         };
 

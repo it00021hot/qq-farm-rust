@@ -1452,6 +1452,13 @@ impl WorkerLoop {
         }
     }
 
+    /// ACE 运行诊断（connection_summary 用；未挂 ACE / 已 quiesce 后为 None。
+    /// `stop` 不清诊断，掉线后仍可读最后一次会话的统计）
+    #[must_use]
+    pub fn ace_diagnostics(&self) -> Option<crate::services::ace::AceDiagnostics> {
+        self.ace.lock().as_ref().map(|ace| ace.diagnostics())
+    }
+
     /// 挂上 ACE runtime（登录成功后，断开时随 quiesce 停）
     pub fn attach_ace(&self, ace: Arc<crate::services::ace::AceShared>) {
         if let Some(old) = self.ace.lock().replace(ace) {

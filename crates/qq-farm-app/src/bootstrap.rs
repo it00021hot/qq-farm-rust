@@ -1,7 +1,7 @@
 //! 共享启动：加载 store + 组装 RuntimeEngine（server / desktop 共用）。
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+
 use std::sync::Arc;
 
 use qq_farm_core::config::{
@@ -103,10 +103,6 @@ pub fn assemble_app_context(max_workers: usize, gateway_origin: &str) -> AppCont
     let engine = Arc::new(RuntimeEngine::assemble(EngineConfig {
         max_workers,
         gateway_template,
-        tsdk_wasm_path: std::env::var("TSDK_WASM_PATH").map_or_else(
-            |_| qq_farm_core::config::get_resource_path(&["assets", "tsdk.wasm"]),
-            PathBuf::from,
-        ),
         data_root: qq_farm_core::config::get_data_dir(),
         ..Default::default()
     }));

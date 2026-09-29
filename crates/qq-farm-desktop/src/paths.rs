@@ -64,6 +64,15 @@ pub fn apply_bundled_resource_env(app: &AppHandle) {
             }
         }
     }
+    if env_unset("TSDK_WX_WASM_PATH") {
+        if let Ok(p) = app.path().resolve("assets/tsdk-wx.wasm", BaseDirectory::Resource) {
+            if p.is_file() {
+                std::env::set_var("TSDK_WX_WASM_PATH", &p);
+            } else {
+                tracing::warn!(path = %p.display(), "bundled tsdk-wx.wasm missing");
+            }
+        }
+    }
     if env_unset("FARM_GAME_CONFIG_DIR") {
         if let Ok(p) = app.path().resolve("assets/game_config", BaseDirectory::Resource) {
             if p.is_dir() {

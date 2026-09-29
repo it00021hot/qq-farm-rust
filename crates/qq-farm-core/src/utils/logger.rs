@@ -52,7 +52,10 @@ pub fn sanitize_meta(value: serde_json::Value, depth: usize) -> serde_json::Valu
         serde_json::Value::Object(map) => {
             let mut new_map = serde_json::Map::new();
             for (k, v) in map {
-                if is_sensitive_key(&k) {
+                if is_diagnostic_code_key(&k) && (v.is_i64() || v.is_u64()) {
+                    // 整数诊断码放行（对齐 bot `DIAGNOSTIC_CODE_KEY_RE`，掉线排查必需）
+                    new_map.insert(k, v);
+                } else if is_sensitive_key(&k) {
                     new_map.insert(k, serde_json::Value::String("[REDACTED]".to_string()));
                 } else {
                     new_map.insert(k, sanitize_meta(v, depth + 1));
@@ -68,6 +71,16 @@ fn is_sensitive_key(k: &str) -> bool {
     ["code", "token", "password", "passwd", "auth", "ticket", "cookie", "session"]
         .iter()
         .any(|kw| lower.contains(kw))
+}
+
+/// 整数诊断码 key（对齐 bot `DIAGNOSTIC_CODE_KEY_RE`：
+/// `/^(?:disconnect|close|error|http|status|exit|reason)Code$/i`，全匹配）。
+/// 仅当值为整数时放行；字符串等仍走敏感词脱敏（bot 同款语义）。
+fn is_diagnostic_code_key(k: &str) -> bool {
+    let lower = k.to_lowercase();
+    ["disconnectcode", "closecode", "errorcode", "httpcode", "statuscode", "exitcode", "reasoncode"]
+        .iter()
+        .any(|kw| lower == *kw)
 }
 
 /// 真实 redact（state machine 版）
@@ -489,6 +502,33 @@ mod tests {
         let out = sanitize_meta(v, 0);
         assert_eq!(out["data"]["code"], "[REDACTED]");
         assert_eq!(out["data"]["user"]["token"], "[REDACTED]");
+    }
+
+    /// 对齐 bot `wechat-connection.test.js`「diagnostic numeric codes survive while
+    /// credentials remain redacted」：整数诊断码放行，字符串与凭据仍脱敏。
+    #[test]
+    fn sanitize_meta_keeps_numeric_diagnostic_codes() {
+        let v = json!({
+            "code": 123456,
+            "token": "secret",
+            "diagnostics": {
+                "reasonCode": 2,
+                "disconnectCode": 1006,
+                "errorCode": 500,
+                "closeCode": "credential",
+                "authCode": "secret",
+                "reason": "wss://example.test/?code=secret&token=secret"
+            }
+        });
+        let out = sanitize_meta(v, 0);
+        assert_eq!(out["code"], "[REDACTED]");
+        assert_eq!(out["token"], "[REDACTED]");
+        assert_eq!(out["diagnostics"]["reasonCode"], 2);
+        assert_eq!(out["diagnostics"]["disconnectCode"], 1006);
+        assert_eq!(out["diagnostics"]["errorCode"], 500);
+        assert_eq!(out["diagnostics"]["closeCode"], "[REDACTED]");
+        assert_eq!(out["diagnostics"]["authCode"], "[REDACTED]");
+        assert!(!out.to_string().contains("secret"));
     }
 
     #[test]

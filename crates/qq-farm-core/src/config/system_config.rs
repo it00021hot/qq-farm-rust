@@ -13,12 +13,12 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
-/// 默认客户端版本（与原 TS DEFAULT_CLIENT_VERSION 一致）
-pub const DEFAULT_CLIENT_VERSION: &str = "1.14.2.11_20260922";
+/// 默认客户端版本（与原 TS DEFAULT_CLIENT_VERSION 一致；QQ/微信统一，对齐 bot 864caf3）
+pub const DEFAULT_CLIENT_VERSION: &str = "1.14.2.15_20260922";
 
 /// 默认客户端版本的发布时间（毫秒）。保存的版本只有在其时间戳**更新**时才沿用，
 /// 防止旧存档把升级链锁死在过期版本上（对齐 bot `resolveClientVersion`）。
-pub const DEFAULT_CLIENT_VERSION_UPDATED_AT: i64 = 1_790_215_551_955;
+pub const DEFAULT_CLIENT_VERSION_UPDATED_AT: i64 = 1_790_568_000_000;
 
 /// 解析生效的 client_version：保存值比默认值新才沿用，否则回默认。
 #[must_use]

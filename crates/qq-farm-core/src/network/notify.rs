@@ -15,6 +15,8 @@ pub enum NotifyEvent {
         event_type: String,
         /// 原因描述
         reason: String,
+        /// 数字原因码（KickoutNotify.reason；掉线诊断用，未知为 0）
+        reason_code: i64,
     },
     /// 土地状态变化（自己的田或好友气泡）
     LandsChanged {
@@ -73,8 +75,14 @@ pub fn parse_event(event: &EventMessage) -> NotifyEvent {
 
     if event_type.contains("Kickout") {
         match crate::proto::generated::gatepb::KickoutNotify::decode(body) {
-            Ok(notify) => NotifyEvent::Kickout { event_type, reason: notify.reason_message },
-            Err(_) => NotifyEvent::Kickout { event_type, reason: String::from("未知") },
+            Ok(notify) => NotifyEvent::Kickout {
+                event_type,
+                reason: notify.reason_message,
+                reason_code: notify.reason,
+            },
+            Err(_) => {
+                NotifyEvent::Kickout { event_type, reason: String::from("未知"), reason_code: 0 }
+            }
         }
     } else if event_type.contains("LandsNotify") {
         match crate::proto::generated::gamepb::plantpb::LandsNotify::decode(body) {
@@ -317,9 +325,11 @@ mod tests {
             body: kickout.encode_to_vec().into(),
         };
         match parse_event(&ev) {
-            NotifyEvent::Kickout { event_type, reason } => {
+            NotifyEvent::Kickout { event_type, reason, reason_code } => {
                 assert_eq!(event_type, "GateUserKickoutNotify");
                 assert_eq!(reason, "test reason");
+                // 数字原因码保留（对齐 bot reasonCode 掉线诊断，2026-09-28）
+                assert_eq!(reason_code, 1);
             }
             _ => panic!("expected Kickout"),
         }

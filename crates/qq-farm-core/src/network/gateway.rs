@@ -227,6 +227,16 @@ struct Inner {
     disconnect_reason: parking_lot::Mutex<Option<String>>,
     /// 最近一次收到任意 WS 帧的时间（ms）。大包 GetAll 下载期间心跳 RPC 可能超时，但连接仍活。
     last_rx_ms: AtomicI64,
+    /// 连接建立时刻（ms；0 = 未连接）。会话结束的 connection_summary 用
+    connected_at_ms: AtomicI64,
+    /// 登录成功（进入 Online）时刻（ms；0 = 未上线）
+    online_at_ms: AtomicI64,
+    /// 心跳发出拍数（connection_summary 用）
+    heartbeat_attempts: AtomicU64,
+    /// 心跳正常回包拍数
+    heartbeat_replies: AtomicU64,
+    /// 心跳失败拍数（超时/RPC 错误；解码失败按成功计，对齐 bot）
+    heartbeat_failures: AtomicU64,
     /// TSDK 重建中标志（worker rebuild 期间置 true，WorkerLoop 据此放宽 silence 阈值）
     rebuilding: AtomicBool,
     /// 五班次请求调度器（对齐 bot request-priority.ts 的队列模型，替换旧的
@@ -263,6 +273,11 @@ impl Gateway {
                 session_end,
                 disconnect_reason: parking_lot::Mutex::new(None),
                 last_rx_ms: AtomicI64::new(0),
+                connected_at_ms: AtomicI64::new(0),
+                online_at_ms: AtomicI64::new(0),
+                heartbeat_attempts: AtomicU64::new(0),
+                heartbeat_replies: AtomicU64::new(0),
+                heartbeat_failures: AtomicU64::new(0),
                 rebuilding: AtomicBool::new(false),
                 rpc_scheduler: RpcScheduler::new(),
                 token_provider: crate::utils::random::GatewayTokenProvider::new(),
@@ -320,6 +335,12 @@ impl Gateway {
         let _ = self.inner.session_end.send(false);
         *self.inner.disconnect_reason.lock() = None;
         self.inner.last_rx_ms.store(0, Ordering::Release);
+        // 新会话诊断基线（connection_summary 从这里起算）
+        self.inner.connected_at_ms.store(crate::utils::time::now_ms(), Ordering::Release);
+        self.inner.online_at_ms.store(0, Ordering::Release);
+        self.inner.heartbeat_attempts.store(0, Ordering::Release);
+        self.inner.heartbeat_replies.store(0, Ordering::Release);
+        self.inner.heartbeat_failures.store(0, Ordering::Release);
 
         let url = self.inner.config.build_ws_url();
         tracing::info!(
@@ -749,22 +770,26 @@ impl Gateway {
 
     /// 标记登录完成（阶段 1A 外部调用；阶段 1B 由业务模块在收到登录响应后调用）
     pub fn mark_online(&self) {
+        self.inner.online_at_ms.store(crate::utils::time::now_ms(), Ordering::Release);
         *self.inner.phase.write() = ConnectionPhase::Online;
     }
 
     /// 完整登录流程：发 LoginRequest → 等 LoginReply → bindUser → mark_online
     ///
     /// 1:1 对应原 `network.ts:sendLogin()`。请求体由
-    /// [`crate::network::login_body::build_login_body`] 逐字节对齐官方抓包。
+    /// [`crate::network::login_body::build_login_body_for_platform`] 按平台对齐
+    /// （QQ：官方 73 字节抓包逐字节；微信：bot `864caf3` 的 wechat 分支）。
     ///
     /// # Arguments
-    /// - `client_version`: 生效的客户端版本（如 `1.14.0.4_20260911`）
+    /// - `client_version`: 生效的客户端版本（如 `1.14.2.15_20260922`）
     /// - `sys_software`: 系统标识（如 `Windows`）
+    /// - `wx_extras`: 微信平台 device_info 扩展字段（network/device_id/memory；QQ 忽略）
     /// - `tsdk`: TSDK runtime（用于 bindUser）
     pub async fn login(
         &self,
         client_version: &str,
         sys_software: &str,
+        wx_extras: &crate::network::login_body::WxDeviceExtras,
         tsdk: &Arc<crate::crypto::tsdk::TsdkRuntime>,
     ) -> Result<LoginReply> {
         // 1. 阶段检查：必须在 Login 阶段
@@ -777,8 +802,13 @@ impl Gateway {
             }
         }
 
-        // 2. 构造 LoginRequest（逐字节对齐官方 73 字节抓包）
-        let body = crate::network::login_body::build_login_body(client_version, sys_software);
+        // 2. 构造 LoginRequest（平台分支见 login_body 模块文档）
+        let body = crate::network::login_body::build_login_body_for_platform(
+            client_version,
+            sys_software,
+            &self.inner.config.platform,
+            Some(wx_extras),
+        );
 
         // 3. 对齐 sendLogin：用 sendMsg（Login 阶段可发），不是 sendMsgAsync
         let reply_bytes = self
@@ -871,14 +901,23 @@ impl Gateway {
         // 逐字节对齐官方 27 字节抓包（field_3 显式写 0）
         let body = crate::network::login_body::build_heartbeat_body(gid, client_version);
         // 对齐 network.ts：Heartbeat 走 sendMsgAsync 默认 20s，不能用 5s（忙时易误超时→掉线）
-        let reply_bytes = self
+        self.inner.heartbeat_attempts.fetch_add(1, Ordering::Relaxed);
+        let reply_bytes = match self
             .request_with_timeout(
                 "gamepb.userpb.UserService",
                 "Heartbeat",
                 &body,
                 crate::constants::HEARTBEAT_RPC_TIMEOUT_MS,
             )
-            .await?;
+            .await
+        {
+            Ok(b) => b,
+            Err(e) => {
+                self.inner.heartbeat_failures.fetch_add(1, Ordering::Relaxed);
+                return Err(e);
+            }
+        };
+        self.inner.heartbeat_replies.fetch_add(1, Ordering::Relaxed);
         // 对齐 bot network.ts:822-827：心跳回包到达即算成功（先记账再解码），
         // 解码失败只 warn 不计 miss——连接活着就不该因本地解码问题判死。
         let reply = match HeartbeatReply::decode(reply_bytes.as_slice()) {
@@ -898,6 +937,55 @@ impl Gateway {
     pub fn now_ms(&self) -> i64 {
         crate::utils::time::now_ms()
     }
+
+    /// TSDK 运行诊断（connection_summary 用；非 TSDK 加密器时为 None）
+    #[must_use]
+    pub fn tsdk_diagnostics(&self) -> Option<crate::crypto::tsdk::TsdkDiagnostics> {
+        self.inner.encryptor.read().tsdk_runtime().map(|rt| rt.diagnostics())
+    }
+
+    /// 会话连接诊断（对齐 bot `getConnectionDiagnostics` 的可采集子集，
+    /// 供会话结束的 connection_summary 汇总日志使用）
+    #[must_use]
+    pub fn connection_diagnostics(&self) -> ConnectionDiagnostics {
+        let now = crate::utils::time::now_ms();
+        let connected_at = self.inner.connected_at_ms.load(Ordering::Relaxed);
+        let online_at = self.inner.online_at_ms.load(Ordering::Relaxed);
+        let last_rx = self.inner.last_rx_ms.load(Ordering::Relaxed);
+        ConnectionDiagnostics {
+            platform: self.inner.config.platform.clone(),
+            client_version: self.inner.config.client_version.clone(),
+            connection_age_ms: if connected_at > 0 { (now - connected_at).max(0) } else { 0 },
+            online_age_ms: if online_at > 0 { (now - online_at).max(0) } else { 0 },
+            heartbeat_attempts: self.inner.heartbeat_attempts.load(Ordering::Relaxed),
+            heartbeat_replies: self.inner.heartbeat_replies.load(Ordering::Relaxed),
+            heartbeat_failures: self.inner.heartbeat_failures.load(Ordering::Relaxed),
+            last_inbound_age_ms: if last_rx > 0 { (now - last_rx).max(0) } else { 0 },
+            pending: self.inner.requests.pending_count(),
+            queued: self.inner.rpc_scheduler.queued_count(),
+            disconnect_reason: self.inner.disconnect_reason.lock().clone(),
+        }
+    }
+}
+
+/// 会话连接诊断快照（对齐 bot `getConnectionDiagnostics` 字段子集）
+#[derive(Debug, Clone)]
+pub struct ConnectionDiagnostics {
+    pub platform: String,
+    pub client_version: String,
+    /// 连接建立至今（ms；未连接为 0）
+    pub connection_age_ms: i64,
+    /// 登录成功至今（ms；未上线为 0）
+    pub online_age_ms: i64,
+    pub heartbeat_attempts: u64,
+    pub heartbeat_replies: u64,
+    pub heartbeat_failures: u64,
+    /// 距最近一次入站的时长（ms）
+    pub last_inbound_age_ms: i64,
+    pub pending: usize,
+    pub queued: usize,
+    /// 会话结束原因（心跳超时 / kickout / ws_close 等）
+    pub disconnect_reason: Option<String>,
 }
 
 fn end_session(inner: &Inner, reason: Option<&str>) {

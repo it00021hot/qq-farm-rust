@@ -36,20 +36,51 @@ pub struct AceShared {
     tsdk: Mutex<Option<Arc<TsdkRuntime>>>,
     /// 上次 speed_check 时间戳
     last_speed_check_at: AtomicI64,
-    /// readyLogged 标志
+    /// readyLogged 标志（对齐 bot `readyLogged`：非空回灌确认只记一次）
     ready_logged: AtomicBool,
+    /// roundtripLogged 标志（对齐 bot `roundtripLogged`：AntiData 通道确认只记一次）
+    roundtrip_logged: AtomicBool,
     /// 防止 AntiData 重入
     request_running: AtomicBool,
     /// 上次打印 AntiData 往返日志的时间（限频诊断：确认回灌通道活着）
     last_reply_log_ms: AtomicI64,
     /// 上次发出 WasmReset 事件的时间（限频：pending_reset 短路兜底）
     last_reset_emit_ms: AtomicI64,
+    /// 运行诊断（对齐 bot `getAceDiagnostics`，[`Self::diagnostics`] 读取）
+    diagnostics: Mutex<AceDiagnostics>,
     /// scheduler
     scheduler: Scheduler,
     /// worker 事件总线（用于发 WasmReset）
     event_tx: Mutex<Option<broadcast::Sender<WorkerEvent>>>,
     /// 账号名（用于事件）
     account_name: Mutex<String>,
+}
+
+/// ACE 运行诊断（对齐 bot `ace.ts` 的 `emptyDiagnostics()` 字段语义）
+#[derive(Debug, Clone, Default)]
+pub struct AceDiagnostics {
+    /// AntiData RPC 发出次数
+    pub requests: u64,
+    /// 收到回包次数
+    pub replies: u64,
+    /// 非空回灌次数
+    pub nonempty_replies: u64,
+    /// 上报/回灌失败次数
+    pub failures: u64,
+    pub last_request_at: i64,
+    pub last_reply_at: i64,
+    pub last_failure_at: i64,
+    /// 最近一次失败阶段：collect / encode / request / decode / feed
+    pub last_failure_stage: String,
+    /// 最近一次 process_received_data 成功时刻
+    pub last_process_at: i64,
+    pub last_process_failure_at: i64,
+    /// TSDK 定时任务（process/heartbeat/speed/status）失败次数
+    pub task_failures: u64,
+    pub last_task_failure_at: i64,
+    pub last_failed_task: String,
+    /// 是否有 AntiData 请求在途（bot `getAceDiagnostics().requestRunning`）
+    pub request_running: bool,
 }
 
 impl AceShared {
@@ -60,13 +91,23 @@ impl AceShared {
             tsdk: Mutex::new(None),
             last_speed_check_at: AtomicI64::new(0),
             ready_logged: AtomicBool::new(false),
+            roundtrip_logged: AtomicBool::new(false),
             request_running: AtomicBool::new(false),
             last_reply_log_ms: AtomicI64::new(0),
             last_reset_emit_ms: AtomicI64::new(0),
+            diagnostics: Mutex::new(AceDiagnostics::default()),
             scheduler: Scheduler::new("ace"),
             event_tx: Mutex::new(None),
             account_name: Mutex::new(String::new()),
         }
+    }
+
+    /// 当前运行诊断（对齐 bot `getAceDiagnostics`，喂给会话结束的 connection_summary）
+    #[must_use]
+    pub fn diagnostics(&self) -> AceDiagnostics {
+        let mut d = self.diagnostics.lock().clone();
+        d.request_running = self.request_running.load(Ordering::SeqCst);
+        d
     }
 
     /// 注入 worker 事件总线 + 账号名（用于 WasmReset 事件）
@@ -77,12 +118,14 @@ impl AceShared {
 
     /// 启动 ACE runtime（注册 5 个定时任务）
     pub fn start(self: &Arc<Self>, sender: Arc<dyn AceSender>, tsdk: Arc<TsdkRuntime>) {
-        // 清理旧状态
+        // 清理旧状态（对齐 bot startAceRuntime：diagnostics 清零 + 两个 once 标志复位）
         self.stop(false);
 
         *self.sender.lock() = Some(sender);
         *self.tsdk.lock() = Some(tsdk);
         self.ready_logged.store(false, Ordering::SeqCst);
+        self.roundtrip_logged.store(false, Ordering::SeqCst);
+        *self.diagnostics.lock() = AceDiagnostics::default();
         self.last_speed_check_at.store(crate::utils::time::now_ms(), Ordering::SeqCst);
 
         // 1. anti_data 5s
@@ -100,9 +143,9 @@ impl AceShared {
                 if !s.sender_online() {
                     return;
                 }
-                if let Some(tsdk) = s.tsdk.lock().as_ref() {
-                    let _ = tsdk.process_received_data();
-                }
+                run_tsdk_task(s, "process_received_data", || {
+                    s.tsdk.lock().as_ref().map_or(Ok(()), |tsdk| tsdk.process_received_data())
+                });
             }),
         );
 
@@ -114,9 +157,9 @@ impl AceShared {
                 if !s.sender_online() {
                     return;
                 }
-                if let Some(tsdk) = s.tsdk.lock().as_ref() {
-                    let _ = tsdk.heartbeat_tick();
-                }
+                run_tsdk_task(s, "heartbeat_tick", || {
+                    s.tsdk.lock().as_ref().map_or(Ok(()), |tsdk| tsdk.heartbeat_tick())
+                });
             }),
         );
 
@@ -131,9 +174,9 @@ impl AceShared {
                 let now = crate::utils::time::now_ms();
                 let last = s.last_speed_check_at.swap(now, Ordering::SeqCst);
                 let elapsed = if last == 0 { 30_000 } else { (now - last).max(0) as u64 };
-                if let Some(tsdk) = s.tsdk.lock().as_ref() {
-                    let _ = tsdk.detect_speed_hack(elapsed);
-                }
+                run_tsdk_task(s, "speed_check", || {
+                    s.tsdk.lock().as_ref().map_or(Ok(()), |tsdk| tsdk.detect_speed_hack(elapsed))
+                });
             }),
         );
 
@@ -145,9 +188,9 @@ impl AceShared {
                 if !s.sender_online() {
                     return;
                 }
-                if let Some(tsdk) = s.tsdk.lock().as_ref() {
-                    let _ = tsdk.send_status();
-                }
+                run_tsdk_task(s, "status_report", || {
+                    s.tsdk.lock().as_ref().map_or(Ok(()), |tsdk| tsdk.send_status())
+                });
             }),
         );
     }
@@ -162,6 +205,7 @@ impl AceShared {
         self.scheduler.clear_all();
         self.request_running.store(false, Ordering::SeqCst);
         self.ready_logged.store(false, Ordering::SeqCst);
+        self.roundtrip_logged.store(false, Ordering::SeqCst);
         *self.sender.lock() = None;
         if destroy_wasm {
             if let Some(tsdk) = self.tsdk.lock().take() {
@@ -188,7 +232,10 @@ impl AceShared {
         match inner_result {
             Ok(Ok(())) => {}
             Ok(Err(e)) => {
+                let stage = self.diagnostics.lock().last_failure_stage.clone();
                 tracing::warn!(
+                    event = "antidata_failed",
+                    stage = %stage,
                     account = %self.account_name.lock(),
                     error = %e,
                     "ACE AntiData 上报失败"
@@ -235,6 +282,7 @@ impl AceShared {
                 // 任何 wasm 错误都已经在内部累计到 consecutive_fail_count；
                 // 若已达阈值，is_reset_pending() 会返回 true，这里再发一次事件兜底
                 // （防止 ace 任务自己先踩到边缘）。
+                self.record_failure("collect", &e);
                 if tsdk.is_reset_pending() {
                     self.emit_wasm_reset(
                         tsdk.consecutive_fail_count(),
@@ -256,22 +304,55 @@ impl AceShared {
             return Ok(());
         };
 
+        // stage=encode（encode_to_vec 不会失败）
         let req = AntiDataRequest { data: prost::bytes::Bytes::from(data.clone()) };
         let body = req.encode_to_vec();
 
+        {
+            let mut d = self.diagnostics.lock();
+            d.requests += 1;
+            d.last_request_at = crate::utils::time::now_ms();
+        }
         let reply_body = match sender.send("gamepb.acepb.AceService", "AntiData", &body).await {
             Ok(b) => b,
             // 断线瞬间的 Phase 错误：连接已结束，无需告警（否则僵尸任务掉线后持续刷屏）
             Err(crate::error::Error::Network(crate::network::error::NetworkError::Phase(_))) => {
-                return Ok(())
+                self.record_failure(
+                    "request",
+                    &crate::error::Error::Network(crate::network::error::NetworkError::Phase(
+                        "connection ended".to_string(),
+                    )),
+                );
+                return Ok(());
             }
-            Err(e) => return Err(e),
+            Err(e) => {
+                self.record_failure("request", &e);
+                return Err(e);
+            }
         };
 
-        let reply = AntiDataReply::decode(reply_body.as_slice())?;
+        // stage=decode
+        let reply = match AntiDataReply::decode(reply_body.as_slice()) {
+            Ok(r) => r,
+            Err(e) => {
+                let err = crate::error::Error::Crypto(format!("decode AntiDataReply: {e}"));
+                self.record_failure("decode", &err);
+                return Err(err);
+            }
+        };
+        // 对齐 bot roundtripLogged：通道确认只记一次（event=antidata_roundtrip）。
+        // 之后的 60s 限频日志仍保留（rust 增强的巡检视角）。
+        if !self.roundtrip_logged.swap(true, Ordering::SeqCst) {
+            tracing::info!(event = "antidata_roundtrip", "AntiData 请求已收到有效回复");
+        }
+        let now = crate::utils::time::now_ms();
+        {
+            let mut d = self.diagnostics.lock();
+            d.replies += 1;
+            d.last_reply_at = now;
+        }
         // 限频诊断日志（每 60s 一条）：确认 AntiData 往返通道活着、服务端是否回灌。
         // 若长期 sent_ok 但 result 恒为 0，说明服务端 ACE 没有认我们（排查方向）。
-        let now = crate::utils::time::now_ms();
         let last_log = self.last_reply_log_ms.swap(now, Ordering::SeqCst);
         if now - last_log > 60_000 {
             tracing::info!(
@@ -282,9 +363,17 @@ impl AceShared {
             );
         }
         if !reply.result.is_empty() {
-            tsdk.send_data_from_server(&reply.result)?;
+            let mut d = self.diagnostics.lock();
+            d.nonempty_replies += 1;
+            drop(d);
+            // stage=feed
+            if let Err(e) = tsdk.send_data_from_server(&reply.result) {
+                self.record_failure("feed", &e);
+                return Err(e);
+            }
             if !self.ready_logged.swap(true, Ordering::SeqCst) {
                 tracing::info!(
+                    event = "antidata_received",
                     "ACE 链路正常: 上报 {} 字节，回灌 {} 字节",
                     data.len(),
                     reply.result.len()
@@ -292,6 +381,15 @@ impl AceShared {
             }
         }
         Ok(())
+    }
+
+    /// 记一次 AntiData 失败（对齐 bot：failures/lastFailureAt/lastFailureStage）。
+    /// 日志由外层 [`Self::send_anti_data`] 统一发（event=antidata_failed），避免双份。
+    fn record_failure(&self, stage: &str, _e: &crate::error::Error) {
+        let mut d = self.diagnostics.lock();
+        d.failures += 1;
+        d.last_failure_at = crate::utils::time::now_ms();
+        d.last_failure_stage = stage.to_string();
     }
 }
 
@@ -327,6 +425,31 @@ impl AceShared {
 }
 
 // ===== 任务构造 helper =====
+
+/// bot `runTsdkTask` 等价：TSDK 定时任务失败计数 + `tsdk_task_failed` 事件日志。
+/// 成功时仅 process_received_data 刷新 `last_process_at`（对齐 bot）。
+fn run_tsdk_task(shared: &AceShared, task: &str, f: impl FnOnce() -> crate::error::Result<()>) {
+    match f() {
+        Ok(()) => {
+            if task == "process_received_data" {
+                shared.diagnostics.lock().last_process_at = crate::utils::time::now_ms();
+            }
+        }
+        Err(e) => {
+            let now = crate::utils::time::now_ms();
+            {
+                let mut d = shared.diagnostics.lock();
+                d.task_failures += 1;
+                d.last_task_failure_at = now;
+                d.last_failed_task = task.to_string();
+                if task == "process_received_data" {
+                    d.last_process_failure_at = now;
+                }
+            }
+            tracing::warn!(event = "tsdk_task_failed", task, error = %e, "TSDK 定时任务失败");
+        }
+    }
+}
 
 fn ace_anti_data_task(shared: Arc<AceShared>) -> TaskFn {
     Arc::new(move || {
@@ -411,6 +534,21 @@ mod tests {
         let s = AceShared::new();
         s.stop(false);
         assert!(!s.ready_logged.load(Ordering::SeqCst));
+        assert!(!s.roundtrip_logged.load(Ordering::SeqCst));
         assert_eq!(s.scheduler.task_count(), 0);
+    }
+
+    /// 诊断初值全零、request_running 跟随标志（对齐 bot emptyDiagnostics + requestRunning）
+    #[test]
+    fn diagnostics_initial_state_and_running_flag() {
+        let s = AceShared::new();
+        let d = s.diagnostics();
+        assert_eq!(d.requests, 0);
+        assert_eq!(d.replies, 0);
+        assert_eq!(d.nonempty_replies, 0);
+        assert_eq!(d.failures, 0);
+        assert_eq!(d.last_failure_stage, "");
+        assert_eq!(d.task_failures, 0);
+        assert!(!d.request_running);
     }
 }

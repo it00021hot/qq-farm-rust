@@ -1,4 +1,4 @@
-//! 微信 TSDK (`tsdk.wasm`) 封装。
+//! 微信 TSDK 封装（QQ/微信双平台构建：`tsdk.wasm` + `tsdk-wx.wasm`，对齐 bot `TSDK_BUILDS`）。
 //!
 //! # 指针所有权约定（务必遵守，违者会破坏 wasm 堆导致 64MB 内存耗尽）
 //!
@@ -46,18 +46,72 @@ macro_rules! werr {
     };
 }
 
-/// wasm 单次回灌的合理上限（与 Node `readCString` 默认 `maxLength=64 * 1024` 对齐）
+/// wasm 单次回灌的合理上限（bot `getEncryptedInitInfo` 读 `H()` 结果的显式 64KB 上限）
 pub const MAX_SANE_LEN: usize = 64 * 1024;
+
+/// 宿主读 cstring 的默认上限（对齐 bot `readCString` 默认 `maxLength = 1024 * 1024`）
+const MAX_READ_CSTRING_LEN: usize = 1024 * 1024;
 
 /// 同一 wasm 错误连续出现 N 次即触发 [`TsdkRuntime::request_reset`]
 pub const WASM_CONSECUTIVE_FAIL_THRESHOLD: u32 = 3;
 
 // ===== TSDK 元信息（与原项目保持一致） =====
 
-const TSDK_VERSION: &str = "v3.9.0.1789137379";
-/// 随 wasm 二进制更新的 SHA256（对齐 bot `tsdk-runtime.ts` 的 `TSDK_SHA256`），
-/// 加载前校验，防止旧版/被替换的 wasm 静默参与加解密。
-const TSDK_WASM_SHA256: &str = "2c9e377ecc9a4fd9019f12191b589d543a60d6654580eb3e237b35f1fa5b1cb7";
+/// TSDK 双平台构建（对齐 bot `TSDK_BUILDS`）：QQ 与微信各一份 wasm，
+/// 文件名、版本号（经 host import `d` 写入 wasm、编入 AntiData 特征）与 SHA-256 成组校验。
+struct TsdkBuild {
+    key: &'static str,
+    file: &'static str,
+    version: &'static str,
+    sha256: &'static str,
+}
+
+const TSDK_BUILD_QQ: TsdkBuild = TsdkBuild {
+    key: "qq",
+    file: "tsdk.wasm",
+    version: "v3.9.0.1790160550",
+    sha256: "2c9e377ecc9a4fd9019f12191b589d543a60d6654580eb3e237b35f1fa5b1cb7",
+};
+
+const TSDK_BUILD_WX: TsdkBuild = TsdkBuild {
+    key: "wx",
+    file: "tsdk-wx.wasm",
+    version: "v3.9.0.1790237209",
+    sha256: "4bf6aa0ede9677fe82186c1a76f8df8a14ccd6d14b6ff1280230923189f4e972",
+};
+
+/// 平台归一（对齐 bot `resolveTsdkPlatform`）：`wx`/`wechat` → 微信，其余（含空/未知）→ QQ。
+fn resolve_tsdk_platform(platform: &str) -> &'static str {
+    let normalized = platform.trim().to_ascii_lowercase();
+    if normalized == "wx" || normalized == "wechat" {
+        "wx"
+    } else {
+        "qq"
+    }
+}
+
+fn tsdk_build(platform: &str) -> &'static TsdkBuild {
+    if resolve_tsdk_platform(platform) == "wx" {
+        &TSDK_BUILD_WX
+    } else {
+        &TSDK_BUILD_QQ
+    }
+}
+
+/// 按平台解析 wasm 文件路径（对齐 bot init 的 `getResourcePath('utils', build.file)`）。
+/// `TSDK_WASM_PATH` / `TSDK_WX_WASM_PATH` 分别覆盖 QQ/微信构建（dev 与桌面安装包用）。
+#[must_use]
+pub fn resolve_wasm_path(platform: &str) -> std::path::PathBuf {
+    let build = tsdk_build(platform);
+    let env_key = if build.key == "qq" { "TSDK_WASM_PATH" } else { "TSDK_WX_WASM_PATH" };
+    if let Ok(p) = std::env::var(env_key) {
+        let trimmed = p.trim();
+        if !trimmed.is_empty() {
+            return std::path::PathBuf::from(trimmed);
+        }
+    }
+    crate::config::paths::get_resource_path(&["assets", build.file])
+}
 const MINI_PROGRAM_APP_ID: &str = "wx5306c5978fdb76e4";
 /// QQ 小程序 App ID（QQ 平台宿主初始化，对齐 bot `MINI_PROGRAM_APP_IDS.qq`）
 const QQ_MINI_PROGRAM_APP_ID: &str = "1112386029";
@@ -76,7 +130,7 @@ const QQ_HOST_STATE_LENGTH: usize = 64;
 const QQ_HOST_NODE_MISMATCH_INDEX: usize = 1;
 
 /// 平台宿主画像（对齐 bot `resolveTsdkHostProfile`）：
-/// QQ 账号走 QQ 宿主（App ID/设备文本/用户目录/非调试），其余默认微信宿主。
+/// `wx`/`wechat` 走微信宿主，其余（含空/未知）走 QQ 宿主（App ID/设备文本/用户目录/非调试）。
 #[derive(Clone)]
 struct HostProfile {
     app_id: &'static str,
@@ -84,6 +138,8 @@ struct HostProfile {
     device_text: Option<&'static str>,
     user_data_path: Option<&'static str>,
     platform: &'static str,
+    /// 平台对应的 wasm 构建（版本号经 import `d` 写入 wasm，SHA-256 加载前校验）
+    build: &'static TsdkBuild,
 }
 
 impl Default for HostProfile {
@@ -94,23 +150,24 @@ impl Default for HostProfile {
             device_text: None,
             user_data_path: None,
             platform: "wx",
+            build: &TSDK_BUILD_WX,
         }
     }
 }
 
 impl HostProfile {
     fn resolve(platform: &str) -> Self {
-        let normalized = platform.trim().to_ascii_lowercase();
-        if normalized == "qq" {
+        if resolve_tsdk_platform(platform) == "wx" {
+            Self::default()
+        } else {
             Self {
                 app_id: QQ_MINI_PROGRAM_APP_ID,
                 debug_mode: 0,
                 device_text: Some(QQ_DEVICE_TEXT),
                 user_data_path: Some(QQ_USER_DATA_PATH),
                 platform: "qq",
+                build: &TSDK_BUILD_QQ,
             }
-        } else {
-            Self::default()
         }
     }
 }
@@ -154,6 +211,19 @@ const MERGED_DATA_METADATA: (u32, u32) = (67_371_008, 404);
 
 // ===== Store 状态 =====
 
+/// ACEVM 宿主能力边界诊断（对齐 bot `recordUnsupportedAceVm` 采集的字段）。
+/// 任务原文只做 SHA-256，不解码/不执行/不保留/不落日志。
+#[derive(Default)]
+struct AceVmDiag {
+    calls: u64,
+    last_call_at_ms: i64,
+    last_task_hash: String,
+    last_task_bytes: u64,
+    last_task_read_failed: bool,
+    /// bot `warnOnce('acevm', ...)`：只告警一次
+    warned: bool,
+}
+
 /// Store 持有的 host 端数据
 #[derive(Default)]
 struct HostState {
@@ -163,6 +233,8 @@ struct HostState {
     data_dir: String,
     /// 平台宿主画像（QQ / 微信）
     host: HostProfile,
+    /// ACEVM 诊断（与所属 [`TsdkRuntime`] 共享，rebuild 换 Store 后计数仍延续）
+    acevm_diag: std::sync::Arc<parking_lot::Mutex<AceVmDiag>>,
 }
 
 // ===== Engine 单例 =====
@@ -188,29 +260,36 @@ fn shared_engine() -> Result<&'static Engine> {
     Ok(ENGINE.get().expect("engine initialized"))
 }
 
-static MODULE: OnceLock<Module> = OnceLock::new();
+static QQ_MODULE: OnceLock<Module> = OnceLock::new();
+static WX_MODULE: OnceLock<Module> = OnceLock::new();
 
-fn shared_module(engine: &Engine, wasm_path: &Path) -> Result<&'static Module> {
-    if let Some(m) = MODULE.get() {
+fn shared_module(
+    engine: &Engine,
+    wasm_path: &Path,
+    build: &'static TsdkBuild,
+) -> Result<&'static Module> {
+    let slot = if build.key == "qq" { &QQ_MODULE } else { &WX_MODULE };
+    if let Some(m) = slot.get() {
         return Ok(m);
     }
     let wasm_bytes =
         std::fs::read(wasm_path).map_err(|e| Error::crypto(format!("read wasm failed: {e}")))?;
-    verify_wasm_sha256(&wasm_bytes)?;
+    verify_wasm_sha256(&wasm_bytes, build)?;
     let module = Module::new(engine, &wasm_bytes)
         .map_err(|e| Error::crypto(format!("load wasm failed: {e}")))?;
-    let _ = MODULE.set(module);
-    Ok(MODULE.get().expect("module initialized"))
+    let _ = slot.set(module);
+    Ok(slot.get().expect("module initialized"))
 }
 
-/// 加载前校验 wasm 完整性（对齐 bot `tsdk-runtime.ts` 的 SHA256 校验）。
-fn verify_wasm_sha256(bytes: &[u8]) -> Result<()> {
+/// 加载前校验 wasm 完整性（对齐 bot `tsdk-runtime.ts`：SHA256 必须等于构建表登记值），
+/// 防止旧版/被替换的 wasm 静默参与加解密。
+fn verify_wasm_sha256(bytes: &[u8], build: &TsdkBuild) -> Result<()> {
     use sha2::{Digest, Sha256};
-    let digest = Sha256::digest(bytes);
-    let hex_digest = hex::encode(digest);
-    if hex_digest != TSDK_WASM_SHA256 {
+    let hex_digest = hex::encode(Sha256::digest(bytes));
+    if hex_digest != build.sha256 {
         return Err(Error::crypto(format!(
-            "tsdk.wasm SHA256 校验失败：期望 {TSDK_WASM_SHA256}，实际 {hex_digest}（版本 {TSDK_VERSION}）"
+            "{} SHA256 校验失败：期望 {}，实际 {}（版本 {}）",
+            build.file, build.sha256, hex_digest, build.version
         )));
     }
     Ok(())
@@ -235,6 +314,9 @@ pub struct TsdkRuntime {
     /// 是否已请求重置。被 worker 拉起重置后清零。
     /// 在 pending_reset 期间所有 host-side helper 直接返回 `Err(WasmResetPending)`。
     pending_reset: AtomicBool,
+    /// ACEVM 宿主能力边界诊断（host import `e` 回填，[`Self::diagnostics`] 读取；
+    /// 与 [`HostState`] 共享同一 Arc，rebuild 换 Store 后计数延续）
+    acevm_diag: std::sync::Arc<parking_lot::Mutex<AceVmDiag>>,
 }
 
 struct Inner {
@@ -282,7 +364,7 @@ impl TsdkRuntime {
         Self::for_platform(data_dir, "wx")
     }
 
-    /// 按账号平台创建 runtime（`qq` → QQ 宿主，其余 → 微信宿主）。
+    /// 按账号平台创建 runtime（`wx`/`wechat` → 微信宿主，其余 → QQ 宿主，对齐 bot）。
     #[must_use]
     pub fn for_platform(data_dir: impl Into<String>, platform: &str) -> Self {
         Self {
@@ -293,15 +375,16 @@ impl TsdkRuntime {
             inner: parking_lot::Mutex::new(None),
             consecutive_fail_count: AtomicU32::new(0),
             pending_reset: AtomicBool::new(false),
+            acevm_diag: std::sync::Arc::new(parking_lot::Mutex::new(AceVmDiag::default())),
         }
     }
 
-    /// 便捷构造：创建 + 初始化（微信宿主）
+    /// 便捷构造：创建 + 初始化（微信宿主，须传入 `tsdk-wx.wasm`）。
     pub fn load(wasm_path: &Path, data_dir: impl Into<String>) -> Result<Self> {
         Self::load_for_platform(wasm_path, data_dir, "wx")
     }
 
-    /// 便捷构造：创建 + 初始化（按账号平台选择宿主）
+    /// 便捷构造：创建 + 初始化（按账号平台选择宿主与对应 wasm 构建校验）。
     pub fn load_for_platform(
         wasm_path: &Path,
         data_dir: impl Into<String>,
@@ -312,7 +395,7 @@ impl TsdkRuntime {
         rt.init(wasm_path)?;
         tracing::info!(
             elapsed_ms = start.elapsed().as_millis() as u64,
-            version = TSDK_VERSION,
+            version = rt.host_profile.build.version,
             platform = rt.host_profile.platform,
             "TSDK 初始化完成"
         );
@@ -340,6 +423,40 @@ impl TsdkRuntime {
     #[must_use]
     pub fn is_reset_pending(&self) -> bool {
         self.pending_reset.load(Ordering::Acquire)
+    }
+
+    /// 当前运行诊断（对齐 bot `getDiagnostics`，喂给会话结束的 connection_summary）。
+    ///
+    /// 两把锁分别短临界区读取、不嵌套：wasm 执行路径持 `inner` 再取 `acevm_diag`，
+    /// 这里若先 `acevm_diag` 后 `inner` 会形成反序死锁。
+    #[must_use]
+    pub fn diagnostics(&self) -> TsdkDiagnostics {
+        let (
+            unsupported_acevm_calls,
+            last_unsupported_acevm_at_ms,
+            last_task_hash,
+            last_task_bytes,
+            last_task_read_failed,
+        ) = {
+            let diag = self.acevm_diag.lock();
+            (
+                diag.calls,
+                diag.last_call_at_ms,
+                diag.last_task_hash.clone(),
+                diag.last_task_bytes,
+                diag.last_task_read_failed,
+            )
+        };
+        TsdkDiagnostics {
+            platform: self.host_profile.platform,
+            version: self.host_profile.build.version,
+            ready: self.inner.lock().is_some(),
+            unsupported_acevm_calls,
+            last_unsupported_acevm_at_ms,
+            last_unsupported_acevm_task_hash: last_task_hash,
+            last_unsupported_acevm_task_bytes: last_task_bytes,
+            last_unsupported_acevm_task_read_failed: last_task_read_failed,
+        }
     }
 
     /// 请求重置。下次 host 侧调用会先观察该标志。worker 重建完成后必须调 [`Self::mark_reset_completed`]。
@@ -427,11 +544,12 @@ impl TsdkRuntime {
             return Ok(());
         }
         let engine = shared_engine()?;
-        let module = shared_module(engine, wasm_path)?;
+        let module = shared_module(engine, wasm_path, self.host_profile.build)?;
 
         let host = HostState {
             data_dir: self.data_dir.clone(),
             host: self.host_profile.clone(),
+            acevm_diag: std::sync::Arc::clone(&self.acevm_diag),
             ..Default::default()
         };
         let mut store = Store::new(engine, host);
@@ -1039,12 +1157,12 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
         },
     )?;
 
-    // d: 写入 TSDK_VERSION
+    // d: 写入当前平台构建的 TSDK 版本号（对齐 bot：`TSDK_BUILDS[platform].version`）
     linker.func_wrap(
         "a",
         "d",
         |mut c: wasmtime::Caller<'_, HostState>, ptr: i32, cap: i32| -> WasmResult<i32> {
-            let bytes = TSDK_VERSION.as_bytes();
+            let bytes = c.data().host.build.version.as_bytes();
             if bytes.len() < cap as usize {
                 write_cstring_in_caller(&mut c, ptr, bytes)?;
                 Ok(1)
@@ -1054,11 +1172,15 @@ fn create_linker(engine: &Engine) -> Result<Linker<HostState>> {
         },
     )?;
 
-    // e: ACEVM 完整性 — 返回 0（参数是 wasm 内部传入的某种上下文指针）
+    // e: ACEVM 完整性 — 宿主不执行任务，返回 0（失败态），但记录诊断
+    // （对齐 bot `recordUnsupportedAceVm`，tsdk-runtime.ts:151-175）
     linker.func_wrap(
         "a",
         "e",
-        |_c: wasmtime::Caller<'_, HostState>, _ctx: i32| -> WasmResult<i32> { Ok(0) },
+        |mut c: wasmtime::Caller<'_, HostState>, ctx: i32| -> WasmResult<i32> {
+            record_unsupported_acevm(&mut c, ctx);
+            Ok(0)
+        },
     )?;
 
     // f: sensors — noop
@@ -1713,7 +1835,80 @@ fn process_start() -> std::time::Instant {
     *START.get_or_init(std::time::Instant::now)
 }
 
-/// 在 host function 闭包内读 cstring（对齐 bot readCString，默认 64KB 上限）
+/// TSDK 运行诊断快照（对齐 bot `getDiagnostics`）
+#[derive(Debug, Clone)]
+pub struct TsdkDiagnostics {
+    pub platform: &'static str,
+    pub version: &'static str,
+    /// wasm 是否已初始化
+    pub ready: bool,
+    /// 服务端触发 ACEVM 检查的次数
+    pub unsupported_acevm_calls: u64,
+    /// 最近一次 ACEVM 触发时刻（毫秒时间戳，0 = 未触发）
+    pub last_unsupported_acevm_at_ms: i64,
+    /// 最近一次 ACEVM 任务原文的 SHA-256（空串 = 未读出）
+    pub last_unsupported_acevm_task_hash: String,
+    /// 最近一次 ACEVM 任务字节数
+    pub last_unsupported_acevm_task_bytes: u64,
+    /// 最近一次任务原文读取是否失败（缺内存/越界/超诊断上限）
+    pub last_unsupported_acevm_task_read_failed: bool,
+}
+
+/// host import `e`（ACEVM）的诊断采集（对齐 bot `recordUnsupportedAceVm`）：
+/// 官方 ABI 传入 NUL 结尾的任务原文指针；这里只对原文做 SHA-256，
+/// 不解码、不执行、不保留、不落日志原文。诊断失败绝不转 wasm trap。
+fn record_unsupported_acevm(caller: &mut wasmtime::Caller<'_, HostState>, ptr: i32) {
+    let mut task_hash = String::new();
+    let mut task_bytes = 0u64;
+    let mut read_failed = true;
+    if ptr > 0 {
+        if let Some(mem) = caller.data().memory {
+            let data = mem.data(&*caller);
+            let start = ptr as usize;
+            if start < data.len() {
+                // bot 上限 ptr + 65537：65536 字节任务 + 终止 NUL
+                let limit = data.len().min(start + 65537);
+                let mut end = start;
+                while end < limit && data[end] != 0 {
+                    end += 1;
+                }
+                if end < limit {
+                    use sha2::{Digest, Sha256};
+                    task_hash = hex::encode(Sha256::digest(&data[start..end]));
+                    task_bytes = (end - start) as u64;
+                    read_failed = false;
+                }
+            }
+        }
+    }
+    let now_ms = crate::utils::time::now_ms();
+    // warning 只发一次（bot warnOnce）；字段在闭包外快照，避免与 tracing 宏参数纠缠
+    let (calls, already_warned) = {
+        let mut diag = caller.data().acevm_diag.lock();
+        diag.calls += 1;
+        diag.last_call_at_ms = now_ms;
+        diag.last_task_hash = task_hash.clone();
+        diag.last_task_bytes = task_bytes;
+        diag.last_task_read_failed = read_failed;
+        let warned = diag.warned;
+        diag.warned = true;
+        (diag.calls, warned)
+    };
+    if !already_warned {
+        tracing::warn!(
+            event = "tsdk_host_limitation",
+            feature = "acevm",
+            platform = caller.data().host.platform,
+            version = caller.data().host.build.version,
+            calls,
+            task_bytes,
+            task_read_failed = read_failed,
+            "服务端触发 ACEVM 检查，但当前宿主未执行该任务，返回失败状态；请保留掉线诊断"
+        );
+    }
+}
+
+/// 在 host function 闭包内读 cstring（对齐 bot readCString，默认 1MB 上限）
 fn read_cstring_in_caller(
     caller: &mut wasmtime::Caller<'_, HostState>,
     ptr: i32,
@@ -1727,7 +1922,7 @@ fn read_cstring_in_caller(
     if off >= mem_size {
         return Err(werr!("read_cstring_in_caller: out of bounds ptr={ptr}"));
     }
-    let cap = (mem_size - off).min(64 * 1024);
+    let cap = (mem_size - off).min(MAX_READ_CSTRING_LEN);
     let data = mem.data(&*caller);
     let mut end = off;
     while end - off < cap && data[end] != 0 {
@@ -1956,5 +2151,70 @@ mod tests {
         // wasm_path 为空，rebuild 应该失败
         let result = rt.rebuild();
         assert!(result.is_err());
+    }
+
+    /// 平台归一方向对齐 bot `resolveTsdkPlatform`：wx/wechat（含大小写/空白）→ 微信，
+    /// 其余（含空串/未知值）→ QQ。rust 曾反向（仅 == "qq" 走 QQ），已纠正。
+    #[test]
+    fn resolve_tsdk_platform_matches_bot() {
+        assert_eq!(resolve_tsdk_platform("wx"), "wx");
+        assert_eq!(resolve_tsdk_platform("wechat"), "wx");
+        assert_eq!(resolve_tsdk_platform(" WX "), "wx");
+        assert_eq!(resolve_tsdk_platform("WeChat"), "wx");
+        assert_eq!(resolve_tsdk_platform("qq"), "qq");
+        assert_eq!(resolve_tsdk_platform(""), "qq");
+        assert_eq!(resolve_tsdk_platform("unknown"), "qq");
+    }
+
+    /// 宿主画像与平台构建成组：wx → 微信宿主 + wx 构建，其余 → QQ 宿主 + QQ 构建。
+    #[test]
+    fn host_profile_resolves_build_with_platform() {
+        let wx = HostProfile::resolve("wx");
+        assert_eq!(wx.platform, "wx");
+        assert_eq!(wx.build.key, "wx");
+        assert_eq!(wx.app_id, MINI_PROGRAM_APP_ID);
+
+        let qq = HostProfile::resolve("qq");
+        assert_eq!(qq.platform, "qq");
+        assert_eq!(qq.build.key, "qq");
+        assert_eq!(qq.app_id, QQ_MINI_PROGRAM_APP_ID);
+
+        // 空/未知平台走 QQ（bot 同款兜底方向）
+        assert_eq!(HostProfile::resolve("").build.key, "qq");
+        assert_eq!(HostProfile::resolve("foo").build.key, "qq");
+    }
+
+    /// 双平台构建表对齐 bot `TSDK_BUILDS` 字面量（tsdk-runtime.ts:13-18）。
+    #[test]
+    fn tsdk_builds_match_bot_literals() {
+        assert_eq!(TSDK_BUILD_QQ.file, "tsdk.wasm");
+        assert_eq!(TSDK_BUILD_QQ.version, "v3.9.0.1790160550");
+        assert_eq!(
+            TSDK_BUILD_QQ.sha256,
+            "2c9e377ecc9a4fd9019f12191b589d543a60d6654580eb3e237b35f1fa5b1cb7"
+        );
+        assert_eq!(TSDK_BUILD_WX.file, "tsdk-wx.wasm");
+        assert_eq!(TSDK_BUILD_WX.version, "v3.9.0.1790237209");
+        assert_eq!(
+            TSDK_BUILD_WX.sha256,
+            "4bf6aa0ede9677fe82186c1a76f8df8a14ccd6d14b6ff1280230923189f4e972"
+        );
+        // wx 构建体积 160,992 字节（bot tsdk-wx.wasm 实际大小），防呆
+        let wx_bytes = std::fs::read(resolve_wasm_path("wx")).expect("tsdk-wx.wasm readable");
+        assert_eq!(wx_bytes.len(), 160_992);
+        verify_wasm_sha256(&wx_bytes, &TSDK_BUILD_WX).expect("wx wasm sha256");
+    }
+
+    /// ACEVM 诊断结构初始值（未触发时全零/空，对齐 bot getDiagnostics 语义）
+    #[test]
+    fn diagnostics_initial_state() {
+        let rt = TsdkRuntime::new("test_diag_initial");
+        let d = rt.diagnostics();
+        assert!(!d.ready);
+        assert_eq!(d.unsupported_acevm_calls, 0);
+        assert_eq!(d.last_unsupported_acevm_at_ms, 0);
+        assert_eq!(d.last_unsupported_acevm_task_hash, "");
+        assert_eq!(d.last_unsupported_acevm_task_bytes, 0);
+        assert!(!d.last_unsupported_acevm_task_read_failed);
     }
 }
