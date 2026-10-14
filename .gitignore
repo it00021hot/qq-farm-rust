@@ -10,6 +10,8 @@
 .idea/
 .vscode/
 *.iml
+.zcode/
+.zcodeignore
 
 # OS
 .DS_Store
