@@ -177,15 +177,17 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    const ACC: &str = "test-automation-lock-account";
+    const NESTED_ACC: &str = "test-automation-lock-nested";
+    const HUNG_ACC: &str = "test-automation-lock-hung";
+    const SERIAL_ACC: &str = "test-automation-lock-serial";
 
     #[tokio::test]
     async fn nested_call_runs_inline() {
         // 已在互斥上下文内的嵌套调用直接执行，不排队
         let hit = Arc::new(AtomicUsize::new(0));
         let h = Arc::clone(&hit);
-        run_exclusive_automation_task(ACC, "outer", async move {
-            run_exclusive_automation_task(ACC, "inner", async move {
+        run_exclusive_automation_task(NESTED_ACC, "outer", async move {
+            run_exclusive_automation_task(NESTED_ACC, "inner", async move {
                 h.fetch_add(1, Ordering::SeqCst);
             })
             .await;
@@ -201,7 +203,7 @@ mod tests {
         let entered = Arc::new(AtomicUsize::new(0));
         let e1 = Arc::clone(&entered);
         let hung = run_exclusive_with_limit(
-            ACC,
+            HUNG_ACC,
             "hung",
             async move {
                 e1.fetch_add(1, Ordering::SeqCst);
@@ -212,7 +214,7 @@ mod tests {
         let next_ran = Arc::new(AtomicUsize::new(0));
         let n1 = Arc::clone(&next_ran);
         let next = run_exclusive_with_limit(
-            ACC,
+            HUNG_ACC,
             "next",
             async move {
                 n1.fetch_add(1, Ordering::SeqCst);
@@ -228,8 +230,8 @@ mod tests {
         assert!(done.is_ok(), "hung task should be cancelled and next should run");
         assert_eq!(entered.load(Ordering::SeqCst), 1);
         assert_eq!(next_ran.load(Ordering::SeqCst), 1);
-        assert!(!is_automation_task_running_for(ACC));
-        assert!(current_holder(ACC).is_none());
+        assert!(!is_automation_task_running_for(HUNG_ACC));
+        assert!(current_holder(HUNG_ACC).is_none());
     }
 
     #[tokio::test]
@@ -237,21 +239,21 @@ mod tests {
         let order = Arc::new(Mutex::new(Vec::new()));
 
         let order_a = Arc::clone(&order);
-        let first = run_exclusive_automation_task(ACC, "a", async move {
+        let first = run_exclusive_automation_task(SERIAL_ACC, "a", async move {
             order_a.lock().push("a-start");
-            assert!(is_automation_task_running_for(ACC));
+            assert!(is_automation_task_running_for(SERIAL_ACC));
             tokio::time::sleep(std::time::Duration::from_millis(30)).await;
             order_a.lock().push("a-end");
         });
 
         let order_b = Arc::clone(&order);
-        let second = run_exclusive_automation_task(ACC, "b", async move {
+        let second = run_exclusive_automation_task(SERIAL_ACC, "b", async move {
             order_b.lock().push("b-start");
             order_b.lock().push("b-end");
         });
 
         tokio::join!(first, second);
-        assert!(!is_automation_task_running_for(ACC));
+        assert!(!is_automation_task_running_for(SERIAL_ACC));
         assert_eq!(*order.lock(), vec!["a-start", "a-end", "b-start", "b-end"]);
     }
 

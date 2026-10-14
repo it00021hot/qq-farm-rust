@@ -22,8 +22,10 @@ mod updater;
 use std::sync::Arc;
 
 use tauri::Manager;
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 use crate::state::DesktopState;
+use qq_farm_app::runtime_lease::{EngineLease, EngineLeaseError};
 
 #[cfg(target_os = "android")]
 use jni::objects::{JClass, JObject};
@@ -94,13 +96,61 @@ pub fn run() {
                 qq_farm_core::utils::logger::init();
             }
             paths::apply_bundled_resource_env(app.handle());
+            let data_dir = qq_farm_core::config::get_data_dir();
+            let lease = match EngineLease::acquire_for(&data_dir, "tauri") {
+                Ok(lease) => lease,
+                Err(error) => {
+                    if matches!(error, EngineLeaseError::AlreadyRunning) {
+                        #[cfg(desktop)]
+                        let owner = EngineLease::wake_existing_owner(&data_dir);
+                        #[cfg(not(desktop))]
+                        let _ = EngineLease::wake_existing_owner(&data_dir);
+                        #[cfg(desktop)]
+                        if owner.as_deref().is_some_and(|owner| owner != "tauri") {
+                            let dialog_handle = app.handle().clone();
+                            app.dialog()
+                                .message("GPUI 桌面端正在使用此数据目录，已唤起现有窗口。")
+                                .title("QQ Farm 已在运行")
+                                .kind(MessageDialogKind::Info)
+                                .show(move |_| dialog_handle.exit(0));
+                            let window_handle = app.handle().clone();
+                            std::thread::spawn(move || {
+                                for _ in 0..30 {
+                                    if let Some(window) = window_handle.get_webview_window("main") {
+                                        let _ = window.hide();
+                                        break;
+                                    }
+                                    std::thread::sleep(std::time::Duration::from_millis(100));
+                                }
+                            });
+                            return Ok(());
+                        }
+                    }
+                    return Err(Box::new(error).into());
+                }
+            };
+            #[cfg(desktop)]
+            if let Some(wake_receiver) = lease.take_wake_receiver() {
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    while wake_receiver.recv().is_ok() {
+                        for _ in 0..30 {
+                            if app_handle.get_webview_window("main").is_some() {
+                                crate::shell::show_main_window(&app_handle);
+                                break;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                        }
+                    }
+                });
+            }
             let max_workers =
                 std::env::var("MAX_WORKERS").ok().and_then(|s| s.parse().ok()).unwrap_or(16);
             let app_ctx = Arc::new(qq_farm_app::bootstrap::assemble_app_context(
                 max_workers,
                 "https://game.qq.com",
             ));
-            let desktop = DesktopState::new(app_ctx);
+            let desktop = DesktopState::with_lease(app_ctx, lease);
             events::spawn_event_bridge(app.handle().clone(), desktop.clone());
             desktop.app.engine.schedule_wx_authorized_start();
             app.manage(desktop);
@@ -281,14 +331,20 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building qq-farm-desktop");
 
-    #[cfg(target_os = "macos")]
     app.run(|app_handle, event| {
+        #[cfg(target_os = "macos")]
         if let tauri::RunEvent::Reopen { .. } = event {
             shell::show_main_window(app_handle);
         }
+        if matches!(event, tauri::RunEvent::Exit) {
+            if let Some(state) = app_handle.try_state::<DesktopState>() {
+                tauri::async_runtime::block_on(qq_farm_app::lifecycle::shutdown(
+                    &state.app,
+                    std::time::Duration::from_secs(5),
+                ));
+            }
+        }
     });
-    #[cfg(not(target_os = "macos"))]
-    app.run(|_, _| {});
 }
 
 #[cfg(test)]

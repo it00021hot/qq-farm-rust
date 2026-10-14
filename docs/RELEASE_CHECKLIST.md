@@ -13,13 +13,14 @@ GitHub repo **Settings → Secrets and variables → Actions**：
 
 ## CI / Release page
 
-- [ ] Actions workflow **Release** is green (macOS Apple Silicon + macOS Intel + Windows + SHA256SUMS)
+- [ ] Actions workflow **Release** is green (Tauri macOS Apple Silicon + macOS Intel + Windows; GPUI macOS/Windows/Linux; latest.json + SHA256SUMS)
 - [ ] GitHub Release for the tag includes:
   - Windows NSIS installer (`.exe`)
   - macOS Apple Silicon `.dmg` (`*_aarch64.dmg`)
   - macOS Intel `.dmg` (`*_x64.dmg`)
   - updater artifacts（Mac `.app.tar.gz` + `.sig`，Windows `.exe` + `.sig`；仅有 DMG 不能给「检查更新」用）
   - `latest.json`（必须同时含 `darwin-aarch64` / `darwin-x86_64` / `windows-x86_64`，由 `updater-manifest` job 写一次）
+  - GPUI packages: `QQ Farm-aarch64.app` / `QQ Farm-x86_64.app` and matching macOS `.app.zip`, `qq-farm-gpui-windows-x86_64.zip`, `qq-farm-gpui-linux-x86_64.tar.gz`
   - `SHA256SUMS`
 - [ ] `assets/tsdk.wasm` was present in the checkout (workflow fails otherwise)
 
@@ -44,4 +45,7 @@ GitHub repo **Settings → Secrets and variables → Actions**：
 ```bash
 pnpm -C desktop-ui i
 cd crates/qq-farm-desktop && cargo tauri build
+cargo run -p qq-farm-gpui
 ```
+
+For GPUI packaging, build first with `cargo build --release -p qq-farm-gpui`, then run `scripts/package-gpui.sh` on macOS/Linux or `scripts/package-gpui.ps1` on Windows. `FARM_DATA_DIR` must point to the same directory for both hosts when checking mutual exclusion.

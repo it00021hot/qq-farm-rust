@@ -111,6 +111,7 @@ mod tests {
 
     #[test]
     fn activity_ended_uses_cached_window() {
+        let _cache = crate::config::activity_windows::activity_windows_test_guard();
         clear_activity_windows_for_test();
         set_activity_windows(vec![window("2026081800", 1, 50)]);
         let ctx =

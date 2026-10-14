@@ -320,8 +320,8 @@ pub fn plant_blacklist(account_id: &str) -> Value {
     json!(qq_farm_core::models::store::account_config::get_plant_blacklist(id))
 }
 
-pub fn set_plant_blacklist(account_id: &str, seed_ids: Vec<i64>) -> Value {
-    json!(qq_farm_core::models::store::account_config::set_plant_blacklist(account_id, seed_ids))
+pub fn set_plant_blacklist(account_id: &str, seed_ids: Vec<i64>) -> Vec<i64> {
+    qq_farm_core::models::store::account_config::set_plant_blacklist(account_id, seed_ids)
 }
 
 pub fn add_plant_blacklist(account_id: &str, seed_id: i64) -> Value {
@@ -330,13 +330,13 @@ pub fn add_plant_blacklist(account_id: &str, seed_id: i64) -> Value {
     if !current.contains(&seed_id) {
         current.push(seed_id);
     }
-    set_plant_blacklist(account_id, current)
+    json!(set_plant_blacklist(account_id, current))
 }
 
 pub fn remove_plant_blacklist(account_id: &str, seed_id: i64) -> Value {
     let cur = qq_farm_core::models::store::account_config::get_plant_blacklist(Some(account_id));
     let next: Vec<i64> = cur.into_iter().filter(|x| *x != seed_id).collect();
-    set_plant_blacklist(account_id, next)
+    json!(set_plant_blacklist(account_id, next))
 }
 
 /// 购买化肥。

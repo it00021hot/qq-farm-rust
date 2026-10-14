@@ -75,6 +75,11 @@ fn percent_decode(s: &str) -> Result<String, std::str::Utf8Error> {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
+        if bytes[i] == b'+' {
+            out.push(b' ');
+            i += 1;
+            continue;
+        }
         if bytes[i] == b'%' && i + 2 < bytes.len() {
             let h1 = (bytes[i + 1] as char).to_digit(16);
             let h2 = (bytes[i + 2] as char).to_digit(16);
@@ -207,6 +212,8 @@ mod tests {
     #[test]
     fn extract_code_url_encoded() {
         assert_eq!(extract_code("?code=hello%20world"), "hello world");
+        assert_eq!(extract_code("?code=hello+world"), "hello world");
+        assert_eq!(extract_code("?code=hello%2Bworld"), "hello+world");
     }
 
     #[test]

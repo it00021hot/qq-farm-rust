@@ -346,7 +346,7 @@ mod tests {
     }
 
     /// 从顶层消息中取出指定 LEN 字段的 payload（测试辅助）。
-    fn split_len_field<'a>(buf: &'a [u8], field: u32) -> Option<(usize, u8, &'a [u8])> {
+    fn split_len_field(buf: &[u8], field: u32) -> Option<(usize, u8, &[u8])> {
         let mut pos = 0;
         while pos < buf.len() {
             let tag = read_varint(buf, &mut pos);

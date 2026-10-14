@@ -138,13 +138,17 @@ pub fn list_files_with_ext(dir: impl AsRef<Path>, ext: &str) -> Vec<PathBuf> {
 mod tests {
     use super::*;
     use serial_test::serial;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEMP_FILE_ID: AtomicU64 = AtomicU64::new(0);
 
     fn temp_file() -> PathBuf {
         let dir = PathBuf::from("/tmp/qq-farm-test");
         let _ = fs::create_dir_all(&dir);
         let pid = std::process::id();
         let ts = crate::utils::time::now_ms();
-        dir.join(format!("json-db-{pid}-{ts}.json"))
+        let id = NEXT_TEMP_FILE_ID.fetch_add(1, Ordering::Relaxed);
+        dir.join(format!("json-db-{pid}-{ts}-{id}.json"))
     }
 
     #[test]

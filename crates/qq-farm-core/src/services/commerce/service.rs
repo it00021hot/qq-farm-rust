@@ -491,7 +491,7 @@ impl CommerceService {
             }
         }
 
-        let reply = self.mall.purchase_mall_goods(goods_id, i64::from(count)).await?;
+        let reply = self.mall.purchase_mall_goods(goods_id, count).await?;
         let purchase = PurchaseResultDto {
             goods_id: reply.goods_id,
             count,
@@ -499,10 +499,7 @@ impl CommerceService {
             limit: reply.purchase_limit.as_ref().and_then(limit_dto),
         };
         // bot：回读目录失败降级为 refreshRequired，不整体报错
-        let catalog = match self.get_mall_catalog(Some(slot_type), Some(0)).await {
-            Ok(c) => Some(c),
-            Err(_) => None,
-        };
+        let catalog = self.get_mall_catalog(Some(slot_type), Some(0)).await.ok();
         let refresh_required = catalog.is_none();
         Ok(PurchaseResponseDto { purchase, catalog, refresh_required })
     }

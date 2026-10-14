@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use qq_farm_app::accounts::AclPolicy;
+use qq_farm_app::runtime_lease::EngineLease;
 use qq_farm_app::session::AppContext;
 
 /// Tauri `Managed` 状态。
@@ -10,11 +11,12 @@ use qq_farm_app::session::AppContext;
 pub struct DesktopState {
     pub app: Arc<AppContext>,
     pub acl: AclPolicy,
+    _lease: Option<Arc<EngineLease>>,
 }
 
 impl DesktopState {
     #[must_use]
-    pub const fn new(app: Arc<AppContext>) -> Self {
-        Self { app, acl: AclPolicy::LocalOwner }
+    pub fn with_lease(app: Arc<AppContext>, lease: EngineLease) -> Self {
+        Self { app, acl: AclPolicy::LocalOwner, _lease: Some(Arc::new(lease)) }
     }
 }

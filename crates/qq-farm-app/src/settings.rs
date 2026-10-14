@@ -147,6 +147,20 @@ pub fn set_offline_reminder(username: Option<&str>, cfg: Value) {
     }
 }
 
+/// 保存 QQ Bot 凭据（部署者配置，设置页扫码绑定使用）。
+pub fn save_qq_bot_credentials(app_id: &str, client_secret: &str) -> AppResult<Value> {
+    let app_id = app_id.trim();
+    let client_secret = client_secret.trim();
+    if app_id.is_empty() || client_secret.is_empty() {
+        return Err(AppError::BadRequest("QQ Bot AppID 和 AppSecret 不能为空".into()));
+    }
+    let mut credentials = effective_qq_bot_credentials();
+    credentials.app_id = app_id.to_string();
+    credentials.client_secret = client_secret.to_string();
+    set_qq_bot_credentials(credentials);
+    Ok(offline_reminder_view(None))
+}
+
 /// 测试离线提醒推送。
 pub async fn test_offline_reminder(
     ctx: &AppContext,

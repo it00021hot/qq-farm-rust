@@ -23,6 +23,9 @@ use std::time::Duration;
 
 use parking_lot::RwLock;
 use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
+
+mod shutdown;
 
 use crate::error::Result;
 use crate::models::store::accounts as accounts_store;
@@ -104,6 +107,10 @@ pub struct RuntimeEngine {
     worker_loops: Arc<RwLock<HashMap<String, Arc<crate::runtime::worker_loop::WorkerLoop>>>>,
     /// worker 任务句柄（account_id -> (世代号, JoinHandle)），重启时等待旧任务真正退出用
     worker_tasks: WorkerTaskRegistry,
+    /// 启动注册与停机互斥，防止退出过程中出现新的游戏会话。
+    worker_admission: RwLock<()>,
+    shutdown_token: CancellationToken,
+    shutdown_wait: tokio::sync::Mutex<()>,
     /// 每账号生命周期锁：串行化 start/stop/restart/重连触发，防止并发生命周期操作
     /// 产生同账号双会话互踢（tokio::sync::Mutex 不可重入，只在这些入口最外层获取）
     lifecycle_locks: RwLock<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
@@ -178,6 +185,9 @@ impl RuntimeEngine {
             workers,
             worker_loops,
             worker_tasks: Arc::new(RwLock::new(HashMap::new())),
+            worker_admission: RwLock::new(()),
+            shutdown_token: CancellationToken::new(),
+            shutdown_wait: tokio::sync::Mutex::new(()),
             lifecycle_locks: RwLock::new(HashMap::new()),
             generation: std::sync::atomic::AtomicU64::new(1),
             events,
@@ -262,6 +272,10 @@ impl RuntimeEngine {
         account_id: &str,
         worker_loop: Arc<crate::runtime::worker_loop::WorkerLoop>,
     ) {
+        let _admission = self.worker_admission.read();
+        if self.shutdown_token.is_cancelled() {
+            return;
+        }
         self.worker_loops.write().insert(account_id.to_string(), worker_loop);
     }
 
@@ -385,7 +399,12 @@ impl RuntimeEngine {
         let engine = Arc::clone(self);
         crate::runtime::safe_spawn::spawn_logged("worker_event_bridge", async move {
             loop {
-                let ev = match rx.recv().await {
+                let received = tokio::select! {
+                    biased;
+                    () = engine.shutdown_token.cancelled() => break,
+                    received = rx.recv() => received,
+                };
+                let ev = match received {
                     Ok(ev) => ev,
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         tracing::warn!(skipped = n, "worker event bridge lagged");
@@ -843,6 +862,10 @@ impl RuntimeEngine {
 
     /// 启动一个 worker
     pub fn start_worker(self: &Arc<Self>, account: AccountSession) -> Result<()> {
+        let _admission = self.worker_admission.read();
+        if self.shutdown_token.is_cancelled() {
+            return Err(crate::error::Error::Internal("引擎正在退出，不能启动账号".into()));
+        }
         let max = self.config.max_workers;
         {
             let mut workers = self.workers.write();
@@ -1157,8 +1180,14 @@ impl RuntimeEngine {
         crate::runtime::safe_spawn::spawn_logged("wx_keepalive", async move {
             let interval = Duration::from_millis(crate::constants::WX_KEEPALIVE_INTERVAL_MS);
             loop {
-                tokio::time::sleep(interval).await;
-                engine.run_wx_keepalive_tick().await;
+                tokio::select! {
+                    biased;
+                    () = engine.shutdown_token.cancelled() => break,
+                    () = async {
+                        tokio::time::sleep(interval).await;
+                        engine.run_wx_keepalive_tick().await;
+                    } => {}
+                }
             }
         });
     }
@@ -1332,14 +1361,6 @@ impl RuntimeEngine {
         let workers = self.workers.read();
         for h in workers.values() {
             let _ = h.try_send(WorkerMessage::Disconnect);
-        }
-    }
-
-    /// 关闭所有 worker
-    pub fn shutdown(&self) {
-        let handles: Vec<_> = self.workers.write().drain().collect();
-        for (_, h) in handles {
-            h.cancel();
         }
     }
 }

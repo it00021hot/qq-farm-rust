@@ -108,6 +108,8 @@ pub struct Item {
     pub max_count: Option<i64>,
     pub can_use: Option<i64>,
     pub desc: Option<String>,
+    #[serde(rename = "effectDesc")]
+    pub effect_desc: Option<String>,
     pub rarity: Option<i64>,
     #[serde(rename = "trait_id ")]
     pub trait_id: Option<i64>,
@@ -1340,6 +1342,7 @@ mod tests {
 
     #[test]
     fn conditional_sells_unlock_after_activity_ends() {
+        let _cache = crate::config::activity_windows::activity_windows_test_guard();
         use crate::config::activity_windows::{
             clear_activity_windows_for_test, set_activity_windows, ActivityWindow,
         };

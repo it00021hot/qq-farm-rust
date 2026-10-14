@@ -1928,7 +1928,7 @@ mod tests {
         assert_eq!(layout.land_ids, vec![5, 6, 1, 2]);
         assert_eq!(reserved, vec![6, 1]);
         // 空地本身已能凑齐 2x2 → 无需预留
-        assert!(select_future_layout_reservation(&vec![5, 6, 1, 2], &all, 2).is_none());
+        assert!(select_future_layout_reservation(&[5, 6, 1, 2], &all, 2).is_none());
         // 单格不预留
         assert!(select_future_layout_reservation(&empty, &all, 1).is_none());
     }

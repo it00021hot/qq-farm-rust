@@ -246,12 +246,14 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(global_friend_quiet_hours)]
     fn in_friend_quiet_hours_disabled_by_default() {
         set_friend_quiet_hours(GLOBAL_QUIET_HOURS_ACCOUNT, None);
         assert!(!in_friend_quiet_hours(Some((10, 0))));
     }
 
     #[test]
+    #[serial_test::serial(global_friend_quiet_hours)]
     fn in_friend_quiet_hours_within_window() {
         set_friend_quiet_hours(
             GLOBAL_QUIET_HOURS_ACCOUNT,
@@ -267,6 +269,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(global_friend_quiet_hours)]
     fn in_friend_quiet_hours_same_window_means_all_day() {
         set_friend_quiet_hours(
             GLOBAL_QUIET_HOURS_ACCOUNT,

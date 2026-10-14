@@ -10,7 +10,8 @@ use qq_farm_core::constants::game_ids::{
 };
 use qq_farm_core::constants::{WX_LOGIN_PENDING_AUTH_TTL_MS, WX_LOGIN_TASK_TTL_MS, WX_MINI_APP_ID};
 use qq_farm_core::services::wx_login::service::{ScanStatus, WxLoginService, WxLoginSession};
-use qq_farm_core::services::wx_login::{LocalWechatPosition, LocalWechatProfile, YybCredentials};
+pub use qq_farm_core::services::wx_login::LocalWechatPosition;
+use qq_farm_core::services::wx_login::{LocalWechatProfile, YybCredentials};
 
 use crate::error::{AppError, AppResult};
 

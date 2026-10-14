@@ -1,0 +1,14 @@
+mod accounts;
+mod activities;
+mod analytics;
+mod assets;
+mod commerce;
+mod dashboard;
+mod friends;
+mod game_config;
+mod layout;
+mod personal;
+mod settings;
+mod support;
+mod toolbar;
+mod weather;

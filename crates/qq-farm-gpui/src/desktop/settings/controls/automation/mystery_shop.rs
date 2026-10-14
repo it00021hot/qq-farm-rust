@@ -1,0 +1,57 @@
+use super::super::super::super::*;
+
+impl FarmDesktop {
+    pub(super) fn automation_mystery_shop_controls(&self, cx: &mut Context<Self>) -> Div {
+        div()
+            .v_flex()
+            .gap_2()
+            .child(self.settings_section_title(div().v_flex().gap_2(), "神秘商人", cx))
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .gap_4()
+                    .child(self.render_automation_switch(
+                        "mystery_shop_auto_buy",
+                        "神秘商人自动购买",
+                        false,
+                        cx,
+                    ))
+                    .child(self.render_automation_switch(
+                        "mystery_shop_arrival_notify",
+                        "神秘商人到货通知",
+                        false,
+                        cx,
+                    ))
+                    .child(self.render_automation_switch(
+                        "mystery_shop_purchase_notify",
+                        "购买成功通知",
+                        false,
+                        cx,
+                    ))
+                    .child(self.render_automation_switch(
+                        "mystery_shop_allow_gold",
+                        "允许用金币购买",
+                        false,
+                        cx,
+                    ))
+                    .child(self.render_automation_switch(
+                        "mystery_shop_allow_coupon",
+                        "允许用点券购买",
+                        false,
+                        cx,
+                    ))
+                    .child(self.render_automation_switch(
+                        "mystery_shop_allow_gold_bean",
+                        "允许用金豆豆购买",
+                        false,
+                        cx,
+                    ))
+                    .child(self.render_automation_switch(
+                        "mystery_shop_allow_diamond",
+                        "允许用钻石购买",
+                        false,
+                        cx,
+                    )),
+            )
+    }
+}

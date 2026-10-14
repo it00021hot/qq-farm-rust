@@ -1,6 +1,6 @@
 # qq-farm-rust
 
-QQ 农场多账号挂机的 Rust 重写。协议与调度对齐原 [qq-farm-bot](https://github.com/it00021hot/qq-farm-bot)（TypeScript + Vue），前端为内置 SoybeanAdmin 桌面 UI，**只维护桌面版**（原 HTTP API 服务 crate `qq-farm-server` 已删除）。
+QQ 农场多账号挂机的 Rust 重写。协议与调度对齐原 [qq-farm-bot](https://github.com/it00021hot/qq-farm-bot)（TypeScript + Vue），提供 Tauri/SoybeanAdmin 与 GPUI Kit 两种桌面宿主（原 HTTP API 服务 crate `qq-farm-server` 已删除）。
 
 与原 `core` 的**业务同步状态、缺口与更新记录**见 [docs/SYNC.md](docs/SYNC.md)（对齐以业务目标一致为准；每次业务对齐请追加更新记录）。
 
@@ -12,6 +12,7 @@ qq-farm-rust/
 │   ├── qq-farm-core/      # 网关、登录、农场/好友调度、活动中心、统计
 │   ├── qq-farm-app/       # UI 无关应用门面（desktop 经 IPC 调用）
 │   └── qq-farm-desktop/   # Tauri v2 桌面宿主（IPC → app）
+│   └── qq-farm-gpui/      # GPUI Kit 原生桌面宿主（GPUI → app）
 ├── desktop-ui/            # SoybeanAdmin 桌面前端（与客户端共存）
 ├── proto/                 # 游戏 protobuf
 ├── assets/activity-data/  # 活动静态数据
@@ -41,6 +42,26 @@ cd crates/qq-farm-desktop && cargo tauri dev
 ```
 
 桌面端经 IPC 调 `qq-farm-app`（LocalOwner），**不**走 HTTP。
+
+### GPUI Kit 桌面端
+
+GPUI 版本采用 Finder / 系统设置风格的原生布局，并直接调用同一 `qq-farm-app` 门面。它与 Tauri 客户端共用账号及业务配置；同一数据目录由 app 层互斥锁保护，一次只能运行一个桌面宿主。
+
+页面实现和交互测试按账号、农场、好友、活动、商城、设置等业务目录拆分；代码与测试索引见 [GPUI crate README](crates/qq-farm-gpui/README.md)。
+
+```bash
+cargo run -p qq-farm-gpui
+```
+
+GPUI 壳层资源打包脚本为 `scripts/package-gpui.sh`（macOS/Linux）和 `scripts/package-gpui.ps1`（Windows）；产物位于 `dist/`。macOS 会输出可直接打开的 `QQ Farm-<架构>.app` 和 `.app.zip`。主题与窗口偏好和业务数据分开保存。
+
+在有原生 GPU 渲染器的 Mac 上可输出账号、农场和天气页的浅深主题、最小尺寸及放大字体预览：
+
+```bash
+cargo run -p qq-farm-gpui --features ui-preview -- --render-preview /tmp/qq-farm-gpui-previews
+```
+
+预览使用隔离的临时数据目录和展示快照，不启动真实账号；在线操作与实机验收进度记录于 `docs/SYNC.md`。
 
 - macOS 有原生菜单（应用：打开数据目录 / 检查更新）；Windows 动作在托盘
 - 关闭窗口隐藏到托盘；退出只走托盘「退出」或 macOS Cmd+Q

@@ -89,3 +89,10 @@ pub fn activity_window_by_id(id: &str) -> Option<ActivityWindow> {
 pub fn clear_activity_windows_for_test() {
     *WINDOWS.write() = WindowsState::empty();
 }
+
+/// 写入/清空共用窗口缓存的测试须持有同一锁，避免并行测试互相替换日程。
+#[cfg(test)]
+pub(crate) fn activity_windows_test_guard() -> parking_lot::MutexGuard<'static, ()> {
+    static TEST_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+    TEST_LOCK.lock()
+}

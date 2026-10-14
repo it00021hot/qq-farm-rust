@@ -108,6 +108,7 @@ pub fn delete_account(ctx: &AppContext, policy: &AclPolicy, id: &str) -> AppResu
 pub struct UpsertAccountRequest {
     pub id: Option<String>,
     pub name: Option<String>,
+    pub remark: Option<String>,
     pub code: Option<String>,
     pub platform: Option<String>,
     pub qq: Option<String>,
@@ -117,6 +118,29 @@ pub struct UpsertAccountRequest {
     pub username: Option<String>,
     /// 非 admin 时用于额度校验；None 表示不校验额度。
     pub account_limit: Option<i64>,
+}
+
+fn normalize_account_login_request(
+    request: &mut UpsertAccountRequest,
+) -> Option<qq_farm_core::services::login_url_profile::LoginClientHints> {
+    let raw_code = request.code.as_deref()?.trim();
+    let client = qq_farm_core::utils::login_url::extract_client_hints(raw_code);
+    let code = qq_farm_core::utils::login_url::extract_code(raw_code);
+    if !code.is_empty() {
+        request.code = Some(code);
+    }
+
+    let platform = qq_farm_core::utils::login_url::normalize_login_platform(&client.platform);
+    if !platform.is_empty() {
+        request.platform = Some(platform.into());
+    }
+
+    let hints = qq_farm_core::services::login_url_profile::LoginClientHints {
+        platform: (!client.platform.is_empty()).then_some(client.platform),
+        os: (!client.os.is_empty()).then_some(client.os),
+        ver: (!client.ver.is_empty()).then_some(client.ver),
+    };
+    (hints.platform.is_some() || hints.os.is_some() || hints.ver.is_some()).then_some(hints)
 }
 
 /// 带 running / nick 的账号列表。
@@ -195,8 +219,14 @@ fn policy_username_filter(policy: &AclPolicy) -> Option<&str> {
 pub async fn upsert_account(
     ctx: &AppContext,
     policy: &AclPolicy,
-    req: UpsertAccountRequest,
+    mut req: UpsertAccountRequest,
 ) -> AppResult<Value> {
+    if let Some(hints) = normalize_account_login_request(&mut req) {
+        let _ =
+            qq_farm_core::services::login_url_profile::apply_login_client_hints_to_system_config(
+                Some(&hints),
+            );
+    }
     let owner = req.username.clone().filter(|u| !u.is_empty()).unwrap_or_else(|| match policy {
         AclPolicy::LocalOwner => "local".to_string(),
         AclPolicy::PanelUser { username, .. } => username.clone(),
@@ -260,6 +290,7 @@ pub async fn upsert_account(
         avatar_changed = req.avatar.as_ref().is_some_and(|v| *v != existing.avatar);
         let updated = AccountRecord {
             name: if name.is_empty() { existing.name.clone() } else { name },
+            remark: req.remark.unwrap_or(existing.remark),
             code: if code.is_empty() { existing.code.clone() } else { code },
             platform: if platform_set { platform } else { existing.platform.clone() },
             qq: req.qq.clone().unwrap_or(existing.qq),
@@ -273,6 +304,7 @@ pub async fn upsert_account(
         let acc = AccountRecord {
             id: String::new(),
             name,
+            remark: req.remark.unwrap_or_default(),
             code,
             platform,
             qq: req.qq.unwrap_or_default(),
@@ -360,6 +392,39 @@ pub async fn upsert_account(
 mod tests {
     use super::*;
     use serde_json::Map;
+
+    #[test]
+    fn login_url_is_normalized_once_and_keeps_device_hints() {
+        let mut request = UpsertAccountRequest {
+            code: Some(
+                "wss://gate-obt.nqf.qq.com/prod/ws?code=ABC%2B123&platform=WX&os=android&ver=1.14.2.15_20260922"
+                    .into(),
+            ),
+            platform: Some("qq".into()),
+            ..Default::default()
+        };
+
+        let hints = normalize_account_login_request(&mut request).unwrap();
+
+        assert_eq!(request.code.as_deref(), Some("ABC+123"));
+        assert_eq!(request.platform.as_deref(), Some("wx"));
+        assert_eq!(hints.platform.as_deref(), Some("wx"));
+        assert_eq!(hints.os.as_deref(), Some("android"));
+        assert_eq!(hints.ver.as_deref(), Some("1.14.2.15_20260922"));
+    }
+
+    #[test]
+    fn bare_login_code_is_unchanged_and_has_no_client_hints() {
+        let mut request = UpsertAccountRequest {
+            code: Some("plain-code".into()),
+            platform: Some("qq".into()),
+            ..Default::default()
+        };
+
+        assert!(normalize_account_login_request(&mut request).is_none());
+        assert_eq!(request.code.as_deref(), Some("plain-code"));
+        assert_eq!(request.platform.as_deref(), Some("qq"));
+    }
 
     #[test]
     fn redact_wx_auth_strips_secrets_and_flags() {

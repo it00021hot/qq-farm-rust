@@ -1,0 +1,42 @@
+[package]
+name = "qq-farm-gpui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "QQ 农场 GPUI Kit 桌面客户端"
+
+[lints]
+workspace = true
+
+[features]
+ui-preview = ["gpui-kit/test-support"]
+
+[dependencies]
+gpui-kit = { workspace = true }
+qq-farm-app = { workspace = true }
+qq-farm-core = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+dirs = { workspace = true }
+reqwest = { workspace = true }
+semver = { workspace = true }
+chrono = { workspace = true }
+base64 = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+dotenvy = { workspace = true }
+tray-icon = "0.24.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18.2"
+
+[dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }

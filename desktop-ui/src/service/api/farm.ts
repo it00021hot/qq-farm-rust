@@ -263,7 +263,8 @@ export function fetchAddFarmAccount(data: Api.Farm.AccountCreateParams) {
   return upsertAndPick({
     name: data.name,
     code: data.code,
-    platform: data.platform
+    platform: data.platform,
+    remark: data.remark
   });
 }
 
@@ -272,7 +273,8 @@ export function fetchModifyFarmAccount(data: Api.Farm.AccountUpdateParams) {
     id: String(data.id),
     name: data.name,
     code: data.code,
-    platform: data.platform
+    platform: data.platform,
+    remark: data.remark
   });
 }
 

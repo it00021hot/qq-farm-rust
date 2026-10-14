@@ -175,7 +175,7 @@ pub fn farm_set_plant_blacklist(
     state: State<'_, DesktopState>,
     account_id: String,
     seed_ids: Vec<i64>,
-) -> IpcResult<Value> {
+) -> IpcResult<Vec<i64>> {
     ensure(&state, &account_id)?;
     Ok(farm::set_plant_blacklist(&account_id, seed_ids))
 }

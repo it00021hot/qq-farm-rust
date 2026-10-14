@@ -35,6 +35,9 @@ pub struct AccountRecord {
     pub id: String,
     /// 显示名
     pub name: String,
+    /// 本地备注；缺失时兼容旧数据。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub remark: String,
     /// 游戏内昵称
     #[serde(default)]
     pub nick: String,
@@ -327,6 +330,20 @@ mod tests {
             username: username.to_string(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn legacy_account_json_without_remark_deserializes_and_omits_empty_remark() {
+        let mut value = serde_json::to_value(AccountRecord {
+            remark: "legacy note".into(),
+            ..make_account("1", "Farm", "local")
+        })
+        .unwrap();
+        value.as_object_mut().unwrap().remove("remark");
+
+        let restored: AccountRecord = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.remark, "");
+        assert!(serde_json::to_value(restored).unwrap().get("remark").is_none());
     }
 
     fn reset() {

@@ -1,0 +1,21 @@
+mod state;
+pub(crate) use state::GameConfigState;
+
+mod column_settings;
+pub(in crate::desktop) mod columns;
+mod controls;
+mod delete;
+mod delete_view;
+mod editor;
+mod feedback;
+pub(super) mod form;
+mod form_view;
+pub(in crate::desktop) mod labels;
+mod row_actions;
+mod save;
+pub(super) mod search;
+mod search_panel;
+mod selectors;
+mod table;
+mod view;
+use super::*;

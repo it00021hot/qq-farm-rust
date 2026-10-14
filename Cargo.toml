@@ -4,6 +4,7 @@ members = [
     "crates/qq-farm-core",
     "crates/qq-farm-app",
     "crates/qq-farm-desktop",
+    "crates/qq-farm-gpui",
 ]
 
 [workspace.package]
@@ -124,6 +125,9 @@ p256 = { version = "0.14", features = ["ecdh"] }
 # 进程内 crate
 qq-farm-core = { path = "crates/qq-farm-core" }
 qq-farm-app = { path = "crates/qq-farm-app" }
+gpui-kit = "=0.7.0"
+dirs = "6"
+semver = "1"
 
 [profile.release]
 opt-level = 3
