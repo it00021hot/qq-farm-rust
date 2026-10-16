@@ -29,6 +29,7 @@ import {
   logText,
   shouldShowEventChip
 } from './log-events';
+import LevelForecast from './LevelForecast.vue';
 
 defineOptions({
   name: 'FarmDashboard'
@@ -134,25 +135,12 @@ const expPercent = computed(() => {
 
 const expRate = computed(() => {
   const gain = Number(status.value?.sessionExpGained || 0);
-  const uptime = localUptime.value || Number(status.value?.uptime || 0);
+  const uptime =
+    Number(status.value?.sessionElapsedSeconds || 0) || localUptime.value || Number(status.value?.uptime || 0);
   if (!uptime) return '0/时';
   const hours = uptime / 3600;
   const rate = hours > 0 ? gain / hours : 0;
   return `${Math.floor(rate)}/时`;
-});
-
-const timeToLevel = computed(() => {
-  const gain = Number(status.value?.sessionExpGained || 0);
-  const uptime = localUptime.value || Number(status.value?.uptime || 0);
-  const current = Number(levelProgress.value.current || 0);
-  const needed = Number(levelProgress.value.needed || 0);
-  if (!needed || !uptime || gain <= 0) return '';
-  const hours = uptime / 3600;
-  const ratePerHour = hours > 0 ? gain / hours : 0;
-  if (ratePerHour <= 0) return '';
-  const mins = (needed - current) / (ratePerHour / 60);
-  if (mins < 60) return `约 ${Math.ceil(mins)} 分钟后升级`;
-  return `约 ${(mins / 60).toFixed(1)} 小时后升级`;
 });
 
 function bagItemById(id: number) {
@@ -697,8 +685,8 @@ onBeforeUnmount(() => {
             <NProgress type="line" :percentage="expPercent" :show-indicator="false" status="info" />
             <div class="mt-8px flex-y-center justify-between text-12px text-gray-400">
               <span>{{ $t('page.farm.dashboard.expRate') }}: {{ expRate }}</span>
-              <span>{{ timeToLevel }}</span>
             </div>
+            <LevelForecast v-if="isOnline" :forecast="status?.levelForecast" />
             <div v-if="status?.sessionExpGained" class="mt-6px text-12px text-success">
               {{ $t('page.farm.dashboard.todayExp') }}: +{{ status.sessionExpGained }}
             </div>

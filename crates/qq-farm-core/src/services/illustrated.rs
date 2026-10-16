@@ -20,6 +20,8 @@ const SERVICE: &str = "gamepb.illustratedpb.IllustratedService";
 
 pub struct IllustratedService {
     gateway: Arc<Gateway>,
+    /// 账号 id：商店种子列表（shopSeed 富化）读等级快照用
+    account_id: String,
 }
 
 fn reward_dto(reward: Option<&IllustratedReward>) -> Option<serde_json::Value> {
@@ -84,7 +86,14 @@ fn buff_dto(entry: &crate::config::game_config::BuffConfigItem) -> serde_json::V
 impl IllustratedService {
     #[must_use]
     pub fn new(gateway: Arc<Gateway>) -> Self {
-        Self { gateway }
+        Self { gateway, account_id: String::new() }
+    }
+
+    /// 注入账号 id（面板快照的 shopSeed 需要按账号等级判断 locked）
+    #[must_use]
+    pub fn with_account_id(mut self, account_id: &str) -> Self {
+        self.account_id = account_id.to_string();
+        self
     }
 
     async fn get_list(&self, kind: i32) -> Result<GetIllustratedListV2Reply> {
@@ -159,11 +168,67 @@ impl IllustratedService {
         let (crop_levels, mutant_levels) = tokio::join!(self.get_levels(1), self.get_levels(2));
         let crop_levels = crop_levels?;
         let mutant_levels = mutant_levels?;
+        let mut crop = self.normalize_book(1, &crop_list, &crop_levels);
+        self.attach_shop_seeds(&mut crop).await;
         Ok(serde_json::json!({
-            "crop": self.normalize_book(1, &crop_list, &crop_levels),
+            "crop": crop,
             "mutant": self.normalize_book(2, &mutant_list, &mutant_levels),
             "updatedAt": crate::utils::time::now_ms(),
         }))
+    }
+
+    /// 作物条目挂商店种子购买信息（对齐 bot `buildIllustratedSnapshot`，0f09702）：
+    /// seedId 归一为植物种子 id，可购买的挂完整 shopSeed，仅本地目录可查的挂
+    /// `unknownMeta` 版本（goodsId=0），都没有则 null。
+    async fn attach_shop_seeds(&self, crop: &mut serde_json::Value) {
+        let gc = global_game_config();
+        let seeds = crate::services::farm::planting::fetch_available_seeds(
+            self.gateway.clone(),
+            &self.account_id,
+            false,
+        )
+        .await
+        .unwrap_or_default();
+        let seed_by_id: std::collections::HashMap<i64, serde_json::Value> = seeds
+            .iter()
+            .filter_map(|seed| {
+                seed.get("seedId").and_then(serde_json::Value::as_i64).map(|id| (id, seed.clone()))
+            })
+            .collect();
+        let local_seeds: std::collections::HashMap<i64, serde_json::Value> = gc
+            .get_all_seeds()
+            .into_iter()
+            .filter_map(|s| serde_json::to_value(&s).ok().map(|v| (s.seed_id, v)))
+            .collect();
+        let Some(items) = crop.get_mut("items").and_then(serde_json::Value::as_array_mut) else {
+            return;
+        };
+        for item in items.iter_mut() {
+            let Some(obj) = item.as_object_mut() else { continue };
+            let item_id = obj.get("seedId").and_then(serde_json::Value::as_i64).unwrap_or(0);
+            let plant =
+                gc.get_plant_by_seed_id(item_id).or_else(|| gc.get_plant_by_fruit_id(item_id));
+            let seed_id =
+                plant.as_ref().and_then(|p| p.seed_id).filter(|id| *id > 0).unwrap_or(item_id);
+            let shop_seed = match seed_by_id.get(&seed_id) {
+                Some(shop) => shop.clone(),
+                None => match local_seeds.get(&seed_id) {
+                    Some(local) => {
+                        let mut value = local.clone();
+                        if let Some(local_obj) = value.as_object_mut() {
+                            local_obj.insert("goodsId".into(), serde_json::json!(0));
+                            local_obj.insert("price".into(), serde_json::Value::Null);
+                            local_obj.insert("unknownMeta".into(), serde_json::json!(true));
+                            local_obj.insert("requiresUnlockCard".into(), serde_json::json!(false));
+                        }
+                        value
+                    }
+                    None => serde_json::Value::Null,
+                },
+            };
+            obj.insert("seedId".into(), serde_json::json!(seed_id));
+            obj.insert("shopSeed".into(), shop_seed);
+        }
     }
 }
 

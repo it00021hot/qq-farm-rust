@@ -103,6 +103,7 @@ impl FarmService {
     /// 设置账号 id（登录后调用，用于按账号读 automation / 种植策略）
     pub fn set_account_id(&self, account_id: &str) {
         *self.account_id.lock() = account_id.to_string();
+        self.api.set_account_id(account_id);
     }
 
     /// 订阅事件

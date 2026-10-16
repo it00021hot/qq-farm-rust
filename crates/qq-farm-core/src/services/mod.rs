@@ -54,6 +54,7 @@ pub mod illustrated;
 pub mod interact;
 pub mod invite;
 pub mod item_capture;
+pub mod level_forecast;
 pub mod login_url_profile;
 pub mod mall;
 pub mod monthcard;

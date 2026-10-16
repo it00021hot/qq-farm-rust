@@ -130,6 +130,18 @@ pub async fn illustrated_snapshot(
     friend::illustrated_snapshot(&state.app, &account_id).await.map_err(IpcError::from)
 }
 
+/// 直接购买商店种子（图鉴购买入口；对齐 bot POST /api/seeds/purchase）。
+#[tauri::command]
+pub async fn seeds_purchase(
+    state: State<'_, DesktopState>,
+    account_id: String,
+    goods_id: i64,
+    count: i64,
+) -> IpcResult<Value> {
+    ensure(&state, &account_id)?;
+    friend::seed_purchase(&state.app, &account_id, goods_id, count).await.map_err(IpcError::from)
+}
+
 /// 游戏内删除好友（成功后加入本地黑名单）。
 #[tauri::command]
 pub async fn friend_delete(

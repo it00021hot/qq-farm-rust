@@ -242,10 +242,21 @@ declare namespace Api {
       uptime?: number;
       sessionExpGained?: number;
       sessionGoldGained?: number;
+      sessionElapsedSeconds?: number;
       levelProgress?: {
         current?: number;
         needed?: number;
         level?: number;
+      };
+      levelForecast?: {
+        generatedAt?: number;
+        remainingExp?: number;
+        scheduledExp?: number;
+        plotCount?: number;
+        readyExp?: number;
+        estimatedAt?: number | null;
+        source?: 'unavailable' | 'ready' | 'planted' | 'mixed' | 'history' | string;
+        automatic?: boolean;
       };
       operations?: Record<string, number>;
       nextChecks?: {
@@ -403,6 +414,35 @@ declare namespace Api {
         plantYieldBonus?: number;
         plantingTimeReduction?: number;
         plantExpBonus?: number;
+      };
+      /** 土地升级/解锁条件详情（bot e5f3552 buildLandUpgradeDetail；好友模式无此字段） */
+      landInfo?: {
+        mode: 'unlock' | 'max' | 'upgrade';
+        current?: {
+          level: number;
+          name: string;
+          image: string;
+          yieldBonus?: number;
+          growthReduction?: number;
+          expBonus?: number;
+          mutantMultiplier?: number;
+          resonanceBonus?: number;
+        } | null;
+        next?: {
+          level: number;
+          name: string;
+          image: string;
+          yieldBonus?: number;
+          growthReduction?: number;
+          expBonus?: number;
+          mutantMultiplier?: number;
+          resonanceBonus?: number;
+        } | null;
+        serverAllowed?: boolean;
+        needLevel?: number | null;
+        prerequisite?: { landId: number; met: boolean } | null;
+        costs?: { id: string; count: string; name: string; image: string }[];
+        unknown?: boolean;
       };
       interactionEffects?: LandInteractionEffect[];
       needInteractionCleanup?: boolean;

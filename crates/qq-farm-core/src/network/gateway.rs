@@ -252,6 +252,22 @@ struct Inner {
     /// 乱序帧（或加密序 ≠ seq 序）会被服务端丢弃，反复即触发静默断供
     /// （2026-09-11 慢性掉线排查：登录爆发期并发最高，最容易撞出乱序）。
     send_order: tokio::sync::Mutex<()>,
+    /// 等级预测的土地快照（对齐 bot level-forecast.ts 模块级 snapshot）。
+    /// 每账号一个 Gateway 实例；随连接销毁即断线失效（对齐 bot clearNetworkRuntime）。
+    land_forecast: parking_lot::Mutex<Option<crate::services::level_forecast::ForecastSnapshot>>,
+    /// 快照代次：任何使土地变化的写操作都会自增；携带旧代次的 AllLands 回包不再登记
+    /// （对齐 bot getLandForecastRevision / rememberLandForecast 的 revision 门）。
+    land_forecast_revision: AtomicU64,
+    /// 本账号 gid（登录成功时记录；土地变更推送只在本账号农场变化时使快照失效）
+    own_gid: AtomicI64,
+}
+
+impl Inner {
+    /// 使土地快照失效并自增代次（对齐 bot invalidateLandForecast）
+    fn invalidate_land_forecast(&self) {
+        self.land_forecast.lock().take();
+        self.land_forecast_revision.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 impl Gateway {
@@ -282,6 +298,9 @@ impl Gateway {
                 rpc_scheduler: RpcScheduler::new(),
                 token_provider: crate::utils::random::GatewayTokenProvider::new(),
                 send_order: tokio::sync::Mutex::new(()),
+                land_forecast: parking_lot::Mutex::new(None),
+                land_forecast_revision: AtomicU64::new(0),
+                own_gid: AtomicI64::new(0),
             }),
         }
     }
@@ -768,6 +787,55 @@ impl Gateway {
         self.inner.notify_subscribers.read().len()
     }
 
+    // ===== 等级预测土地快照（对齐 bot services/level-forecast.ts 的模块级状态）=====
+
+    /// 使土地快照失效并自增代次。种植写操作、土地变更推送、断线清理时调用。
+    pub fn invalidate_land_forecast(&self) {
+        self.inner.invalidate_land_forecast();
+    }
+
+    /// 当前快照代次（发起 `AllLands` 请求前捕获，回包到达时校验）
+    pub fn land_forecast_revision(&self) -> u64 {
+        self.inner.land_forecast_revision.load(Ordering::SeqCst)
+    }
+
+    /// 登记 `AllLands` 回包为预测快照；代次已变化（期间发生过写操作）则丢弃
+    /// （对齐 bot `rememberLandForecast` 的 revision 门）。
+    pub fn remember_land_forecast(
+        &self,
+        lands: Vec<crate::proto::generated::gamepb::plantpb::LandInfo>,
+        gid: i64,
+        exp: i64,
+        expected_revision: u64,
+    ) {
+        if self.inner.land_forecast_revision.load(Ordering::SeqCst) != expected_revision {
+            return;
+        }
+        let at = crate::utils::time::get_server_time_secs();
+        *self.inner.land_forecast.lock() =
+            Some(crate::services::level_forecast::ForecastSnapshot { lands, gid, exp, at });
+    }
+
+    /// 读取仍有效的土地快照：gid/exp 与当前一致且未超过 180s（对齐 bot `getLevelForecast`
+    /// 里的 valid 判断）；不匹配返回 `None`。
+    pub fn valid_land_forecast_lands(
+        &self,
+        gid: i64,
+        exp: i64,
+        now_sec: i64,
+        max_age_sec: i64,
+    ) -> Option<Vec<crate::proto::generated::gamepb::plantpb::LandInfo>> {
+        let guard = self.inner.land_forecast.lock();
+        let snapshot = guard.as_ref()?;
+        if snapshot.gid != gid || snapshot.exp != exp {
+            return None;
+        }
+        if now_sec < snapshot.at || now_sec - snapshot.at > max_age_sec {
+            return None;
+        }
+        Some(snapshot.lands.clone())
+    }
+
     /// 标记登录完成（阶段 1A 外部调用；阶段 1B 由业务模块在收到登录响应后调用）
     pub fn mark_online(&self) {
         self.inner.online_at_ms.store(crate::utils::time::now_ms(), Ordering::Release);
@@ -869,6 +937,7 @@ impl Gateway {
         let name = if basic.name.is_empty() { "未知".to_string() } else { basic.name.clone() };
         let level = basic.level;
         let gold = basic.gold;
+        self.inner.own_gid.store(gid, Ordering::SeqCst);
         tracing::info!(
             gid = gid,
             name = %name,
@@ -997,6 +1066,8 @@ fn end_session(inner: &Inner, reason: Option<&str>) {
     }
     // 丢弃未消费的一次性初始化凭据（对齐 bot clearNetworkRuntime → gatewayTokens.clear()）
     inner.token_provider.clear();
+    // 土地快照随会话结束失效（对齐 bot clearNetworkRuntime → invalidateLandForecast）
+    inner.invalidate_land_forecast();
     *inner.phase.write() = ConnectionPhase::Disconnected;
     *inner.ws_sender.lock() = None;
     // 会话结束后不再保留 client handle（连接已由对端/force_disconnect 关闭）
@@ -1094,6 +1165,16 @@ fn handle_response(inner: &Arc<Inner>, parsed: &FrameParser) {
             body_len = parsed.body().len(),
             "response for unknown seq"
         );
+    } else {
+        // 成功回包使等级预测的土地快照失效（对齐 bot network.ts handleMessage）：
+        // PlantService 除 AllLands 外的任何回包、ItemService.Use 都可能改变土地状态。
+        let service = parsed.service_name();
+        let method = parsed.method_name();
+        if (service == "gamepb.plantpb.PlantService" && method != "AllLands")
+            || (service == "gamepb.itempb.ItemService" && method == "Use")
+        {
+            inner.invalidate_land_forecast();
+        }
     }
 }
 
@@ -1110,6 +1191,14 @@ fn handle_notify(inner: &Arc<Inner>, parsed: &FrameParser) {
         }
     };
     let event = crate::network::notify::parse_event(&event_msg);
+    // 本账号农场土地变更推送使等级预测快照失效（对齐 bot handleNotify：
+    // lands 非空且 hostGid 是自己或 0 时 invalidateLandForecast）
+    if let NotifyEvent::LandsChanged { host_gid, lands, .. } = &event {
+        let own_gid = inner.own_gid.load(Ordering::SeqCst);
+        if !lands.is_empty() && (*host_gid == 0 || (own_gid != 0 && *host_gid == own_gid)) {
+            inner.invalidate_land_forecast();
+        }
+    }
     // 广播给所有订阅者
     let subs = inner.notify_subscribers.read().clone();
     for (_, tx) in subs {

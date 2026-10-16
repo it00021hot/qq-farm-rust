@@ -12,6 +12,7 @@
 
 pub mod api;
 pub mod land_analysis;
+pub mod land_upgrade;
 pub mod layout_reservation;
 pub mod planting;
 pub mod scheduler;

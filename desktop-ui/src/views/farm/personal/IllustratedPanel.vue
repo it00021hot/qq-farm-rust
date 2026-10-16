@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { NCard, NEmpty, NProgress, NTag, NTabs, NTabPane } from 'naive-ui';
+import { NButton, NCard, NEmpty, NInputNumber, NModal, NProgress, NSpace, NTag, NTabs, NTabPane, useMessage } from 'naive-ui';
 import { useFarmAccountStore } from '@/store/modules/farm-account';
-import { fetchGetIllustratedSnapshot } from '@/service/api';
+import { fetchGetIllustratedSnapshot, fetchPurchaseSeed } from '@/service/api';
 import { resolveCatalogImage } from '@/views/farm/game-config/shared';
 import { $t } from '@/locales';
 
 defineOptions({ name: 'IllustratedPanel' });
 
 const farmAccountStore = useFarmAccountStore();
+const message = useMessage();
 const loading = ref(false);
 const snapshot = ref<any>(null);
 const book = ref<'crop' | 'mutant'>('crop');
@@ -47,6 +48,67 @@ function imageSrc(item: any): string {
   return resolveCatalogImage(item.image);
 }
 
+// ============ 种子购买（bot 0f09702：图鉴直达商店购买） ============
+
+const purchaseOpen = ref(false);
+const purchaseItem = ref<any>(null);
+const purchaseCount = ref(1);
+const purchasing = ref(false);
+
+/** 可直接购买：有商品 ID 且未锁定/未售罄/非仅本地目录 */
+function canBuy(item: any): boolean {
+  const seed = item?.shopSeed;
+  return Boolean(seed?.goodsId && !seed.locked && !seed.soldOut && !seed.unknownMeta);
+}
+
+/** 不可购买时的可用性提示（对齐 bot seedAvailability 文案语义） */
+function seedAvailability(item: any): string {
+  const seed = item?.shopSeed;
+  if (!seed) return $t('page.farm.personal.illustrated.noShopInfo');
+  if (seed.unknownMeta) return $t('page.farm.personal.illustrated.fromOtherSource');
+  if (seed.locked) {
+    return seed.requiresUnlockCard
+      ? $t('page.farm.personal.illustrated.needUnlockCard')
+      : seed.requiredLevel
+        ? $t('page.farm.personal.illustrated.needLevel', { level: seed.requiredLevel })
+        : $t('page.farm.personal.illustrated.needOtherCondition');
+  }
+  if (seed.soldOut) return $t('page.farm.personal.illustrated.soldOut');
+  return $t('page.farm.personal.illustrated.cannotBuy');
+}
+
+function purchaseLimit(item: any): number {
+  const remaining = Number(item?.shopSeed?.remainingPurchaseCount);
+  return Number.isFinite(remaining) && remaining > 0 ? remaining : 9999;
+}
+
+function openSeedPurchase(item: any) {
+  purchaseItem.value = item;
+  purchaseCount.value = 1;
+  purchaseOpen.value = true;
+}
+
+async function purchaseSeed() {
+  const item = purchaseItem.value;
+  const seed = item?.shopSeed;
+  const accountId = farmAccountStore.currentAccountId;
+  if (!accountId || !seed?.goodsId || purchasing.value) return;
+  const count = Math.max(1, Math.min(purchaseLimit(item), Math.floor(Number(purchaseCount.value) || 1)));
+  purchasing.value = true;
+  try {
+    const { error } = await fetchPurchaseSeed(accountId, Number(seed.goodsId), count);
+    if (error) throw new Error(error.message);
+    message.success($t('page.farm.personal.illustrated.buySuccess', { name: item.name }));
+    purchaseOpen.value = false;
+    purchaseItem.value = null;
+    await load();
+  } catch (cause) {
+    message.error((cause as Error)?.message || $t('page.farm.personal.illustrated.buyFailed'));
+  } finally {
+    purchasing.value = false;
+  }
+}
+
 defineExpose({ refresh: load });
 
 void load();
@@ -63,8 +125,13 @@ void load();
       <NEmpty v-if="!snapshot" :description="$t('page.farm.personal.illustrated.empty')" />
       <template v-else>
         <NTabs v-model:value="book" type="segment" size="small" class="mb-12px">
-          <NTabPane name="crop" :tab="$t('page.farm.personal.illustrated.cropTab')" />
-          <NTabPane name="mutant" :tab="$t('page.farm.personal.illustrated.mutantTab')" />
+          <!-- 自闭合 NTabPane 在 naive-ui 2.45 的 label 会渲染成空，label 必须走 #tab 具名插槽 -->
+          <NTabPane name="crop">
+            <template #tab>{{ $t('page.farm.personal.illustrated.cropTab') }}</template>
+          </NTabPane>
+          <NTabPane name="mutant">
+            <template #tab>{{ $t('page.farm.personal.illustrated.mutantTab') }}</template>
+          </NTabPane>
         </NTabs>
 
         <div v-if="current" class="mb-8px flex items-center gap-12px">
@@ -83,7 +150,7 @@ void load();
             v-for="item in current?.items ?? []"
             :key="item.seedId"
             class="cv-auto relative flex flex-col items-center gap-2px rounded-6px px-2px py-6px"
-            :title="`${item.name} · ${item.unlocked ? $t('page.farm.personal.illustrated.unlocked') : $t('page.farm.personal.illustrated.locked')}${item.reward ? ` · ${item.reward.name} x${item.reward.count}` : ''}`"
+            :title="`${item.name} · ${item.unlocked ? $t('page.farm.personal.illustrated.unlocked') : $t('page.farm.personal.illustrated.locked')}${item.reward ? ` · ${item.reward.name} x${item.reward.count}` : ''}${book === 'crop' && !canBuy(item) ? ` · ${seedAvailability(item)}` : ''}`"
           >
             <span
               class="absolute right-2px top-0 text-11px"
@@ -107,8 +174,65 @@ void load();
             <span class="text-11px leading-tight" :class="item.unlocked ? 'font-semibold' : 'text-gray-400'">
               {{ item.progress ?? 0 }}点
             </span>
+            <NButton
+              v-if="book === 'crop' && canBuy(item)"
+              size="tiny"
+              type="primary"
+              :loading="purchasing"
+              :disabled="purchasing"
+              class="mt-2px"
+              @click="openSeedPurchase(item)"
+            >
+              {{ $t('page.farm.personal.illustrated.buy') }}
+            </NButton>
           </div>
         </div>
+
+        <NModal v-model:show="purchaseOpen">
+          <NCard
+            size="small"
+            class="w-340px"
+            :title="`${$t('page.farm.personal.illustrated.buyTitle')} · ${purchaseItem?.name ?? ''}`"
+            closable
+            @close="purchaseOpen = false"
+          >
+            <div class="flex flex-col gap-12px">
+              <span class="text-12px text-gray-500">
+                {{
+                  $t('page.farm.personal.illustrated.batch', {
+                    count: purchaseItem?.shopSeed?.itemCount ?? 1,
+                    price: purchaseItem?.shopSeed?.price ?? 0
+                  })
+                }}
+              </span>
+              <div class="flex items-center justify-between">
+                <span>{{ $t('page.farm.personal.illustrated.batches') }}</span>
+                <NInputNumber
+                  v-model:value="purchaseCount"
+                  size="small"
+                  :min="1"
+                  :max="purchaseLimit(purchaseItem)"
+                  :disabled="purchasing"
+                  class="w-140px"
+                />
+              </div>
+              <div class="flex items-center justify-between border-t border-gray-200 pt-8px dark:border-gray-700">
+                <span>{{ $t('page.farm.personal.illustrated.total') }}</span>
+                <strong>
+                  {{ ((purchaseItem?.shopSeed?.price ?? 0) * (Number(purchaseCount) || 0)).toLocaleString() }}
+                </strong>
+              </div>
+              <NSpace justify="end">
+                <NButton size="small" :disabled="purchasing" @click="purchaseOpen = false">
+                  {{ $t('page.farm.personal.illustrated.cancel') }}
+                </NButton>
+                <NButton size="small" type="primary" :loading="purchasing" @click="purchaseSeed">
+                  {{ $t('page.farm.personal.illustrated.confirmBuy') }}
+                </NButton>
+              </NSpace>
+            </div>
+          </NCard>
+        </NModal>
       </template>
     </NCard>
   </div>

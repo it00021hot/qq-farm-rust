@@ -17,8 +17,8 @@
 
 | 仓库 | Commit | 日期 | 说明 |
 |------|--------|------|------|
-| **qq-farm-rust** | `main`（本提交：bot 9-28 协议/微信 TSDK/掉线诊断增量） | 2026-09-29 | 协议 1.14.2.15_20260922（QQ/微信统一）+ 微信 TSDK 双 wasm + 微信登录分支 + 掉线诊断（reasonCode/connection_summary/ACE·TSDK 诊断）+ 18 张新种子图（重登 UI 按用户决策不对齐，后端能力本已等价） |
-| **qq-farm-bot** | `864caf3` | 2026-09-28 | 协议升级 + 微信协议对齐（PR #84）+ 会话保活诊断（PR #85）+ 重登 UX（PR #83，不移植）+ 18 张种子图 |
+| **qq-farm-rust** | `main`（本提交：bot 10-12 土地详情/升级预测/图鉴购种/预留修复/TSDK 增量） | 2026-10-15 | QQ TSDK wasm 升级 `v3.9.0.1790414929` + 土地加成与升级/解锁详情（landInfo）+ 等级升级时间预测（levelForecast + sessionElapsedSeconds）+ 图鉴 shopSeed 与种子直购（seeds_purchase）+ 多格种子预留 #89 修复（登记表 + 互斥 + 更满优先）；Tauri 与 GPUI 双端同步（实机待验） |
+| **qq-farm-bot** | `8303e7d` | 2026-10-12 | QQ TSDK 构建对齐（9b19af9）+ 土地详情（e5f3552）+ 升级预测（62e1880）+ 图鉴种子购买（0f09702）+ 多格预留 #89 修复（1a5c23e） |
 
 文档范围：**业务行为 + 面板 HTTP/Socket 契约**（不含改 Vue 面板本身）。
 
@@ -28,7 +28,7 @@
 |------|--------|------|
 | 客户端版本 `FARM_CLIENT_VERSION` | 默认 `1.14.2.15_20260922`（与 bot `config.ts` 默认一致，UPDATED_AT `1790568000000`；QQ/微信统一） | 进游戏网关声明 |
 | bot `core` 包版本号 | `20260928` | 原项目发布标签，≠ 客户端版本字符串 |
-| TSDK wasm（QQ） | `v3.9.0.1790160550`（161081 字节，SHA-256 `2c9e377ecc9a4fd9…`；加载时校验） | QQ 账号网关加密 + ACE |
+| TSDK wasm（QQ） | `v3.9.0.1790414929`（161111 字节，SHA-256 `f80c5f34f4e7dc55…`；加载时校验；bot 9b19af9 对齐已核验构建，协议版本仍为 1.14.2.15_20260922） | QQ 账号网关加密 + ACE |
 | TSDK wasm（微信） | `v3.9.0.1790237209`（160992 字节，SHA-256 `4bf6aa0ede9677fe…`；加载时校验） | 微信账号网关加密 + ACE（bot 864caf3 新增，`assets/tsdk-wx.wasm`） |
 | 青梅活动 ID | 每日 `2026081201` / 酿造 `2026081202` | 活动协议 |
 | 公益小红花活动 ID | 活动组 `2026090900` / 活动 `2026090901` | 活动协议 |
@@ -68,7 +68,8 @@
 | 连网进游戏 | 齐 | 经 Gateway + TSDK 登录并维持心跳；登录/心跳包字节级对齐官方抓包（QQ 73/27 字节向量）；微信登录分支对齐 bot（device_info 扩展 network/device_id/memory、scene_id 省略、channel `other`）；会话结束输出 connection_summary 汇总诊断（心跳计数/pending/queued/ACE·TSDK 诊断/断开原因），踢下线日志带 reasonCode | `network/*`, `crypto/tsdk.rs` |
 | QQ 小程序扫码拿码 | 齐 | 面板可走 QQ 码登录流程 | `services/qrlogin.rs` |
 | 微信扫码拿码并启动 | 齐 | 扫码 → 应用宝 login_buffer 落盘 → 换一次性网关 code 启动；掉线/重启可用授权再换码重连；TSDK 按平台选 wasm（QQ `tsdk.wasm` / 微信 `tsdk-wx.wasm`，各自 SHA-256 校验，bot 864caf3 双构建） | `services/wx_login/*`, `routes/wx_login.rs` |
-| 本田务农循环 | 齐 | 除草除虫浇水 → 收获 → 铲除 → 种植（含多格 + `bagSeedMultiLandReservationEnabled` 优先多格种子预留空地，默认关）→ 施肥/解锁升级；默认策略/skip_own_weed_bug/smart 秒数对齐 bot | `services/farm/*`, `runtime/worker_loop.rs` |
+| 本田务农循环 | 齐 | 除草除虫浇水 → 收获 → 铲除 → 种植（含多格 + `bagSeedMultiLandReservationEnabled` 优先多格种子预留空地，默认关；bot #89：按种子登记目标布局、各组整组互斥、优先已预留格数更多的布局，种子可种即清登记）→ 施肥/解锁升级；默认策略/skip_own_weed_bug/smart 秒数对齐 bot | `services/farm/*`, `runtime/worker_loop.rs` |
+| 土地详情 / 等级预测 / 图鉴购种 | 齐 | 土地面板 DTO 携带 `landInfo`（当前/下一级加成对比、解锁/升级条件与成本；服务器条件优先、官方 LandLevel(Need).json 回退，bot e5f3552）；状态快照携带 `levelForecast`（按当前作物排期推算升级时间，不足时用会话速率在最后一笔收获后外推；土地快照随 PlantService 写回包/ItemService.Use/土地推送/断线失效，bot 62e1880）与 `sessionElapsedSeconds`；图鉴快照作物条目挂 `shopSeed`（服务器商店失败回落本地目录 `unknownMeta`），`seeds_purchase` 直购（参数校验/解锁卡/限购/金币门控与文案逐条照抄 bot 0f09702） | `farm/land_upgrade.rs`, `services/level_forecast.rs`, `farm/planting.rs`, `services/illustrated.rs` |
 | 宠物（护主犬） | 齐 | 上场/收回/喂粮/守护记录 + `ActivateDog` 消耗背包卡片激活图鉴项；快照含 `activatable` 三态（field_6=1 或背包有未锁定同 ID 卡） | `services/pets.rs` |
 | 好友帮助 / 偷菜 / 捣乱 | 齐 | 列表、访问、帮助（经验门控）、偷菜（气泡+自巡/空访/一键 Harvest 主地回退/先偷后帮）、静默仅挡好友、黑名单落盘；捣乱按日限/启动筛选/`1001046` 停 | `services/friend/*` |
 | 背包展示与操作 | 齐 | 按 UID 堆分行；含 `key`/`uid`/`mutantTypes`/`groupKey`；系统物品分离 | `services/warehouse.rs` |
@@ -3528,3 +3529,93 @@ bot 本轮 13 个提交**玩法层零变化**（活动/商城/日常自动化均
 - 预览：214 张全量重渲染；抽查 `accounts-light/dark/minimum/150`、`game-config-light`、`analytics-light`——表格铺满、无死区；分析页参考等级显示账号等级（fixture 26）。
 - **验证通过**：GPUI `ui-preview` 全量 **432 项测试**、严格 GPUI Clippy（`--features ui-preview --all-targets --no-deps -- -D warnings`）、`RUSTFLAGS="-D warnings" cargo check --workspace --all-targets`、`cargo fmt --all -- --check`、`git diff --check`。
 - **交付物与实机证据**：release 重建 + `scripts/package-gpui.sh release`（`dist/QQ Farm-x86_64.app`、UUID `A31C9681-…`；`.app` 与 `.zip` 内可执行文件 SHA-256 一致 `3223f595…5f2de6`）。关闭旧实例（SIGTERM 优雅退出）后启动新包，约 5 分钟内 `session-liveness.json` 三个已授权微信账号（6 → 7 → 5）依次刷新 `last_seen`——启动自动重连（60 秒延迟 + 旧会话释放窗口 + 15–45 秒错峰）在实机生效。
+
+### 2026-10-15 — 同步 bot 864caf3..8303e7d：QQ TSDK 新构建 + 土地详情 + 等级预测 + 图鉴种子购买 + 多格预留 #89 修复（Tauri + GPUI 双端）
+
+**基准**：bot `864caf3` → `8303e7d`（9b19af9 / e5f3552 / 62e1880 / 0f09702 / 1a5c23e）。客户端版本不变（仍 `1.14.2.15_20260922`，9b19af9 明确无需升版）。
+
+**业务明细**：
+
+- **QQ TSDK 构建对齐（bot 9b19af9）**：`assets/tsdk.wasm` 整份覆盖为 `v3.9.0.1790414929`（161111 字节，SHA-256 `f80c5f34…94704ff4`），`crypto/tsdk.rs` 的 `TSDK_BUILD_QQ` 版本/哈希/体积防呆断言同步更新（微信构建不变）。官方会话握手/登录/心跳仍为 `1.14.2.15_20260922`。
+- **土地加成与升级/解锁详情（bot e5f3552）**：镜像 `assets/game_config/LandLevel.json` + `LandLevelNeed.json`（include_str! + OnceLock）；新增 `services/farm/land_upgrade.rs`（`buildLandUpgradeDetail` 1:1：unlock/max/upgrade 三态、服务器条件优先 + 官方配置回退、needLevel/prerequisite/costs、未知条件类型 fail-open 为 unknown）；`build_lands_panel_dto` 四个 Own 分支注入 `landInfo`（好友模式不带）；土地等级图 `land-assets/*.png` 镜像进 `desktop-ui/public/land-assets/`，GPUI 资产解析器新增 `/land-assets/` 分支。prost 表达不了 protobufjs 标量 presence：`LandInfo.buff` 消息存在即整体采用其字段、否则回落官方配置（代码注释已标注依据）。
+- **等级升级时间预测（bot 62e1880）**：新增 `services/level_forecast.rs`（`build_harvest_events` 每足迹一次/仅当前季服务器成熟时间/缺 buff 不猜零加成；`calculateLevelForecast` 的 ready/planted/mixed/history 四源语义与 ceil 取整）；快照挂在 `Gateway`（每账号连接一份，随连接销毁即断线失效）：`AllLands` 回包按 revision 门登记（farm `Api::get_all_lands`，bot farm/api.ts 同位），任何 PlantService 写回包（除 AllLands）、ItemService.Use、本账号 LandsChanged 推送、会话结束均失效；`worker_loop/status.rs` 把 `levelForecast` 注入状态广播；`infra/stats.rs` 增加 `sessionElapsedSeconds`（init 时重置）；app `PanelStatus` 透传 `levelForecast`/`sessionElapsedSeconds`。原客户端本地历史估算已删除，改用服务端预测。
+- **图鉴种子购买（bot 0f09702）**：`farm/planting.rs` 新增 `fetch_available_seeds`（商店种子列表含不可用状态；失败/为空回落本地目录 `unknownMeta`）与 `purchase_seed_via`（goodsId/count 校验、解锁卡拒绝、等级/限购/金币门控与错误文案逐条照抄；回包 cost_items 扣金币快照）；`illustrated.rs` 作物条目 seedId 归一（getPlantBySeedId/FruitId）并挂 `shopSeed`；app 门面 `friend::seed_purchase` + Tauri IPC `seeds_purchase`（generate_handler 与 ACL 两处注册，防回归测试兜底）。
+- **多格种子预留 #89 修复（bot 1a5c23e）**：`layout_reservation.rs` 重写选择规则——已预留格数多者优先 → 沿用已登记布局 → 锚点最小；新增 `SelectFutureLayoutOptions { registered, exclude_land_ids }`；`PlantingEngine` 持有按 seedId 的登记表（bot 模块级 Map 的每账号等价物；rust 多账号同进程，挂引擎实例隔离）；`plant_from_bag_seeds_ex` 改为每种子每轮最多预留一组、各组整组目标布局互斥、种子可种或不再需要预留时清登记；删除 `land_analysis.rs` 里过时的模块内副本（死代码防漂移）。
+- **双端 UI**：Tauri `desktop-ui`：图鉴面板购买按钮/批次弹窗/可用性提示（i18n zh+en + `app.d.ts` Schema 同步）、FarmPanel 土地卡「土地详情」+ `LandDetailModal.vue`（土壤对比/加成表/条件/成本余额对比，打开时拉状态+背包）、仪表盘 `LevelForecast.vue` 替换本地估算、`farm.ts`/`farm.d.ts` 补类型。GPUI：仪表盘账号卡渲染 `levelForecast` 行（`level_forecast_lines`，`estimate_level_up` 本地估算移除；expRate 分母优先 sessionElapsedSeconds）、图鉴卡片「购买」按钮 + 批次弹窗（复用 commerce 弹窗模式，成功关弹窗并刷新）+ 面板内结果提示、土地卡「详情」按钮 + 土地详情弹窗（打开时拉状态/背包做等级与余额对比）。
+
+**测试**：`layout_reservation` 10 项（含 #89 回归、登记沿用、互斥排除）、`land_upgrade` 4 项（对齐 bot land-upgrade.test.js 全部断言）、`level_forecast` 7 项（对齐 bot level-forecast.test.js：issue 86、共享足迹、排除项、phase 6 成熟、ready/手动/静默、盛开末段、历史外推）、GPUI `level_forecast_lines` 文案对齐、`tsdk_builds_match_bot_literals` 更新至新构建。
+
+**验证**：`RUSTFLAGS="-D warnings" cargo check --workspace --all-targets` 0 错 0 警；`cargo test --workspace` 全绿 1517 项（core lib 1059、GPUI 429）；`cargo fmt --all --check` 与 `git diff --check` 通过；desktop-ui `corepack pnpm typecheck` + `pnpm build` 通过。
+
+**待验（实机）**：QQ 账号用新 TSDK wasm 长时间挂机；图鉴种子真实下单一次（门控文案与金币扣减）；土地详情弹窗在有解锁/升级条件的地块上核对服务器下发的条件数据；升级预测在自动收获开启时与实际收获时间对照；多格种子预留（开关打开 + 多格背包种子）在 #89 场景（后空出的地被纳入预留）下实盘观察。
+
+### 2026-10-15 — 热修：naive-ui 2.45 下自闭合 NTabPane 的 tab 标签渲染为空（图鉴/游戏配置）
+
+- **现象**：实机查看图鉴面板时「作物图鉴 / 变异图鉴」切换 tab 名称全部丢失（渲染为空）；排查发现游戏配置页「种子 / 果实 / 道具」tab 同样为空。商城页同款 segment tab 正常——商城在该依赖升级时已修过并留有注释，图鉴与游戏配置两处漏改。
+- **根因**：887f0db 前端依赖批量升级带入 naive-ui 2.45.3：自闭合（无子节点）的 `<NTabPane :tab="…" />` 的 label 会被 normalizeSlots 包成空插槽，渲染为空；`tab` prop 只有配合默认插槽内容才生效，必须改走 `#tab` 具名插槽。jsdom 实测四种写法：自闭合 NTabPane ✗（line/card/segment 全类型）、#tab 插槽 ✓、NTab 自闭合 ✓、NTabPane 带内容 ✓——仅图鉴与游戏配置两处命中。
+- **修复**：`personal/IllustratedPanel.vue` 与 `game-config/index.vue` 的 tab 全部改为 `#tab` 具名插槽写法（与商城/秋日活动一致）；全库扫描确认无其余自闭合 NTabPane 残留。
+- **验证**：`corepack pnpm typecheck` + `pnpm build` 通过；dev 实例重启后 tab 文案可见。GPUI 端不受影响（自有控件）。
+
+### 2026-10-15 — 热修：土地详情弹窗成本图标丢失 + 样式重排
+
+- **图标丢失根因**：`LandDetailModal.vue` 成本项图片直接用了 `/game-config/...` 相对路径当 `src`，违反图片路径黄金规则 2（必须经 `resolveCatalogImage()` 转 `farmcfg://` 协议地址），webview 404 显示破图。土壤图（`/land-assets/`，dist 静态文件）按规则本就原样使用，显示正常。已改为 `resolveCatalogImage(cost.image)`。
+- **样式重排**：表头第一格误用「产量加成」改为新增 locale 键 `landDetail.bonusHeader`（土地加成 / Land bonuses，zh+en+Schema 三处同步）；加成对比改为圆角分组行 + 表格数字右对齐（tabular-nums），提升项绿色 ↑；条件与成本行改为圆角卡片行，成本图标带容器底框，余额状态（余额充足/还差 X/待同步）右对齐着色；标题行 #id 移到 header-extra。
+- **验证**：`corepack pnpm typecheck` + `pnpm build` 通过，dev 实例重启加载新 dist。
+
+### 2026-10-15 — 性能：修复 levelForecast/sessionElapsedSeconds 破坏状态广播内容门控
+
+- **排查**：用户反馈机器卡顿。实测 qq-farm-desktop 瞬时 CPU 仅 0~5%（47MB），机器负载大头是 ZCode 渲染进程（约 100%）与 WindowServer（50%+）、Chrome——农场应用不是主因。
+- **发现的真实回归**：本次同步新增的 `sessionElapsedSeconds`（1s 精度）与 `levelForecast.generatedAt`（1s 精度）让 status 广播的内容哈希每轮必变，3s 一轮的 status_sync 从「内容变化才推送」（原有 5s 量化门控）退化为每 3s 每账号全量推送，白白增加序列化与前端重渲染。
+- **修复**：两处均量化到 5s 桶（对齐 status.rs 里 uptime/nextChecks 的既有策略）：`infra/stats.rs` 的 sessionElapsedSeconds 取整到 5s；status.rs 在插入 levelForecast 前把 generatedAt 量化为 `(now_ms/5000)*5000`（UI 仅用它换算「还有几分钟」，±5s 不影响分钟粒度显示）。core 的 `calculate_level_forecast` 保持与 bot 1:1 不动。
+- **验证**：`RUSTFLAGS="-D warnings" cargo check -p qq-farm-core --all-targets` 0 错，core lib 1059 测试全绿，`cargo fmt --check` 通过。
+
+### 2026-10-15 — GPUI 实机反馈三连修 + 图鉴滚动修复 + 仪表盘对齐第一批
+
+- **图鉴页滚动不了（用户实机报告）**：图鉴网格 `v_virtual_list` 使用 Infer 尺寸会长到内容高度，容器内部无溢出 → 滚轮无效且整页也未挂滚动容器（图鉴分支独享「无页面滚动条」路径）。修复：列表改 `Auto` 尺寸（元素高度取视口、内部滚动）+ `IllustratedState.grid_scroll_handle` 持久滚动句柄（滚动位置不随重渲染丢失）；页面容器统一挂 `overflow_y_scrollbar`。新增回归测试 `illustrated_grid_scrolls_to_reach_later_rows`（200 项注入 + `scroll_to_bottom` + 虚拟化断言；对齐 gpui-base 自身测试模式——合成滚轮事件在该测试栈不可靠，handle 驱动才是组件的规范路径）。
+- **仪表盘对齐第一批（对照 Tauri 截图）**：农场资产卡从流式改 2×2 网格 + 彩色数值（金币橙/点券绿/钻石蓝/金豆豆橙，新增 `metric_colored`）；今日统计改 2 列网格并按 Tauri 固定顺序（收获/任务/偷菜/出售/一键务农/施肥/帮务农/种植）排列。
+- **UI 全量对齐启动**：渲染 214 张预览图逐模块对照 Tauri；差异清单与工作约定落盘 `docs/UI-ALIGNMENT.md`（设置页栅格化表单为最大差异，后续按模块推进）。
+- **验证**：GPUI `--features ui-preview` 全量 433 项测试通过（含新增滚动回归）；214 张预览重渲染核对仪表盘布局。
+
+### 2026-10-15 — GPUI 实机反馈第四批：账号表格居中 + 神秘商店菜单移除 + 工具栏图标
+
+- **账号页表格**：表头与全部字段文字居中（`account_cell_frame` 加 `text_center`）；运行状态/授权状态标签（胶囊）内文字居中（flex 三件套）；最近在线时间居中；操作按钮组居中。
+- **神秘商店菜单**：侧边栏移除独立「神秘商店」入口（`Page::MysteryShop` 从导航过滤），与 Tauri 一致——入口在商城「神秘商人」tab；页面本身保留（持久化偏好直达仍可渲染）。两个旧断言「侧边栏独立入口」的测试按新行为更新（`mystery_shop_remains_available_as_a_mall_tab`、`mystery_shop_page_still_renders_without_sidebar_entry`）。
+- **内容工具栏**：侧边栏/刷新/检查更新三个按钮补图标（PanelLeft/RefreshCw/Download，来自 gpui-kit-assets 完整 Lucide 目录 `gpui_kit::assets::IconName`），消除裸文字链接感。
+- **验证**：GPUI 全量 433 项测试通过；214 张预览重渲染，账号页居中/工具栏图标/侧边栏项核对无误。
+
+### 2026-10-16 — GPUI 设置页对齐第一批：策略设置 tab 栅格化（对照 Tauri 截图）
+
+- **顶部表单**：种植策略 / 指定种子(或策略预览) 从「label 上 + 控件下」竖排单列改为「label 左 140px 右对齐 + 控件 flex_1」的两列并排网格（对齐 Tauri `md:grid-cols-2` + `label-placement=left`）；label 补 `aria_label`（observation 的 label() 依赖它，strategy-preview 断言需要）。
+- **分组卡片**：策略 tab 容器从横排流式改为竖排整行（v_flex），巡田间隔/静默时段/种植延迟三个分组卡片各占整行；巡田间隔六项改两列网格并约束 max-w 640（同 Tauri `sm:grid-cols-2 max-w-640`）；静默时段时间行与延迟行同样约束 640。
+- **测试**：`strategy_sections_top_align_with_the_strategy_controls`（旧横排顶对齐断言）改写为竖排堆叠 + 整行宽度断言；`strategy_preview_shows_vue_level_choice_and_empty_state` 随 aria_label 修复恢复。settings 全量 50 项通过。
+
+### 2026-10-16 — 设置页对齐第二批：整数输入框 Tauri 化（用户实机反馈）
+
+- **问题**：策略 tab 的数字设置是「纯文本 + 编辑按钮」，用户实机指出与 Tauri 的 NInputNumber 框体输入差距大（看着像普通文本）。
+- **修复**：`SettingsState` 新增 `number_inputs`（路径 → InputState 实体表）与 `NUMBER_PATHS` 全路径清单（巡田间隔×6、延迟×2、化肥购买×4、好友互动阈值×3，含默认值与 min/max）；构造时逐个创建 InputState（set_value/set_min/set_max）并订阅 `InputEvent::Change` 回写 draft；`sync_setting_selectors` 反向同步（draft → 输入框，账号切换/载入后显示正确值）。`append_integer_setting(_disabled)` 改用 `NumberInput`（框体 + 内嵌 − + 步进、禁用态透传），「编辑」按钮移除；网格容器包 `settings-number-<path>` id 供测试。
+- **策略 tab 补缺**：bag_priority 下补「第二优先策略」下拉（bag_fallback 实体，sync/订阅已有）与「多格种子预留空地」开关行。
+- **测试**：`disabled_auto_accept_keeps_its_threshold_fields_visible_but_inactive` 更新为新交互（框体可见、禁用态点击不改值）；全量 433 项通过；预览重渲染核对（深浅主题框体样式与 Tauri 一致）。
+
+### 2026-10-16 — 设置页对齐第三批：自动化 tab 网格化 + tab 命名对齐
+
+- **自动化 tab**：基础自动化/化肥与购买/神秘商人三组开关容器从流式换行改为 3 列网格（对齐 Tauri `auto-switch-grid` ≥1024px 断言）；自动好友互动保持「开关 + 阈值」行式混排（与 Tauri 语义一致，不强行网格化）。
+- **tab 命名对齐 Tauri**：中文「种植策略→策略设置」「自动化→自动控制」（`pages/model.rs` 的 Settings 分支单列，不影响 Analytics 同名子区）；英文 Planting strategy→Strategy settings、Automation→Auto control。section key 不变，持久化偏好不受影响。navigation 测试断言同步更新。
+- **验证**：全量 433 项测试通过；预览重渲染核对自动化 tab（3 列开关网格 + 新 tab 名）。
+
+### 2026-10-16 — UI 对齐收尾：剩余模块全量预览核对
+
+- 逐模块核对 214 张预览（我的农场/背包/任务/宠物/图鉴/互动道具/好友/活动目录/商城含神秘商人 tab/账号/游戏配置/收益分析/仪表盘）：结构、栅格、徽标、操作入口与 Tauri 版一致，未发现新的「不伦不类」级偏差。此前三轮（表格居中+菜单+工具栏、仪表盘网格、设置页栅格化+输入框化、图鉴滚动）已覆盖用户实机点名的全部问题。
+- `docs/UI-ALIGNMENT.md` 更新：已完成项打勾，剩余仅实机细验项（levelForecast 真实数据展示、极端窗口微调），发现一处修一处。
+
+### 2026-10-16 — 反馈通道收口：操作结果类页面内提示全面移除（用户实机反馈）
+
+- **问题**：农场操作与图鉴购买后，toast 与页面内横幅同时出现（用户实机截图框出「操作已提交」双通道重复）。
+- **修复**：删除四处「操作结果类」页面内提示渲染——农场 operation_notice（content.rs 的 farm-operation-feedback 横幅）、图鉴 illustrated-notice、商城 commerce-action-notice、账号 success-feedback 横幅；对应 show_* 函数只发全局 toast。**设置 save-notice 保留**（表单保存反馈贴近表单、6 处测试断言该元素）。
+- **附带**：删除工具栏页面副标题（`summary_for`「土地、仓库与每日任务」等，Tauri 无此元素），`summary_for` 方法与 Page summary 字段保留（数据层仍在用）；我的任务礼包卡片改均匀网格（列数随内容区宽度自适应，对齐 Tauri auto-fill minmax(200px,1fr)）。
+- **验证**：全量 433 项测试通过；GPUI 重启后确认窗口与购买 toast 单通道显示。
+
+### 2026-10-16 — 反馈通道收口补遗：账号页横幅渲染移除 + 死代码清理
+
+- 账号页 success-feedback 横幅渲染移除（toast 已覆盖；字段保留供保存流程读写），对应测试改写为断言「页面不再渲染横幅、字段值保留」。
+- 删除失去消费者的 `Page::summary_for` 方法与 `page_summaries_are_localized` 测试（工具栏副标题移除后的死代码清理）。
+- 全量 432 项测试通过。

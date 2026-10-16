@@ -130,11 +130,53 @@ pub async fn farm_interaction_items_use(
     .map_err(AppError::from_core)
 }
 
-/// 图鉴快照（作物 + 变异）。
+/// 图鉴快照（作物 + 变异；作物条目含 shopSeed 购买信息，bot 0f09702）。
 pub async fn illustrated_snapshot(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
     qq_farm_core::services::illustrated::IllustratedService::new(loop_.gateway().clone())
+        .with_account_id(account_id)
         .get_snapshot()
         .await
         .map_err(AppError::from_core)
+}
+
+/// 直接购买商店种子（图鉴购买入口；对齐 bot `purchaseSeed`，门控与文案逐条照抄）。
+pub async fn seed_purchase(
+    ctx: &AppContext,
+    account_id: &str,
+    goods_id: i64,
+    count: i64,
+) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    let reply = loop_
+        .farm()
+        .planting()
+        .lock()
+        .await
+        .purchase_seed(account_id, goods_id, count)
+        .await
+        .map_err(AppError::from_core)?;
+    let goods = reply.goods.as_ref();
+    Ok(json!({
+        "ok": true,
+        "goods": goods.map(|g| json!({
+            "goodsId": g.id,
+            "boughtNum": g.bought_num,
+            "price": g.price,
+            "limitCount": g.limit_count,
+            "unlocked": g.unlocked,
+            "itemId": g.item_id,
+            "itemCount": g.item_count,
+        })),
+        "getItems": reply
+            .get_items
+            .iter()
+            .map(|i| json!({ "id": i.id, "count": i.count }))
+            .collect::<Vec<_>>(),
+        "costItems": reply
+            .cost_items
+            .iter()
+            .map(|i| json!({ "id": i.id, "count": i.count }))
+            .collect::<Vec<_>>(),
+    }))
 }

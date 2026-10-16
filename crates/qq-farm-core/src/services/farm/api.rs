@@ -45,6 +45,8 @@ fn land_became_ripe(lands: &[LandInfo], land_id: i64) -> bool {
 pub struct Api {
     gateway: Arc<Gateway>,
     on_operation_limits_update: Arc<Mutex<Option<OperationLimitsCallback>>>,
+    /// 账号 id（FarmService 注入；AllLands 登记等级预测快照时读当前经验用）
+    account_id: Arc<Mutex<String>>,
 }
 
 use parking_lot::Mutex;
@@ -53,7 +55,16 @@ impl Api {
     /// 创建 API 客户端
     #[must_use]
     pub fn new(gateway: Arc<Gateway>) -> Self {
-        Self { gateway, on_operation_limits_update: Arc::new(Mutex::new(None)) }
+        Self {
+            gateway,
+            on_operation_limits_update: Arc::new(Mutex::new(None)),
+            account_id: Arc::new(Mutex::new(String::new())),
+        }
+    }
+
+    /// 注入账号 id（FarmService::set_account_id 转发）
+    pub fn set_account_id(&self, account_id: &str) {
+        *self.account_id.lock() = account_id.to_string();
     }
 
     /// 设置操作限制更新回调
@@ -94,10 +105,20 @@ impl Api {
     /// 获取所有土地
     ///
     /// 对齐 TS `getAllLands()`：`AllLandsRequest.create({})`，不传 host_gid。
-    pub async fn get_all_lands(&self, _host_gid: i64) -> Result<AllLandsReply> {
+    /// 成功后把回包登记为等级预测的土地快照（bot 62e1880：farm/api.ts 调
+    /// `rememberLandForecast(reply.lands, userState, revision)`，期间有写操作则丢弃）。
+    pub async fn get_all_lands(&self, host_gid: i64) -> Result<AllLandsReply> {
         let body = AllLandsRequest { host_gid: 0 }.encode_to_vec();
+        let revision = self.gateway.land_forecast_revision();
         let resp = self.gateway.request("gamepb.plantpb.PlantService", "AllLands", &body).await?;
         let reply = AllLandsReply::decode(&*resp).map_err(Error::from)?;
+        let account_id = self.account_id.lock().clone();
+        let exp = if account_id.is_empty() {
+            0
+        } else {
+            crate::services::status::status_data_for(&account_id).exp
+        };
+        self.gateway.remember_land_forecast(reply.lands.clone(), host_gid, exp, revision);
         if !reply.operation_limits.is_empty() {
             if let Some(cb) = self.on_operation_limits_update.lock().as_ref() {
                 cb(reply.operation_limits.clone());

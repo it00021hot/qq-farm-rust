@@ -45,6 +45,7 @@ commands.allow = [
   "farm_interaction_items",
   "farm_interaction_items_use",
   "illustrated_snapshot",
+  "seeds_purchase",
   "weather_snapshot",
   "weather_friends",
   "weather_friends_scan",

@@ -304,6 +304,7 @@ pub fn run() {
             commands::friend::farm_interaction_items,
             commands::friend::farm_interaction_items_use,
             commands::friend::illustrated_snapshot,
+            commands::friend::seeds_purchase,
             // settings
             commands::settings::get_settings_panel,
             commands::settings::save_settings,

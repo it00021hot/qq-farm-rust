@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { NButton, NCard, NEmpty, NSpace, NSpin, NTag, useMessage } from 'naive-ui';
 import { fetchFarmOperate, fetchGetFarmLands } from '@/service/api';
 import LandCountdown from '@/views/farm/shared/LandCountdown.vue';
+import LandDetailModal from './LandDetailModal.vue';
 import { useFarmAccountStore } from '@/store/modules/farm-account';
 import { useManagedInterval } from '@/hooks/common/use-managed-interval';
 import { resolveCatalogImage } from '@/views/farm/game-config/shared';
@@ -34,6 +35,9 @@ const operating = ref(false);
 const lands = ref<Api.Farm.LandRow[]>([]);
 const summary = ref<Api.Farm.LandSummary | null>(null);
 const career = ref<Api.Farm.Career | null>(null);
+/** 土地详情弹窗（bot e5f3552：LandCard「土地详情」入口） */
+const detailLandId = ref<number | null>(null);
+const detailLand = computed(() => lands.value.find(land => land.id === detailLandId.value) || null);
 
 const operateOptions: { op: OperateOp; type: NaiveUI.ThemeColor }[] = [
   { op: 'harvest', type: 'success' },
@@ -162,6 +166,7 @@ function stopTimers() {
 watch(
   () => [farmAccountStore.currentAccountId, props.connected] as const,
   () => {
+    detailLandId.value = null;
     void loadLands();
   },
   { immediate: true }
@@ -241,6 +246,14 @@ defineExpose({ refresh: loadLands });
               </NTag>
             </div>
           </div>
+          <button
+            type="button"
+            class="self-start rounded-4px text-11px text-gray-500 underline decoration-dotted underline-offset-3 hover:text-primary"
+            :aria-label="$t('page.farm.personal.landDetail.title')"
+            @click.stop="detailLandId = land.id"
+          >
+            {{ $t('page.farm.personal.landDetail.title') }}
+          </button>
           <div class="farm-land-crop flex-center min-h-48px">
             <img
               v-if="landImageSrc(land)"
@@ -324,5 +337,7 @@ defineExpose({ refresh: loadLands });
         </div>
       </div>
     </NSpin>
+
+    <LandDetailModal :land="detailLand" :connected="connected" @close="detailLandId = null" />
   </NCard>
 </template>

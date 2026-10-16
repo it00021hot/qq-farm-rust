@@ -123,6 +123,8 @@ struct StatsSlot {
     initial: InitialState,
     session: SessionData,
     date_key: Option<String>,
+    /// 会话起始时刻（ms；init 时重置，对齐 bot `sessionStartedAt`，不持久化）
+    session_started_at_ms: i64,
 }
 
 impl Default for StatsSlot {
@@ -133,6 +135,7 @@ impl Default for StatsSlot {
             initial: InitialState::default(),
             session: SessionData::default(),
             date_key: None,
+            session_started_at_ms: 0,
         }
     }
 }
@@ -303,6 +306,7 @@ pub fn init_stats_with_persistence(account_id: &str, gold: i64, exp: i64, coupon
     slot.initial.exp = Some(exp);
     slot.initial.coupon = Some(coupon);
     slot.date_key = Some(today);
+    slot.session_started_at_ms = crate::utils::time::now_ms();
     put_slot(account_id, slot);
 }
 
@@ -494,6 +498,14 @@ pub fn get_stats_for(
         .to_string();
     let ops = slot.operations.clone();
     let session = slot.session.clone();
+    // 量化到 5s 桶：否则每 3s 的 status_sync 因该字段必变而每次全量广播
+    // （对齐 status.rs 里 uptime/nextChecks 的量化策略）
+    let session_elapsed_seconds = if slot.session_started_at_ms > 0 {
+        let elapsed = (crate::utils::time::now_ms() - slot.session_started_at_ms).max(0) / 1000;
+        ((elapsed / 5) * 5) as f64
+    } else {
+        0.0
+    };
     put_slot(account_id, slot);
 
     serde_json::json!({
@@ -511,6 +523,7 @@ pub fn get_stats_for(
         },
         "uptime": 0,
         "operations": ops,
+        "sessionElapsedSeconds": session_elapsed_seconds,
         "sessionExpGained": session.exp_gained,
         "sessionGoldGained": session.gold_gained,
         "sessionCouponGained": session.coupon_gained,

@@ -436,13 +436,38 @@ pub struct ShopPlantResult {
 pub struct PlantingEngine {
     api: Api,
     config: PlantingConfig,
+    /// 已登记的「未来布局」（seedId → 布局，bot `registeredLayouts`）。
+    /// bot 用模块级 Map 靠每账号独立进程隔离；rust 多账号同进程，挂引擎实例隔离。
+    registered_layouts: parking_lot::Mutex<std::collections::HashMap<i64, PlantingLayout>>,
 }
 
 impl PlantingEngine {
     /// 创建
     #[must_use]
     pub fn new(api: Api, config: PlantingConfig) -> Self {
-        Self { api, config }
+        Self {
+            api,
+            config,
+            registered_layouts: parking_lot::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// 读取某种子上一轮登记的目标布局（副本；对齐 TS `getRegisteredLayout`）
+    pub fn registered_layout(&self, seed_id: i64) -> Option<PlantingLayout> {
+        self.registered_layouts.lock().get(&seed_id).cloned()
+    }
+
+    /// 登记某种子的目标布局（对齐 TS `registerLayout`）
+    pub fn register_layout(&self, seed_id: i64, layout: PlantingLayout) {
+        if seed_id == 0 || layout.land_ids.is_empty() {
+            return;
+        }
+        self.registered_layouts.lock().insert(seed_id, layout);
+    }
+
+    /// 种子可种或不再需要预留时清除登记（对齐 TS `clearRegisteredLayout`）
+    pub fn clear_registered_layout(&self, seed_id: i64) {
+        self.registered_layouts.lock().remove(&seed_id);
     }
 
     /// 当前配置
@@ -1175,8 +1200,11 @@ impl PlantingEngine {
         let mut deferred_land_ids: Vec<i64> = Vec::new();
         let mut occupied = std::collections::HashSet::new();
         let mut total_planted = 0usize;
-        // 多格预留每轮最多一次（bot `futureLayoutReserved`）
-        let mut future_layout_anchor: Option<i64> = None;
+        // 每个种子每轮最多预留一组布局；各种子预留的整组目标布局互不重叠（bot #89）
+        let mut reserved_seed_ids: std::collections::HashSet<i64> =
+            std::collections::HashSet::new();
+        let mut claimed_layout_land_ids: std::collections::HashSet<i64> =
+            std::collections::HashSet::new();
         let multi_land_reservation_enabled =
             crate::models::store::account_config::get_bag_seed_multi_land_reservation_enabled(
                 Some(account_id),
@@ -1224,10 +1252,10 @@ impl PlantingEngine {
                         );
                     }
                 }
-                // 多格预留（bot 96fdb39 + ee4de82）：为排在前面的多格种子保住
-                // 尚未凑齐布局的空地，只预留当前已空出的部分；每轮最多一次。
+                // 多格预留（bot 1a5c23e，#89）：为排在前面的多格种子保住尚未凑齐布局的空地，
+                // 只预留当前已空出的部分；每个种子每轮最多一组，且各组的整组目标布局互不重叠。
                 if multi_land_reservation_enabled
-                    && future_layout_anchor.is_none()
+                    && !reserved_seed_ids.contains(&seed.seed_id)
                     && plant_size > 1
                     && priority.contains(&seed.seed_id)
                 {
@@ -1246,14 +1274,28 @@ impl PlantingEngine {
                         }
                         None => all_unlocked_land_ids.to_vec(),
                     };
-                    if let Some(reservation) =
-                        select_future_layout_reservation(&allowed_target, &all_eligible, plant_size)
-                    {
+                    let reservation = select_future_layout_reservation(
+                        &allowed_target,
+                        &all_eligible,
+                        plant_size,
+                        &crate::services::farm::layout_reservation::SelectFutureLayoutOptions {
+                            registered: self.registered_layout(seed.seed_id),
+                            exclude_land_ids: claimed_layout_land_ids.iter().copied().collect(),
+                        },
+                    );
+                    if reservation.is_none() {
+                        self.clear_registered_layout(seed.seed_id);
+                    }
+                    if let Some(reservation) = reservation {
+                        self.register_layout(seed.seed_id, reservation.layout.clone());
+                        for id in &reservation.layout.land_ids {
+                            claimed_layout_land_ids.insert(*id);
+                        }
+                        reserved_seed_ids.insert(seed.seed_id);
                         let reserved: std::collections::HashSet<i64> =
                             reservation.reserved_land_ids.iter().copied().collect();
                         target.retain(|id| !reserved.contains(id));
                         deferred_land_ids.extend(reservation.reserved_land_ids.iter().copied());
-                        future_layout_anchor = Some(reservation.layout.anchor_land_id);
                         crate::services::panel_log::log(
                             account_id,
                             "种植",
@@ -1277,6 +1319,8 @@ impl PlantingEngine {
                 }
                 continue;
             }
+            // 种子当前可种：清除它的布局登记（bot #89，对齐 plantSeeds 前的 clearRegisteredLayout）
+            self.clear_registered_layout(seed.seed_id);
             let result =
                 self.plant_seeds_with_layouts(seed.seed_id, layouts, usize::MAX, host_gid).await?;
             for id in result.reserved_land_ids.iter().chain(result.occupied_land_ids.iter()) {
@@ -1460,6 +1504,169 @@ impl PlantingEngine {
         let preferred = crate::models::store::account_config::get_preferred_seed(Some(account_id));
         Ok(sort_shop_seeds_by_strategy(available, strategy_key, &ranking_ids, preferred))
     }
+
+    /// 商店种子列表（含不可用项的状态；对齐 bot `getAvailableSeeds`，0f09702）。
+    pub async fn get_available_seeds(
+        &self,
+        account_id: &str,
+        propagate_errors: bool,
+    ) -> Result<Vec<serde_json::Value>> {
+        fetch_available_seeds(self.api.gateway().clone(), account_id, propagate_errors).await
+    }
+
+    /// 直接购买商店种子（对齐 bot `purchaseSeed`，0f09702）：门控与错误文案逐条照抄。
+    ///
+    /// 成功后按回包 `cost_items` 扣减本地金币快照（bot 同款）。
+    pub async fn purchase_seed(
+        &self,
+        account_id: &str,
+        goods_id: i64,
+        count: i64,
+    ) -> Result<crate::proto::generated::gamepb::shoppb::BuyGoodsReply> {
+        purchase_seed_via(&self.api, account_id, goods_id, count).await
+    }
+}
+
+/// 商店种子列表主体（含不可用项的状态；对齐 bot `getAvailableSeeds`，0f09702）。
+///
+/// 商店失败/为空时回落本地种子目录（`unknownMeta: true`，goodsId=0 表示不可直接购买），
+/// `propagate_errors` 为 true 时主请求错误直接抛出。种植引擎与图鉴快照共用。
+pub async fn fetch_available_seeds(
+    gateway: std::sync::Arc<crate::network::gateway::Gateway>,
+    account_id: &str,
+    propagate_errors: bool,
+) -> Result<Vec<serde_json::Value>> {
+    const SEED_SHOP_ID: i64 = 2;
+    let api = Api::new(gateway);
+    let gc = crate::config::game_config::global();
+    let state_level = crate::services::status::status_data_for(account_id).level;
+    let mut list: Vec<serde_json::Value> = Vec::new();
+
+    match api.get_shop_info(SEED_SHOP_ID).await {
+        Ok(shop_reply) => {
+            for goods in &shop_reply.goods_list {
+                // 不过滤不可用的种子，返回给前端展示状态
+                let mut required_level = 0i64;
+                let mut requires_unlock_card = false;
+                for cond in &goods.conds {
+                    if cond.r#type == 1 {
+                        required_level = cond.param;
+                    }
+                    if cond.r#type == 2 {
+                        requires_unlock_card = true;
+                    }
+                }
+                let limit_count = goods.limit_count;
+                let bought_num = goods.bought_num;
+                let sold_out = limit_count > 0 && bought_num >= limit_count;
+                list.push(serde_json::json!({
+                    "seedId": goods.item_id,
+                    "goodsId": goods.id,
+                    "name": gc.get_plant_name_by_seed_id(goods.item_id),
+                    "price": goods.price,
+                    "itemCount": (goods.item_count).max(1),
+                    "remainingPurchaseCount": if limit_count > 0 {
+                        serde_json::json!((limit_count - bought_num).max(0))
+                    } else {
+                        serde_json::Value::Null
+                    },
+                    "requiredLevel": required_level,
+                    "requiresUnlockCard": requires_unlock_card,
+                    "locked": !goods.unlocked || state_level < required_level,
+                    "soldOut": sold_out,
+                }));
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "获取商店失败，使用本地备选列表");
+            if propagate_errors {
+                return Err(e);
+            }
+        }
+    }
+
+    // 商店请求失败或为空：使用本地配置
+    if list.is_empty() {
+        for s in gc.get_all_seeds() {
+            let mut entry = serde_json::to_value(&s).unwrap_or(serde_json::json!({}));
+            if let Some(obj) = entry.as_object_mut() {
+                obj.insert("goodsId".into(), serde_json::json!(0));
+                obj.insert("price".into(), serde_json::Value::Null);
+                obj.insert("requiresUnlockCard".into(), serde_json::json!(false));
+                obj.insert("unknownMeta".into(), serde_json::json!(true));
+                obj.insert("locked".into(), serde_json::json!(false));
+                obj.insert("soldOut".into(), serde_json::json!(false));
+            }
+            list.push(entry);
+        }
+    }
+    list.sort_by_key(|item| {
+        item.get("requiredLevel").and_then(serde_json::Value::as_i64).unwrap_or(9_999)
+    });
+    Ok(list)
+}
+
+/// `purchaseSeed` 主体（engine 方法与潜在复用方共用）：门控与错误文案逐条照抄 bot。
+///
+/// 成功后按回包 `cost_items` 扣减本地金币快照（bot 同款）。
+async fn purchase_seed_via(
+    api: &Api,
+    account_id: &str,
+    goods_id: i64,
+    count: i64,
+) -> Result<crate::proto::generated::gamepb::shoppb::BuyGoodsReply> {
+    const SEED_SHOP_ID: i64 = 2;
+    const GOLD_ITEM_ID: i64 = 1_001;
+    if goods_id <= 0 {
+        return Err(crate::error::Error::Business("种子商品无效，请刷新后重试".into()));
+    }
+    if !(1..=9_999).contains(&count) {
+        return Err(crate::error::Error::Business("购买数量必须是 1 到 9999 的整数".into()));
+    }
+
+    let shop_reply = api.get_shop_info(SEED_SHOP_ID).await?;
+    let goods = shop_reply
+        .goods_list
+        .iter()
+        .find(|entry| entry.id == goods_id)
+        .ok_or_else(|| crate::error::Error::Business("种子商品已下架，请刷新后重试".into()))?;
+    let state = crate::services::status::status_data_for(account_id);
+    let mut required_level = 0i64;
+    for condition in &goods.conds {
+        if condition.r#type == 1 {
+            required_level = condition.param;
+        }
+        if condition.r#type == 2 {
+            return Err(crate::error::Error::Business("该种子需要解锁卡，暂不支持直接购买".into()));
+        }
+    }
+    if !goods.unlocked || state.level < required_level {
+        return Err(crate::error::Error::Business(if required_level > 0 {
+            "未达到种子解锁等级".into()
+        } else {
+            "种子尚未解锁".into()
+        }));
+    }
+    let limit = goods.limit_count;
+    let remaining = if limit > 0 { limit - goods.bought_num } else { i64::MAX };
+    if remaining <= 0 {
+        return Err(crate::error::Error::Business("该种子已达到限购数量".into()));
+    }
+    if count > remaining {
+        return Err(crate::error::Error::Business("购买数量超过剩余限购数量".into()));
+    }
+    let price = goods.price;
+    if price <= 0 || state.gold < price.saturating_mul(count) {
+        return Err(crate::error::Error::Business("金币不足或商品价格无效".into()));
+    }
+    let reply = api.buy_goods(goods_id, count, price).await?;
+    for item in &reply.cost_items {
+        if item.id == GOLD_ITEM_ID && !account_id.is_empty() {
+            let new_gold = state.gold.saturating_sub(item.count).max(0);
+            crate::services::status::update_status_gold_for(account_id, new_gold);
+        }
+    }
+    Ok(reply)
 }
 
 fn planting_strategy_key(s: crate::models::types::PlantingStrategy) -> &'static str {

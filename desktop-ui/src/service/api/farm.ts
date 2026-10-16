@@ -67,7 +67,9 @@ interface PanelStatusDto {
   uptime?: number;
   sessionExpGained?: number;
   sessionGoldGained?: number;
+  sessionElapsedSeconds?: number;
   levelProgress?: { current?: number; needed?: number; level?: number };
+  levelForecast?: Api.Farm.Status['levelForecast'];
   operations?: Record<string, number>;
   nextChecks?: Api.Farm.Status['nextChecks'];
 }
@@ -111,6 +113,7 @@ function toFarmStatus(raw: PanelStatusDto, accountId: number): Api.Farm.Status {
     uptime: Number(raw.uptime ?? 0) || undefined,
     sessionExpGained: Number(raw.sessionExpGained ?? 0) || undefined,
     sessionGoldGained: Number(raw.sessionGoldGained ?? 0) || undefined,
+    sessionElapsedSeconds: Number(raw.sessionElapsedSeconds ?? 0) || undefined,
     levelProgress: levelProgress
       ? {
           current: Number(levelProgress.current ?? 0),
@@ -118,6 +121,7 @@ function toFarmStatus(raw: PanelStatusDto, accountId: number): Api.Farm.Status {
           level: Number(levelProgress.level ?? raw.level ?? 0)
         }
       : undefined,
+    levelForecast: raw.levelForecast || undefined,
     operations: raw.operations,
     nextChecks: raw.nextChecks
   };
@@ -1135,6 +1139,15 @@ export function fetchUseFarmInteractionItems(accountId: number, itemId: number, 
 
 export function fetchGetIllustratedSnapshot(accountId: number) {
   return invokeFlat('illustrated_snapshot', { accountId: aid(accountId) });
+}
+
+/** 直接购买商店种子（图鉴购买入口；对齐 bot POST /api/seeds/purchase） */
+export function fetchPurchaseSeed(accountId: number, goodsId: number, count: number) {
+  return invokeFlat('seeds_purchase', {
+    accountId: aid(accountId),
+    goodsId: Number(goodsId),
+    count: Number(count)
+  });
 }
 
 // ============ 天气活动「雨落成诗」 ============

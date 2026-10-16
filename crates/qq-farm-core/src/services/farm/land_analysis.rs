@@ -1038,49 +1038,6 @@ pub fn select_non_overlapping_layouts(
     best
 }
 
-/// 为暂时凑不齐的多格作物选择一组未来布局，并只预留其中当前已经空出的土地。
-///
-/// 1:1 对齐 bot `layout-reservation.ts:selectFutureLayoutReservation`（96fdb39）：
-/// 始终选择锚点最小且已经部分空出的布局，使后续轮次只会向更早布局收敛，避免来回切换。
-/// 单格作物 / 当前已能凑齐布局 / 没有空地时返回 `None`。
-///
-/// 返回 `(选中的未来布局, 其中当前已空出需预留的地块)`。
-#[must_use]
-pub fn select_future_layout_reservation(
-    current_empty_land_ids: &[i64],
-    all_eligible_land_ids: &[i64],
-    plant_size: usize,
-) -> Option<(PlantingLayout, Vec<i64>)> {
-    let size = plant_size.max(1);
-    if size <= 1 {
-        return None;
-    }
-    let empty_ids: HashSet<i64> =
-        current_empty_land_ids.iter().copied().filter(|id| *id > 0).collect();
-    if empty_ids.is_empty() {
-        return None;
-    }
-    let empty_vec: Vec<i64> = empty_ids.iter().copied().collect();
-    // 当前空地已能凑出布局，无需预留
-    if !build_planting_layouts(&empty_vec, size).is_empty() {
-        return None;
-    }
-    let mut candidates: Vec<(PlantingLayout, Vec<i64>)> =
-        build_planting_layouts(all_eligible_land_ids, size)
-            .into_iter()
-            .map(|layout| {
-                let reserved: Vec<i64> =
-                    layout.land_ids.iter().copied().filter(|id| empty_ids.contains(id)).collect();
-                (layout, reserved)
-            })
-            .filter(|(layout, reserved)| {
-                !reserved.is_empty() && reserved.len() < layout.land_ids.len()
-            })
-            .collect();
-    candidates.sort_by_key(|(layout, _)| layout.anchor_land_id);
-    candidates.into_iter().next()
-}
-
 /// 解析某锚点实际占用的土地
 #[must_use]
 pub fn resolve_occupied_land_ids(anchor_land_id: i64, lands: &[LandInfo]) -> (i64, Vec<i64>) {
@@ -1327,6 +1284,10 @@ pub fn build_lands_panel_dto(lands: &[LandInfo], kind: LandDetailKind) -> Vec<se
                     o.insert("couldUpgrade".into(), serde_json::json!(land.could_upgrade));
                     o.insert("currentSeason".into(), serde_json::json!(0));
                     o.insert("totalSeason".into(), serde_json::json!(0));
+                    o.insert(
+                        "landInfo".into(),
+                        super::land_upgrade::build_land_upgrade_detail(land, &lands_map),
+                    );
                 }
             } else if let Some(o) = obj.as_object_mut() {
                 o.insert("needWater".into(), serde_json::json!(false));
@@ -1361,6 +1322,10 @@ pub fn build_lands_panel_dto(lands: &[LandInfo], kind: LandDetailKind) -> Vec<se
                     o.insert("couldUpgrade".into(), serde_json::json!(land.could_upgrade));
                     o.insert("currentSeason".into(), serde_json::json!(0));
                     o.insert("totalSeason".into(), serde_json::json!(0));
+                    o.insert(
+                        "landInfo".into(),
+                        super::land_upgrade::build_land_upgrade_detail(land, &lands_map),
+                    );
                 }
             }
             out.push(obj);
@@ -1391,6 +1356,10 @@ pub fn build_lands_panel_dto(lands: &[LandInfo], kind: LandDetailKind) -> Vec<se
                     o.insert("couldUpgrade".into(), serde_json::json!(land.could_upgrade));
                     o.insert("currentSeason".into(), serde_json::json!(0));
                     o.insert("totalSeason".into(), serde_json::json!(0));
+                    o.insert(
+                        "landInfo".into(),
+                        super::land_upgrade::build_land_upgrade_detail(land, &lands_map),
+                    );
                 }
             }
             out.push(obj);
@@ -1573,6 +1542,10 @@ pub fn build_lands_panel_dto(lands: &[LandInfo], kind: LandDetailKind) -> Vec<se
                 o.insert("landSize".into(), serde_json::json!(land.land_size));
                 o.insert("couldUnlock".into(), serde_json::json!(land.could_unlock));
                 o.insert("couldUpgrade".into(), serde_json::json!(land.could_upgrade));
+                o.insert(
+                    "landInfo".into(),
+                    super::land_upgrade::build_land_upgrade_detail(land, &lands_map),
+                );
             }
         }
         out.push(obj);
@@ -1913,24 +1886,6 @@ mod tests {
             make_land(5, true, None),
         ];
         assert_eq!(get_immature_crop_targets_from_lands(&lands), vec![1, 2]);
-    }
-
-    #[test]
-    fn future_layout_reservation_picks_min_anchor_partial_empty() {
-        // 真实网格：5(0,4) 6(1,4) / 1(0,5) 2(1,5) 恰好组成 2x2，锚点 5。
-        // 当前空地只剩 {1, 6}（该布局的一部分但凑不齐）→ 选锚点 5 的未来布局，
-        // 只预留其中已空出的 [6, 1]（按布局足迹顺序）。
-        let empty = vec![1, 6];
-        let all = vec![1, 2, 5, 6];
-        let (layout, reserved) =
-            select_future_layout_reservation(&empty, &all, 2).expect("应有候选布局");
-        assert_eq!(layout.anchor_land_id, 5);
-        assert_eq!(layout.land_ids, vec![5, 6, 1, 2]);
-        assert_eq!(reserved, vec![6, 1]);
-        // 空地本身已能凑齐 2x2 → 无需预留
-        assert!(select_future_layout_reservation(&[5, 6, 1, 2], &all, 2).is_none());
-        // 单格不预留
-        assert!(select_future_layout_reservation(&empty, &all, 1).is_none());
     }
 
     // ===== 多季作物阶段识别（对齐 bot farm-multi-season.test.js，PR #68）=====

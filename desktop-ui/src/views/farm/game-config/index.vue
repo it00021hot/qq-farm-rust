@@ -533,9 +533,16 @@ onMounted(async () => {
     <NCard :bordered="false" size="small" class="card-wrapper sm:flex-1-hidden">
       <template #header>
         <NTabs :value="activeTab" type="line" pane-wrapper-style="display: none" @update:value="handleTabChange">
-          <NTabPane name="seeds" :tab="$t('page.farm.gameConfig.tabSeeds')" />
-          <NTabPane name="fruits" :tab="$t('page.farm.gameConfig.tabFruits')" />
-          <NTabPane name="items" :tab="$t('page.farm.gameConfig.tabItems')" />
+          <!-- 自闭合 NTabPane 在 naive-ui 2.45 的 label 会渲染成空，label 必须走 #tab 具名插槽 -->
+          <NTabPane name="seeds">
+            <template #tab>{{ $t('page.farm.gameConfig.tabSeeds') }}</template>
+          </NTabPane>
+          <NTabPane name="fruits">
+            <template #tab>{{ $t('page.farm.gameConfig.tabFruits') }}</template>
+          </NTabPane>
+          <NTabPane name="items">
+            <template #tab>{{ $t('page.farm.gameConfig.tabItems') }}</template>
+          </NTabPane>
         </NTabs>
       </template>
       <template #header-extra>

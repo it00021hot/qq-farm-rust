@@ -41,8 +41,14 @@ pub struct PanelStatus {
     pub session_exp_gained: Option<i64>,
     #[serde(default)]
     pub session_gold_gained: Option<i64>,
+    /// 会话已进行秒数（bot 62e1880：stats.sessionElapsedSeconds，expRate 分母）
+    #[serde(default)]
+    pub session_elapsed_seconds: Option<f64>,
     #[serde(default)]
     pub level_progress: Option<ExpProgress>,
+    /// 等级升级时间预测（bot 62e1880；引擎原始 JSON 透传）
+    #[serde(default)]
+    pub level_forecast: Option<Value>,
     #[serde(default)]
     pub operations: HashMap<String, i64>,
     #[serde(default)]
@@ -120,7 +126,9 @@ impl PanelStatus {
             uptime: raw.get("uptime").and_then(Value::as_u64),
             session_exp_gained: raw.get("sessionExpGained").and_then(Value::as_i64),
             session_gold_gained: raw.get("sessionGoldGained").and_then(Value::as_i64),
+            session_elapsed_seconds: raw.get("sessionElapsedSeconds").and_then(Value::as_f64),
             level_progress,
+            level_forecast: raw.get("levelForecast").cloned(),
             operations,
             connection: raw.get("connection").cloned(),
             status: raw.get("status").cloned(),
@@ -199,6 +207,9 @@ pub struct LandRow {
     pub purple_crystal_resonance_exp_bonus: i64,
     #[serde(default)]
     pub land_buff: Option<Value>,
+    /// 土地升级/解锁详情（bot e5f3552 `landInfo`；好友模式无此字段）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub land_info: Option<Value>,
     #[serde(default)]
     pub interaction_effects: Vec<Value>,
     #[serde(default)]
