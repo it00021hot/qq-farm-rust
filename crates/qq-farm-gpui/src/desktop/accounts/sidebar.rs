@@ -32,6 +32,9 @@ impl FarmDesktop {
         let records = self.accounts.records.clone();
         let selected = self.selected_account.clone();
         let desktop = cx.entity().downgrade();
+        // 弹层与触发器等宽：触发器 w_full = 侧边栏宽 − 左右 p_3(12px×2)；
+        // 否则 PopupMenu 按内容自适应，比触发器窄一圈、比例失调。
+        let menu_min_w = px((self.preferences.sidebar_width as f32 - 24.).max(160.));
 
         Button::new("sidebar-account-switcher")
             .label(trigger_label)
@@ -40,7 +43,8 @@ impl FarmDesktop {
             .ghost()
             .w_full()
             .disabled(self.quitting)
-            .dropdown_menu(move |mut menu, _, _| {
+            .dropdown_menu(move |menu, _, _| {
+                let mut menu = menu.min_w(menu_min_w);
                 if records.is_empty() {
                     return menu.item(PopupMenuItem::new(empty_label.clone()).disabled(true));
                 }

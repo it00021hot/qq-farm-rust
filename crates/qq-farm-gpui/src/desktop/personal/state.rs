@@ -22,7 +22,7 @@ impl FarmState {
             lands: LandsState::default(),
             bag: BagState::default(),
             interaction: InteractionItemsState::new(language, window, cx),
-            illustrated: IllustratedState::default(),
+            illustrated: IllustratedState::new(language, window, cx),
             pets: PetsState::default(),
         }
     }

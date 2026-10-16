@@ -70,10 +70,26 @@ impl FarmDesktop {
                     .justify_between()
                     .gap_2()
                     .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(crate::desktop::land_grid::land_id_label(land)),
+                        h_flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(crate::desktop::land_grid::land_id_label(land)),
+                            )
+                            // 土地详情入口（bot e5f3552 LandCard「土地详情」按钮）
+                            .child({
+                                let detail_land = land.clone();
+                                Button::new(format!("farm-land-detail-{id}"))
+                                    .label(crate::i18n::text(language, "详情", "Details"))
+                                    .compact()
+                                    .ghost()
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.open_land_detail(detail_land.clone(), window, cx);
+                                    }))
+                            }),
                     )
                     .child(
                         h_flex()

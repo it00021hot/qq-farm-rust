@@ -41,3 +41,48 @@ fn illustrated_switches_books_and_preserves_progress_and_unlock_state(cx: &mut T
     })
     .expect("virtualized crop and mutant books");
 }
+
+/// 图鉴网格必须能被滚轮滚动：注入 200 项后下滚，首行应被虚拟化、尾部行应进入视口。
+#[gpui_kit::test]
+fn illustrated_grid_scrolls_to_reach_later_rows(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (window, desktop, _restore_data_dir) = open_test_desktop(cx);
+    let items: Vec<serde_json::Value> = (1..=200)
+        .map(|i| {
+            serde_json::json!({
+                "seedId": i, "name": format!("作物{i}"),
+                "rewardCategory": 2, "progress": 0, "unlocked": false,
+            })
+        })
+        .collect();
+    cx.update(|cx| {
+        desktop.update(cx, |this, _| {
+            this.page = Page::Personal;
+            this.page_section = "illustrated".into();
+            this.selected_account = Some("7".into());
+            this.page_raw = serde_json::json!({"illustrated": {
+                "crop": {"level": 1, "progress": 0, "nextLevelProgress": 10, "items": items},
+                "mutant": {"level": 1, "progress": 0, "nextLevelProgress": 10, "items": []},
+            }});
+        })
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("illustrated-item-crop-1").visible());
+        assert!(window.try_find("illustrated-item-crop-200").is_none());
+        // 滚到底（对齐 gpui-base 自身测试模式：handle 驱动滚动）。
+        // 若列表尺寸退化为 Infer（长到内容高度、无内部溢出），此滚动将不产生位移，
+        // 首行不会被虚拟化 —— 即用户报告的「图鉴页滚动不了」回归。
+        desktop.update(cx, |this, _| {
+            this.farm.illustrated.grid_scroll_handle.scroll_to_bottom();
+        });
+        window.render_frame(cx);
+        let early_gone = window.try_find("illustrated-item-crop-1").is_none();
+        let late_mounted = window.try_find("illustrated-item-crop-200").is_some();
+        assert!(
+            early_gone && late_mounted,
+            "滚到底后首行应被虚拟化、尾行应挂载: early_gone={early_gone} late_mounted={late_mounted}"
+        );
+    })
+    .expect("illustrated grid scrolls to the bottom");
+}

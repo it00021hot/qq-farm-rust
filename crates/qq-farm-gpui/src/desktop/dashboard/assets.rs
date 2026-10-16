@@ -1,6 +1,6 @@
 use super::super::*;
 use super::format::{
-    bag_count, bucket_time, format_clock, format_number, int_at, metric, value_text,
+    bag_count, bucket_time, format_clock, format_number, int_at, metric, metric_colored, value_text,
 };
 
 impl FarmDesktop {
@@ -35,32 +35,37 @@ impl FarmDesktop {
                 )),
             )
             .child(
-                h_flex().flex_wrap().gap_4().children([
-                    metric(
+                // 2×2 网格（对齐 Tauri：金币/点券、钻石/金豆豆 各占一行两列）
+                div().grid().grid_cols(2).gap_3().children([
+                    metric_colored(
                         crate::i18n::text(language, "金币", "Gold"),
                         format_number(int_at(status, &["gold"])),
                         int_at(status, &["sessionGoldGained"]).to_string(),
+                        cx.theme().warning,
                         cx,
                     ),
-                    metric(
+                    metric_colored(
                         crate::i18n::text(language, "点券", "Coupons"),
                         coupon.to_string(),
                         self.dashboard
                             .coupon_baseline
                             .map_or(0, |baseline| coupon - baseline)
                             .to_string(),
+                        cx.theme().success,
                         cx,
                     ),
-                    metric(
+                    metric_colored(
                         crate::i18n::text(language, "钻石", "Diamonds"),
                         diamond,
                         String::new(),
+                        cx.theme().info,
                         cx,
                     ),
-                    metric(
+                    metric_colored(
                         crate::i18n::text(language, "金豆豆", "Gold Beans"),
                         gold_bean.to_string(),
                         String::new(),
+                        cx.theme().warning,
                         cx,
                     ),
                 ]),

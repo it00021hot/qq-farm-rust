@@ -1,6 +1,6 @@
 use super::super::*;
 use super::format::{
-    account_avatar_url, account_display_name, estimate_level_up, int_at, string_at,
+    account_avatar_url, account_display_name, int_at, level_forecast_lines, string_at,
 };
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::StatefulInteractiveElement;
@@ -32,13 +32,16 @@ impl FarmDesktop {
         };
         let uptime = int_at(status, &["uptime"]).max(0);
         let session_exp = int_at(status, &["sessionExpGained"]);
-        let exp_rate = if uptime > 0 {
-            ((session_exp.max(0) as f64 * 3600. / uptime as f64).floor() as i64).max(0)
+        // 会话效率分母优先用 sessionElapsedSeconds（bot 62e1880：登录起算）
+        let session_elapsed = int_at(status, &["sessionElapsedSeconds"]);
+        let rate_base = if session_elapsed > 0 { session_elapsed } else { uptime };
+        let exp_rate = if rate_base > 0 {
+            ((session_exp.max(0) as f64 * 3600. / rate_base as f64).floor() as i64).max(0)
         } else {
             0
         };
-        let time_to_level =
-            estimate_level_up(session_exp, uptime, progress_current, progress_needed, language);
+        // 等级升级时间预测（bot 62e1880：服务端按当前作物排期推算，替代本地历史估算）
+        let forecast_lines = level_forecast_lines(status.get("levelForecast"), language);
         let avatar = account_avatar_url(&string_at(status, &["avatar"]), saved_avatar);
         let avatar_initial = display_name.chars().next().unwrap_or('?');
         let avatar_background = cx.theme().background;
@@ -127,16 +130,18 @@ impl FarmDesktop {
                 ),
             )
             .child(
-                h_flex()
-                    .justify_between()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(if language == "en-US" {
-                        format!("Rate: {exp_rate}/h")
+                h_flex().justify_between().text_xs().text_color(cx.theme().muted_foreground).child(
+                    if language == "en-US" {
+                        format!("Session rate: {exp_rate}/h")
                     } else {
-                        format!("效率：{exp_rate}/时")
-                    })
-                    .child(time_to_level),
+                        format!("会话效率：{exp_rate}/时")
+                    },
+                ),
+            )
+            .children(
+                forecast_lines.into_iter().map(|line| {
+                    div().text_xs().text_color(cx.theme().muted_foreground).child(line)
+                }),
             )
             .when(session_exp != 0, |card| {
                 card.child(div().text_xs().text_color(cx.theme().green).child(

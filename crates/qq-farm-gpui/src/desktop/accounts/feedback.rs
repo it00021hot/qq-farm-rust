@@ -10,8 +10,9 @@ impl FarmDesktop {
     ) {
         self.accounts.feedback_generation = self.accounts.feedback_generation.wrapping_add(1);
         let generation = self.accounts.feedback_generation;
-        self.accounts.success_feedback =
-            Some(crate::i18n::text(&self.preferences.language, chinese, english).to_string());
+        let message = crate::i18n::text(&self.preferences.language, chinese, english).to_string();
+        self.show_toast(message.clone(), true, cx);
+        self.accounts.success_feedback = Some(message);
         cx.notify();
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_secs(4)).await;

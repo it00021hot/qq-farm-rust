@@ -10,6 +10,11 @@ impl FarmDesktop {
         cx: &mut Context<Self>,
     ) -> Div {
         controls = controls.child({
+            let interval_row = |path: &'static str,
+                                label: &'static str,
+                                cx: &mut Context<FarmDesktop>| {
+                self.append_integer_setting(h_flex().w_full(), path, label, Some(1), None, 1, cx)
+            };
             let intervals = div()
                 .id("settings-intervals-card")
                 .v_flex()
@@ -24,60 +29,22 @@ impl FarmDesktop {
                         .font_semibold()
                         .child(settings_text(&self.preferences.language, "巡田间隔（秒）")),
                 )
-                .child(self.append_integer_setting(
-                    h_flex().flex_1(),
-                    "intervals/farmMin",
-                    "农场巡查最小",
-                    Some(1),
-                    None,
-                    1,
-                    cx,
-                ))
-                .child(self.append_integer_setting(
-                    h_flex().flex_1(),
-                    "intervals/farmMax",
-                    "农场巡查最大",
-                    Some(1),
-                    None,
-                    1,
-                    cx,
-                ))
-                .child(self.append_integer_setting(
-                    h_flex().flex_1(),
-                    "intervals/helpMin",
-                    "帮助巡查最小",
-                    Some(1),
-                    None,
-                    1,
-                    cx,
-                ))
-                .child(self.append_integer_setting(
-                    h_flex().flex_1(),
-                    "intervals/helpMax",
-                    "帮助巡查最大",
-                    Some(1),
-                    None,
-                    1,
-                    cx,
-                ))
-                .child(self.append_integer_setting(
-                    h_flex().flex_1(),
-                    "intervals/stealMin",
-                    "偷菜巡查最小",
-                    Some(1),
-                    None,
-                    1,
-                    cx,
-                ))
-                .child(self.append_integer_setting(
-                    h_flex().flex_1(),
-                    "intervals/stealMax",
-                    "偷菜巡查最大",
-                    Some(1),
-                    None,
-                    1,
-                    cx,
-                ));
+                .child(
+                    // 两列网格（对齐 Tauri sm:grid-cols-2 max-w-640）
+                    div()
+                        .id("settings-intervals-grid")
+                        .grid()
+                        .grid_cols(2)
+                        .max_w(px(640.))
+                        .gap_x_6()
+                        .gap_y_2()
+                        .child(interval_row("intervals/farmMin", "农场巡查最小", cx))
+                        .child(interval_row("intervals/farmMax", "农场巡查最大", cx))
+                        .child(interval_row("intervals/helpMin", "帮助巡查最小", cx))
+                        .child(interval_row("intervals/helpMax", "帮助巡查最大", cx))
+                        .child(interval_row("intervals/stealMin", "偷菜巡查最小", cx))
+                        .child(interval_row("intervals/stealMax", "偷菜巡查最大", cx)),
+                );
             #[cfg(test)]
             let intervals = intervals.test_support();
             intervals
@@ -227,6 +194,7 @@ impl FarmDesktop {
         row =
             row.items_center()
                 .justify_between()
+                .max_w(px(640.))
                 .gap_3()
                 .child(div().text_sm().child(settings_text(&self.preferences.language, label)))
                 .child(

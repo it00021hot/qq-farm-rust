@@ -7,8 +7,11 @@ impl FarmDesktop {
             .gap_2()
             .child(self.settings_section_title(div().v_flex().gap_2(), "神秘商人", cx))
             .child(
-                h_flex()
-                    .flex_wrap()
+                div()
+                    .grid()
+                    .grid_cols(3)
+                    .gap_y_2()
+                    .gap_x_4()
                     .gap_4()
                     .child(self.render_automation_switch(
                         "mystery_shop_auto_buy",

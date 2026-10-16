@@ -3,6 +3,7 @@ pub(in crate::desktop) use state::LandsState;
 
 mod card;
 mod clock;
+mod detail;
 mod summary;
 
 pub(in crate::desktop) use card::{

@@ -93,19 +93,7 @@ impl FarmDesktop {
             .flex_1()
             .min_h_0()
             .child(self.render_account_filters(cx))
-            .when_some(self.accounts.success_feedback.as_ref(), |panel, message| {
-                let feedback = div()
-                    .id("account-success-feedback")
-                    .rounded(cx.theme().radius)
-                    .bg(cx.theme().group_box)
-                    .px_4()
-                    .py_3()
-                    .text_color(cx.theme().success)
-                    .child(message.clone());
-                #[cfg(test)]
-                let feedback = feedback.test_support();
-                panel.child(feedback)
-            })
+            // 操作结果走全局 toast
             .child(self.render_account_table(
                 window,
                 cx,

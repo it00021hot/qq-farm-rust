@@ -55,6 +55,9 @@ impl FarmDesktop {
                 let color = if running { cx.theme().green } else { cx.theme().muted_foreground };
                 super::account_cell_frame(stretch, column.width()).child(
                     div()
+                        .flex()
+                        .items_center()
+                        .justify_center()
                         .rounded_full()
                         .bg(cx.theme().group_box)
                         .px_2()
@@ -75,6 +78,9 @@ impl FarmDesktop {
                 let label = status.label(&self.preferences.language);
                 let tag = div()
                     .id(format!("account-auth-status-{id}"))
+                    .flex()
+                    .items_center()
+                    .justify_center()
                     .rounded_full()
                     .bg(cx.theme().group_box)
                     .px_2()
@@ -101,6 +107,7 @@ impl FarmDesktop {
                         .flex_1()
                         .min_w_0()
                         .truncate()
+                        .text_center()
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
                         .child(label)
@@ -121,6 +128,7 @@ impl FarmDesktop {
                 super::account_cell_frame(stretch, column.width())
                     .flex()
                     .items_center()
+                    .justify_center()
                     .gap_1()
                     .child(
                         Button::new(format!("account-edit-{id}"))

@@ -54,14 +54,16 @@ impl FarmDesktop {
                         this.refresh(cx);
                     }
                     Ok(Err(error)) => {
-                        this.error = Some(error.to_string());
+                        let message = error.to_string();
+                        this.show_toast(message.clone(), false, cx);
+                        this.error = Some(message);
                         cx.notify();
                     }
                     Err(error) => {
-                        this.error = Some(crate::i18n::background_task_error(
-                            &this.preferences.language,
-                            error,
-                        ));
+                        let message =
+                            crate::i18n::background_task_error(&this.preferences.language, error);
+                        this.show_toast(message.clone(), false, cx);
+                        this.error = Some(message);
                         cx.notify();
                     }
                 }

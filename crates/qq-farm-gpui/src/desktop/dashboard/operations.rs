@@ -17,6 +17,22 @@ impl FarmDesktop {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        // 固定展示顺序（对齐 Tauri OP_META：收获/任务/偷菜/出售/一键务农/施肥/帮务农/种植），
+        // 后端返回顺序不稳定；未知键排最后。
+        const ORDER: [&str; 8] = [
+            "harvest",
+            "taskClaim",
+            "steal",
+            "sell",
+            "farming",
+            "fertilize",
+            "helpFarming",
+            "plant",
+        ];
+        let mut operations = operations;
+        operations.sort_by_key(|(key, _)| {
+            ORDER.iter().position(|known| known == key).unwrap_or(ORDER.len())
+        });
         let operations_card = div()
             .v_flex()
             .flex_1()
@@ -56,7 +72,8 @@ impl FarmDesktop {
                 )
             })
             .when(online, |card| {
-                card.child(div().flex().flex_wrap().gap_2().children(
+                // 2 列网格（对齐 Tauri：图标+名称 左、数量 右）
+                card.child(div().grid().grid_cols(2).gap_2().children(
                     operations.clone().into_iter().map(|(key, count)| {
                         let label = operation_label(&key, language);
                         div()

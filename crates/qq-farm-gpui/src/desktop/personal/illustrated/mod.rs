@@ -2,6 +2,7 @@ mod state;
 pub(in crate::desktop) use state::IllustratedState;
 
 mod card;
+mod purchase;
 mod summary;
 
 use super::super::*;
@@ -105,28 +106,34 @@ impl FarmDesktop {
         let sizes = Rc::new(
             (0..row_count).map(|_| Size::new(px(available), window.rem_size() * 7.5)).collect(),
         );
-        panel.child(
-            gpui_kit::component::v_virtual_list(
-                cx.entity(),
-                "illustrated-grid",
-                sizes,
-                move |this, range, _, cx| {
-                    range
-                        .map(|row| {
-                            h_flex().h(rems(7.5)).items_center().gap_2().children(
-                                items
-                                    .iter()
-                                    .skip(row * columns)
-                                    .take(columns)
-                                    .map(|item| this.render_illustrated_item(item, cx)),
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                },
-            )
-            .with_sizing_behavior(gpui_kit::ListSizingBehavior::Infer)
-            .flex_1()
-            .min_h_0(),
+        // Auto 尺寸：元素高度取视口，内容溢出由列表内部滚动承担；
+        // Infer 会让元素长到内容高度，内部无溢出导致滚轮失效（用户报告的「图鉴页滚动不了」）。
+        // 持久 handle：滚动位置不随重渲染丢失。
+        let list = gpui_kit::component::v_virtual_list(
+            cx.entity(),
+            "illustrated-grid",
+            sizes,
+            move |this, range, _, cx| {
+                range
+                    .map(|row| {
+                        h_flex().h(rems(7.5)).items_center().gap_2().children(
+                            items
+                                .iter()
+                                .skip(row * columns)
+                                .take(columns)
+                                .map(|item| this.render_illustrated_item(item, cx)),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            },
         )
+        .with_sizing_behavior(gpui_kit::ListSizingBehavior::Auto)
+        .with_scroll_handle(&self.farm.illustrated.grid_scroll_handle)
+        .flex_1()
+        .min_h_0();
+        let viewport = div().id("illustrated-grid-viewport").flex_1().min_h_0().child(list);
+        #[cfg(test)]
+        let viewport = viewport.test_support();
+        panel.child(viewport)
     }
 }

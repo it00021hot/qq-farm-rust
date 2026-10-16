@@ -21,6 +21,19 @@ pub(super) fn resolve_local_asset_at(resources: &Path, url: &str) -> Result<Path
             },
             relative,
         )
+    } else if let Some(relative) = url.strip_prefix("/land-assets/") {
+        // 土地等级图（bot e5f3552 web/public/land-assets；桌面端打包或回退前端 public）
+        (
+            {
+                let packaged = resources.join("land-assets");
+                if packaged.is_dir() {
+                    packaged
+                } else {
+                    resources.join("desktop-ui/public/land-assets")
+                }
+            },
+            relative,
+        )
     } else {
         return Err(AssetError::UnsupportedUrl);
     };

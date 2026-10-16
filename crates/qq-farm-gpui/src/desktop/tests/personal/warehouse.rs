@@ -127,6 +127,10 @@ fn large_warehouse_grid_mounts_visible_cards_and_scrolls_to_later_items(cx: &mut
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
         assert!(window.find("personal-bag-grid-viewport").visible());
+        eprintln!(
+            "DEBUG bag viewport bounds={:?}",
+            window.find("personal-bag-grid-viewport").bounds()
+        );
         assert!(window.find("bag-item-2000-0").visible());
         assert!(window.try_find("bag-item-2119-119").is_none());
         window.scroll(

@@ -82,66 +82,39 @@ impl FarmDesktop {
         disabled: bool,
         cx: &mut Context<Self>,
     ) -> Div {
+        let _ = (minimum, maximum, step);
+        // 框体输入 + 内嵌 − + 步进（对齐 Tauri NInputNumber）；值经 Change 事件回写 draft。
         let value = self
             .settings
             .draft
             .pointer(&json_pointer(path))
             .and_then(serde_json::Value::as_i64)
             .unwrap_or_default();
+        let number = div().id(format!("settings-number-{path}")).child(
+            match self.settings.number_inputs.get(path).cloned() {
+                Some(input) => gpui_kit::component::input::NumberInput::new(&input)
+                    .w(px(200.))
+                    .disabled(disabled || self.loading)
+                    .into_any_element(),
+                // 路径未注册的兜底：sync_setting_selectors 会在载入后注册全部路径
+                None => div()
+                    .w(px(200.))
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(value.to_string())
+                    .into_any_element(),
+            },
+        );
+        #[cfg(test)]
+        let number = number.test_support();
+        let control = number.into_any_element();
         controls = controls.child(
             h_flex()
                 .items_center()
                 .justify_between()
                 .gap_3()
                 .child(div().text_sm().child(settings_text(&self.preferences.language, label)))
-                .child(
-                    h_flex()
-                        .items_center()
-                        .gap_1()
-                        .child(format!("{value}"))
-                        .child(
-                            Button::new(format!("settings-step-down-{path}"))
-                                .label("−")
-                                .ghost()
-                                .disabled(
-                                    disabled
-                                        || self.loading
-                                        || minimum.is_some_and(|minimum| value <= minimum),
-                                )
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.adjust_setting(path, -step, cx)
-                                })),
-                        )
-                        .child(
-                            Button::new(format!("settings-edit-{path}"))
-                                .label(settings_text(&self.preferences.language, "编辑"))
-                                .ghost()
-                                .disabled(disabled || self.loading)
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    let current = this
-                                        .settings
-                                        .draft
-                                        .pointer(&json_pointer(path))
-                                        .and_then(serde_json::Value::as_i64)
-                                        .unwrap_or_default()
-                                        .to_string();
-                                    this.open_setting_edit(path.to_string(), current, window, cx)
-                                })),
-                        )
-                        .child(
-                            Button::new(format!("settings-step-up-{path}"))
-                                .label("+")
-                                .ghost()
-                                .disabled(
-                                    disabled
-                                        || self.loading
-                                        || maximum.is_some_and(|maximum| value >= maximum),
-                                )
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.adjust_setting(path, step, cx)
-                                })),
-                        ),
-                ),
+                .child(control),
         );
         controls
     }

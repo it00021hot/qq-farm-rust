@@ -62,46 +62,6 @@ impl Page {
         }
     }
 
-    pub fn summary_for(self, summary: &str, language: &str) -> String {
-        if language != "en-US" {
-            return summary.to_string();
-        }
-        if summary == "尚未添加账号，请先在侧栏添加账号" {
-            return "No account added yet. Add one from the sidebar.".into();
-        }
-        match (self, summary) {
-            (Self::Dashboard, "账号状态与近期运行记录") => {
-                "Account status and recent activity"
-            }
-            (Self::Personal, "土地、仓库与每日任务") => {
-                "Land, warehouse, and daily tasks"
-            }
-            (Self::Friends, "好友农场与互动记录") => {
-                "Friends' farms and interaction history"
-            }
-            (Self::Activities, "正在开放的活动和奖励") => {
-                "Available activities and rewards"
-            }
-            (Self::Analytics, "农场收益、种植策略与黑名单") => {
-                "Farm earnings, planting strategy, and blacklist"
-            }
-            (Self::Mall, "游戏商城商品与余额") => "Shop items and balance",
-            (Self::Mall, "神秘商店限时商品") => "Limited-time mystery shop items",
-            (Self::MysteryShop, "神秘商店限时商品") => "Limited-time mystery shop items",
-            (Self::Settings, "农场策略、自动化与系统选项") => {
-                "Farm strategy, automation, and system options"
-            }
-            (Self::GameConfig, "种子、果实与道具配置") => {
-                "Seed, fruit, and item configuration"
-            }
-            (Self::Accounts, "账号连接状态与本地凭据") => {
-                "Account connection and local credentials"
-            }
-            _ => return summary.to_string(),
-        }
-        .into()
-    }
-
     pub fn section_title_for(self, section: &str, language: &str) -> Option<&'static str> {
         let chinese = match self {
             Self::Dashboard => match section {
@@ -153,8 +113,8 @@ impl Page {
             },
             Self::MysteryShop => return None,
             Self::Settings => match section {
-                "strategy" => "种植策略",
-                "automation" => "自动化",
+                "strategy" => "策略设置",
+                "automation" => "自动控制",
                 "offlineReminder" => "下线提醒",
                 "systemConfig" => "运行环境",
                 "ui" => "界面偏好",
@@ -197,12 +157,13 @@ impl Page {
             (Self::Activities, "petDiary") => "Pet diary",
             (Self::Activities, "autumn") => "Autumn",
             (Self::Activities, "weather") => "Weather",
-            (Self::Analytics, "strategy") | (Self::Settings, "strategy") => "Planting strategy",
+            (Self::Analytics, "strategy") => "Planting strategy",
+            (Self::Settings, "strategy") => "Strategy settings",
             (Self::Analytics, "plantBlacklist") => "Plant blacklist",
             (Self::Mall, "normal") => "General shop",
             (Self::Mall, "svip") => "SVIP shop",
             (Self::Mall, "mystery") => "Mystery merchant",
-            (Self::Settings, "automation") => "Automation",
+            (Self::Settings, "automation") => "Auto control",
             (Self::Settings, "friendBlacklist") => "Friend rules",
             (Self::Settings, "offlineReminder") => "Offline Alert",
             (Self::Settings, "systemConfig") => "Runtime",

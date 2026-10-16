@@ -167,9 +167,11 @@ impl FarmDesktop {
         success: bool,
         cx: &mut Context<Self>,
     ) {
+        let message = message.into();
+        self.show_toast(message.clone(), success, cx);
         self.commerce.notice_generation = self.commerce.notice_generation.wrapping_add(1);
         let generation = self.commerce.notice_generation;
-        self.commerce.notice = Some((message.into(), success));
+        self.commerce.notice = Some((message, success));
         cx.notify();
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_secs(4)).await;

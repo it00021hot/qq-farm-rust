@@ -4,7 +4,7 @@ use gpui_kit::{AppContext as GpuiContextExt, TestAppContext};
 use serde_json::json;
 
 #[gpui_kit::test]
-fn account_success_feedback_is_rendered_in_the_accounts_page(cx: &mut TestAppContext) {
+fn account_success_feedback_is_not_rendered_in_page_after_toast_migration(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (window, desktop, _restore_data_dir) = open_test_desktop(cx);
     cx.update(|cx| {
@@ -16,12 +16,12 @@ fn account_success_feedback_is_rendered_in_the_accounts_page(cx: &mut TestAppCon
         });
     });
     cx.update_window(window, |_, window, cx| {
-        window.click("accounts", cx);
         window.render_frame(cx);
+        // 操作结果已迁移为全局 toast：页面内不再渲染成功横幅（字段保留供保存流程读写）
         assert_eq!(desktop.read(cx).accounts.success_feedback.as_deref(), Some("添加成功"));
-        assert!(window.find("account-success-feedback").visible());
+        assert!(window.try_find("account-success-feedback").is_none());
     })
-    .expect("show a success message after account actions");
+    .expect("account success feedback is toast-only after migration");
 }
 
 #[gpui_kit::test]

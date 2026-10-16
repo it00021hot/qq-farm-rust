@@ -75,6 +75,7 @@ pub(crate) use activities::{
 };
 
 mod state;
+mod toast;
 pub(crate) use accounts::AccountsState;
 pub(crate) use activities::ActivitiesState;
 pub(crate) use analytics::AnalyticsState;

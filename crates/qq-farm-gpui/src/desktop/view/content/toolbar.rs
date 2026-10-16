@@ -1,4 +1,5 @@
 use super::*;
+use gpui_kit::assets::IconName;
 
 impl FarmDesktop {
     pub(super) fn render_content_toolbar(&self, cx: &mut Context<Self>) -> Div {
@@ -11,21 +12,12 @@ impl FarmDesktop {
             .border_b_1()
             .border_color(cx.theme().border)
             .child(
-                div()
-                    .v_flex()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_xl()
-                            .font_semibold()
-                            .child(self.page.title_for(&self.preferences.language)),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(self.page.summary_for(&self.summary, language)),
-                    ),
+                div().v_flex().justify_center().child(
+                    div()
+                        .text_xl()
+                        .font_semibold()
+                        .child(self.page.title_for(&self.preferences.language)),
+                ),
             )
             .child(
                 h_flex()
@@ -46,6 +38,7 @@ impl FarmDesktop {
                     )
                     .child(
                         Button::new("toggle-sidebar")
+                            .icon(IconName::PanelLeft)
                             .label(crate::i18n::text(language, "侧边栏", "Sidebar"))
                             .ghost()
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -57,6 +50,7 @@ impl FarmDesktop {
                     )
                     .child(
                         Button::new("refresh")
+                            .icon(IconName::RefreshCw)
                             .label(crate::i18n::text(language, "刷新", "Refresh"))
                             .ghost()
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -65,6 +59,7 @@ impl FarmDesktop {
                     )
                     .child(
                         Button::new("check-update")
+                            .icon(IconName::Download)
                             .label(crate::i18n::text(language, "检查更新", "Check for updates"))
                             .ghost()
                             .on_click(cx.listener(|this, _, window, cx| {

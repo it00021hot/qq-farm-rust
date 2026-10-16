@@ -294,11 +294,10 @@ impl FarmDesktop {
                             && !state.personal_pets_view,
                         |panel| panel.child(row_contents),
                     );
-                if state.personal_illustrated_view {
-                    panel.into_any_element()
-                } else {
-                    panel.overflow_y_scrollbar().into_any_element()
-                }
+                // 图鉴网格与背包网格同款：整页滚动，虚拟列表按窗口空间裁剪可见行。
+                // 此前图鉴独走「无页面滚动条、靠列表内部滚动」的分支，而 Infer 尺寸下
+                // 列表内部滚动从未生效（滚轮无响应），整页无法下滑。
+                panel.overflow_y_scrollbar().into_any_element()
             })
     }
 }

@@ -363,11 +363,11 @@ fn disabled_auto_accept_keeps_its_threshold_fields_visible_but_inactive(cx: &mut
         window.render_frame(cx);
         for id in [
             "automation-switch-friend_auto_accept",
-            "settings-edit-autoAcceptFriendMinLevel",
+            "settings-number-autoAcceptFriendMinLevel",
             "settings-switch-autoAcceptRequireOwnLevel",
             "settings-switch-autoAcceptHarvestStealEnabled",
-            "settings-edit-autoAcceptHarvestStealHarvest",
-            "settings-edit-autoAcceptHarvestStealSteal",
+            "settings-number-autoAcceptHarvestStealHarvest",
+            "settings-number-autoAcceptHarvestStealSteal",
         ] {
             assert!(window.find(id).visible(), "Vue keeps {id} visible while auto-accept is off");
         }
@@ -375,7 +375,8 @@ fn disabled_auto_accept_keeps_its_threshold_fields_visible_but_inactive(cx: &mut
             window.find("settings-auto-accept-hint").label(),
             Some("开启后自动通过好友申请；可按等级与生涯收偷比过滤（收偷比 = 偷菜份数 / 收获份数）。")
         );
-        window.click("settings-edit-autoAcceptFriendMinLevel", cx);
+        // 禁用态的数字输入框点击无效果（Tauri NInputNumber 同款 disabled）
+        window.click("settings-number-autoAcceptFriendMinLevel", cx);
         window.click("settings-switch-autoAcceptRequireOwnLevel", cx);
         let state = desktop.read(cx);
         assert!(
@@ -383,6 +384,7 @@ fn disabled_auto_accept_keeps_its_threshold_fields_visible_but_inactive(cx: &mut
             "disabled numeric field must not open its editor"
         );
         assert_eq!(state.settings.draft["autoAcceptRequireOwnLevel"], true);
+        assert_eq!(state.settings.draft["autoAcceptFriendMinLevel"], 18, "禁用态点击不得改动阈值");
         desktop.update(cx, |this, cx| {
             this.preferences.language = "en-US".into();
             cx.notify();

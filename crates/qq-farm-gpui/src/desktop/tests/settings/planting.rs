@@ -18,18 +18,29 @@ fn strategy_sections_top_align_with_the_strategy_controls(cx: &mut TestAppContex
     cx.simulate_window_resize(window, size(px(1440.), px(900.)));
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
-        let label_top = window.find("planting-strategy-label").bounds().top();
+        // 策略 tab 竖排布局：三个分组卡片整行堆叠（宽度一致、依次向下），
+        // 策略选择行在最上方。
+        let row_top = window.find("planting-strategy-label").bounds().top();
+        let mut prev_bottom = window.find("planting-strategy-label").bounds().bottom();
         for id in
             ["settings-intervals-card", "settings-quiet-hours-card", "settings-plant-delay-card"]
         {
-            let top = window.find(id).bounds().top();
+            let card = window.find(id).bounds();
             assert!(
-                (top - label_top).abs() < px(1.),
-                "{id} must top-align with the strategy controls (label {label_top:?}, card {top:?})"
+                card.top() >= prev_bottom - px(1.),
+                "{id} must stack below the previous section (prev_bottom {prev_bottom:?}, top {:?})",
+                card.top()
             );
+            assert!(
+                card.size.width > px(800.),
+                "{id} must span the full content width, got {:?}",
+                card.size
+            );
+            prev_bottom = card.bottom();
         }
+        let _ = row_top;
     })
-    .expect("settings strategy sections share one top alignment line");
+    .expect("settings strategy sections stack full-width below the strategy row");
 }
 
 #[gpui_kit::test]

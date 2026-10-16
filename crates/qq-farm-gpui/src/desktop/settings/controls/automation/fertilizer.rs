@@ -37,7 +37,7 @@ impl FarmDesktop {
             )
             .child(div().text_sm().child(settings_text(&self.preferences.language, "施肥范围")))
             .child(
-                h_flex().flex_wrap().gap_3().children(
+                div().grid().grid_cols(3).gap_y_2().gap_x_4().gap_3().children(
                     [
                         ("purple-gold", "紫金土地"),
                         ("gold", "金土地"),
@@ -75,7 +75,7 @@ impl FarmDesktop {
             })
             .child(div().text_sm().child(settings_text(&self.preferences.language, "施肥策略")))
             .child(
-                h_flex().flex_wrap().gap_1().children(
+                div().grid().grid_cols(3).gap_y_2().gap_x_4().gap_1().children(
                     [
                         ("both", "普通 + 有机"),
                         ("smart", "智能"),

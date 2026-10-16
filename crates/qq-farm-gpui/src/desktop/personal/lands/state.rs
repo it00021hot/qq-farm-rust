@@ -11,4 +11,11 @@ pub(crate) struct LandsState {
     pub(crate) operation_generation: u64,
     pub(crate) operation_notice: Option<(String, bool)>,
     pub(crate) operation_notice_generation: u64,
+    /// 土地详情弹窗（bot e5f3552 LandDetailModal）
+    pub(crate) pending_detail: Option<serde_json::Value>,
+    pub(crate) detail_generation: u64,
+    pub(crate) detail_dialog_open: bool,
+    /// 详情弹窗的余额对比（level/gold/coupon/goldBean；打开时拉取）
+    pub(crate) detail_balances: Option<serde_json::Value>,
+    pub(crate) detail_balances_loading: bool,
 }

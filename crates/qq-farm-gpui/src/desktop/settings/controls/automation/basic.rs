@@ -11,8 +11,11 @@ impl FarmDesktop {
                     .child(settings_text(&self.preferences.language, "基础自动化")),
             )
             .child(
-                h_flex()
-                    .flex_wrap()
+                div()
+                    .grid()
+                    .grid_cols(3)
+                    .gap_y_2()
+                    .gap_x_4()
                     .gap_4()
                     .child(self.render_automation_switch("farm", "自动种植收获", false, cx))
                     .child(self.render_automation_switch(

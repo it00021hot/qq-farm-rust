@@ -13,7 +13,7 @@ impl FarmDesktop {
             content.push(self.render_personal_status(cx).into_any_element());
         }
         if state.daily_gifts_view {
-            content.push(self.render_personal_daily_gifts(cx).into_any_element());
+            content.push(self.render_personal_daily_gifts(window, cx).into_any_element());
         }
         if state.personal_lands_view {
             content.push(self.render_personal_lands(cx).into_any_element());

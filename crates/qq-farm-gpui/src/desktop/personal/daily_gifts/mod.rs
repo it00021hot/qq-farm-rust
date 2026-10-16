@@ -9,7 +9,11 @@ use labels::{
 };
 
 impl FarmDesktop {
-    pub(in crate::desktop) fn render_personal_daily_gifts(&self, cx: &mut Context<Self>) -> Div {
+    pub(in crate::desktop) fn render_personal_daily_gifts(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let language = &self.preferences.language;
         let gifts =
             self.page_raw.pointer("/dailyGifts/gifts").and_then(serde_json::Value::as_array);
@@ -50,78 +54,97 @@ impl FarmDesktop {
                                 cx,
                             ))
                         } else {
-                            panel.child(h_flex().flex_wrap().gap_3().children(
-                                gifts.iter().filter_map(|gift| {
-                                    let key = gift.get("key")?.as_str().unwrap_or_default();
-                                    let label = gift
-                                        .get("label")
-                                        .and_then(serde_json::Value::as_str)
-                                        .unwrap_or(crate::i18n::text(language, "礼包", "Gift"));
-                                    let status = gift_status(gift, language);
-                                    let status_kind = GiftStatusKind::from_gift(gift);
-                                    let detail = gift_detail(gift, language);
-                                    let icon = gift_icon(key);
-                                    let matches_keyword = keyword.is_empty()
-                                        || label.to_lowercase().contains(&keyword)
-                                        || status.to_lowercase().contains(&keyword)
-                                        || detail.to_lowercase().contains(&keyword);
-                                    matches_keyword.then(|| {
-                                        div()
-                                            .id(format!("daily-gift-{key}"))
-                                            .v_flex()
-                                            .w(px(230.))
-                                            .gap_2()
-                                            .rounded(cx.theme().radius)
-                                            .border_1()
-                                            .border_color(cx.theme().border)
-                                            .bg(cx.theme().background)
-                                            .p_3()
-                                            .child(
-                                                h_flex()
-                                                    .items_center()
-                                                    .gap_2()
-                                                    .child(
-                                                        div()
-                                                            .flex()
-                                                            .items_center()
-                                                            .justify_center()
-                                                            .w(px(32.))
-                                                            .h(px(32.))
-                                                            .rounded(cx.theme().radius)
-                                                            .bg(cx.theme().group_box)
-                                                            .child(div().text_sm().child(icon)),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .v_flex()
-                                                            .min_w_0()
-                                                            .flex_1()
-                                                            .gap_1()
-                                                            .child(
-                                                                div()
-                                                                    .truncate()
-                                                                    .font_medium()
-                                                                    .child(label.to_string()),
-                                                            )
-                                                            .child(h_flex().child(status_tag(
-                                                                format!("daily-gift-status-{key}"),
-                                                                status,
-                                                                status_kind.color(cx),
-                                                            ))),
-                                                    ),
-                                            )
-                                            .when(!detail.is_empty(), |card| {
-                                                card.child(
-                                                    div()
-                                                        .text_xs()
-                                                        .text_color(cx.theme().muted_foreground)
-                                                        .child(detail),
+                            // 均匀网格（对齐 Tauri auto-fill minmax(200px,1fr)）：
+                            // 列数按内容区宽度自适应，卡片等宽不再参差。
+                            let rem = window.rem_size().as_f32();
+                            let sidebar = if self.sidebar_collapsed {
+                                64.
+                            } else {
+                                self.preferences.sidebar_width as f32
+                            };
+                            let available =
+                                (window.bounds().size.width.as_f32() - sidebar - rem * 3.)
+                                    .max(rem * 10.);
+                            let columns = ((available / (rem * 14.)).floor() as usize).clamp(2, 6);
+                            panel.child(
+                                div()
+                                    .id("daily-gifts-grid")
+                                    .grid()
+                                    .grid_cols(columns as u16)
+                                    .gap_3()
+                                    .children(gifts.iter().filter_map(|gift| {
+                                        let key = gift.get("key")?.as_str().unwrap_or_default();
+                                        let label = gift
+                                            .get("label")
+                                            .and_then(serde_json::Value::as_str)
+                                            .unwrap_or(crate::i18n::text(language, "礼包", "Gift"));
+                                        let status = gift_status(gift, language);
+                                        let status_kind = GiftStatusKind::from_gift(gift);
+                                        let detail = gift_detail(gift, language);
+                                        let icon = gift_icon(key);
+                                        let matches_keyword = keyword.is_empty()
+                                            || label.to_lowercase().contains(&keyword)
+                                            || status.to_lowercase().contains(&keyword)
+                                            || detail.to_lowercase().contains(&keyword);
+                                        matches_keyword.then(|| {
+                                            div()
+                                                .id(format!("daily-gift-{key}"))
+                                                .v_flex()
+                                                .w_full()
+                                                .gap_2()
+                                                .rounded(cx.theme().radius)
+                                                .border_1()
+                                                .border_color(cx.theme().border)
+                                                .bg(cx.theme().background)
+                                                .p_3()
+                                                .child(
+                                                    h_flex()
+                                                        .items_center()
+                                                        .gap_2()
+                                                        .child(
+                                                            div()
+                                                                .flex()
+                                                                .items_center()
+                                                                .justify_center()
+                                                                .w(px(32.))
+                                                                .h(px(32.))
+                                                                .rounded(cx.theme().radius)
+                                                                .bg(cx.theme().group_box)
+                                                                .child(div().text_sm().child(icon)),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .v_flex()
+                                                                .min_w_0()
+                                                                .flex_1()
+                                                                .gap_1()
+                                                                .child(
+                                                                    div()
+                                                                        .truncate()
+                                                                        .font_medium()
+                                                                        .child(label.to_string()),
+                                                                )
+                                                                .child(h_flex().child(status_tag(
+                                                                    format!(
+                                                                        "daily-gift-status-{key}"
+                                                                    ),
+                                                                    status,
+                                                                    status_kind.color(cx),
+                                                                ))),
+                                                        ),
                                                 )
-                                            })
-                                            .test_support()
-                                    })
-                                }),
-                            ))
+                                                .when(!detail.is_empty(), |card| {
+                                                    card.child(
+                                                        div()
+                                                            .text_xs()
+                                                            .text_color(cx.theme().muted_foreground)
+                                                            .child(detail),
+                                                    )
+                                                })
+                                                .test_support()
+                                        })
+                                    })),
+                            )
                         }
                     }),
             )

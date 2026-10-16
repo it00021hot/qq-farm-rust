@@ -128,10 +128,11 @@ impl FarmDesktop {
         cx: &mut Context<Self>,
     ) {
         self.error = None;
+        let message = crate::i18n::text(&self.preferences.language, chinese, english).to_string();
+        self.show_toast(message.clone(), !warning, cx);
         self.settings.save_notice_generation = self.settings.save_notice_generation.wrapping_add(1);
         let generation = self.settings.save_notice_generation;
-        self.settings.save_notice =
-            Some(crate::i18n::text(&self.preferences.language, chinese, english).to_string());
+        self.settings.save_notice = Some(message);
         self.settings.save_notice_warning = warning;
         cx.notify();
         cx.spawn(async move |this, cx| {

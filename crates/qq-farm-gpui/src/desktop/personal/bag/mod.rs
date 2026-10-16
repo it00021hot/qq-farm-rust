@@ -124,8 +124,12 @@ impl FarmDesktop {
                     .with_sizing_behavior(gpui_kit::ListSizingBehavior::Infer)
                     .flex_1()
                     .min_h_0();
-                    let viewport =
-                        div().id("personal-bag-grid-viewport").flex_1().min_h_0().child(list);
+                    let viewport = div()
+                        .id("personal-bag-grid-viewport")
+                        .flex_1()
+                        .min_h_0()
+                        .on_scroll_wheel(|_, _, _| eprintln!("DEBUG wheel reached bag viewport"))
+                        .child(list);
                     #[cfg(test)]
                     let viewport = viewport.test_support();
                     panel.flex_1().min_h_0().child(viewport)

@@ -14,7 +14,11 @@ impl FarmDesktop {
     ) -> Div {
         if self.page == Page::Settings {
             controls = match self.page_section.as_str() {
-                "strategy" => self.append_planting_controls(controls, cx),
+                // 策略 tab：整行分组卡片竖排（对齐 Tauri 分隔线 + 网格布局）
+                "strategy" => {
+                    let column = div().v_flex().gap_3().w_full();
+                    self.append_planting_controls(column, cx)
+                }
                 "automation" => self.append_automation_controls(controls, cx),
                 "offlineReminder" => self.append_offline_reminder_controls(controls, cx),
                 _ => controls,

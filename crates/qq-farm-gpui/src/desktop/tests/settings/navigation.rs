@@ -10,7 +10,7 @@ fn settings_navigation_matches_vue_tabs_and_default() {
         page_sections(Page::Settings).iter().map(|(key, _)| *key).collect::<Vec<_>>(),
         ["strategy", "automation", "offlineReminder", "systemConfig", "ui"]
     );
-    assert_eq!(Page::Settings.section_title_for("strategy", "en-US"), Some("Planting strategy"));
+    assert_eq!(Page::Settings.section_title_for("strategy", "en-US"), Some("Strategy settings"));
 }
 
 #[gpui_kit::test]

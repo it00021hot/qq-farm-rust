@@ -125,7 +125,7 @@ p256 = { version = "0.14", features = ["ecdh"] }
 # 进程内 crate
 qq-farm-core = { path = "crates/qq-farm-core" }
 qq-farm-app = { path = "crates/qq-farm-app" }
-gpui-kit = "=0.7.0"
+gpui-kit = "=0.7.3"
 dirs = "6"
 semver = "1"
 

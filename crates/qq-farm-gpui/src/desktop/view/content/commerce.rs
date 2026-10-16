@@ -9,16 +9,7 @@ impl FarmDesktop {
     ) -> Vec<AnyElement> {
         let mut content = Vec::new();
         if state.mall_catalog_view || state.mystery_shop_view {
-            if let Some((message, success)) = self.commerce.notice.as_ref() {
-                content.push(
-                    div()
-                        .id("commerce-action-notice")
-                        .text_sm()
-                        .text_color(if *success { cx.theme().success } else { cx.theme().danger })
-                        .child(message.clone())
-                        .into_any_element(),
-                );
-            }
+            // 购买结果走全局 toast
         }
         if state.mall_catalog_view {
             content.push(self.render_mall_shop_panel(cx).into_any_element());

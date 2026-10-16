@@ -27,7 +27,8 @@ fn mystery_shop_remains_available_as_a_mall_tab(cx: &mut TestAppContext) {
     let (window, desktop, _restore_data_dir) = open_test_desktop(cx);
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
-        assert!(window.find("mystery-shop").visible());
+        // 神秘商店已并入商城 tab：侧边栏不再有独立入口
+        assert!(window.try_find("mystery-shop").is_none());
         window.click("mall", cx);
         window.render_frame(cx);
         assert_eq!(window.find(("page-section", 2_usize)).label(), Some("神秘商人"));
@@ -101,19 +102,21 @@ fn mystery_shop_remains_available_as_a_mall_tab(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn mystery_shop_has_a_standalone_sidebar_page_and_shared_purchase_flow(cx: &mut TestAppContext) {
+fn mystery_shop_page_still_renders_without_sidebar_entry(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (window, desktop, _restore_data_dir) = open_test_desktop(cx);
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
-        assert!(window.find("mystery-shop").visible());
-        window.click("mystery-shop", cx);
+        // 侧边栏不再有独立入口（并入商城「神秘商人」tab），
+        // 但持久化偏好直达该页时页面仍需正常渲染。
+        assert!(window.try_find("mystery-shop").is_none());
+        desktop.update(cx, |this, cx| this.set_page(Page::MysteryShop, cx));
         window.render_frame(cx);
         assert_eq!(desktop.read(cx).page, Page::MysteryShop);
         assert_eq!(desktop.read(cx).commerce.mall_slot_type, -1);
         assert!(window.try_find(("page-section", 0_usize)).is_none());
     })
-    .expect("open the standalone mystery shop from the sidebar");
+    .expect("render the mystery shop page without a sidebar entry");
 
     cx.update(|cx| {
         desktop.update(cx, |this, _| {

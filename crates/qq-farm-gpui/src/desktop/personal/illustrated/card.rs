@@ -40,6 +40,17 @@ impl FarmDesktop {
             ));
         }
         let preview = render_record_asset_preview_sized(item, 40., cx);
+        // 图鉴种子购买（bot 0f09702）：可购买项挂「购买」按钮；不可购买在 tooltip 说明原因
+        let crop_book = self.farm.illustrated.book == "crop";
+        let buyable = crop_book && super::purchase::can_buy(item);
+        if crop_book && !buyable {
+            if let Some(reason) =
+                super::purchase::seed_availability_text(item, &self.preferences.language)
+            {
+                description.push_str(&format!(" · {reason}"));
+            }
+        }
+        let buy_label = crate::i18n::text(&self.preferences.language, "购买", "Buy");
         div()
             .id(format!("illustrated-item-{}-{id}", self.farm.illustrated.book))
             .v_flex()
@@ -87,6 +98,18 @@ impl FarmDesktop {
                     )),
             )
             .tooltip(move |window, cx| Tooltip::new(description.clone()).build(window, cx))
+            .when(buyable, |card| {
+                card.child({
+                    let item = item.clone();
+                    Button::new(format!("illustrated-buy-{id}"))
+                        .label(buy_label)
+                        .compact()
+                        .primary()
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.open_seed_purchase_confirmation(item.clone(), window, cx);
+                        }))
+                })
+            })
             .test_support()
     }
 }

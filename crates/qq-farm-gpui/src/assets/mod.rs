@@ -52,7 +52,10 @@ pub fn resolve_image_source(raw: &str) -> Result<ImageSource, AssetError> {
         let bytes = qq_farm_app::config::read_image(name).ok_or(AssetError::Missing)?;
         return Ok(Arc::new(Image::from_bytes(format, bytes)).into());
     }
-    let url = if raw.starts_with("/game-config/") || raw.starts_with("/activity-assets/") {
+    let url = if raw.starts_with("/game-config/")
+        || raw.starts_with("/activity-assets/")
+        || raw.starts_with("/land-assets/")
+    {
         raw.to_string()
     } else if raw.contains("://") {
         return Err(AssetError::UnsupportedUrl);

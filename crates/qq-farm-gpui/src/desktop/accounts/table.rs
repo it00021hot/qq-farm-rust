@@ -10,8 +10,9 @@ use gpui_kit::base::v_flex;
 /// Column cell sizing for one lane. Pinned lanes keep the column's design
 /// width; the center lane grows every column proportionally so the table
 /// fills the panel instead of leaving a dead strip before the pinned lane.
+/// 表头与字段文字统一居中（对齐 Tauri 表格）。
 pub(super) fn account_cell_frame(stretch: bool, width: f32) -> Div {
-    let cell = div().min_w_0();
+    let cell = div().min_w_0().text_center();
     if stretch {
         cell.flex_basis(px(width)).flex_grow(width).flex_shrink(1.).min_w(px(width))
     } else {

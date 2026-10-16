@@ -1,12 +1,23 @@
 use super::super::*;
 
 pub(super) fn metric(label: &str, value: String, change: String, cx: &Context<FarmDesktop>) -> Div {
+    metric_colored(label, value, change, cx.theme().foreground, cx)
+}
+
+/// 带 value 颜色的指标块（对齐 Tauri：金币橙 / 点券绿 / 钻石蓝 / 金豆豆橙）
+pub(super) fn metric_colored(
+    label: &str,
+    value: String,
+    change: String,
+    value_color: gpui_kit::Hsla,
+    cx: &Context<FarmDesktop>,
+) -> Div {
     div()
         .v_flex()
         .min_w(px(88.))
         .gap_1()
         .child(div().text_xs().text_color(cx.theme().muted_foreground).child(label.to_string()))
-        .child(div().text_lg().font_semibold().child(value))
+        .child(div().text_lg().font_semibold().text_color(value_color).child(value))
         .when(!change.is_empty() && change != "0", |metric| {
             metric.child(
                 div()
@@ -169,35 +180,111 @@ pub(super) fn format_number(value: i64) -> String {
     output
 }
 
-pub(super) fn estimate_level_up(
-    gained_exp: i64,
-    uptime_seconds: i64,
-    progress_current: i64,
-    progress_needed: i64,
+/// 服务端等级升级预测（bot 62e1880 LevelForecast.vue）渲染行：
+/// [预测文案 + 依据, 已种植排期（有排期时）, 手动提示（非自动时）]
+pub(super) fn level_forecast_lines(
+    forecast: Option<&serde_json::Value>,
     language: &str,
-) -> String {
-    if progress_needed == 0 || uptime_seconds == 0 || gained_exp <= 0 {
-        return String::new();
-    }
-
-    let rate_per_hour = gained_exp as f64 / (uptime_seconds as f64 / 3600.);
-    if rate_per_hour <= 0. {
-        return String::new();
-    }
-    let remaining_minutes =
-        (progress_needed as f64 - progress_current as f64) / (rate_per_hour / 60.);
-    if remaining_minutes < 60. {
-        let remaining_minutes = remaining_minutes.ceil() as i64;
-        if language == "en-US" {
-            format!("About {remaining_minutes} min to level up")
-        } else {
-            format!("约 {remaining_minutes} 分钟后升级")
+) -> Vec<String> {
+    let english = language == "en-US";
+    let Some(forecast) = forecast else { return Vec::new() };
+    let plots = forecast.get("plotCount").and_then(serde_json::Value::as_i64).unwrap_or(0);
+    let automatic = forecast.get("automatic").and_then(serde_json::Value::as_bool).unwrap_or(false);
+    let scheduled = forecast.get("scheduledExp").and_then(serde_json::Value::as_i64).unwrap_or(0);
+    let text = match forecast.get("estimatedAt").and_then(serde_json::Value::as_i64) {
+        None => {
+            if plots > 0 {
+                if english {
+                    "Scheduled harvests not enough to level up".to_string()
+                } else {
+                    "本轮收获不足升级".to_string()
+                }
+            } else if english {
+                "Waiting for forecast data".to_string()
+            } else {
+                "等待预测数据".to_string()
+            }
         }
-    } else if language == "en-US" {
-        format!("About {:.1} h to level up", remaining_minutes / 60.)
-    } else {
-        format!("约 {:.1} 小时后升级", remaining_minutes / 60.)
+        Some(estimated_at) => {
+            let source = forecast.get("source").and_then(serde_json::Value::as_str).unwrap_or("");
+            if source == "ready" {
+                if english {
+                    "Ready to level up after harvest".to_string()
+                } else {
+                    "收获后可升级".to_string()
+                }
+            } else {
+                let generated_at =
+                    forecast.get("generatedAt").and_then(serde_json::Value::as_i64).unwrap_or(0);
+                let minutes =
+                    (((estimated_at - generated_at).max(0) as f64) / 60_000.).ceil().max(1.);
+                let duration = if minutes < 60. {
+                    format!("{} min", minutes as i64)
+                } else {
+                    format!("{:.1} h", minutes / 60.)
+                };
+                if english {
+                    if source == "planted" {
+                        format!("Level up after harvest in ~{duration}")
+                    } else {
+                        format!("Level up in ~{duration}")
+                    }
+                } else if source == "planted" {
+                    format!("约 {duration}后收获可升级")
+                } else {
+                    format!("约 {duration}后升级")
+                }
+            }
+        }
+    };
+    let basis = match forecast.get("source").and_then(serde_json::Value::as_str) {
+        Some("planted") => {
+            if english {
+                "by current crops"
+            } else {
+                "按当前作物"
+            }
+        }
+        Some("ready") => {
+            if english {
+                "ready to harvest"
+            } else {
+                "待收获"
+            }
+        }
+        Some("mixed") => {
+            if english {
+                "harvest schedule + history rate"
+            } else {
+                "收获排期 + 历史均值"
+            }
+        }
+        Some("history") => {
+            if english {
+                "history rate estimate"
+            } else {
+                "历史均值估算"
+            }
+        }
+        _ => "",
+    };
+    let mut lines =
+        vec![if basis.is_empty() { text.to_string() } else { format!("{text} · {basis}") }];
+    if plots > 0 {
+        lines.push(if english {
+            format!("{plots} plots planted · ~{} EXP scheduled", format_number(scheduled))
+        } else {
+            format!("已种植 {plots} 处 · 预计 {} 经验", format_number(scheduled))
+        });
+        if !automatic {
+            lines.push(if english {
+                "Harvest timing depends on manual actions or resuming auto farm".into()
+            } else {
+                "收获时间取决于手动操作或恢复自动农场".into()
+            });
+        }
     }
+    lines
 }
 
 pub(super) fn operation_label(key: &str, language: &str) -> String {
@@ -219,8 +306,8 @@ pub(super) fn operation_label(key: &str, language: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        account_avatar_url, account_display_name, bag_count, check_value, estimate_level_up,
-        format_clock, format_number, int_at, operation_label,
+        account_avatar_url, account_display_name, bag_count, check_value, format_clock,
+        format_number, int_at, level_forecast_lines, operation_label,
     };
     use serde_json::json;
 
@@ -274,10 +361,57 @@ mod tests {
     }
 
     #[test]
-    fn level_up_estimate_matches_vue_fractional_rate_and_progress_edges() {
-        assert_eq!(estimate_level_up(1, 7200, 99, 100, "en-US"), "About 2.0 h to level up");
-        assert_eq!(estimate_level_up(1, 3600, 101, 100, "zh-CN"), "约 -60 分钟后升级");
-        assert_eq!(estimate_level_up(2, 3600, 99, 100, "zh-CN"), "约 30 分钟后升级");
-        assert_eq!(estimate_level_up(0, 3600, 99, 100, "en-US"), "");
+    fn level_forecast_lines_match_bot_level_forecast_component() {
+        let generated = 1_800_000_000_000i64;
+        // 已排期够升：planted → 「约 X 后收获可升级 · 按当前作物」+ 排期行
+        let planted = json!({
+            "generatedAt": generated,
+            "remainingExp": 12_660,
+            "scheduledExp": 20_544,
+            "plotCount": 24,
+            "readyExp": 0,
+            "estimatedAt": generated + 21_614_000i64,
+            "source": "planted",
+            "automatic": true,
+        });
+        assert_eq!(
+            level_forecast_lines(Some(&planted), "zh-CN"),
+            vec!["约 6.0 h后收获可升级 · 按当前作物", "已种植 24 处 · 预计 20,544 经验",]
+        );
+        // ready：不显示时长
+        let ready = json!({ "generatedAt": generated, "estimatedAt": generated, "plotCount": 1,
+            "scheduledExp": 500, "source": "ready", "automatic": false });
+        assert_eq!(
+            level_forecast_lines(Some(&ready), "zh-CN"),
+            vec![
+                "收获后可升级 · 待收获",
+                "已种植 1 处 · 预计 500 经验",
+                "收获时间取决于手动操作或恢复自动农场",
+            ]
+        );
+        // 不足升级 / 等待数据
+        let not_enough = json!({ "plotCount": 3, "scheduledExp": 100, "source": "unavailable", "automatic": true });
+        assert_eq!(
+            level_forecast_lines(Some(&not_enough), "en-US"),
+            vec![
+                "Scheduled harvests not enough to level up",
+                "3 plots planted · ~100 EXP scheduled"
+            ]
+        );
+        let waiting = json!({ "plotCount": 0, "source": "unavailable" });
+        assert_eq!(level_forecast_lines(Some(&waiting), "zh-CN"), vec!["等待预测数据"]);
+        assert_eq!(level_forecast_lines(None, "zh-CN"), Vec::<String>::new());
+        // 历史外推分钟取整（bot：ceil 到分钟，最少 1 分钟）
+        let history = json!({
+            "generatedAt": generated,
+            "estimatedAt": generated + 90_000,
+            "plotCount": 0,
+            "source": "history",
+            "automatic": true,
+        });
+        assert_eq!(
+            level_forecast_lines(Some(&history), "en-US"),
+            vec!["Level up in ~2 min · history rate estimate"]
+        );
     }
 }

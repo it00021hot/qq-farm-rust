@@ -47,7 +47,29 @@ pub(crate) struct SettingsState {
     pub(crate) system_user_agent: Entity<InputState>,
     pub(in crate::desktop) time_zone: Entity<super::system_config::TimeZoneSelect>,
     pub(crate) selected_device_preset: Option<String>,
+    /// 各整数设置路径的 NumberInput 状态（框体输入 + 内嵌步进，回写 draft）
+    pub(in crate::desktop) number_inputs: std::collections::HashMap<String, Entity<InputState>>,
 }
+
+/// 全部整数设置路径（对齐各 tab 的 append_integer_setting 调用）：
+/// (json 路径, 默认值, 最小, 最大)
+pub(in crate::desktop) const NUMBER_PATHS: &[(&str, i64, i64, i64)] = &[
+    ("intervals/farmMin", 30, 1, 99_999),
+    ("intervals/farmMax", 60, 1, 99_999),
+    ("intervals/helpMin", 20, 1, 99_999),
+    ("intervals/helpMax", 25, 1, 99_999),
+    ("intervals/stealMin", 60, 1, 99_999),
+    ("intervals/stealMax", 90, 1, 99_999),
+    ("plantDelaySeconds", 0, 0, 60),
+    ("stealDelaySeconds", 0, 0, 60),
+    ("fertilizerBuy/organicCount", 1, 1, 10_000),
+    ("fertilizerBuy/organicThresholdHours", 1, 1, 9_999),
+    ("fertilizerBuy/normalCount", 1, 1, 10_000),
+    ("fertilizerBuy/normalThresholdHours", 1, 1, 9_999),
+    ("autoAcceptFriendMinLevel", 0, 0, 9_999),
+    ("autoAcceptHarvestStealHarvest", 0, 0, 9_999),
+    ("autoAcceptHarvestStealSteal", 0, 0, 9_999),
+];
 
 impl SettingsState {
     pub(crate) fn section_save_pending(&self, section: &str) -> bool {
@@ -249,8 +271,31 @@ impl SettingsState {
             })
             .detach();
         }
+        // 整数设置输入框（NumberInput 框体 + 内嵌 − +，对齐 Tauri NInputNumber）：
+        // Change 事件回写 draft；draft 载入后由 sync_setting_selectors 反向同步。
+        let mut number_inputs = std::collections::HashMap::new();
+        for (path, default, minimum, maximum) in NUMBER_PATHS {
+            let state = cx.new(|cx| {
+                let mut state = InputState::new(window, cx).placeholder(default.to_string());
+                state.set_value(default.to_string(), window, cx);
+                state.set_min(Some(*minimum as f64), window, cx);
+                state.set_max(Some(*maximum as f64), window, cx);
+                state
+            });
+            cx.subscribe(&state, move |this, input, event, cx| {
+                if matches!(event, gpui_kit::component::input::InputEvent::Change) {
+                    let raw = input.read(cx).value().trim().to_string();
+                    if let Ok(value) = raw.parse::<i64>() {
+                        this.set_setting_path_value(path, serde_json::json!(value), cx);
+                    }
+                }
+            })
+            .detach();
+            number_inputs.insert(path.to_string(), state);
+        }
         Self {
             qq_bot_app_id,
+            number_inputs,
             qq_bot_secret,
             offline_endpoint,
             offline_token,
