@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue';
 import { NButton, NCard, NEmpty, NInputNumber, NModal, NProgress, NSpace, NTag, NTabs, NTabPane, useMessage } from 'naive-ui';
 import { useFarmAccountStore } from '@/store/modules/farm-account';
-import { fetchGetIllustratedSnapshot, fetchPurchaseSeed } from '@/service/api';
+import { fetchGetIllustratedSnapshot, fetchIllustratedClaim, fetchPurchaseSeed } from '@/service/api';
 import { resolveCatalogImage } from '@/views/farm/game-config/shared';
 import { $t } from '@/locales';
 
@@ -15,6 +15,49 @@ const snapshot = ref<any>(null);
 const book = ref<'crop' | 'mutant'>('crop');
 
 const current = computed(() => snapshot.value?.[book.value] ?? null);
+
+// ============ 收藏奖励（bot 0533264：详情 + 领取） ============
+
+const detailsOpen = ref(false);
+const claiming = ref(false);
+
+function levelState(level: any): string {
+  if (level?.claimed) return $t('page.farm.personal.illustrated.stateClaimed');
+  if (level?.canClaim) return $t('page.farm.personal.illustrated.stateClaimable');
+  return $t('page.farm.personal.illustrated.stateLocked');
+}
+
+function buffValueText(buff: any): string {
+  const value = Number(buff?.value ?? 0);
+  return buff?.valueType === 'probability' ? `+${value / 10}%` : `+${value}`;
+}
+
+async function claimRewards() {
+  const accountId = farmAccountStore.currentAccountId;
+  if (!accountId || claiming.value || !current.value?.claimable) return;
+  claiming.value = true;
+  try {
+    const { data, error } = await fetchIllustratedClaim(accountId, book.value === 'crop' ? 1 : 2);
+    if (error || !data) {
+      throw new Error(error?.message || $t('page.farm.personal.illustrated.claimFailed'));
+    }
+    const text =
+      (data.rewards ?? []).map((reward: any) => `${reward.name} ×${reward.count}`).join('、') ||
+      $t('page.farm.personal.illustrated.claimSuccess');
+    if (data.snapshot) snapshot.value = data.snapshot;
+    else await load();
+    if (data.refreshRequired) {
+      message.warning(`${text}。${$t('page.farm.personal.illustrated.claimRefreshRequired')}`);
+    } else {
+      message.success(text);
+    }
+  } catch (cause) {
+    message.error((cause as Error)?.message || $t('page.farm.personal.illustrated.claimFailed'));
+    await load();
+  } finally {
+    claiming.value = false;
+  }
+}
 
 async function load() {
   if (!farmAccountStore.currentAccountId) return;
@@ -118,9 +161,21 @@ void load();
   <div class="flex flex-col gap-12px">
     <NCard size="small" :title="$t('page.farm.personal.illustrated.title')">
       <template #header-extra>
-        <NTag v-if="current" size="small" type="info">
-          {{ $t('page.farm.personal.illustrated.level') }} {{ current.level }}
-        </NTag>
+        <NSpace size="small" align="center">
+          <NButton
+            v-if="current?.claimable"
+            size="small"
+            type="primary"
+            :loading="claiming"
+            :disabled="loading || claiming"
+            @click="claimRewards"
+          >
+            {{ $t('page.farm.personal.illustrated.claimRewards') }}
+          </NButton>
+          <NTag v-if="current" size="small" type="info">
+            {{ $t('page.farm.personal.illustrated.level') }} {{ current.level }}
+          </NTag>
+        </NSpace>
       </template>
       <NEmpty v-if="!snapshot" :description="$t('page.farm.personal.illustrated.empty')" />
       <template v-else>
@@ -137,6 +192,9 @@ void load();
         <div v-if="current" class="mb-8px flex items-center gap-12px">
           <NProgress type="line" :percentage="progressPercent(current)" :height="8" class="flex-1" />
           <span class="text-12px text-gray-500">{{ current.progress }} / {{ current.nextLevelProgress }}</span>
+          <NButton size="tiny" secondary @click="detailsOpen = true">
+            {{ $t('page.farm.personal.illustrated.details') }}
+          </NButton>
         </div>
 
         <div v-if="current?.currentBuffs?.length" class="mb-8px flex flex-wrap gap-6px">
@@ -231,6 +289,104 @@ void load();
                 </NButton>
               </NSpace>
             </div>
+          </NCard>
+        </NModal>
+
+        <NModal v-model:show="detailsOpen">
+          <NCard
+            size="small"
+            class="w-[calc(100vw-24px)] max-w-3xl"
+            :title="
+              book === 'mutant'
+                ? $t('page.farm.personal.illustrated.buffsTitle')
+                : $t('page.farm.personal.illustrated.rewardsTitle')
+            "
+            closable
+            @close="detailsOpen = false"
+          >
+            <template v-if="book === 'crop'">
+              <div class="mb-8px text-13px text-gray-500">
+                {{ current?.level }} · {{ current?.progress }} / {{ current?.nextLevelProgress }}
+              </div>
+              <div class="flex max-h-55vh flex-col gap-8px overflow-y-auto">
+                <div
+                  v-for="level in current?.levels ?? []"
+                  :key="level.level"
+                  class="flex items-center gap-12px rounded-8px border border-gray-200 px-12px py-8px dark:border-gray-700"
+                  :class="level.claimed ? 'opacity-60' : level.canClaim ? 'border-emerald-400' : ''"
+                >
+                  <div class="min-w-80px">
+                    <strong>{{ level.level }}级</strong>
+                    <div class="text-12px text-gray-500">{{ level.progress }} 进度</div>
+                  </div>
+                  <div class="flex flex-1 flex-wrap justify-end gap-8px">
+                    <span v-for="reward in level.rewards ?? []" :key="reward.itemId" class="text-12px">
+                      {{ reward.name }} ×{{ reward.count }}
+                    </span>
+                  </div>
+                  <span
+                    class="text-12px"
+                    :class="level.claimed ? 'text-gray-400' : level.canClaim ? 'text-emerald-500' : 'text-gray-400'"
+                  >
+                    {{ levelState(level) }}
+                  </span>
+                </div>
+                <span v-if="!(current?.levels ?? []).length" class="text-12px text-gray-500">
+                  {{ $t('page.farm.personal.illustrated.claimNoRewards') }}
+                </span>
+              </div>
+            </template>
+            <template v-else>
+              <div class="mb-8px text-13px font-semibold">
+                {{ $t('page.farm.personal.illustrated.currentBuffs') }}
+              </div>
+              <div class="mb-12px flex flex-wrap gap-6px">
+                <NTag
+                  v-for="buff in current?.currentBuffs ?? []"
+                  :key="`current-buff-${buff.id}`"
+                  size="small"
+                  type="warning"
+                  :bordered="false"
+                >
+                  {{ buff.name }} {{ buffValueText(buff) }}
+                </NTag>
+                <span v-if="!(current?.currentBuffs ?? []).length" class="text-12px text-gray-500">
+                  {{ $t('page.farm.personal.illustrated.noBuffs') }}
+                </span>
+              </div>
+              <div class="mb-8px text-13px font-semibold">
+                {{ $t('page.farm.personal.illustrated.buffsTitle') }}
+              </div>
+              <div class="flex max-h-45vh flex-col gap-6px overflow-y-auto">
+                <div
+                  v-for="buff in current?.buffs ?? []"
+                  :key="`all-buff-${buff.id}`"
+                  class="flex items-center justify-between rounded-6px border border-gray-200 px-10px py-6px text-12px dark:border-gray-700"
+                  :class="buff.level <= Number(current?.level || 0) ? 'border-emerald-300' : ''"
+                >
+                  <span>Lv.{{ buff.level }} · {{ buff.name }} {{ buffValueText(buff) }}</span>
+                  <span class="text-gray-400">
+                    {{
+                      buff.level <= Number(current?.level || 0)
+                        ? $t('page.farm.personal.illustrated.stateReached')
+                        : $t('page.farm.personal.illustrated.stateLocked')
+                    }}
+                  </span>
+                </div>
+              </div>
+            </template>
+            <template #footer>
+              <NButton
+                v-if="book === 'crop' || current?.claimable"
+                block
+                type="primary"
+                :loading="claiming"
+                :disabled="!current?.claimable || loading || claiming"
+                @click="claimRewards"
+              >
+                {{ $t('page.farm.personal.illustrated.claimRewards') }}
+              </NButton>
+            </template>
           </NCard>
         </NModal>
       </template>

@@ -209,7 +209,8 @@ impl TaskService {
     /// - 网络 / 网关错误
     /// - protobuf 解码失败
     pub async fn claim_all_illustrated_rewards(&self) -> Result<ClaimAllRewardsV2Reply> {
-        let req = ClaimAllRewardsV2Request { only_claimable: true };
+        // 官方 1.15 版本请求携带 `type: 1`（作物图鉴），对齐 bot task.ts 0533264
+        let req = ClaimAllRewardsV2Request { r#type: 1 };
         let body = self
             .gateway
             .request(ILLUSTRATED_SERVICE, "ClaimAllRewardsV2", &req.encode_to_vec())
@@ -414,7 +415,7 @@ impl TaskService {
         if gain < 200 {
             return false;
         }
-        let total_items = reply.items.len() + reply.bonus_items.len();
+        let total_items = reply.total_rewards.len();
         tracing::info!("[任务] 领取成功: 点券{}", gain);
         crate::services::panel_log::log(
             &self.account_id.lock(),

@@ -7,4 +7,3 @@ use gpui_kit::{AppContext as GpuiContextExt, TestAppContext};
 mod mall;
 mod mystery;
 mod purchase;
-mod star_sand;

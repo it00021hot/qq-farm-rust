@@ -28,9 +28,12 @@ declare module "@elegant-router/types" {
     "farm_friends": "/farm/friends";
     "farm_game-config": "/farm/game-config";
     "farm_game-mall": "/farm/game-mall";
+    "farm_milk-tea": "/farm/milk-tea";
     "farm_mystery-shop": "/farm/mystery-shop";
     "farm_personal": "/farm/personal";
     "farm_settings": "/farm/settings";
+    "farm_share-reward": "/farm/share-reward";
+    "farm_solar-calendar": "/farm/solar-calendar";
     "home": "/home";
     "iframe-page": "/iframe-page/:url";
     "login": "/login/:module(pwd-login|code-login|register|reset-pwd|bind-wechat)?";
@@ -100,9 +103,12 @@ declare module "@elegant-router/types" {
     | "farm_friends"
     | "farm_game-config"
     | "farm_game-mall"
+    | "farm_milk-tea"
     | "farm_mystery-shop"
     | "farm_personal"
     | "farm_settings"
+    | "farm_share-reward"
+    | "farm_solar-calendar"
     | "home"
   >;
 

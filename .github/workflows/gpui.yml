@@ -12,6 +12,7 @@ on:
       - "assets/game_config/**"
       - "assets/tsdk*.wasm"
       - "desktop-ui/public/activity-assets/**"
+      - "desktop-ui/public/land-assets/**"
       - "scripts/package-gpui.*"
       - ".github/workflows/gpui.yml"
   pull_request:
@@ -24,6 +25,7 @@ on:
       - "assets/game_config/**"
       - "assets/tsdk*.wasm"
       - "desktop-ui/public/activity-assets/**"
+      - "desktop-ui/public/land-assets/**"
       - "scripts/package-gpui.*"
       - ".github/workflows/gpui.yml"
   workflow_dispatch:

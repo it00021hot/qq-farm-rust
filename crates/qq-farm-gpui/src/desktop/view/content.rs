@@ -1,4 +1,3 @@
-mod activities;
 mod commerce;
 mod filter;
 mod personal;
@@ -22,15 +21,11 @@ impl FarmDesktop {
             || state.personal_unavailable
             || state.personal_has_error
             || state.analytics_view
-            || state.activity_directory
+            || state.solar_calendar_view
+            || state.milk_tea_view
+            || state.share_reward_view
             || state.mall_catalog_view
             || state.mystery_shop_view
-            || state.qixi_view
-            || state.qingmei_view
-            || state.constellation_view
-            || state.solar_terms_view
-            || state.season_view
-            || state.weather_view
             || state.daily_gifts_view
             || state.personal_lands_view
             || state.personal_bag
@@ -48,7 +43,18 @@ impl FarmDesktop {
             page_views.push(self.render_dashboard_panel(cx).into_any_element());
         }
         page_views.extend(self.render_personal_content(&state, window, cx));
-        page_views.extend(self.render_activity_content(&state, window, cx));
+        if self.page == Page::Activities {
+            page_views.push(self.render_activities(cx).into_any_element());
+        }
+        if state.solar_calendar_view {
+            page_views.push(self.render_solar_calendar(cx).into_any_element());
+        }
+        if state.milk_tea_view {
+            page_views.push(self.render_milk_tea(cx).into_any_element());
+        }
+        if state.share_reward_view {
+            page_views.push(self.render_share_reward(cx).into_any_element());
+        }
         page_views.extend(self.render_commerce_content(&state, cx));
         div()
             .v_flex()
@@ -112,36 +118,6 @@ impl FarmDesktop {
                     })
                     .children(page_views)
                     .child(self.render_settings_ui(cx))
-                    .when(state.charity_view, |panel| panel.child(self.render_activity_rules(cx)))
-                    .when_some(self.update_message.as_ref(), |panel, message| {
-                        panel.child(
-                            h_flex()
-                                .id("update-notice")
-                                .aria_label(message.clone())
-                                .justify_between()
-                                .items_center()
-                                .rounded(cx.theme().radius)
-                                .bg(cx.theme().group_box)
-                                .px_4()
-                                .py_3()
-                                .child(message.clone())
-                                .test_support()
-                                .when_some(self.release_url.as_ref(), |row, _| {
-                                    row.child(
-                                        Button::new("open-release")
-                                            .label(crate::i18n::text(
-                                                language,
-                                                "打开发布页下载",
-                                                "Download from release page",
-                                            ))
-                                            .primary()
-                                            .on_click(cx.listener(|this, _, _, _| {
-                                                this.open_release_page()
-                                            })),
-                                    )
-                                }),
-                        )
-                    })
                     .child(self.render_game_config_overlays(cx))
                     .child(self.render_setting_editor(cx))
                     .when(self.loading, |panel| {
@@ -172,23 +148,18 @@ impl FarmDesktop {
                         let error_panel = error_panel.test_support();
                         panel.child(error_panel)
                     })
-                    .when_some(
-                        self.error
-                            .as_ref()
-                            .filter(|_| !state.pet_diary_error && !state.weather_error),
-                        |panel, error| {
-                            let banner = div()
-                                .id("page-error")
-                                .aria_label(error.clone())
-                                .rounded(cx.theme().radius)
-                                .bg(cx.theme().group_box)
-                                .p_4()
-                                .text_color(cx.theme().danger)
-                                .child(error.clone())
-                                .test_support();
-                            panel.child(banner)
-                        },
-                    )
+                    .when_some(self.error.as_ref(), |panel, error| {
+                        let banner = div()
+                            .id("page-error")
+                            .aria_label(error.clone())
+                            .rounded(cx.theme().radius)
+                            .bg(cx.theme().group_box)
+                            .p_4()
+                            .text_color(cx.theme().danger)
+                            .child(error.clone())
+                            .test_support();
+                        panel.child(banner)
+                    })
                     .when(
                         self.page != Page::Dashboard
                             && self.page != Page::Settings
@@ -202,17 +173,6 @@ impl FarmDesktop {
                             && (self.rows.is_empty() || friends_without_account)
                             && !self.loading
                             && self.error.is_none()
-                            && !state.charity_view
-                            && !state.activity_directory
-                            && !state.activity_shop_view
-                            && !state.pet_diary_view
-                            && !state.autumn_view
-                            && !state.qixi_view
-                            && !state.qingmei_view
-                            && !state.constellation_view
-                            && !state.solar_terms_view
-                            && !state.season_view
-                            && !state.weather_view
                             && !state.mall_catalog_view
                             && !state.mystery_shop_view
                             && !state.daily_gifts_view
@@ -221,6 +181,9 @@ impl FarmDesktop {
                             && !state.personal_interaction_view
                             && !state.personal_illustrated_view
                             && !state.personal_pets_view
+                            && !state.solar_calendar_view
+                            && !state.milk_tea_view
+                            && !state.share_reward_view
                             && state.friend_section_error.is_none(),
                         |panel| {
                             let empty_label = if friends_without_account {
@@ -274,16 +237,6 @@ impl FarmDesktop {
                             && !state.personal_unavailable
                             && !state.personal_has_error
                             && self.page != Page::Analytics
-                            && !state.charity_view
-                            && !state.activity_shop_view
-                            && !state.pet_diary_view
-                            && !state.autumn_view
-                            && !state.qixi_view
-                            && !state.qingmei_view
-                            && !state.constellation_view
-                            && !state.solar_terms_view
-                            && !state.season_view
-                            && !state.weather_view
                             && !state.mall_catalog_view
                             && !state.mystery_shop_view
                             && !state.daily_gifts_view
@@ -291,7 +244,10 @@ impl FarmDesktop {
                             && !state.personal_bag
                             && !state.personal_interaction_view
                             && !state.personal_illustrated_view
-                            && !state.personal_pets_view,
+                            && !state.personal_pets_view
+                            && !state.solar_calendar_view
+                            && !state.milk_tea_view
+                            && !state.share_reward_view,
                         |panel| panel.child(row_contents),
                     );
                 // 图鉴网格与背包网格同款：整页滚动，虚拟列表按窗口空间裁剪可见行。

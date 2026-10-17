@@ -111,6 +111,15 @@ export const generatedRoutes: GeneratedRoute[] = [
         }
       },
       {
+        name: 'farm_milk-tea',
+        path: '/farm/milk-tea',
+        component: 'view.farm_milk-tea',
+        meta: {
+          title: 'farm_milk-tea',
+          i18nKey: 'route.farm_milk-tea'
+        }
+      },
+      {
         name: 'farm_mystery-shop',
         path: '/farm/mystery-shop',
         component: 'view.farm_mystery-shop',
@@ -136,6 +145,24 @@ export const generatedRoutes: GeneratedRoute[] = [
         meta: {
           title: 'farm_settings',
           i18nKey: 'route.farm_settings'
+        }
+      },
+      {
+        name: 'farm_share-reward',
+        path: '/farm/share-reward',
+        component: 'view.farm_share-reward',
+        meta: {
+          title: 'farm_share-reward',
+          i18nKey: 'route.farm_share-reward'
+        }
+      },
+      {
+        name: 'farm_solar-calendar',
+        path: '/farm/solar-calendar',
+        component: 'view.farm_solar-calendar',
+        meta: {
+          title: 'farm_solar-calendar',
+          i18nKey: 'route.farm_solar-calendar'
         }
       }
     ]

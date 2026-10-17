@@ -1,6 +1,7 @@
 use super::super::support::open_test_desktop;
-use crate::desktop::personal::visible_farm_operations;
+use crate::desktop::personal::{fertilize_candidate_count, visible_farm_operations};
 use crate::desktop::Page;
+use gpui_kit::component::WindowExt;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{AppContext as GpuiContextExt, TestAppContext};
 
@@ -221,4 +222,81 @@ fn personal_offline_state_hides_business_actions_and_rows(cx: &mut TestAppContex
         assert_eq!(window.find("personal-unavailable").label(), Some("请选择账号"));
     })
     .expect("offline farm must not expose mutation controls");
+}
+
+#[test]
+fn fertilize_candidates_count_growing_crops_only() {
+    assert_eq!(fertilize_candidate_count(&serde_json::Value::Null), 0);
+    let raw = serde_json::json!({
+        "lands": {"lands": [
+            {"id": 1, "unlocked": true, "status": "growing", "matureInSec": 600},
+            {"id": 2, "unlocked": true, "status": "growing", "matureInSec": 0},
+            {"id": 3, "unlocked": true, "status": "harvestable", "matureInSec": 600},
+            {"id": 4, "unlocked": false, "status": "growing", "matureInSec": 600},
+            {"id": 5, "unlocked": true, "status": "growing", "matureInSec": 600,
+                "occupiedByMaster": true}
+        ]}
+    });
+    assert_eq!(fertilize_candidate_count(&raw), 1);
+}
+
+#[gpui_kit::test]
+fn fertilize_all_dialog_offers_fertilizer_types(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (window, desktop, _restore_data_dir) = open_test_desktop(cx);
+    cx.update(|cx| {
+        desktop.update(cx, |this, cx| {
+            this.page = Page::Personal;
+            this.page_section = "lands".into();
+            this.selected_account = Some("missing-worker".into());
+            this.page_raw = serde_json::json!({
+                "lands": {"lands": [
+                    {"id": 1, "status": "growing", "unlocked": true, "matureInSec": 600},
+                    {"id": 2, "status": "harvestable", "unlocked": true}
+                ]}
+            });
+            cx.notify();
+        });
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("fertilize-all", cx);
+        window.render_frame(cx);
+        assert!(window.has_active_dialog(cx));
+        assert_eq!(window.find("fertilize-all-count").label(), Some("可施肥 1 株作物"));
+        assert_eq!(window.find("fertilize-all-normal").label(), Some("普通化肥"));
+        assert_eq!(window.find("fertilize-all-organic").label(), Some("有机化肥"));
+        window.click("fertilize-all-cancel", cx);
+        window.render_frame(cx);
+        assert!(!window.has_active_dialog(cx));
+        assert_eq!(desktop.read(cx).farm.lands.fertilize_all_generation, 0);
+    })
+    .expect("one-click fertilize dialog shows candidate count and both fertilizer types");
+}
+
+#[gpui_kit::test]
+fn fertilize_all_button_stays_inert_without_candidates(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (window, desktop, _restore_data_dir) = open_test_desktop(cx);
+    cx.update(|cx| {
+        desktop.update(cx, |this, cx| {
+            this.page = Page::Personal;
+            this.page_section = "lands".into();
+            this.selected_account = Some("7".into());
+            this.page_raw = serde_json::json!({
+                "lands": {"lands": [
+                    {"id": 2, "status": "harvestable", "unlocked": true}
+                ]}
+            });
+            cx.notify();
+        });
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("fertilize-all", cx);
+        window.render_frame(cx);
+        assert!(!window.has_active_dialog(cx));
+        assert_eq!(desktop.read(cx).farm.lands.fertilize_all_generation, 0);
+    })
+    .expect("no candidate crops -> fertilize-all cannot open its confirmation");
 }

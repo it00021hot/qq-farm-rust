@@ -132,13 +132,11 @@ impl FarmDesktop {
     }
 
     pub(in crate::desktop) fn select_all_bag_sellable(&mut self, cx: &mut Context<Self>) {
-        let query = self.search.read(cx).value();
-        self.farm.bag.selected_ids =
-            filtered_items(&self.page_raw, &self.farm.bag.category, query.trim())
-                .into_iter()
-                .filter(|item| can_sell(item))
-                .map(|item| number(item.get("id")))
-                .collect();
+        self.farm.bag.selected_ids = filtered_items(&self.page_raw, &self.farm.bag.category)
+            .into_iter()
+            .filter(|item| can_sell(item))
+            .map(|item| number(item.get("id")))
+            .collect();
         cx.notify();
     }
 
@@ -148,8 +146,7 @@ impl FarmDesktop {
         }
         let Some(account_id) = self.selected_account.clone() else { return };
         let selected = self.farm.bag.selected_ids.clone();
-        let query = self.search.read(cx).value();
-        let selected = filtered_items(&self.page_raw, &self.farm.bag.category, query.trim())
+        let selected = filtered_items(&self.page_raw, &self.farm.bag.category)
             .into_iter()
             .filter(|item| can_sell(item) && selected.contains(&number(item.get("id"))))
             .map(|item| number(item.get("id")))

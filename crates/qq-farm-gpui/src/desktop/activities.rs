@@ -1,67 +1,84 @@
-mod state;
-pub(crate) use state::ActivitiesState;
+//! 活动中心：当前活动的目录入口（节令日历 / 奶茶活动 / 快乐不独享）。
 
-mod actions;
-mod autumn_view;
-mod charity;
-mod constellation;
-mod controls;
-mod directory;
-mod feedback;
-mod helpers;
-mod loading;
-mod pet_diary;
-mod pet_diary_view;
-mod qingmei_controls;
-mod qingmei_view;
-mod qixi_controls;
-mod qixi_view;
-mod rewards;
-mod row_actions;
-mod rules;
-mod season_pass;
-mod shop;
-mod solar_terms;
-mod weather;
-#[cfg(any(test, feature = "ui-preview"))]
-pub(crate) use weather::weather_fixture;
+use super::*;
 
-pub(crate) use directory::activity_section_for_record;
-pub(crate) use helpers::{
-    activity_action_enabled, activity_title_for_section, value_to_action_string,
-};
-
-pub(crate) fn star_sand_purchase_feedback(
-    result: &serde_json::Value,
-    goods: &serde_json::Value,
-    count: i64,
-    english: bool,
-) -> (String, bool) {
-    feedback::star_sand_purchase_feedback(
-        result,
-        goods.get("fallbackItem"),
-        goods.get("id").unwrap_or(&serde_json::Value::Null),
-        goods.get("fallbackGoodsName").and_then(serde_json::Value::as_str).unwrap_or_default(),
-        count,
-        english,
-    )
-}
-
-pub(super) fn default_constellation_selection(raw: &serde_json::Value, selected: &str) -> String {
-    constellation::selected_constellation_id(raw, selected)
-}
-
-pub(super) fn default_solar_term_selection(raw: &serde_json::Value, selected: &str) -> String {
-    solar_terms::selected_solar_term_id(raw, selected)
-}
-
-impl super::FarmDesktop {
-    pub(super) fn reconcile_activity_selection(&mut self) {
-        self.activities.constellation_group_id = default_constellation_selection(
-            &self.page_raw,
-            &self.activities.constellation_group_id,
-        );
-        self.activities.solar_term_id =
-            default_solar_term_selection(&self.page_raw, &self.activities.solar_term_id);
+impl FarmDesktop {
+    pub(in crate::desktop) fn render_activities(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let language = self.preferences.language.as_str();
+        let cards = [
+            (
+                Page::SolarCalendar,
+                "activity-center-solar-calendar",
+                "activity-center-open-solar-calendar",
+                "节令日历",
+                "Solar Calendar",
+                "节气奖励、答题与季度奖励",
+                "Solar-term rewards, quiz and season rewards",
+            ),
+            (
+                Page::MilkTea,
+                "activity-center-milk-tea",
+                "activity-center-open-milk-tea",
+                "奶茶活动",
+                "Milk Tea",
+                "店铺、工坊、雇佣、工作与兑换",
+                "Shop, workshop, hiring, work and exchange",
+            ),
+            (
+                Page::ShareReward,
+                "activity-center-share-reward",
+                "activity-center-open-share-reward",
+                "快乐不独享",
+                "Share & Reward",
+                "分享、每日奖励与档位奖励",
+                "Sharing, daily and tier rewards",
+            ),
+        ];
+        div().id("activity-center").test_support().v_flex().gap_3().w_full().children(cards.map(
+            |(page, card_id, button_id, zh_title, en_title, zh_desc, en_desc)| {
+                h_flex()
+                    .id(card_id)
+                    .test_support()
+                    .items_center()
+                    .justify_between()
+                    .gap_4()
+                    .p_4()
+                    .rounded(cx.theme().radius)
+                    .bg(cx.theme().group_box)
+                    .child(
+                        h_flex()
+                            .gap_3()
+                            .items_center()
+                            .child(
+                                div()
+                                    .p_2()
+                                    .rounded(cx.theme().radius)
+                                    .bg(cx.theme().accent)
+                                    .child(Icon::new(page.icon())),
+                            )
+                            .child(
+                                div()
+                                    .v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .font_semibold()
+                                            .child(crate::i18n::text(language, zh_title, en_title)),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(crate::i18n::text(language, zh_desc, en_desc)),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        Button::new(button_id)
+                            .label(crate::i18n::text(language, "进入", "Open"))
+                            .on_click(cx.listener(move |this, _, _, cx| this.set_page(page, cx))),
+                    )
+            },
+        ))
     }
 }

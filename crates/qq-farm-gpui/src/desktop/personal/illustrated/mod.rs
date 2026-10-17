@@ -3,6 +3,7 @@ pub(in crate::desktop) use state::IllustratedState;
 
 mod card;
 mod purchase;
+mod rewards;
 mod summary;
 
 use super::super::*;
@@ -18,6 +19,9 @@ impl FarmDesktop {
             .page_raw
             .get("illustrated")
             .and_then(|snapshot| snapshot.get(&self.farm.illustrated.book));
+        let claimable =
+            book.and_then(|book| book.get("claimable")).and_then(serde_json::Value::as_bool)
+                == Some(true);
         let level_pill = book
             .and_then(|book| book.get("level"))
             .and_then(serde_json::Value::as_i64)
@@ -62,7 +66,42 @@ impl FarmDesktop {
                         },
                     ),
                 ))
-                .children(level_pill),
+                .child(
+                    h_flex()
+                        .items_center()
+                        .gap_2()
+                        .when(book.is_some(), |row| {
+                            row.child(
+                                Button::new("illustrated-details")
+                                    .label(crate::i18n::text(
+                                        &self.preferences.language,
+                                        "详情",
+                                        "Details",
+                                    ))
+                                    .ghost()
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_illustrated_rewards_dialog(window, cx)
+                                    })),
+                            )
+                        })
+                        .when(claimable, |row| {
+                            row.child(
+                                Button::new("illustrated-claim")
+                                    .label(crate::i18n::text(
+                                        &self.preferences.language,
+                                        "领取奖励",
+                                        "Claim rewards",
+                                    ))
+                                    .primary()
+                                    .loading(self.farm.illustrated.claim_pending)
+                                    .disabled(self.farm.illustrated.claim_pending)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.start_illustrated_claim(cx)
+                                    })),
+                            )
+                        })
+                        .children(level_pill),
+                ),
         );
         let Some(book) = book.filter(|book| !book.is_null()) else {
             return panel.child(

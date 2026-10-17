@@ -42,7 +42,6 @@ use crate::models::AccountSession;
 use crate::network::gateway::Gateway;
 use crate::runtime::events::WorkerEvent;
 use crate::runtime::scheduler::Scheduler;
-use crate::services::activity_center::ActivityCenterService;
 
 type HeartbeatTimeoutCallback = dyn Fn(String) + Send + Sync;
 use crate::services::automation;
@@ -95,7 +94,7 @@ pub struct WorkerLoop {
     gateway: Arc<Gateway>,
     /// event_tx 用于上报状态 / 错误 / 停止
     event_tx: broadcast::Sender<WorkerEvent>,
-    /// farm / friend / status / automation / share / qq / monthcard / email / mall / task / activity_center / warehouse
+    /// farm / friend / status / automation / share / qq / monthcard / email / mall / task / warehouse
     farm: Arc<FarmService>,
     friend: Arc<FriendService>,
     email: Arc<EmailService>,
@@ -106,8 +105,6 @@ pub struct WorkerLoop {
     task: Arc<TaskService>,
     warehouse: Arc<WarehouseService>,
     mystery_shop: Arc<MysteryShopService>,
-    activity_center: Arc<ActivityCenterService>,
-    weather: Arc<crate::services::weather_activity::WeatherActivityService>,
 
     // —— 内部状态 ——
     /// 登录完成
@@ -301,11 +298,7 @@ impl WorkerLoop {
         task: Arc<TaskService>,
         warehouse: Arc<WarehouseService>,
         mystery_shop: Arc<MysteryShopService>,
-        activity_center: Arc<ActivityCenterService>,
     ) -> Self {
-        let weather = Arc::new(crate::services::weather_activity::WeatherActivityService::new(
-            std::sync::Arc::clone(&gateway),
-        ));
         farm.api().set_operation_limits_callback(Arc::new({
             let friend = friend.clone();
             move |limits| friend.update_operation_limits(&limits)
@@ -345,8 +338,6 @@ impl WorkerLoop {
             task,
             warehouse,
             mystery_shop,
-            activity_center,
-            weather,
             login_ready: AtomicBool::new(false),
             shutdown_started: AtomicBool::new(false),
             is_running: AtomicBool::new(false),
@@ -546,14 +537,10 @@ impl WorkerLoop {
         let gid = *self.gid.lock();
         self.farm.set_host_gid(gid);
         self.friend.set_host_gid(gid);
-        self.weather.set_account_id(&self.account.id);
-        self.weather.set_own_gid(gid);
         self.farm.set_account_id(&self.account.id);
         self.task.set_account_id(&self.account.id);
         self.warehouse.set_account_id(&self.account.id);
         self.friend.set_account_id(&self.account.id);
-        self.activity_center.set_account_id(&self.account.id);
-        self.activity_center.set_warehouse(self.warehouse.clone());
         self.farm.set_external_scheduler(true);
         self.friend.set_external_scheduler(true);
         *self.last_fertilizer_mode.lock() =
@@ -1541,19 +1528,11 @@ impl WorkerLoop {
     pub fn friend(&self) -> &Arc<FriendService> {
         &self.friend
     }
-    #[must_use]
-    pub fn activity_center(&self) -> &Arc<ActivityCenterService> {
-        &self.activity_center
-    }
-    #[must_use]
-    pub fn weather(&self) -> &Arc<crate::services::weather_activity::WeatherActivityService> {
-        &self.weather
-    }
 
     /// 登录后刷新活动窗口（对齐 bot worker.ts:568-572 的 refreshActivityWindows，
     /// 发 activitypb.ActivityService.List）。失败忽略。
     pub async fn refresh_activity_windows(&self) {
-        let _ = self.activity_center.get_activity_center_snapshot().await;
+        let _ = crate::services::activity_windows::ensure_activity_windows(&self.gateway).await;
     }
     #[must_use]
     pub fn email(&self) -> &Arc<EmailService> {
@@ -1673,7 +1652,6 @@ mod tests {
     use super::*;
     use crate::models::AccountSession;
     use crate::network::gateway::{Gateway, GatewayConfig};
-    use crate::services::activity_center::ActivityCenterService;
 
     fn make_account() -> AccountSession {
         AccountSession::new("acc-1", "code-1", "Test")
@@ -1708,7 +1686,6 @@ mod tests {
         let task = Arc::new(TaskService::new(gateway.clone()));
         let warehouse = Arc::new(WarehouseService::new(gateway.clone()));
         let mystery_shop = Arc::new(MysteryShopService::new(gateway.clone()));
-        let activity_center = Arc::new(ActivityCenterService::new(gateway.clone()));
         let loop_ = Arc::new(WorkerLoop::new(
             account,
             WorkerLoopConfig::default(),
@@ -1724,7 +1701,6 @@ mod tests {
             task,
             warehouse,
             mystery_shop,
-            activity_center,
         ));
         (loop_, tx)
     }
@@ -1878,7 +1854,6 @@ mod tests {
         // 简单确保各 service 可访问（不调用真实方法）
         let _ = loop_.farm();
         let _ = loop_.friend();
-        let _ = loop_.activity_center();
         let _ = loop_.email();
         let _ = loop_.share();
         let _ = loop_.monthcard();

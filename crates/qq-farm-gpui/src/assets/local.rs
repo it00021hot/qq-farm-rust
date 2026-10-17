@@ -10,6 +10,7 @@ pub(super) fn resolve_local_asset_at(resources: &Path, url: &str) -> Result<Path
     let (root, relative) = if let Some(relative) = url.strip_prefix("/game-config/") {
         (resources.join("assets/game_config"), relative)
     } else if let Some(relative) = url.strip_prefix("/activity-assets/") {
+        // 活动素材（奶茶/快乐不独享等，bot web/public/activity-assets；打包或回退前端 public）
         (
             {
                 let packaged = resources.join("activity-assets");

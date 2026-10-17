@@ -24,7 +24,7 @@ fn qq_bot_binding_qr_is_rendered_in_the_binding_section_at_vue_size(cx: &mut Tes
             this.settings.qq_bot_status = Some("请使用 QQ 扫描二维码完成绑定。".into());
             this.settings.qq_bot_session_id = Some("session".into());
             this.settings.qq_bot_qr_path =
-                Some(PathBuf::from("desktop-ui/public/activity-assets/autumn/happy.png"));
+                Some(PathBuf::from("desktop-ui/public/land-assets/1.png"));
         });
     });
 

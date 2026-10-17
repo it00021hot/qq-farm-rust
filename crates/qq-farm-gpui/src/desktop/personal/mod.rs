@@ -15,4 +15,6 @@ mod status;
 
 pub(crate) use bag::bag_category_for_type;
 #[cfg(test)]
+pub(crate) use farming::fertilize_candidate_count;
+#[cfg(test)]
 pub(crate) use farming::visible_farm_operations;

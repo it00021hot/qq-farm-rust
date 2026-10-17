@@ -243,6 +243,16 @@ pub fn run() {
             commands::farm::farm_get_plant_blacklist,
             commands::farm::farm_set_plant_blacklist,
             commands::farm::farm_fertilizer_check_and_buy,
+            commands::farm::farm_fertilize_all,
+            // solar calendar
+            commands::solar_calendar::solar_calendar_snapshot,
+            commands::solar_calendar::solar_calendar_operate,
+            // milk tea activity
+            commands::milk_tea::milk_tea_snapshot,
+            commands::milk_tea::milk_tea_operate,
+            // share reward activity
+            commands::share_reward::share_reward_snapshot,
+            commands::share_reward::share_reward_operate,
             // friend
             commands::friend::friend_list,
             commands::friend::friend_lands,
@@ -250,40 +260,6 @@ pub fn run() {
             commands::friend::friend_interact_records,
             commands::friend::friend_blacklist_toggle,
             commands::friend::friend_delete,
-            // activity
-            commands::activity::activity_snapshot,
-            commands::activity::activity_claim_battle_pass,
-            commands::activity::activity_light_constellation,
-            commands::activity::activity_exchange_star_sand,
-            commands::activity::activity_claim_solar_term,
-            commands::activity::activity_claim_qingmei_seed,
-            commands::activity::activity_qingmei_brew_start,
-            commands::activity::activity_qingmei_brew_continue,
-            commands::activity::activity_qingmei_brew_settle,
-            commands::activity::activity_claim_qixi_bridge,
-            commands::activity::activity_gift_qixi_sachet,
-            commands::activity::activity_get_charity,
-            commands::activity::activity_claim_charity_seeds,
-            commands::activity::activity_donate_charity_love,
-            commands::activity::activity_claim_charity_daily_gift,
-            commands::activity::activity_claim_charity_progress_reward,
-            commands::activity::activity_get_pet_diary,
-            commands::activity::activity_operate_pet_diary,
-            commands::activity::activity_get_pet_diary_records,
-            commands::activity::activity_get_pet_diary_friend,
-            // autumn activities
-            commands::activity::activity_get_autumn,
-            commands::activity::activity_operate_autumn,
-            // weather
-            commands::weather::weather_snapshot,
-            commands::weather::weather_friends,
-            commands::weather::weather_friends_scan,
-            commands::weather::weather_exchange_collector,
-            commands::weather::weather_collect,
-            commands::weather::weather_summon,
-            commands::weather::weather_mischief_frog,
-            commands::weather::weather_mischief_cloud,
-            commands::weather::weather_advance_research,
             // commerce
             commands::commerce::commerce_mall_catalog,
             commands::commerce::commerce_mall_purchase,
@@ -304,6 +280,7 @@ pub fn run() {
             commands::friend::farm_interaction_items,
             commands::friend::farm_interaction_items_use,
             commands::friend::illustrated_snapshot,
+            commands::friend::illustrated_claim,
             commands::friend::seeds_purchase,
             // settings
             commands::settings::get_settings_panel,
@@ -352,7 +329,7 @@ pub fn run() {
 mod acl_tests {
     /// 防回归：`generate_handler!` 注册的每条 IPC 命令都必须在
     /// `permissions/desktop.toml` 的 ACL 白名单里，漏声明会在运行期报
-    /// "Command xxx not allowed by ACL"（小红花四条命令曾漏过）。
+    /// "Command xxx not allowed by ACL"。
     #[test]
     fn every_handler_command_is_allowed_by_acl() {
         let lib_src = include_str!("lib.rs");
@@ -360,7 +337,7 @@ mod acl_tests {
         for line in lib_src.lines() {
             let line = line.trim().trim_end_matches(',');
             if let Some((path, _)) = line.split_once("::") {
-                // 形如 commands::activity::activity_snapshot
+                // 形如 commands::farm::farm_get_logs
                 if path == "commands" {
                     if let Some(name) = line.rsplit("::").next() {
                         if name.chars().all(|c| c.is_ascii_lowercase() || c == '_')

@@ -47,19 +47,23 @@ mod dashboard;
 mod friends;
 mod game_config;
 mod init;
+mod json_text;
 mod land_grid;
+mod milk_tea;
 mod navigation;
 pub(crate) use navigation::{default_page_section, page_sections};
 mod personal;
 pub(crate) use friends::{
-    friend_action_type_number, friend_matches_search, friend_pet_sync_progress,
-    friend_status_localized, friend_value_number, has_friend_action, stealable_friends_matching,
+    friend_action_type_number, friend_pet_sync_progress, friend_status_localized,
+    friend_value_number, has_friend_action, stealable_friends_matching,
 };
 pub(crate) use personal::bag_category_for_type;
 mod runtime;
 mod settings;
 pub(in crate::desktop) use settings::{json_pointer, settings_text};
+mod share_reward;
 mod shell;
+mod solar_calendar;
 mod view;
 pub(crate) use view::{
     page_items, render_asset_image, render_asset_preview, render_asset_preview_sized,
@@ -69,23 +73,23 @@ pub(crate) use view::{
 pub(crate) use accounts::{
     account_value, parse_account_login_input, upsert_and_maybe_start_account,
 };
-pub(crate) use activities::{
-    activity_action_enabled, activity_section_for_record, activity_title_for_section,
-    star_sand_purchase_feedback, value_to_action_string,
-};
-
 mod state;
 mod toast;
 pub(crate) use accounts::AccountsState;
-pub(crate) use activities::ActivitiesState;
 pub(crate) use analytics::AnalyticsState;
 pub(crate) use commerce::CommerceState;
 pub(crate) use dashboard::DashboardState;
 pub(crate) use friends::{FriendFeedbackLevel, FriendsState};
 pub(crate) use game_config::GameConfigState;
+pub(crate) use json_text::value_to_action_string;
+pub(crate) use milk_tea::MilkTeaState;
 pub(crate) use personal::FarmState;
 pub(crate) use settings::SettingsState;
+pub(crate) use share_reward::ShareRewardState;
+pub(crate) use share_reward::SHARE_REWARD_ACTIVITY_ID;
+pub(crate) use solar_calendar::SolarCalendarState;
 pub use state::FarmDesktop;
+pub(crate) use state::ToastState;
 
 pub(crate) enum DesktopEvent {
     Realtime(Vec<qq_farm_app::events::PanelRealtimeEvent>),

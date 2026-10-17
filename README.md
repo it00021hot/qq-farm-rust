@@ -15,7 +15,6 @@ qq-farm-rust/
 │   └── qq-farm-gpui/      # GPUI Kit 原生桌面宿主（GPUI → app）
 ├── desktop-ui/            # SoybeanAdmin 桌面前端（与客户端共存）
 ├── proto/                 # 游戏 protobuf
-├── assets/activity-data/  # 活动静态数据
 ├── scripts/               # 辅助脚本
 ├── docs/ARCHITECTURE.md   # 分层拓扑
 ├── docs/CODING_STANDARDS.md
@@ -89,7 +88,7 @@ git push origin v0.2.0
 |------|------|------|
 | `FARM_SERVER_URL` | `wss://gate-obt.nqf.qq.com/prod/ws` | 游戏网关 |
 | `FARM_OS` | `Windows` | 客户端 OS |
-| `FARM_CLIENT_VERSION` | `1.13.3.14_20260826` | 客户端版本 |
+| `FARM_CLIENT_VERSION` | `1.15.0.2_20261001` | 客户端版本 |
 | `RUST_LOG` | `info` | 日志级别 |
 | `FARM_DATA_DIR` | dev：仓库 `data/`；安装包：OS 应用数据目录 `QQFarmRust` | 账号、用户、配置 |
 

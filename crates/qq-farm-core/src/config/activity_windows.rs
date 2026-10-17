@@ -49,12 +49,6 @@ pub fn set_activity_windows(windows: Vec<ActivityWindow>) {
     state.windows = next;
 }
 
-/// 缓存快照（活动目录用）。
-#[must_use]
-pub fn activity_windows_snapshot() -> Vec<ActivityWindow> {
-    WINDOWS.read().windows.values().cloned().collect()
-}
-
 /// 缓存是否仍在 TTL 内。
 #[must_use]
 pub fn activity_windows_fresh() -> bool {

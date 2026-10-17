@@ -21,20 +21,8 @@ impl FarmDesktop {
         }
 
         let catalog = self.page_raw.get("catalog").unwrap_or(&serde_json::Value::Null);
-        let goods =
+        let visible_goods =
             catalog.get("goods").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
-        let query = self.search.read(cx).value().trim().to_lowercase();
-        let visible_goods = goods
-            .iter()
-            .filter(|good| {
-                let name = good.get("name").and_then(serde_json::Value::as_str).unwrap_or_default();
-                let id = good.get("id").map(value_to_action_string).unwrap_or_default();
-                query.is_empty()
-                    || name.to_lowercase().contains(&query)
-                    || id.to_lowercase().contains(&query)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
 
         let mut header = h_flex().items_center().flex_wrap().gap_2();
         if let Some(membership) = catalog.get("membership") {
@@ -70,7 +58,7 @@ impl FarmDesktop {
                 cx,
             ));
         }
-        let total = goods.len();
+        let total = visible_goods.len();
         let countdown =
             catalog.get("refreshCountdown").and_then(serde_json::Value::as_i64).unwrap_or_default();
         let count_label = if countdown > 0 {
@@ -107,11 +95,7 @@ impl FarmDesktop {
             )))
             .child(header);
         if visible_goods.is_empty() {
-            let empty_label = if goods.is_empty() {
-                crate::i18n::text(language, "暂无商品", "No goods available")
-            } else {
-                crate::i18n::text(language, "没有匹配的商品", "No matching goods")
-            };
+            let empty_label = crate::i18n::text(language, "暂无商品", "No goods available");
             let empty = div()
                 .id("mall-empty")
                 .aria_label(empty_label.to_string())

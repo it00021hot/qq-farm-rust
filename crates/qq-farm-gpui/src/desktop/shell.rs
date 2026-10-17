@@ -46,6 +46,7 @@ impl FarmDesktop {
             .items_stretch()
             .size_full()
             .child(layout)
+            .child(self.render_toast(cx))
     }
 }
 

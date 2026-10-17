@@ -25,33 +25,9 @@ pub(crate) fn error_with_detail(
     format!("{}{separator}{detail}", text(language, chinese_prefix, english_prefix))
 }
 
-pub(crate) fn weather_reason(reason: &str, language: &str) -> String {
-    if language != "en-US" {
-        return reason.to_string();
-    }
-    match reason {
-        "金币不足" => "Not enough gold".into(),
-        "雷电徽章不足" => "Not enough thunder badges".into(),
-        "背包中没有可用的雷雨召唤瓶" => {
-            "No thunderstorm bottle available in the inventory".into()
-        }
-        _ => reason.to_string(),
-    }
-}
-
-pub(crate) fn activity_rule_title(title: &str, language: &str) -> String {
-    match title {
-        "活动说明" => text(language, "活动说明", "Activity rules").into(),
-        "活动规则" => text(language, "活动规则", "Activity rules").into(),
-        _ => title.to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        activity_rule_title, background_task_error, error_with_detail, text, weather_reason,
-    };
+    use super::{background_task_error, error_with_detail, text};
 
     #[test]
     fn unknown_languages_fall_back_to_chinese() {
@@ -76,23 +52,5 @@ mod tests {
             error_with_detail("en-US", "无法打开链接", "Could not open the link", "blocked"),
             "Could not open the link: blocked"
         );
-    }
-
-    #[test]
-    fn weather_gate_reasons_follow_the_selected_language() {
-        assert_eq!(weather_reason("金币不足", "zh-CN"), "金币不足");
-        assert_eq!(weather_reason("金币不足", "en-US"), "Not enough gold");
-        assert_eq!(weather_reason("雷电徽章不足", "en-US"), "Not enough thunder badges");
-        assert_eq!(
-            weather_reason("背包中没有可用的雷雨召唤瓶", "en-US"),
-            "No thunderstorm bottle available in the inventory"
-        );
-    }
-
-    #[test]
-    fn generic_activity_rule_titles_follow_the_selected_language() {
-        assert_eq!(activity_rule_title("活动说明", "zh-CN"), "活动说明");
-        assert_eq!(activity_rule_title("活动说明", "en-US"), "Activity rules");
-        assert_eq!(activity_rule_title("雨落成诗规则", "en-US"), "雨落成诗规则");
     }
 }

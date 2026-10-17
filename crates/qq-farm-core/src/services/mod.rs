@@ -18,26 +18,24 @@
 //! - [`invite`] — 邀请码处理（ReportArkClick 模拟点击分享链接）（1G-4）
 //! - [`guide`] — 新手引导 / 节点奖励（1G-4）
 //! - [`task`] — 任务 / 活跃度 / 图鉴自动领取（1G-5）
-//! - [`activity_center`] — 赛季 / 商店 / 星座 / 节气（1G-6，仅复刻生效活动）
+//! - [`solar_calendar`] — 节令日历（GetSolarTermsV2 / 答题 / 季度奖励，bot 0533264）
+//! - [`milk_tea`] — 奶茶活动（GetGroup 2026110100 / Operate 53-76，1.15 新活动）
+//! - [`share_reward`] — 快乐不独享（分享奖励，实例 2026110104）
 //! - [`security`] — 密码 / 限流 / 会话 token（1G-7）
 //! - [`qrlogin`] — QQ 小程序扫码登录（1G-7）
 //! - [`login_url_profile`] — 登录 URL hints 写入系统配置（1G-7）
-//! - [`randomdrop`] — 随机掉落活动（1G-7）
 //! - [`wx_login`] — 微信扫码登录（1G-8：协议层 + QR 流程）
 //!
 //! ## 域分组（Phase 2a）
 //!
 //! - [`commerce`] — mall / mystery_shop / pay / 编排
 //! - [`daily`] — email / share / monthcard / qqvip
-//! - [`activity`] — activity_center / activity_center_state
 //! - [`auth`] — security / qrlogin / wx_login / login_url_profile
-//! - [`tasks`] — task / guide / interact / invite / randomdrop
+//! - [`tasks`] — task / guide / interact / invite
 
 pub mod account_resolver;
 pub mod ace;
-pub mod activity;
-pub mod activity_center;
-pub mod activity_center_state;
+pub(crate) mod activity_text;
 pub mod activity_windows;
 pub mod analytics;
 pub mod auth;
@@ -57,6 +55,7 @@ pub mod item_capture;
 pub mod level_forecast;
 pub mod login_url_profile;
 pub mod mall;
+pub mod milk_tea;
 pub mod monthcard;
 pub mod mystery_shop;
 pub mod mystery_shop_auto;
@@ -66,13 +65,13 @@ pub mod push;
 pub mod qq_bot;
 pub mod qqvip;
 pub mod qrlogin;
-pub mod randomdrop;
 pub mod security;
 pub mod share;
+pub mod share_reward;
+pub mod solar_calendar;
 pub mod task;
 pub mod tasks;
 pub mod warehouse;
-pub mod weather_activity;
 pub mod wx_login;
 
 // --- infra 向后兼容 re-export（已迁至 [`crate::infra`]) ---

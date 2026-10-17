@@ -49,7 +49,7 @@ pub(crate) fn matches_vue_keyword(row: &DisplayRow, keyword: &str) -> bool {
         row.record
             .get(*field)
             .filter(|value| !value.is_null())
-            .map(super::activities::value_to_action_string)
+            .map(super::super::json_text::value_to_action_string)
             .is_some_and(|value| value.contains(&keyword))
     })
 }

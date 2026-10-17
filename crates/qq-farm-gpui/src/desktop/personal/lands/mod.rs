@@ -21,7 +21,6 @@ impl FarmDesktop {
         let lands = land_payload
             .and_then(|payload| payload.get("lands"))
             .and_then(serde_json::Value::as_array);
-        let keyword = self.search.read(cx).value().trim().to_lowercase();
 
         div()
             .v_flex()
@@ -53,20 +52,14 @@ impl FarmDesktop {
                     })
             })
             .when_some(lands, |panel, lands| {
-                let visible = land_grid::visible_lands(lands)
-                    .into_iter()
-                    .filter(|land| land_grid::matches_search(land, &keyword))
-                    .collect::<Vec<_>>();
+                let visible = land_grid::visible_lands(lands).into_iter().collect::<Vec<_>>();
                 if visible.is_empty() {
                     panel.child(
-                        div().py_8().text_center().text_color(cx.theme().muted_foreground).child(
-                            if keyword.is_empty() {
-                                crate::i18n::text(language, "无数据", "No Data").to_string()
-                            } else {
-                                crate::i18n::text(language, "没有匹配的地块", "No matching lands")
-                                    .to_string()
-                            },
-                        ),
+                        div()
+                            .py_8()
+                            .text_center()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(crate::i18n::text(language, "无数据", "No Data").to_string()),
                     )
                 } else {
                     let mut land_grid = div().grid().grid_cols(4).grid_rows_min_content(6).gap_3();

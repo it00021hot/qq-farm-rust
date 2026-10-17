@@ -22,8 +22,7 @@ impl FarmDesktop {
         cx: &mut Context<Self>,
     ) -> Div {
         let language = &self.preferences.language;
-        let query = self.search.read(cx).value().trim().to_lowercase();
-        let items = filtered_items_with_indices(&self.page_raw, &self.farm.bag.category, &query);
+        let items = filtered_items_with_indices(&self.page_raw, &self.farm.bag.category);
         let item_indices = items.iter().map(|(index, _)| *index).collect::<Vec<_>>();
         let virtualize = item_indices.len() > 80;
         div()
@@ -54,11 +53,7 @@ impl FarmDesktop {
                 ))
             })
             .when(items.is_empty(), |panel| {
-                let empty = if query.is_empty() {
-                    crate::i18n::text(language, "无数据", "No Data")
-                } else {
-                    crate::i18n::text(language, "没有匹配的物品", "No matching items")
-                };
+                let empty = crate::i18n::text(language, "无数据", "No Data");
                 let empty_state = div()
                     .id("bag-empty")
                     .aria_label(empty.to_string())

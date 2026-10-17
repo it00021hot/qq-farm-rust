@@ -52,12 +52,8 @@ pub enum NotifyEvent {
     DogProtectLogChanged,
     /// 活动列表变化（ActiviesChangeNotify，用于失效活动时间窗缓存）
     ActivitiesChanged,
-    /// 通行证（游记）变化（BattlePassChangeNotify，用于刷新赛季缓存）
-    BattlePassChanged { pass: Option<crate::proto::generated::gamepb::seasonpb::SeasonPass> },
     /// 任务信息推送
     TaskInfoNotify { task_info: Option<crate::proto::generated::gamepb::taskpb::TaskInfo> },
-    /// 天气变化（自己或好友农场；WeatherChangeNotify）
-    WeatherChanged { event_type: String, host_gid: i64 },
 }
 
 /// ItemNotify 里一条物品变化（对齐 network.ts handleNotify）
@@ -176,12 +172,6 @@ pub fn parse_event(event: &EventMessage) -> NotifyEvent {
         }
     } else if event_type.contains("NewProtectLogNotify") {
         NotifyEvent::DogProtectLogChanged
-    } else if event_type.contains("BattlePassChangeNotify") {
-        // 通行证（游记）进度变化推送，对齐 go manager.go 的 applyBattlePassNotify
-        match crate::proto::generated::gamepb::seasonpb::BattlePassChangeNotify::decode(body) {
-            Ok(notify) => NotifyEvent::BattlePassChanged { pass: notify.pass },
-            Err(_) => NotifyEvent::BattlePassChanged { pass: None },
-        }
     } else if event_type.contains("ActiviesChangeNotify")
         || event_type.contains("ActivityChangeNotify")
     {
@@ -198,11 +188,6 @@ pub fn parse_event(event: &EventMessage) -> NotifyEvent {
         match crate::proto::generated::gamepb::taskpb::TaskInfoNotify::decode(body) {
             Ok(notify) => NotifyEvent::TaskInfoNotify { task_info: notify.task_info },
             Err(_) => NotifyEvent::TaskInfoNotify { task_info: None },
-        }
-    } else if event_type.contains("WeatherChangeNotify") {
-        match crate::proto::generated::gamepb::weatherpb::WeatherChangeNotify::decode(body) {
-            Ok(notify) => NotifyEvent::WeatherChanged { event_type, host_gid: notify.host_gid },
-            Err(_) => NotifyEvent::WeatherChanged { event_type, host_gid: 0 },
         }
     } else {
         NotifyEvent::Unknown { event_type }
@@ -427,32 +412,6 @@ mod tests {
                 NotifyEvent::ActivitiesChanged => {}
                 other => panic!("expected ActivitiesChanged for {name}, got {other:?}"),
             }
-        }
-    }
-
-    #[test]
-    fn battle_pass_change_notify_extracts_pass() {
-        let pass = crate::proto::generated::gamepb::seasonpb::SeasonPass {
-            activity_id: 100,
-            current_level: 3,
-            current_progress: 1,
-            progress_target: 10,
-            ..Default::default()
-        };
-        let notify =
-            crate::proto::generated::gamepb::seasonpb::BattlePassChangeNotify { pass: Some(pass) };
-        let ev = EventMessage {
-            message_type: "BattlePassChangeNotify".to_string(),
-            body: notify.encode_to_vec().into(),
-        };
-        match parse_event(&ev) {
-            NotifyEvent::BattlePassChanged { pass } => {
-                let pass = pass.expect("应解出通行证");
-                assert_eq!(pass.activity_id, 100);
-                assert_eq!(pass.current_level, 3);
-                assert_eq!(pass.current_progress, 1);
-            }
-            other => panic!("expected BattlePassChanged, got {other:?}"),
         }
     }
 }

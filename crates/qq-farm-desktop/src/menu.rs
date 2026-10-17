@@ -12,7 +12,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
         version: Some(app.package_info().version.to_string()),
         comments: Some(format!(
             "QQ Farm Rust（桌面端）\n\
-多账号挂机农场执行器：通过本地 IPC 驱动 qq-farm-core / qq-farm-app 完成农场/偷菜/活动中心任务。\n\
+多账号挂机农场执行器：通过本地 IPC 驱动 qq-farm-core / qq-farm-app 完成农场/偷菜/日常任务。\n\
 面板前端使用本仓库 desktop-ui（SoybeanAdmin）展示状态与运行日志。\n\
 GitHub: {github}"
         )),

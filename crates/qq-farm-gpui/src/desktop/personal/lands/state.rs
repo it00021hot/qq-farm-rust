@@ -7,6 +7,9 @@ pub(crate) struct LandsState {
     pub(crate) refreshing: bool,
     pub(crate) error: Option<String>,
     pub(crate) operating: bool,
+    /// 一键施肥在途（独立于巡田操作按钮）
+    pub(crate) fertilize_all_pending: bool,
+    pub(crate) fertilize_all_generation: u64,
     pub(crate) finish_operation_after_refresh: bool,
     pub(crate) operation_generation: u64,
     pub(crate) operation_notice: Option<(String, bool)>,

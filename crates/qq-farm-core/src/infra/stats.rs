@@ -519,7 +519,6 @@ pub fn get_stats_for(
             "goldBean": current_gold_bean,
             "exp": current_exp,
             "platform": platform,
-            "travelPass": null,
         },
         "uptime": 0,
         "operations": ops,

@@ -299,10 +299,6 @@ impl Worker {
                     let mystery_shop = Arc::new(
                         crate::services::mystery_shop::MysteryShopService::new(gateway.clone()),
                     );
-                    let activity_center =
-                        Arc::new(crate::services::activity_center::ActivityCenterService::new(
-                            gateway.clone(),
-                        ));
 
                     let rt = crate::config::get_runtime_config();
                     let client_version = if rt.client_version.is_empty() {
@@ -334,7 +330,6 @@ impl Worker {
                         task,
                         warehouse,
                         mystery_shop,
-                        activity_center,
                     ));
                     eng.register_worker_loop(&account_id, worker_loop.clone());
                     tracing::info!(account_id = %account_id, "WorkerLoop 已注册到 engine");
@@ -509,25 +504,6 @@ impl Worker {
                                     }
                                     crate::network::notify::NotifyEvent::ActivitiesChanged => {
                                         crate::config::activity_windows::invalidate_activity_windows();
-                                        // 活动列表变化：天气快照与好友天气缓存一并失效
-                                        wl.weather().clear_caches();
-                                    }
-                                    crate::network::notify::NotifyEvent::BattlePassChanged {
-                                        pass,
-                                    } => {
-                                        // 通行证（游记）进度推送：合并进赛季缓存
-                                        // （对齐 go applyBattlePassNotify；解码失败时 pass 为 None，忽略）
-                                        if let Some(pass) = pass {
-                                            wl.activity_center().apply_battle_pass_notify(&pass);
-                                        }
-                                    }
-                                    crate::network::notify::NotifyEvent::WeatherChanged {
-                                        host_gid,
-                                        ..
-                                    } => {
-                                        // 天气变化：清空快照与好友天气缓存（对齐 bot weatherChanged）
-                                        tracing::debug!(host_gid, "天气变化推送");
-                                        wl.weather().clear_caches();
                                     }
                                     crate::network::notify::NotifyEvent::TaskInfoNotify {
                                         task_info,
@@ -626,14 +602,36 @@ impl Worker {
                             let ace_for_reset = ace.clone();
                             worker_loop.attach_ace(ace);
 
-                            // 对齐 bot 登录序列：GetUserSettings 最先发出（携带 TSDK
-                            // 初始化凭据，对齐 bot 登录回调里的 fetchUserSettings），
-                            // 随后刷新活动窗口；GetBag 只由 on_login_success 拉一次
-                            // （此前这里重复多拉了一次）。
+                            // 对齐 bot sendLogin：GetUserSettings 最先发出（携带 TSDK
+                            // 初始化凭据，失败忽略），QQ 1.15+ 随后完成农场场景登录
+                            // （PlayerSceneLogin）；回包不完整按登录初始化失败终止连接
+                            // （对齐 bot login_init_failed）。活动窗口刷新保持异步。
+                            let _ = gateway.fetch_user_settings().await;
+                            if gateway.uses_player_scene_login(&client_version) {
+                                if let Err(e) = gateway.player_scene_login().await {
+                                    tracing::warn!(account_id = %account_id, "登录初始化失败: {e}");
+                                    emit_login_log(
+                                        &account_id,
+                                        &format!("登录初始化失败: {e}"),
+                                        true,
+                                    );
+                                    emit_terminal_stop(
+                                        &event_tx,
+                                        &account_id,
+                                        &account_name,
+                                        &format!("登录初始化失败: {e}"),
+                                        "login_init_failed",
+                                        has_wx_auth,
+                                        generation,
+                                    );
+                                    gateway.force_disconnect_with_reason("login_init_failed");
+                                    crate::services::panel_log::unregister(&account_id);
+                                    eng.release_worker_gen(&account_id, generation);
+                                    return;
+                                }
+                            }
                             let extras = worker_loop.clone();
-                            let gw_settings = gateway.clone();
                             tokio::spawn(async move {
-                                let _ = gw_settings.fetch_user_settings().await;
                                 let _ = extras.refresh_activity_windows().await;
                             });
 
@@ -962,6 +960,7 @@ fn disconnect_reason_label(source: &str) -> &str {
     match source {
         "heartbeat_timeout" => "心跳超时",
         "kickout" => "被踢下线",
+        "login_init_failed" => "登录初始化失败",
         "ws_close" => "连接关闭",
         "" => "未知原因",
         other => other,

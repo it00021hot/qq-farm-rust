@@ -44,7 +44,6 @@ impl FarmDesktop {
         let dashboard = DashboardState::new(&preferences.language, window, cx);
         let farm = FarmState::new(&preferences.language, window, cx);
         let friends = FriendsState::new(&preferences.language, window, cx);
-        let activities = ActivitiesState::new(&preferences.language, window, cx);
         let analytics = AnalyticsState::new(
             &app,
             selected_account.as_deref(),
@@ -53,6 +52,9 @@ impl FarmDesktop {
             cx,
         );
         let game_config = GameConfigState::new(&preferences.language, window, cx);
+        let solar_calendar = SolarCalendarState::default();
+        let milk_tea = MilkTeaState::new(&preferences.language, window, cx);
+        let share_reward = ShareRewardState::default();
         let settings = SettingsState::new(&preferences.language, window, cx);
 
         cx.observe(&search, |this, _, cx| {
@@ -89,15 +91,18 @@ impl FarmDesktop {
             search,
             page_raw: serde_json::Value::Null,
             tray_events,
-            update_message: None,
-            release_url: None,
+            update_checking: false,
+            toast: None,
+            toast_generation: 0,
             commerce,
             accounts: accounts_state,
             dashboard,
             farm,
             friends,
-            activities,
             analytics,
+            solar_calendar,
+            milk_tea,
+            share_reward,
             game_config,
             settings,
         };
@@ -107,8 +112,8 @@ impl FarmDesktop {
             if view.page == Page::Dashboard {
                 view.start_dashboard_clock(cx);
             }
-            if view.page == Page::Activities {
-                view.start_activity_clock(cx);
+            if view.page == Page::SolarCalendar {
+                view.start_solar_calendar_clock(cx);
             }
         }
         view.refresh(cx);

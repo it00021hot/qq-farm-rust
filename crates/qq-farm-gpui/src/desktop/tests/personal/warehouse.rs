@@ -69,7 +69,7 @@ fn bag_defaults_to_fruit_hides_system_items_and_selects_sellable_rows(cx: &mut T
 }
 
 #[gpui_kit::test]
-fn warehouse_search_scopes_select_all_and_the_sale_count(cx: &mut TestAppContext) {
+fn warehouse_select_all_scopes_the_sale_count_to_sellable_items(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (window, desktop, _restore_data_dir) = open_test_desktop(cx);
     cx.update(|cx| {
@@ -86,18 +86,15 @@ fn warehouse_search_scopes_select_all_and_the_sale_count(cx: &mut TestAppContext
     });
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
-        window.click("page-search", cx);
-        window.input("apple", cx);
-        window.render_frame(cx);
         window.click("bag-select-all", cx);
         window.render_frame(cx);
-        assert!(window.try_find("bag-item-8-1").is_none());
-        assert_eq!(window.find("bag-sell-selected").label(), Some("批量出售 (1)"));
+        assert!(window.find("bag-item-8-1").visible());
+        assert_eq!(window.find("bag-sell-selected").label(), Some("批量出售 (2)"));
         desktop.update(cx, |this, _| {
-            assert_eq!(this.farm.bag.selected_ids, std::collections::HashSet::from([7]));
+            assert_eq!(this.farm.bag.selected_ids, std::collections::HashSet::from([7, 8]));
         });
     })
-    .expect("search must not select hidden warehouse items");
+    .expect("select-all selects every sellable warehouse item");
 }
 
 #[gpui_kit::test]
@@ -190,10 +187,6 @@ fn empty_warehouse_category_uses_vue_no_data_copy(cx: &mut TestAppContext) {
         desktop.update(cx, |this, cx| this.set_language("en-US", window, cx));
         window.render_frame(cx);
         assert_eq!(window.find("bag-empty").label(), Some("No Data"));
-        window.click("page-search", cx);
-        window.input("apple", cx);
-        window.render_frame(cx);
-        assert_eq!(window.find("bag-empty").label(), Some("No matching items"));
     })
-    .expect("warehouse empty state should follow Vue's noData copy and search wording");
+    .expect("warehouse empty state should follow Vue's noData copy");
 }

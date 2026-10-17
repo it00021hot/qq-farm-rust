@@ -87,7 +87,7 @@ fn pets_render_real_ownership_gates_food_input_and_guard_records(cx: &mut TestAp
         desktop.update(cx, |this, cx| {
             assert_eq!(this.farm.pets.food_inputs[&90004].read(cx).value(), "2");
         });
-        window.click("page-search", cx);
+        window.click("pet-refresh", cx);
         previous_focus = window.focused(cx);
         desktop.update(cx, |this, cx| this.show_personal_pet_logs(window, cx));
         window.render_frame(cx);

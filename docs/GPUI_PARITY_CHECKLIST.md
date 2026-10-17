@@ -7,19 +7,23 @@
 | 页面 | Vue 对照 | GPUI 实现 | 回归测试位置 | 逐项对照范围 |
 |---|---|---|---|---|
 | 总览 | `views/farm/dashboard/index.vue`、`dashboard/log-events.ts` | `desktop/dashboard/`、`pages/mapper/dashboard.rs` | `desktop/tests/dashboard.rs`、`desktop/dashboard/logs/filter.rs` | 账号状态和资产、检查计划、实时日志、模块/事件/级别/关键词筛选、清空、日志上限和展开收起、操作统计及离线态。关键词范围是消息、模块标签和事件文案；不含时间。 |
-| 我的农场 | `views/farm/personal/{index,FarmPanel,BagPanel,DailyOverview,TaskPanel,PetPanel,IllustratedPanel,InteractionItemsPanel}.vue` | `desktop/personal/` | `desktop/tests/personal/` | 分段导航；地块布局/成熟倒计时/合并地块/务农门控；仓库分类、搜索、批量选择/出售、道具使用；礼包与成长任务；宠物授权、部署、撤回、喂食、奖励和日志；图鉴与互动道具。 |
-| 好友 | `views/farm/friends/index.vue` | `desktop/friends/`、`pages/mapper/friends.rs` | `desktop/tests/friends/` | 搜索、排序、分页和黑名单；好友详情、地块和生涯；偷取/帮忙/捣乱、批量偷取、删除；访客记录和好友互动道具；实时事件合并、加载失败和账号切换。 |
-| 活动 | `views/farm/activity/*.vue`、`activity/rules.ts` | `desktop/activities/`、`pages/mapper/activities.rs` | `desktop/tests/activities/`、`desktop/tests/weather.rs` | 活动目录、状态/时间排序、玩法路由、规则；通行证、星座、星砂、节气、青梅、七夕、秋日、公益、萌宠日记和天气玩法的进度、奖励、选择器、操作门控、确认、刷新、失败重试。未知玩法按 Vue 门控禁用。 |
+| 我的农场 | `views/farm/personal/{index,FarmPanel,BagPanel,DailyOverview,TaskPanel,PetPanel,IllustratedPanel,InteractionItemsPanel}.vue` | `desktop/personal/` | `desktop/tests/personal/` | 分段导航；地块布局/成熟倒计时/合并地块/务农门控；仓库分类、批量选择/出售、道具使用；礼包与成长任务；宠物授权、部署、撤回、喂食、奖励和日志；图鉴与互动道具。 |
+| 好友 | `views/farm/friends/index.vue` | `desktop/friends/`、`pages/mapper/friends.rs` | `desktop/tests/friends/` | 排序、分页和黑名单；好友详情、地块和生涯；偷取/帮忙/捣乱、批量偷取、删除；访客记录和好友互动道具；实时事件合并、加载失败和账号切换。 |
+| 活动中心 | `views/farm/activity/index.vue` | `desktop/activities.rs` | `desktop/tests/activities.rs` | 现役活动目录（节令日历/奶茶活动/快乐不独享）；点击进入各自页面，子页面从侧栏隐藏、菜单只保留一个活动入口。 |
+| 节令日历 | `views/farm/solar-calendar/index.vue` | `desktop/solar_calendar/` | `desktop/tests/solar_calendar.rs` | 季度切换、节令卡（日期/描述/奖励/状态）、直接领取、答题弹窗（题目一致性、错项拦截、每日一次）、季度奖励；到点自动刷新与账号切换失效旧请求。 |
+| 奶茶活动 | `views/farm/milk-tea/index.vue` | `desktop/milk_tea/`、`pages/loader.rs`（奶茶页专用快照加载） | `desktop/tests/milk_tea.rs` | 开店/改名、店铺收益与升级、雇佣与雇佣设置、工坊制作、我的工作（互动/工资）、兑换商店、成长基金、排行榜与营业记录；费用签名校验与钻石拒绝（用户决策）。 |
+| 快乐不独享 | `views/farm/share-reward/index.vue` | `desktop/share_reward/` | `desktop/tests/share_reward.rs` | 实例 2026110104 的分享、每日奖励、档位奖励与互动日志（我领取的/领取我的）；操作后按回包快照合并、刷新失败保留结果。 |
+| ~~活动~~ | ~~`views/farm/activity/*.vue`、`activity/rules.ts`~~ | ~~`desktop/activities/`、`pages/mapper/activities.rs`~~ | ~~`desktop/tests/activities/`、`desktop/tests/weather.rs`~~ | 2026-10-16 已随「活动全部过期」决策全量删除（GPUI/Tauri/后端）。 |
 | 收益分析 | `views/farm/analytics/index.vue` | `desktop/analytics/` | `desktop/tests/analytics.rs` | 五项排名指标、参考等级、并列排序、当前种植策略、种子候选、黑名单增删/保存/失败回退。 |
-| 商城 | `views/farm/game-mall/index.vue` | `desktop/commerce/`、`desktop/activities/shop.rs` | `desktop/tests/commerce/` | 普通及会员商店入口、分类/搜索、余额与商品状态、数量上限、购买确认、在途门控和购买后刷新。 |
+| 商城 | `views/farm/game-mall/index.vue` | `desktop/commerce/` | `desktop/tests/commerce/` | 普通及会员商店入口、分类、余额与商品状态、数量上限、购买确认、在途门控和购买后刷新。 |
 | 神秘商店 | `views/farm/mystery-shop/{index,panel}.vue` | `desktop/commerce/shop/mystery.rs` | `desktop/tests/commerce/mystery.rs` | 独立入口和商城标签入口、折扣/限购/余额、商品选择与共享购买流程。 |
-| 设置 | `views/farm/settings/index.vue` | `desktop/settings/` | `desktop/tests/settings/` | 种植策略与时间字段、自动化开关和数值门槛、分组保存、化肥检查；离线提醒渠道/绑定/测试；QQ Bot 绑定；运行环境设备字段、预设、时区及重置。 |
+| 设置 | `views/farm/settings/index.vue` | `desktop/settings/` | `desktop/tests/settings/` | 种植策略与时间字段、自动化开关和数值门槛、分组保存、化肥检查；离线提醒渠道/绑定/测试；QQ Bot 绑定；运行环境设备字段、预设、时区及重置；系统设置（主题/语言/检查更新）。 |
 | 游戏配置 | `views/farm/game-config/index.vue`、`game-config/shared.ts` | `desktop/game_config/`、`qq-farm-app::config` | `desktop/tests/game_config/`、`desktop/tests/assets.rs` | 种子/果实/道具搜索、筛选、表格列和分页；新增/编辑/删除与确认；字段默认值/回填；图片上传及 `/game-config/`、`/api/config/images/` 兼容解析。 |
 | 账号 | `views/farm/account/index.vue`、`account/modules/account-operate-drawer.vue` | `desktop/accounts/`、`qq-farm-app::account` | `desktop/tests/accounts/` | 账号筛选/搜索/分页/列设置；新增编辑、备注、启停、删除；Code 登录、微信扫码、本机授权、头像与状态；切换账号时使旧请求失效。 |
 
 ## 跨页面和桌面壳
 
-- [ ] 用真实账号逐页完成上表操作，记录成功、失败、空数据、离线、活动未开放、余额不足和授权过期行为；确认请求参数、服务端状态变化和页面回读。
+- [ ] 用真实账号逐页完成上表操作，记录成功、失败、空数据、离线、余额不足和授权过期行为；确认请求参数、服务端状态变化和页面回读。
 - [ ] 在真实窗口检查中英文输入、键盘导航、Escape/焦点恢复、重复提交、浅深主题、最小尺寸、125%/150% 缩放、长名称、滚动和弹层。
 - [x] 账号切换会启动新的页面请求代次：侧栏账号切换窗口测试断言 `request_revision` 递增。
 - [x] 账号切换后将旧页面结果交给生产提交路径，验证旧结果不覆盖新账号页面，也不改动当前加载状态：`desktop/tests/accounts/navigation.rs::switching_accounts_discards_a_late_page_response`。测试驱动真实切号生命周期和结果提交路径，不依赖网络调度时序。
@@ -49,9 +53,9 @@
 - macOS ARM 包补齐：在本机（x86_64）交叉构建 aarch64 release 客户端（`cargo build --release -p qq-farm-gpui --target aarch64-apple-darwin`）并用 `TARGET=aarch64-apple-darwin scripts/package-gpui.sh release` 打包，验证 arm64 Mach-O、Info.plist 标识与资源清单、以及 `.app`/`.zip` 内可执行文件 SHA-256 一致（`15e95f63…bcb0322`）；ARM 实机运行仍待原生环境。
 - 表格中的未勾选项（真实账号逐页操作、真实窗口交互与缩放、双进程唤起/托盘、三平台原生 runner）仍需本机之外的环境，不能由本轮证据替代。
 
-## 附录：预览状态 → 场景映射（2026-10-13，共 214 张）
+## 附录：预览状态 → 场景映射（2026-10-17，共 221 张）
 
-矩阵目录 `/tmp/qq-farm-gpui-preview-1013z`；重生成命令：
+矩阵目录 `/tmp/qq-farm-gpui-preview-1017`；重生成命令：
 `QQ_FARM_ASSET_DIR=<repo> cargo run -p qq-farm-gpui --features ui-preview -- --render-preview <dir>`。
 下列分组把各模块代码中的可见状态与场景对齐（`a|b` 表示同名浅色/深色/英文等变体），供收尾时逐项勾验。
 
@@ -82,7 +86,7 @@
 ### 好友（28 张）
 
 - 列表：`friends-light|dark|english|minimum`；空列表 `friends-empty-light`；未选账号 `friends-no-account-light`
-- 全局态：更新提示 `friends-update-light`、加载中 `friends-loading-light`、页面错误横幅 `friends-error-light|dark`、访客分节错误 `friends-records-error-light|dark`、操作反馈 `friends-feedback-light`
+- 全局态：加载中 `friends-loading-light`、页面错误横幅 `friends-error-light|dark`、访客分节错误 `friends-records-error-light|dark`、操作反馈 `friends-feedback-light`
 - 分节：互动道具 `friends-interaction-light|dark|english`、黑名单 `friends-blacklist-light|dark|english`、访客 `friends-visitors-light|dark|english`
 - 确认气泡：删除 `friends-delete-confirm-light|dark|english`、加入黑名单 `friends-blacklist-confirm-light`、移出黑名单 `friends-unblacklist-confirm-light`
 - 详情加载失败带（错误文案 + 重试）：`friends-detail-error-light`
@@ -94,7 +98,7 @@
 
 ### 商城与神秘商店（28 张）
 
-- 商城：`mall-light|dark|english|minimum`；未选账号 `mall-no-account-light`；空目录 `mall-empty-light|dark`；搜索无结果 `mall-search-empty-light`
+- 商城：`mall-light|dark|english|minimum`；未选账号 `mall-no-account-light`；空目录 `mall-empty-light|dark`
 - 会员分支：SVIP `mall-svip-light|dark|english`、非会员普通页 `mall-non-svip-light`、非会员 SVIP 页 `mall-svip-locked-light`
 - 购买确认：`mall-confirm-light|dark|english`、提交中 `mall-confirm-pending-light`、成功通知 `mall-notice-light`
 - 神秘商店：`mystery-shop-light|dark|english|minimum`、非活跃 `mystery-shop-inactive-light|dark`、独立页签 `mall-mystery-light|dark|english`、购买确认 `mystery-confirm-light|dark`
@@ -112,16 +116,30 @@
 - 编辑抽屉：种子 `game-config-editor-light|dark`、新增 `game-config-editor-new-light`、果实 `game-config-editor-fruit-light`、道具 `game-config-editor-item-light`
 - 删除确认：`game-config-delete-confirm-light|dark`
 
-### 活动（暂停；矩阵保留既有基线 27 张）
+### 活动（2026-10-16 已全量删除）
 
-- 目录/详情：`activity-directory-light|dark|english`、`activity-detail-light|english`
-- 玩法：`pet-diary-light|dark|english`、`charity-light|dark|english`、`qixi-light|dark|english`、`autumn-wish|happy-light|dark|english`
-- 天气：`weather-light|dark|english|minimum|125|150`、`weather-friends-light|dark|english`
+- 活动功能（目录、通行证/星座/星砂/节气、青梅、七夕、秋日、公益、萌宠日记、天气玩法）随「活动全部过期」决策从 GPUI、Tauri 与后端整体移除；对应 27 张预览场景从矩阵中删除。
+
+### 活动中心（3 张）
+
+- 浅/深/英文：`activity-center-light|dark|english`（现役活动目录，不依赖账号快照）
+
+### 节令日历（3 张）
+
+- 浅/深/英文：`solar-calendar-light|dark|english`
+
+### 奶茶活动（27 张）
+
+- 九个场景（默认店铺、店铺、工坊、雇佣、工作、兑换、基金、排行、记录）各浅/深/英文：`milk-tea(-shop|workshop|hire|work|exchange|fund|rank|logs)-light|dark|english`
+
+### 快乐不独享（3 张）
+
+- 浅/深/英文：`share-reward-light|dark|english`
 
 ### 缩放压力场景（字体放大）
 
-- 125%：`account-sheet-125`、`weather-125`
-- 150%：`account-sheet-150`、`accounts-150`、`game-config-150`、`weather-150`、`dashboard-150`、`friends-150`、`settings-150`、`mall-150`、`bag-150`、`pets-150`
+- 125%：`account-sheet-125`
+- 150%：`account-sheet-150`、`accounts-150`、`game-config-150`、`dashboard-150`、`friends-150`、`settings-150`、`mall-150`、`bag-150`、`pets-150`
 - 已知限制：账号「最近在线」列在 150% 下按列宽截断（悬停提示兜底）；窗口边框标题在 150% 下显示为「QQ Fa…」。应用当前没有用户可调的缩放入口，以上为设计指南要求的最小/缩放压力测试项。
 
 ### 明确不在预览范围（需外部环境）
@@ -136,8 +154,8 @@
 | 目标要求 | 本机证据 | 状态 |
 |---|---|---|
 | 基于 gpui-kit 创建桌面端 crate | `crates/qq-farm-gpui`（gpui-kit 0.7.0；独立 crate + 预览/测试基建；check/test/clippy/fmt 全绿） | ✅ 本机满足 |
-| 页面功能与 desktop-ui 一致（非活动模块） | 本页对照表与状态映射附录 + [`SYNC.md`](./SYNC.md) 同日各条目 + 429 项测试（页面/控件/门控/文案/错误态/反馈/确认）+ 214 张预览矩阵 | ✅ 本机满足 |
-| 活动页 | 用户指示暂停（活动已过期）；既有移植基线保留在矩阵中 | ⏸ 按用户指示暂缓 |
+| 页面功能与 desktop-ui 一致 | 本页对照表与状态映射附录 + [`SYNC.md`](./SYNC.md) 同日各条目 + **337 项测试**（页面/控件/门控/文案/错误态/反馈/确认；2026-10-16 活动清理与 bot 10-15/10-16 增量同步后，含 2026-10-17 活动中心入口、顶栏精简、设置保存/更新反馈收敛热修）+ **221 张预览矩阵**（活动 27 张已删除、节令日历/奶茶活动/快乐不独享 33 张、活动中心 3 张新增，搜索空态与更新横幅 2 张随功能下线移除） | ✅ 本机满足 |
+| 活动页 | 旧活动 2026-10-16 随「活动全部过期」决策全量删除；奶茶活动/快乐不独享/节令日历按 bot `1f49191` 重新移植（GPUI/Tauri/后端/资源/测试） | ✅ 本机满足（实机待验） |
 | Apple 风格设计 | 应用主题层 + 214 张浅/深/英文/最小窗/缩放预览，按 GPUI Kit 设计指南核对（层级、语义色、圆角/间距 token、桌面交互、状态可见性、无障碍名） | ✅ 本机满足（以预览基线与设计指南核对为准） |
 | 交付物 | `dist/` x86_64 与 aarch64 `.app`/`.zip` 由当前源码构建，`.app` 与 `.zip` 内可执行文件 SHA-256 一致；release 冒烟 15 秒与 75 秒空闲观测（RSS 60 秒仅 +132KB、CPU 0%）均无输出无 panic；纯 debug 构建冒烟 20 秒亦无任何断言/布局告警输出 | ✅ 本机满足（aarch64 属交叉构建） |
 | 真实账号逐页操作 | 需要真实 QQ 账号环境 | ⏳ 待外部环境 |

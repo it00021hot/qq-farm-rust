@@ -91,14 +91,3 @@ pub(in crate::desktop) fn land_id_label(land: &Value) -> String {
         format!("#{}-{}", ids[0], ids[ids.len() - 1])
     }
 }
-
-pub(in crate::desktop) fn matches_search(land: &Value, keyword: &str) -> bool {
-    keyword.is_empty()
-        || ["id", "plantName", "phaseName", "status", "currentSeason"]
-            .iter()
-            .filter_map(|key| land.get(*key))
-            .filter_map(Value::as_str)
-            .any(|value| value.to_lowercase().contains(keyword))
-        || land_id_label(land).to_lowercase().contains(keyword)
-        || serde_json::to_string(land).unwrap_or_default().to_lowercase().contains(keyword)
-}

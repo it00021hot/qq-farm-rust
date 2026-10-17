@@ -383,6 +383,16 @@ pub async fn fertilizer_check_and_buy(ctx: &AppContext, account_id: &str) -> App
     }))
 }
 
+/// 一键施肥：为所有生长中的作物施用一次所选化肥（normal / organic）。
+pub async fn fertilize_all(
+    ctx: &AppContext,
+    account_id: &str,
+    fertilizer_type: &str,
+) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    loop_.farm().fertilize_all_own_lands(fertilizer_type).await.map_err(AppError::from_core)
+}
+
 /// 每日礼包概览（从 farm 路由提取的聚合逻辑）。
 pub async fn daily_gift_overview(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
-import { NButton, NCard, NEmpty, NSpace, NSpin, NTag, useMessage } from 'naive-ui';
-import { fetchFarmOperate, fetchGetFarmLands } from '@/service/api';
+import { NButton, NCard, NEmpty, NModal, NSelect, NSpace, NSpin, NTag, useMessage } from 'naive-ui';
+import { fetchFarmFertilizeAll, fetchFarmOperate, fetchGetFarmLands } from '@/service/api';
 import LandCountdown from '@/views/farm/shared/LandCountdown.vue';
 import LandDetailModal from './LandDetailModal.vue';
 import { useFarmAccountStore } from '@/store/modules/farm-account';
@@ -38,6 +38,77 @@ const career = ref<Api.Farm.Career | null>(null);
 /** 土地详情弹窗（bot e5f3552：LandCard「土地详情」入口） */
 const detailLandId = ref<number | null>(null);
 const detailLand = computed(() => lands.value.find(land => land.id === detailLandId.value) || null);
+
+/** 一键施肥（bot e15e72e）：确认弹窗 + 化肥类型 */
+const fertilizeAllOpen = ref(false);
+const fertilizeAllType = ref<'normal' | 'organic'>('normal');
+const fertilizeAllPending = ref(false);
+const fertilizeAllOptions = computed(() => [
+  { label: $t('page.farm.personal.fertilizeAllNormal'), value: 'normal' },
+  { label: $t('page.farm.personal.fertilizeAllOrganic'), value: 'organic' }
+]);
+
+/** 可施肥候选（对齐 bot `isFertilizeCandidate`：已解锁、非副地块、生长中且未成熟） */
+function isFertilizeCandidate(land: Api.Farm.LandRow) {
+  return (
+    !!land.unlocked &&
+    !land.occupiedByMaster &&
+    String(land.status || '') === 'growing' &&
+    Number(land.matureInSec || 0) > 0
+  );
+}
+
+const fertilizeCandidateCount = computed(() => lands.value.filter(isFertilizeCandidate).length);
+
+/** 用回包 updatedLands 原地刷新（保留 LandCountdown 的绝对成熟时间戳） */
+function applyFertilizeLands(updates: Api.Farm.LandRow[] | undefined) {
+  if (!updates?.length) return;
+  const now = Math.floor(Date.now() / 1000);
+  const byId = new Map(updates.map(land => [land.id, land]));
+  lands.value = lands.value.map(land => {
+    const next = byId.get(land.id);
+    if (!next) return land;
+    return { ...next, matureAt: now + Number(next.matureInSec || 0) };
+  });
+}
+
+async function handleFertilizeAll() {
+  const accountId = farmAccountStore.currentAccountId;
+  if (!accountId || fertilizeAllPending.value) return;
+  if (!fertilizeCandidateCount.value) {
+    fertilizeAllOpen.value = false;
+    message.info($t('page.farm.personal.fertilizeAllEmpty'));
+    return;
+  }
+  fertilizeAllPending.value = true;
+  try {
+    const { data, error } = await fetchFarmFertilizeAll(accountId, fertilizeAllType.value);
+    fertilizeAllOpen.value = false;
+    if (error || !data) {
+      message.error(error?.message || $t('page.farm.personal.fertilizeAllFailed'));
+      return;
+    }
+    if (!data.successCount) {
+      message.info($t('page.farm.personal.fertilizeAllEmpty'));
+      return;
+    }
+    applyFertilizeLands(data.updatedLands);
+    let text = $t('page.farm.personal.fertilizeAllSuccess', { count: data.successCount });
+    if (data.skippedCount) {
+      text += $t('page.farm.personal.fertilizeAllSkipped', { count: data.skippedCount });
+    }
+    const remaining = Number(data.fertilizerRemainingSec || 0);
+    if (remaining > 0) {
+      text += $t('page.farm.personal.fertilizeAllRemaining', {
+        hours: Math.floor(remaining / 3600),
+        minutes: Math.floor((remaining % 3600) / 60)
+      });
+    }
+    message.success(text);
+  } finally {
+    fertilizeAllPending.value = false;
+  }
+}
 
 const operateOptions: { op: OperateOp; type: NaiveUI.ThemeColor }[] = [
   { op: 'harvest', type: 'success' },
@@ -187,6 +258,15 @@ defineExpose({ refresh: loadLands });
   <NCard :title="$t('page.farm.personal.landsTitle')" :bordered="false" size="small" class="card-wrapper">
     <template #header-extra>
       <NSpace size="small">
+        <NButton
+          size="small"
+          ghost
+          :loading="fertilizeAllPending"
+          :disabled="!connected || operating || !fertilizeCandidateCount"
+          @click="fertilizeAllOpen = true"
+        >
+          {{ $t('page.farm.personal.fertilizeAll') }}
+        </NButton>
         <NButton
           v-for="item in visibleOperateOptions"
           :key="item.op"
@@ -339,5 +419,38 @@ defineExpose({ refresh: loadLands });
     </NSpin>
 
     <LandDetailModal :land="detailLand" :connected="connected" @close="detailLandId = null" />
+
+    <NModal :show="fertilizeAllOpen" @update:show="!$event && !fertilizeAllPending && (fertilizeAllOpen = false)">
+      <NCard
+        class="w-[calc(100vw-32px)] max-w-sm"
+        :title="$t('page.farm.personal.fertilizeAllTitle')"
+        closable
+        @close="!fertilizeAllPending && (fertilizeAllOpen = false)"
+      >
+        <div class="space-y-4">
+          <p class="text-sm text-gray-500">{{ $t('page.farm.personal.fertilizeAllMessage') }}</p>
+          <div class="flex items-center justify-between gap-3">
+            <span>{{ $t('page.farm.personal.fertilizeAllType') }}</span>
+            <NSelect
+              v-model:value="fertilizeAllType"
+              class="w-40"
+              :options="fertilizeAllOptions"
+              :disabled="fertilizeAllPending"
+            />
+          </div>
+          <p class="text-sm text-gray-500">
+            {{ $t('page.farm.personal.fertilizeAllCount', { count: fertilizeCandidateCount }) }}
+          </p>
+          <div class="flex justify-end gap-2">
+            <NButton secondary :disabled="fertilizeAllPending" @click="fertilizeAllOpen = false">
+              {{ $t('common.cancel') }}
+            </NButton>
+            <NButton type="primary" :loading="fertilizeAllPending" @click="handleFertilizeAll">
+              {{ $t('page.farm.personal.fertilizeAllConfirm') }}
+            </NButton>
+          </div>
+        </div>
+      </NCard>
+    </NModal>
   </NCard>
 </template>

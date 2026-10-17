@@ -1,14 +1,8 @@
 use super::super::*;
 
-/// The shared toolbar search uses the page-specific placeholder Vue shows for
-/// its own search fields; pages without one keep the generic wording.
-pub(in crate::desktop) fn search_placeholder_for(page: Page, language: &str) -> &'static str {
-    match page {
-        Page::Mall => crate::i18n::text(language, "搜索商品名称 / ID", "Search item name / ID"),
-        Page::Friends => crate::i18n::text(language, "搜索昵称 / GID", "Search nickname / GID"),
-        Page::GameConfig => crate::i18n::text(language, "请输入关键词搜索", "Please enter keyword"),
-        _ => crate::i18n::text(language, "搜索当前页面", "Search this page"),
-    }
+/// 顶栏搜索已移除；仅游戏配置页的内嵌搜索框复用共享输入状态与占位文案。
+pub(in crate::desktop) fn search_placeholder_for(_page: Page, language: &str) -> &'static str {
+    crate::i18n::text(language, "请输入关键词搜索", "Please enter keyword")
 }
 
 impl FarmDesktop {
@@ -175,33 +169,18 @@ impl FarmDesktop {
                 input.update(cx, |state, cx| state.set_placeholder(placeholder, window, cx));
             }
         }
-        self.activities.weather.search.update(cx, |state, cx| {
-            state.set_placeholder(
-                crate::i18n::text(language, "搜索好友名称或 GID", "Search friends by name or GID"),
-                window,
-                cx,
-            )
-        });
-        self.activities.qixi_friend_search.update(cx, |state, cx| {
-            state.set_placeholder(
-                crate::i18n::text(language, "搜索好友", "Search friends"),
-                window,
-                cx,
-            )
-        });
-        self.activities.qixi_gift_count.update(cx, |state, cx| {
-            state.set_placeholder(
-                crate::i18n::text(language, "赠送数量", "Gift quantity"),
-                window,
-                cx,
-            )
-        });
-        self.activities.pet_diary_exchange_count.update(cx, |state, cx| {
-            state.set_placeholder(crate::i18n::text(language, "数量", "Quantity"), window, cx)
-        });
-        self.activities.pet_diary_goods_id.update(cx, |state, cx| {
-            state.set_placeholder(crate::i18n::text(language, "商品编号", "Item ID"), window, cx)
-        });
+        let shop_placeholder = crate::i18n::text(language, "店铺名", "Shop name").to_string();
+        let quantity_placeholder = crate::i18n::text(language, "数量", "Quantity").to_string();
+        for input in [&self.milk_tea.create_name, &self.milk_tea.rename_name] {
+            input.update(cx, |state, cx| {
+                state.set_placeholder(shop_placeholder.clone(), window, cx)
+            });
+        }
+        for input in [&self.milk_tea.boost_count, &self.milk_tea.exchange_count] {
+            input.update(cx, |state, cx| {
+                state.set_placeholder(quantity_placeholder.clone(), window, cx)
+            });
+        }
         self.settings.offline_endpoint.update(cx, |state, cx| {
             state.set_placeholder(
                 crate::i18n::text(
@@ -243,7 +222,6 @@ impl FarmDesktop {
             )
         });
         self.sync_account_filter_selectors(window, cx);
-        self.sync_pet_diary_friend_selector(window, cx);
         self.update_setting_selector_language(window, cx);
         self.sync_game_config_selectors(window, cx);
         self.persist_ui_preferences();

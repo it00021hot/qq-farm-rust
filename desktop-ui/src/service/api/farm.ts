@@ -502,6 +502,14 @@ export function fetchFertilizerCheckAndBuy(accountId: number | string) {
   return invokeFlat('farm_fertilizer_check_and_buy', { accountId: aid(accountId) });
 }
 
+/** 一键施肥：为所有生长中的作物施用一次所选化肥（normal / organic） */
+export function fetchFarmFertilizeAll(accountId: number | string, fertilizerType: 'normal' | 'organic') {
+  return invokeFlat<Api.Farm.FertilizeAllResult>('farm_fertilize_all', {
+    accountId: aid(accountId),
+    fertilizerType
+  });
+}
+
 interface DeviceInfoPayload {
   os: string;
   clientVersion: string;
@@ -806,129 +814,6 @@ export function fetchGetFarmFriendInteractRecords(accountId: number) {
   return invokeFlat('friend_interact_records', { accountId: aid(accountId) });
 }
 
-export function fetchGetFarmActivitySnapshot(accountId: number) {
-  return invokeFlat<Api.Farm.ActivitySnapshot>('activity_snapshot', {
-    accountId: aid(accountId)
-  });
-}
-
-export function fetchClaimFarmActivityPass(data: Api.Farm.ActivityClaimParams) {
-  return invokeFlat('activity_claim_battle_pass', { accountId: aid(data.accountId) });
-}
-
-export function fetchLightFarmActivityConstellation(data: Api.Farm.ActivityClaimParams) {
-  return invokeFlat('activity_light_constellation', { accountId: aid(data.accountId) });
-}
-
-export function fetchExchangeFarmActivityShop(data: Api.Farm.ActivityClaimParams) {
-  const body = data as any;
-  return invokeFlat('activity_exchange_star_sand', {
-    accountId: aid(data.accountId),
-    goodsId: body.itemId ?? body.goodsId ?? body.id,
-    count: body.count ?? 1
-  });
-}
-
-export function fetchClaimFarmActivitySolarTerm(data: Api.Farm.ActivityClaimParams) {
-  const body = data as any;
-  return invokeFlat('activity_claim_solar_term', {
-    accountId: aid(data.accountId),
-    termId: String(body.termId ?? body.id ?? '')
-  });
-}
-
-export function fetchClaimFarmActivityGreenPlum(data: Api.Farm.ActivityClaimParams) {
-  return invokeFlat('activity_claim_qingmei_seed', { accountId: aid(data.accountId) });
-}
-
-export function fetchStartFarmActivityGreenPlumBrew(data: Api.Farm.ActivityClaimParams) {
-  const body = data as any;
-  return invokeFlat('activity_qingmei_brew_start', {
-    accountId: aid(data.accountId),
-    input: { ingredients: body.ingredients || [] }
-  });
-}
-
-export function fetchContinueFarmActivityGreenPlumBrew(data: Api.Farm.ActivityClaimParams) {
-  return invokeFlat('activity_qingmei_brew_continue', { accountId: aid(data.accountId) });
-}
-
-export function fetchSettleFarmActivityGreenPlumBrew(data: Api.Farm.ActivityClaimParams) {
-  return invokeFlat('activity_qingmei_brew_settle', { accountId: aid(data.accountId) });
-}
-
-export function fetchClaimFarmActivityQixiBridge(data: Api.Farm.ActivityClaimParams) {
-  return invokeFlat('activity_claim_qixi_bridge', { accountId: aid(data.accountId) });
-}
-
-export function fetchGiftFarmActivityQixiSachet(data: Api.Farm.ActivityClaimParams) {
-  const body = data as any;
-  const count = Math.trunc(Number(body.sachetCount ?? body.count ?? 0));
-  return invokeFlat('activity_gift_qixi_sachet', {
-    accountId: aid(data.accountId),
-    friendGid: body.friendGid,
-    sachetCount: count,
-    count
-  });
-}
-
-export function fetchGetFarmActivityCharity(data: Api.Farm.ActivityClaimParams) {
-  return invokeFlat('activity_get_charity', { accountId: aid(data.accountId) });
-}
-
-export function fetchClaimFarmActivityCharitySeeds(data: Api.Farm.ActivityClaimParams) {
-  return invokeFlat('activity_claim_charity_seeds', { accountId: aid(data.accountId) });
-}
-
-export function fetchDonateFarmActivityCharityLove(data: Api.Farm.ActivityClaimParams) {
-  return invokeFlat('activity_donate_charity_love', { accountId: aid(data.accountId) });
-}
-
-export function fetchClaimFarmActivityCharityDailyGift(data: Api.Farm.ActivityClaimParams) {
-  return invokeFlat('activity_claim_charity_daily_gift', { accountId: aid(data.accountId) });
-}
-
-export function fetchGetFarmActivityPetDiary(accountId: number) {
-  return invokeFlat('activity_get_pet_diary', { accountId: aid(accountId) });
-}
-
-export function fetchOperateFarmActivityPetDiary(accountId: number, action: string, params: Record<string, unknown>) {
-  return invokeFlat('activity_operate_pet_diary', {
-    accountId: aid(accountId),
-    action,
-    params
-  });
-}
-
-export function fetchGetFarmActivityPetDiaryRecords(accountId: number, kind: 'interact' | 'plunder') {
-  return invokeFlat('activity_get_pet_diary_records', { accountId: aid(accountId), kind });
-}
-
-export function fetchGetFarmActivityPetDiaryFriend(accountId: number, gid: string) {
-  return invokeFlat('activity_get_pet_diary_friend', { accountId: aid(accountId), gid });
-}
-
-export function fetchGetFarmActivityAutumn(accountId: number, key: 'wish' | 'happy') {
-  return invokeFlat('activity_get_autumn', { accountId: aid(accountId), key });
-}
-
-export function fetchOperateFarmActivityAutumn(
-  accountId: number,
-  key: 'wish' | 'happy',
-  action: string,
-  params: Record<string, unknown>
-) {
-  return invokeFlat('activity_operate_autumn', { accountId: aid(accountId), key, action, params });
-}
-
-export function fetchClaimFarmActivityCharityProgressReward(data: Api.Farm.ActivityClaimParams) {
-  const body = data as any;
-  return invokeFlat('activity_claim_charity_progress_reward', {
-    accountId: aid(data.accountId),
-    target: String(body.target ?? '')
-  });
-}
-
 export async function fetchGetFarmAnalyticsDetail(params?: any) {
   const res = await invokeFlat<any>('farm_analytics', {
     sortBy: params?.sortBy ?? params?.sort ?? null
@@ -1141,6 +1026,58 @@ export function fetchGetIllustratedSnapshot(accountId: number) {
   return invokeFlat('illustrated_snapshot', { accountId: aid(accountId) });
 }
 
+/** 手动领取图鉴奖励（type：1 作物 / 2 变异；bot 0533264） */
+export function fetchIllustratedClaim(accountId: number | string, kind: 1 | 2) {
+  return invokeFlat('illustrated_claim', { accountId: aid(accountId), kind });
+}
+
+/** 节令日历快照（bot 0533264 /api/solar-calendar） */
+export function fetchSolarCalendarSnapshot(accountId: number | string) {
+  return invokeFlat('solar_calendar_snapshot', { accountId: aid(accountId) });
+}
+
+/** 节令操作：claim / answer / season */
+export function fetchSolarCalendarOperate(
+  accountId: number | string,
+  action: 'claim' | 'answer' | 'season',
+  input: Record<string, unknown>
+) {
+  return invokeFlat('solar_calendar_operate', { accountId: aid(accountId), action, input });
+}
+
+/** 奶茶活动快照（page：shop/settings/upgrade/workshop/hireList/exchange/fund/work/rank/logs；bot 4eb9b2a） */
+export function fetchMilkTeaSnapshot(
+  accountId: number | string,
+  page: string,
+  input: Record<string, unknown> = {}
+) {
+  return invokeFlat('milk_tea_snapshot', { accountId: aid(accountId), page, input });
+}
+
+/** 奶茶活动写操作（create/rename/boost/claim/upgrade/craft/hire/exchange/unlock/fundClaim/wages/interact/hireSetting） */
+export function fetchMilkTeaOperate(
+  accountId: number | string,
+  action: string,
+  input: Record<string, unknown> = {}
+) {
+  return invokeFlat('milk_tea_operate', { accountId: aid(accountId), action, input });
+}
+
+/** 快乐不独享快照（实例 2026110104） */
+export function fetchShareRewardSnapshot(accountId: number | string, activityId: string) {
+  return invokeFlat('share_reward_snapshot', { accountId: aid(accountId), activityId });
+}
+
+/** 快乐不独享写操作（share/milestones/logs/daily） */
+export function fetchShareRewardOperate(
+  accountId: number | string,
+  activityId: string,
+  action: string,
+  input: Record<string, unknown> = {}
+) {
+  return invokeFlat('share_reward_operate', { accountId: aid(accountId), activityId, action, input });
+}
+
 /** 直接购买商店种子（图鉴购买入口；对齐 bot POST /api/seeds/purchase） */
 export function fetchPurchaseSeed(accountId: number, goodsId: number, count: number) {
   return invokeFlat('seeds_purchase', {
@@ -1148,64 +1085,6 @@ export function fetchPurchaseSeed(accountId: number, goodsId: number, count: num
     goodsId: Number(goodsId),
     count: Number(count)
   });
-}
-
-// ============ 天气活动「雨落成诗」 ============
-
-export function fetchGetWeatherSnapshot(accountId: number) {
-  return invokeFlat('weather_snapshot', { accountId: aid(accountId) });
-}
-
-export function fetchGetWeatherFriends(accountId: number) {
-  return invokeFlat('weather_friends', { accountId: aid(accountId) });
-}
-
-export function fetchScanWeatherFriends(accountId: number, friendGids: string[]) {
-  return invokeFlat(
-    'weather_friends_scan',
-    { accountId: aid(accountId), friendGids: friendGids.map(g => String(g)) },
-    { silent: true }
-  );
-}
-
-export function fetchExchangeWeatherCollector(accountId: number) {
-  return invokeFlat('weather_exchange_collector', { accountId: aid(accountId) }, { silent: true });
-}
-
-export function fetchCollectWeather(accountId: number, friendGid: string) {
-  return invokeFlat('weather_collect', { accountId: aid(accountId), friendGid: String(friendGid) }, { silent: true });
-}
-
-export function fetchSummonWeather(accountId: number) {
-  return invokeFlat('weather_summon', { accountId: aid(accountId) }, { silent: true });
-}
-
-export function fetchWeatherMischiefFrog(accountId: number, friendGid: string) {
-  return invokeFlat(
-    'weather_mischief_frog',
-    { accountId: aid(accountId), friendGid: String(friendGid) },
-    { silent: true }
-  );
-}
-
-export function fetchWeatherMischiefCloud(accountId: number, friendGid: string, landId?: string) {
-  return invokeFlat(
-    'weather_mischief_cloud',
-    {
-      accountId: aid(accountId),
-      friendGid: String(friendGid),
-      landId: landId != null && String(landId) !== '' ? String(landId) : null
-    },
-    { silent: true }
-  );
-}
-
-export function fetchAdvanceWeatherResearch(accountId: number, nodeId: string) {
-  return invokeFlat(
-    'weather_advance_research',
-    { accountId: aid(accountId), nodeId: String(nodeId) },
-    { silent: true }
-  );
 }
 
 /** 游戏内删除好友（后端会同时加入黑名单）。 */

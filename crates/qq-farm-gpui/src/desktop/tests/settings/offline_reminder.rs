@@ -239,9 +239,8 @@ fn settings_automation_and_reminder_controls_follow_english_locale(cx: &mut Test
         );
 
         desktop.update(cx, |this, cx| {
-            this.settings.qq_bot_qr_path = Some(PathBuf::from(
-                "desktop-ui/public/activity-assets/autumn/happy.png",
-            ));
+            this.settings.qq_bot_qr_path =
+                Some(PathBuf::from("desktop-ui/public/land-assets/1.png"));
             cx.notify();
         });
         window.render_frame(cx);

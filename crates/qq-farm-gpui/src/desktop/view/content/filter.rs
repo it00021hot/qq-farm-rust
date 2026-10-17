@@ -8,11 +8,7 @@ fn friend_action_type_matches(value: Option<&serde_json::Value>, expected: i64) 
 
 impl FarmDesktop {
     pub(super) fn visible_row_indices(&self, cx: &mut Context<Self>) -> (Vec<usize>, bool) {
-        let query = if self.page == Page::GameConfig {
-            self.game_config.applied_keyword.trim().to_lowercase()
-        } else {
-            self.search.read(cx).value().trim().to_lowercase()
-        };
+        let game_config_query = self.game_config.applied_keyword.trim().to_lowercase();
         let account_level = self
             .page_raw
             .get("accountLevel")
@@ -41,15 +37,7 @@ impl FarmDesktop {
             .iter()
             .enumerate()
             .filter_map(|(index, row)| {
-                let matches_page = (self.page_section == "all"
-                    || row.section == self.page_section
-                    || (self.page == Page::Activities
-                        && self.page_section == "qixi"
-                        && row.section == "activityFriends"))
-                    && (self.page != Page::Activities
-                        || self.page_section != "autumn"
-                        || row.section != "autumn"
-                        || row.id.contains(&format!("/{}/", self.activities.autumn_mode)))
+                let matches_page = (self.page_section == "all" || row.section == self.page_section)
                     && (self.page != Page::Friends
                         || self.page_section != "records"
                         || self.friends.record_filter.is_none_or(|filter| {
@@ -82,22 +70,9 @@ impl FarmDesktop {
                         ))
                     && !(self.page == Page::Settings
                         && matches!(self.page_section.as_str(), "automation" | "offlineReminder"))
-                    && (query.is_empty()
-                        || if self.page == Page::Friends
-                            && matches!(row.section.as_str(), "friends" | "blacklist")
-                        {
-                            friend_matches_search(&row.record, &query)
-                        } else if self.page == Page::GameConfig {
-                            matches_vue_keyword(row, &query)
-                        } else {
-                            row.title.to_lowercase().contains(&query)
-                                || row.detail.to_lowercase().contains(&query)
-                                || row.state.to_lowercase().contains(&query)
-                                || row.record.to_string().to_lowercase().contains(&query)
-                        })
-                    && !(self.page == Page::Activities
-                        && self.page_section == "weather"
-                        && row.id.starts_with("weather/friends/"));
+                    && (self.page != Page::GameConfig
+                        || game_config_query.is_empty()
+                        || matches_vue_keyword(row, &game_config_query));
                 if !matches_page {
                     return None;
                 }

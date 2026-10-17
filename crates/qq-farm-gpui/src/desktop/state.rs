@@ -1,5 +1,13 @@
 use super::*;
 
+#[derive(Debug, Clone)]
+pub(crate) struct ToastState {
+    pub(crate) message: String,
+    pub(crate) success: bool,
+    pub(crate) remaining_ms: u64,
+    pub(crate) hovered: bool,
+}
+
 pub struct FarmDesktop {
     pub(crate) app: Arc<AppContext>,
     pub(crate) tokio_runtime: Arc<tokio::runtime::Runtime>,
@@ -25,15 +33,18 @@ pub struct FarmDesktop {
     pub(crate) search: Entity<InputState>,
     pub(crate) page_raw: serde_json::Value,
     pub(crate) tray_events: mpsc::UnboundedReceiver<crate::tray::Action>,
-    pub(crate) update_message: Option<String>,
-    pub(crate) release_url: Option<String>,
+    pub(crate) update_checking: bool,
+    pub(crate) toast: Option<ToastState>,
+    pub(crate) toast_generation: u64,
     pub(crate) commerce: CommerceState,
     pub(crate) accounts: AccountsState,
     pub(crate) dashboard: DashboardState,
     pub(crate) farm: FarmState,
     pub(crate) friends: FriendsState,
-    pub(crate) activities: ActivitiesState,
     pub(crate) analytics: AnalyticsState,
+    pub(crate) solar_calendar: SolarCalendarState,
+    pub(crate) milk_tea: MilkTeaState,
+    pub(crate) share_reward: ShareRewardState,
     pub(crate) game_config: GameConfigState,
     pub(crate) settings: SettingsState,
 }

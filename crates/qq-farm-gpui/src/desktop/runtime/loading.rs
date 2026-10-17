@@ -5,11 +5,18 @@ impl FarmDesktop {
         if self.quitting {
             return;
         }
-        if self.page == Page::Activities && self.page_section == "weather" {
-            self.request_revision = self.request_revision.wrapping_add(1);
-            self.activities.weather.invalidate_requests();
+        if self.page == Page::MilkTea {
+            // 奶茶活动页自带分段参数（雇佣时长 / 排行页 / 记录日期），走专用加载
+            if !self.test_mode {
+                self.fetch_milk_tea_page(cx);
+            }
+            return;
+        }
+        if self.page == Page::Activities {
+            // 活动中心是静态目录，不依赖账号快照
+            self.loading = false;
             self.error = None;
-            self.load_activity_section("weather", cx);
+            cx.notify();
             return;
         }
         if self.page == Page::Dashboard {
@@ -152,11 +159,12 @@ impl FarmDesktop {
                         });
                     }
                 }
-                if self.page == Page::Activities {
-                    self.reconcile_activity_selection();
-                }
                 if self.page == Page::Dashboard {
                     self.reconcile_dashboard_snapshot();
+                }
+                if self.page == Page::SolarCalendar && !self.page_raw.is_null() {
+                    let calendar = self.page_raw.clone();
+                    self.apply_solar_calendar(calendar);
                 }
                 if self.page == Page::Settings {
                     self.apply_settings_snapshot(self.page_raw.clone(), cx);
@@ -171,20 +179,6 @@ impl FarmDesktop {
                             self.sync_plant_blacklist_selector(window, cx);
                         });
                     }
-                }
-                let lazy_activity_section = if self.page == Page::Activities {
-                    match self.page_section.as_str() {
-                        "petDiary" => Some("petDiary"),
-                        "autumn" => Some("autumn"),
-                        "weather" => Some("weather"),
-                        _ => None,
-                    }
-                } else {
-                    None
-                };
-                if let Some(section) = lazy_activity_section {
-                    self.load_activity_section(section, cx);
-                    return;
                 }
                 let directory = accounts::read_accounts(&self.app);
                 self.accounts.records = directory.records;

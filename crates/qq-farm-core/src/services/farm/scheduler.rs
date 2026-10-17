@@ -16,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 use crate::error::Result;
 use crate::network::gateway::Gateway;
 use crate::runtime::scheduler::Scheduler;
-use crate::services::farm::api::Api;
+use crate::services::farm::api::{Api, NORMAL_FERTILIZER_ID, ORGANIC_FERTILIZER_ID};
 use crate::services::farm::land_analysis::{
     analyze_lands, build_land_map, classify_harvested_lands_by_map, collect_dead,
     collect_harvestable, summarize_lands, LandAnalysis, LandSummary,
@@ -42,6 +42,8 @@ pub struct FarmService {
     is_checking: AtomicBool,
     /// 对齐 TS `externalSchedulerMode`：由 worker 统一 tick 驱动，不跑内部 interval
     external_scheduler: AtomicBool,
+    /// 一键施肥单飞（对齐 bot `fertilize-all.ts` 的 `pending`）
+    fertilize_all_pending: AtomicBool,
 }
 
 /// 农场服务事件
@@ -81,6 +83,7 @@ impl FarmService {
             event_tx,
             is_checking: AtomicBool::new(false),
             external_scheduler: AtomicBool::new(false),
+            fertilize_all_pending: AtomicBool::new(false),
         }
     }
 
@@ -355,6 +358,111 @@ impl FarmService {
             .event_tx
             .send(FarmEvent::Fertilized { normal: result.normal, organic: result.organic });
         Ok(FertilizeOpResult { normal: result.normal, organic: result.organic })
+    }
+
+    /// 一键施肥：为所有生长中的作物施用一次所选化肥（对齐 bot `fertilizeAllOwnLands`）。
+    ///
+    /// 手动触发（面板按钮）；执行时重新读地，单次批量请求，超时与部分成功均不重试。
+    /// 返回 `requestedCount / successCount / skippedCount / fertilizerConsumedSec /
+    /// fertilizerRemainingSec / updatedLands`，`updatedLands` 为合并回包后的完整土地详情。
+    pub async fn fertilize_all_own_lands(
+        &self,
+        fertilizer_type: &str,
+    ) -> Result<serde_json::Value> {
+        if fertilizer_type != "normal" && fertilizer_type != "organic" {
+            return Err(crate::error::Error::Business("化肥类型必须是 normal 或 organic".into()));
+        }
+        if self.fertilize_all_pending.swap(true, Ordering::AcqRel) {
+            return Err(crate::error::Error::Business("一键施肥正在进行，请稍后再试".into()));
+        }
+        let result = self.fertilize_all_inner(fertilizer_type).await;
+        self.fertilize_all_pending.store(false, Ordering::Release);
+        result
+    }
+
+    async fn fertilize_all_inner(&self, fertilizer_type: &str) -> Result<serde_json::Value> {
+        // 执行时重新读取，不能使用面板里可能已成熟或被重新种植的快照
+        let snapshot =
+            self.api.get_all_lands(0).await.map_err(|_| {
+                crate::error::Error::Business("无法读取最新土地，请刷新后重试".into())
+            })?;
+        let targets = select_fertilize_all_targets(&snapshot.lands);
+        let mut result = serde_json::json!({
+            "fertilizerType": fertilizer_type,
+            "requestedCount": targets.len(),
+            "successCount": 0,
+            "skippedCount": 0,
+            "fertilizerConsumedSec": serde_json::Value::Null,
+            "fertilizerRemainingSec": serde_json::Value::Null,
+            "updatedLands": Vec::<serde_json::Value>::new(),
+        });
+        if targets.is_empty() {
+            return Ok(result);
+        }
+        let fertilizer_id =
+            if fertilizer_type == "organic" { ORGANIC_FERTILIZER_ID } else { NORMAL_FERTILIZER_ID };
+        // 仅发送一次；超时和部分成功均不自动重试，避免重复推进阶段或消耗化肥
+        let reply = self.api.fertilize_batch(&targets, fertilizer_id).await?;
+        let target_set: HashSet<i64> = targets.iter().copied().collect();
+        let succeeded: HashSet<i64> =
+            reply.land.iter().map(|land| land.id).filter(|id| target_set.contains(id)).collect();
+        let drops = &reply.land_op_drops;
+        let consumed: i64 = drops
+            .iter()
+            .flat_map(|drop| drop.costs.iter())
+            .filter(|item| item.id == fertilizer_id)
+            .map(|item| item.count)
+            .sum();
+        // 合并完整地块关系再生成前端详情，避免多格作物的副地块失去归属
+        let mut merged = snapshot.lands.clone();
+        let mut index: std::collections::HashMap<i64, usize> =
+            merged.iter().enumerate().map(|(idx, land)| (land.id, idx)).collect();
+        for land in &reply.land {
+            match index.get(&land.id) {
+                Some(&idx) => merged[idx] = land.clone(),
+                None => {
+                    index.insert(land.id, merged.len());
+                    merged.push(land.clone());
+                }
+            }
+        }
+        let (updated_lands, _) = crate::services::farm::land_analysis::own_lands_detail(&merged);
+        result["successCount"] = serde_json::json!(succeeded.len());
+        result["skippedCount"] = serde_json::json!(targets.len() - succeeded.len());
+        result["fertilizerConsumedSec"] =
+            if drops.is_empty() { serde_json::Value::Null } else { serde_json::json!(consumed) };
+        result["fertilizerRemainingSec"] = reply
+            .fertilizer
+            .as_ref()
+            .map_or(serde_json::Value::Null, |item| serde_json::json!(item.count));
+        result["updatedLands"] = serde_json::json!(updated_lands);
+        let account_id = self.account_id.lock().clone();
+        if !succeeded.is_empty() {
+            crate::services::stats::record_operation_for(
+                &account_id,
+                "fertilize",
+                succeeded.len() as i64,
+            );
+        }
+        if !account_id.is_empty() {
+            let type_name =
+                if fertilizer_type == "organic" { "有机化肥" } else { "普通化肥" };
+            crate::services::panel_log::log(
+                &account_id,
+                "施肥",
+                format!("一键施肥：{type_name}已施 {}/{} 株作物", succeeded.len(), targets.len()),
+                crate::constants::PanelEvent::Fertilize,
+                Some(serde_json::json!({
+                    "module": "farm",
+                    "event": "一键施肥",
+                    "result": if succeeded.is_empty() { "skip" } else { "ok" },
+                    "type": fertilizer_type,
+                    "count": succeeded.len(),
+                    "consumedSec": result["fertilizerConsumedSec"],
+                })),
+            );
+        }
+        Ok(result)
     }
 
     /// 种植（`op=plant`）—— 自动选种种空地/枯地
@@ -906,6 +1014,30 @@ pub struct FertilizeOpResult {
     pub organic: usize,
 }
 
+/// 一键施肥目标筛选（对齐 bot `fertilizeAllOwnLands` 的过滤）：
+/// 已解锁、非副地块、`status == "growing"`、`matureInSec > 0`、id 有效；
+/// 去重且保持快照顺序。
+fn select_fertilize_all_targets(
+    lands: &[crate::proto::generated::gamepb::plantpb::LandInfo],
+) -> Vec<i64> {
+    let (details, _) = crate::services::farm::land_analysis::own_lands_detail(lands);
+    let mut seen = HashSet::new();
+    details
+        .iter()
+        .filter(|detail| {
+            detail.get("unlocked").and_then(serde_json::Value::as_bool).unwrap_or(false)
+                && !detail
+                    .get("occupiedByMaster")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+                && detail.get("status").and_then(serde_json::Value::as_str) == Some("growing")
+                && detail.get("matureInSec").and_then(serde_json::Value::as_i64).unwrap_or(0) > 0
+        })
+        .filter_map(|detail| detail.get("id").and_then(serde_json::Value::as_i64))
+        .filter(|id| *id > 0 && seen.insert(*id))
+        .collect()
+}
+
 #[cfg(test)]
 pub struct NoopEncryptor;
 
@@ -969,6 +1101,45 @@ mod tests {
         let svc = FarmService::new(gateway);
         svc.set_host_gid(12345);
         assert_eq!(*svc.host_gid.lock(), 12345);
+    }
+
+    #[test]
+    fn fertilize_all_targets_match_bot_filters() {
+        use crate::proto::generated::gamepb::plantpb::{LandInfo, PlantInfo, PlantPhaseInfo};
+
+        fn land(id: i64, unlocked: bool, phases: Vec<PlantPhaseInfo>) -> LandInfo {
+            let plant = if phases.is_empty() {
+                None
+            } else {
+                Some(PlantInfo { id: 102_0002, phases, ..Default::default() })
+            };
+            LandInfo { id, unlocked, plant, ..Default::default() }
+        }
+
+        crate::config::game_config::global().load();
+        let now = crate::utils::time::get_server_time_secs();
+        let growing = || {
+            vec![
+                PlantPhaseInfo { phase: 3, begin_time: now - 600, ..Default::default() },
+                PlantPhaseInfo { phase: 6, begin_time: now + 3600, ..Default::default() },
+            ]
+        };
+        let mature =
+            || vec![PlantPhaseInfo { phase: 6, begin_time: now - 60, ..Default::default() }];
+
+        let mut master = land(10, true, growing());
+        master.slave_land_ids = vec![11];
+        let slave = LandInfo { id: 11, unlocked: true, master_land_id: 10, ..Default::default() };
+        let lands = vec![
+            land(1, false, growing()),
+            land(2, true, growing()),
+            land(3, true, mature()),
+            land(4, true, vec![]),
+            master,
+            slave,
+        ];
+        // 锁定 / 已成熟 / 空地 / 副地块排除；主地块保留；顺序与快照一致
+        assert_eq!(select_fertilize_all_targets(&lands), vec![2, 10]);
     }
 
     // ===== 阶段 2E：op 分派测试（不依赖网络） =====

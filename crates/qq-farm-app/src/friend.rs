@@ -140,6 +140,16 @@ pub async fn illustrated_snapshot(ctx: &AppContext, account_id: &str) -> AppResu
         .map_err(AppError::from_core)
 }
 
+/// 手动领取图鉴奖励（对齐 bot `claimIllustratedRewards`，0533264）。
+pub async fn illustrated_claim(ctx: &AppContext, account_id: &str, kind: i32) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    qq_farm_core::services::illustrated::IllustratedService::new(loop_.gateway().clone())
+        .with_account_id(account_id)
+        .claim_rewards(kind)
+        .await
+        .map_err(AppError::from_core)
+}
+
 /// 直接购买商店种子（图鉴购买入口；对齐 bot `purchaseSeed`，门控与文案逐条照抄）。
 pub async fn seed_purchase(
     ctx: &AppContext,

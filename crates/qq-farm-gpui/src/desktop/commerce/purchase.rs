@@ -22,9 +22,6 @@ impl FarmDesktop {
         let page_section = self.page_section.clone();
         let count = bounded_purchase_count(&self.commerce.purchase_count.read(cx).value());
         let request_count = count;
-        let activity_goods = page == Page::Activities
-            && goods.get("activityGoods").and_then(serde_json::Value::as_bool) == Some(true);
-        let activity_purchase_goods = goods.clone();
         let slot_type = self.commerce.mall_slot_type;
         self.commerce.purchase_generation = self.commerce.purchase_generation.wrapping_add(1);
         let generation = self.commerce.purchase_generation;
@@ -73,23 +70,6 @@ impl FarmDesktop {
                             .await
                             .map_err(|error| error.to_string())
                         }
-                        Page::Activities
-                            if goods.get("activityGoods").and_then(serde_json::Value::as_bool)
-                                == Some(true) =>
-                        {
-                            let id = goods
-                                .get("id")
-                                .cloned()
-                                .ok_or_else(|| "活动商品编号缺失".to_string())?;
-                            qq_farm_app::activity::exchange_star_sand(
-                                &app,
-                                &account_id,
-                                &id,
-                                &serde_json::json!(request_count),
-                            )
-                            .await
-                            .map_err(|error| error.to_string())
-                        }
                         _ => Err("当前页面不支持购买".into()),
                     }
                 })
@@ -115,26 +95,12 @@ impl FarmDesktop {
                     return;
                 }
                 match result {
-                    Ok(Ok(value)) => {
+                    Ok(Ok(_)) => {
                         this.commerce.pending_purchase = None;
-                        if activity_goods {
-                            let (message, success) = crate::desktop::star_sand_purchase_feedback(
-                                &value,
-                                &activity_purchase_goods,
-                                count,
-                                this.preferences.language == "en-US",
-                            );
-                            this.show_activity_action_notice(message, success, cx);
+                        if this.preferences.language == "en-US" {
+                            this.show_commerce_notice("Purchase successful", true, cx);
                         } else {
-                            this.show_commerce_notice(
-                                if this.preferences.language == "en-US" {
-                                    "Purchase successful"
-                                } else {
-                                    "购买成功"
-                                },
-                                true,
-                                cx,
-                            );
+                            this.show_commerce_notice("购买成功", true, cx);
                         }
                         if this.commerce.purchase_dialog_open {
                             this.commerce.purchase_dialog_open = false;

@@ -226,8 +226,7 @@ impl FarmDesktop {
         if self.friends.steal_all_loading {
             return;
         }
-        let search_keyword = self.search.read(cx).value();
-        let gids = stealable_friends_matching(&self.page_raw, &search_keyword)
+        let gids = stealable_friends_matching(&self.page_raw)
             .iter()
             .map(|friend| super::helpers::friend_value_number(friend.get("gid")))
             .filter(|gid| *gid > 0)

@@ -12,7 +12,6 @@ impl FarmDesktop {
         actions = self.append_friend_row_actions(actions, row, index, cx);
         actions = self.append_settings_row_actions(actions, row, index, cx);
         actions = self.append_commerce_row_actions(actions, row, index, cx);
-        actions = self.append_activity_row_actions(actions, row, index, cx);
         actions = self.append_game_config_row_actions(actions, row, index, cx);
         actions
     }

@@ -59,7 +59,7 @@ const flatAuthRoutes: ElegantRoute[] = [
         meta: {
           title: 'farm_activity',
           i18nKey: 'route.farm_activity',
-          icon: 'mdi:star-circle',
+          icon: 'mdi:calendar-star',
           order: 4
         }
       },
@@ -71,7 +71,46 @@ const flatAuthRoutes: ElegantRoute[] = [
           title: 'farm_analytics',
           i18nKey: 'route.farm_analytics',
           icon: 'mdi:chart-line',
-          order: 5
+          order: 7
+        }
+      },
+      {
+        name: 'farm_solar-calendar',
+        path: '/farm/solar-calendar',
+        component: 'view.farm_solar-calendar',
+        meta: {
+          title: 'farm_solar-calendar',
+          i18nKey: 'route.farm_solar-calendar',
+          icon: 'mdi:calendar-month',
+          order: 5,
+          hideInMenu: true,
+          activeMenu: 'farm_activity'
+        }
+      },
+      {
+        name: 'farm_milk-tea',
+        path: '/farm/milk-tea',
+        component: 'view.farm_milk-tea',
+        meta: {
+          title: 'farm_milk-tea',
+          i18nKey: 'route.farm_milk-tea',
+          icon: 'mdi:cup-outline',
+          order: 6,
+          hideInMenu: true,
+          activeMenu: 'farm_activity'
+        }
+      },
+      {
+        name: 'farm_share-reward',
+        path: '/farm/share-reward',
+        component: 'view.farm_share-reward',
+        meta: {
+          title: 'farm_share-reward',
+          i18nKey: 'route.farm_share-reward',
+          icon: 'mdi:gift-outline',
+          order: 7,
+          hideInMenu: true,
+          activeMenu: 'farm_activity'
         }
       },
       {
@@ -82,7 +121,7 @@ const flatAuthRoutes: ElegantRoute[] = [
           title: 'farm_game-mall',
           i18nKey: 'route.farm_game-mall',
           icon: 'mdi:storefront',
-          order: 6
+          order: 8
         }
       },
       {
@@ -104,7 +143,7 @@ const flatAuthRoutes: ElegantRoute[] = [
           title: 'farm_settings',
           i18nKey: 'route.farm_settings',
           icon: 'mdi:cog',
-          order: 8
+          order: 10
         }
       },
       {
@@ -115,7 +154,7 @@ const flatAuthRoutes: ElegantRoute[] = [
           title: 'farm_game-config',
           i18nKey: 'route.farm_game-config',
           icon: 'mdi:leaf',
-          order: 9
+          order: 11
         }
       },
       {
@@ -126,7 +165,7 @@ const flatAuthRoutes: ElegantRoute[] = [
           title: 'farm_account',
           i18nKey: 'route.farm_account',
           icon: 'mdi:account-cowboy-hat',
-          order: 10
+          order: 12
         }
       }
     ]

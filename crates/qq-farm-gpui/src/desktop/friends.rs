@@ -16,7 +16,7 @@ mod realtime;
 mod refresh;
 mod row_actions;
 pub(crate) use helpers::{
-    friend_action_type_number, friend_matches_search, friend_pet_sync_progress,
-    friend_status_localized, friend_value_number, has_friend_action, stealable_friends_matching,
+    friend_action_type_number, friend_pet_sync_progress, friend_status_localized,
+    friend_value_number, has_friend_action, stealable_friends_matching,
 };
 pub(super) use refresh::detail_gid_for_refresh;

@@ -17,8 +17,8 @@
 
 | 仓库 | Commit | 日期 | 说明 |
 |------|--------|------|------|
-| **qq-farm-rust** | `main`（本提交：bot 10-12 土地详情/升级预测/图鉴购种/预留修复/TSDK 增量） | 2026-10-15 | QQ TSDK wasm 升级 `v3.9.0.1790414929` + 土地加成与升级/解锁详情（landInfo）+ 等级升级时间预测（levelForecast + sessionElapsedSeconds）+ 图鉴 shopSeed 与种子直购（seeds_purchase）+ 多格种子预留 #89 修复（登记表 + 互斥 + 更满优先）；Tauri 与 GPUI 双端同步（实机待验） |
-| **qq-farm-bot** | `8303e7d` | 2026-10-12 | QQ TSDK 构建对齐（9b19af9）+ 土地详情（e5f3552）+ 升级预测（62e1880）+ 图鉴种子购买（0f09702）+ 多格预留 #89 修复（1a5c23e） |
+| **qq-farm-rust** | `main`（本提交：bot 10-15/10-16 增量：1.15 客户端 + 奶茶活动 + 节令日历 + 图鉴奖励） | 2026-10-16 | 客户端 1.15.0.2 + PlayerLogin/PlayerSceneLogin 两段式登录 + QQ TSDK `v3.9.0.1792070537`；奶茶活动（开店/工坊/雇佣/工作/兑换/基金/排行/记录）、快乐不独享（分享/档位/日志）、节令日历（GetSolarTermsV2/答题/季度）、图鉴奖励 v2（领取 + 总奖励）、一键施肥、背包种子严格优先级；Tauri 与 GPUI 双端同步（实机待验） |
+| **qq-farm-bot** | `1f49191` | 2026-10-16 | 1.15 客户端与 PlayerSceneLogin（4eb9b2a）+ 奶茶活动（4eb9b2a/e56d9ae/0533264）+ 节令日历与图鉴奖励（0533264）+ 一键施肥（e15e72e）+ 种子优先级修复（ebb1be6/ba2dc9e） |
 
 文档范围：**业务行为 + 面板 HTTP/Socket 契约**（不含改 Vue 面板本身）。
 
@@ -26,14 +26,12 @@
 
 | 概念 | 当前值 | 用途 |
 |------|--------|------|
-| 客户端版本 `FARM_CLIENT_VERSION` | 默认 `1.14.2.15_20260922`（与 bot `config.ts` 默认一致，UPDATED_AT `1790568000000`；QQ/微信统一） | 进游戏网关声明 |
-| bot `core` 包版本号 | `20260928` | 原项目发布标签，≠ 客户端版本字符串 |
-| TSDK wasm（QQ） | `v3.9.0.1790414929`（161111 字节，SHA-256 `f80c5f34f4e7dc55…`；加载时校验；bot 9b19af9 对齐已核验构建，协议版本仍为 1.14.2.15_20260922） | QQ 账号网关加密 + ACE |
+| 客户端版本 `FARM_CLIENT_VERSION` | 默认 `1.15.0.2_20261001`（与 bot `config.ts` 默认一致，UPDATED_AT `1792029692080`；QQ/微信统一；QQ ≥1.15 走 PlayerLogin + PlayerSceneLogin 两段式） | 进游戏网关声明 |
+| bot `core` 包版本号 | `20261016` | 原项目发布标签，≠ 客户端版本字符串 |
+| TSDK wasm（QQ） | `v3.9.0.1792070537`（161054 字节，SHA-256 `837bd271557d…`；加载时校验；bot 0533264 对齐已核验构建） | QQ 账号网关加密 + ACE |
 | TSDK wasm（微信） | `v3.9.0.1790237209`（160992 字节，SHA-256 `4bf6aa0ede9677fe…`；加载时校验） | 微信账号网关加密 + ACE（bot 864caf3 新增，`assets/tsdk-wx.wasm`） |
-| 青梅活动 ID | 每日 `2026081201` / 酿造 `2026081202` | 活动协议 |
-| 公益小红花活动 ID | 活动组 `2026090900` / 活动 `2026090901` | 活动协议 |
-| 萌宠成长日记活动 ID | 活动组 `2026090100` / 养成 `2026090101` / 种子赠礼 `2026090102` / 拾物小铺 `2026090103` | 活动协议 |
-| 秋日活动 ID | 秋祈良愿 组 `2026092400` / 活动 `2026092401`；快乐不独享 组 `2026092500` / 活动 `2026092501` | 活动协议 |
+| 奶茶活动 ID | 组 `2026110100` / 主体 `2026110101` / 兑换商店 `2026110102` / 成长基金 `2026110103` | 活动协议（Operate 53-76） |
+| 快乐不独享实例 ID | `2026110104`（组 `2026110100`；另一个已过期实例 `2026092501`） | 分享奖励协议（Operate 70-74） |
 
 ---
 
@@ -73,10 +71,16 @@
 | 宠物（护主犬） | 齐 | 上场/收回/喂粮/守护记录 + `ActivateDog` 消耗背包卡片激活图鉴项；快照含 `activatable` 三态（field_6=1 或背包有未锁定同 ID 卡） | `services/pets.rs` |
 | 好友帮助 / 偷菜 / 捣乱 | 齐 | 列表、访问、帮助（经验门控）、偷菜（气泡+自巡/空访/一键 Harvest 主地回退/先偷后帮）、静默仅挡好友、黑名单落盘；捣乱按日限/启动筛选/`1001046` 停 | `services/friend/*` |
 | 背包展示与操作 | 齐 | 按 UID 堆分行；含 `key`/`uid`/`mutantTypes`/`groupKey`；系统物品分离 | `services/warehouse.rs` |
-| 自动/手动出售果实 | 齐 | 自动受 `sell` 开关；`sell_cond` 满足后用 `cond_sells`（活动结束后 / 道具过期后等）；手动预检拒绝不可售 | `warehouse` + `game_config` + `activity_windows` |
+| 自动/手动出售果实 | 齐 | 自动受 `sell` 开关；`sell_cond` 满足后用 `cond_sells`（活动结束后 / 道具过期后等）；手动预检拒绝不可售。活动窗口缓存（`ActivityService.List`）随活动清理保留并改为登录后直连刷新 | `warehouse` + `game_config` + `activity_windows` |
 | 商城 / 神秘商店 / 月卡 / 钻石 | 齐 | 列表（slot 1 普通 + slot 4 SVIP，非会员禁购 + expectedPrice 防涨价）、购买（回包 success 校验 + 不限购/售罄/广告/分享状态机）、神秘商人并入商城 tab、月卡、充值信息 | `mall`, `mystery_shop`, `monthcard`, `pay`, `commerce` |
 | 日常领取 | 齐 | 任务（成长 claim 后刷新 TaskInfo + `currentTask`）、邮件、分享等 | `task`, `email`, `share`, … |
-| 活动中心 | 齐 | 千星游记、观星、星砂、节令、青梅（含已领幂等）、鹊桥寄情（筑桥领取 + 赠香囊）、公益小红花（领种子/捐爱心/每日礼包）、萌宠成长日记（养成/寻宝/锦囊/夺宝/种子/小铺/节令/记录）、秋日活动（秋祈良愿抽签/领奖 + 快乐不独享分享/每日/档位/日志） | `activity_center*` |
+| 活动中心（旧活动） | 已删除 | 2026-10-16 用户决策「活动全部过期」：千星游记（通行证/观星/星砂/节令）、青梅、鹊桥、公益小红花、萌宠成长日记、秋日活动、天气活动（雨落成诗）全部从 GPUI / Tauri / 后端 / 资源删除 | —（活动窗口缓存保留，供出售条件使用） |
+| 奶茶活动（1.15） | 齐 | 开店（店名 2—8 字 + 推荐名）、店铺（收益进度/改名/升级/雇佣开关）、收银台（领取收益/加速）、工坊（果实制作）、好友雇佣（时长档/工资/雇佣）、我的工作（班次/互动 ×5/领取工资）、兑换商店（限购/条件/费用校验）、成长基金（解锁/领取）、排行榜、营业记录；费用签名校验 + 钻石一律拒绝（用户决策） | `services/milk_tea.rs` |
+| 快乐不独享（1.15） | 齐 | 实例 2026110104：分享（不下发 ark）、每日奖励、档位奖励、互动日志（host/guest）；操作 70-74 对齐官方编码器 | `services/share_reward.rs` |
+| 节令日历 | 齐 | GetSolarTermsV2 事件/季度快照、直接领取、答题（题目一致性 + 已答错项拦截 + 每日一次）、季度奖励；文案配置镜像 bot solar-calendar.json | `services/solar_calendar.rs` |
+| 图鉴奖励 v2 | 齐 | IllustratedList/Level V2 新字段（fruit_id/rarity/layer/level_list/total_rewards）+ 手动领取 ClaimAllRewardsV2（claimed_level_ids 校验、刷新失败 refreshRequired）；自动领取 task 同步 type=1 | `services/illustrated.rs`, `services/task.rs` |
+| 一键施肥 | 齐 | 面板手动一键施肥（普通/有机，单次批量请求、不重试、成功/跳过/消耗/余量 + updatedLands）；土地读回合并多格归属 | `farm/scheduler.rs`, `farm/api.rs` |
+| 背包种子优先 | 齐 | 严格按优先级列表顺序种植（限制种子无地可种时留待下一轮），不再重排土地限制种子优先 | `farm/planting.rs` |
 | 面板鉴权与账号 | 齐 | 登录注册（无卡密）、账号 CRUD、设置 | `routes/auth`, `account`, `admin` |
 | 面板农场/好友/活动/商业 API | 已随 server 删除 | **只维护桌面版**（Tauri IPC 语义对齐原 HTTP 契约） | `qq-farm-desktop/src/commands/*` |
 | Socket 状态/日志推送 | 齐 | `status:update` / `log:new` 等 | `socket.rs` |
@@ -102,7 +106,7 @@
 | L2 | 本田完整务农一轮（含多格种植） | 待验 |
 | L3 | 好友帮助 + 偷菜 + 捣乱日限（含静默时段） | 待验 |
 | L4 | 自动/手动出售（含不可售跳过/拒绝） | 待验 |
-| L5 | 活动领取（赛季/观星/节令/青梅） | 待验 |
+| L5 | ~~活动领取（赛季/观星/节令/青梅）~~ | 已随活动清理移除（2026-10-16） |
 | L6 | 商城或神秘商店购买 | 待验 |
 | L7 | 掉线后重登提醒 / 重新扫码 | 待验 |
 | L8 | 面板 Socket 状态与日志实时更新 | 待验 |
@@ -3619,3 +3623,87 @@ bot 本轮 13 个提交**玩法层零变化**（活动/商城/日常自动化均
 - 账号页 success-feedback 横幅渲染移除（toast 已覆盖；字段保留供保存流程读写），对应测试改写为断言「页面不再渲染横幅、字段值保留」。
 - 删除失去消费者的 `Page::summary_for` 方法与 `page_summaries_are_localized` 测试（工具栏副标题移除后的死代码清理）。
 - 全量 432 项测试通过。
+
+### 2026-10-16 — 全量清理过期活动（GPUI + Tauri + 后端）
+
+**背景**：游戏内本项目支持的全部活动已过期（千星游记/观星/星砂/节令、青梅、鹊桥、公益小红花、萌宠成长日记、秋日、天气活动雨落成诗），用户决策整体删除对应代码，bot 新活动（奶茶等）同步时重新移植。本条目为**有意偏离 bot 的有损删减**，不作为活动能力对齐依据。
+
+**删除范围**（各层全链，共 252 个文件、-35k 行）：
+
+- **core**：`services/activity_center/*`（9 个活动实现 + 目录 + DTO + 错误 + RPC + 测试）、`activity_center_state`、`weather_activity`、`randomdrop`、`services/activity` 聚合模块、全部活动常量（`constants/game_ids.rs` 活动段、面板事件 `CharitySettlementGiftOpen`）、`NotifyEvent::BattlePassChanged / WeatherChanged` 与其解析、worker/worker_loop 的活动中心与天气服务接线、`farm/land_analysis.rs` 七夕灵露兜底。
+- **app 门面**：`activity.rs`、`weather.rs` 及 `lib.rs` 声明。
+- **Tauri**：`commands/activity.rs`、`commands/weather.rs`、`generate_handler!` 24 条活动命令 + 9 条天气命令、`permissions/desktop.toml` 对应 ACL。
+- **desktop-ui**：`views/farm/activity/*`、活动 API 与 typings、`farm_activity` 路由（含 elegant 生成文件）、活动 i18n（zh/en 各 170 行）与 `travelPass` 仪表盘文案、`public/activity-assets/`。
+- **GPUI**：`desktop/activities/`（约 12.8k 行）、`desktop/tests/activities/` 与 `tests/weather.rs`、`Page::Activities` 及其导航/内容区/行映射/预览场景/i18n/资源解析接线；通用 `value_to_action_string` 迁至 `desktop/json_text.rs`。
+- **资源/脚本/CI**：`assets/activity-data/*`、`desktop-ui/public/activity-assets/*`、`package-gpui.sh|ps1` 与 `gpui.yml` 的活动资源拷贝/触发路径。
+
+**保留说明**：`activity_windows` 缓存（`ActivityService.List`）与 `sell_conditions`（「活动结束后/结束前/区间外」出售条件）保留——属农场出售链路的数据源而非活动功能本体；`refresh_activity_windows` 改为登录后直连 `ensure_activity_windows`（不再经活动中心快照）。proto 为 bot 镜像，一字未动。
+
+**验证通过**：`RUSTFLAGS="-D warnings" cargo check --workspace --all-targets` 0 错 0 警；`cargo test --workspace` 全绿（core lib 959、GPUI 318、app/desktop 28）；GPUI `ui-preview` 全量 **321 项测试**（433 − 112 活动用例）通过；严格 GPUI Clippy（`--features ui-preview --all-targets --no-deps -- -D warnings`）、`cargo fmt --all -- --check` 通过；desktop-ui `corepack pnpm typecheck` + `pnpm build` 通过。
+
+**待验（实机）**：GPUI 与 Tauri 实机确认侧栏/路由不再出现活动入口、页面级错误横幅不再被活动专用分支抑制；自动出售对剩余活动道具的 `活动结束后` 条件在真实回包下仍按窗口缓存判定。
+
+### 2026-10-16 — 增量同步 bot 8303e7d..1f49191（1.15 客户端 + 奶茶/快乐不独享/节令日历 + 图鉴奖励 v2 + 一键施肥 + 种子优先级）
+
+**基准**：bot `8303e7d` → `1f49191`（4eb9b2a / e56d9ae / e15e72e / 0533264 / ebb1be6 / ba2dc9e；ba2dc9e 为 bot web 面板修复，桌面版无对应逻辑不移植）。承接同日「全量清理过期活动」：本轮按 bot 当前实现重新移植现役活动（奶茶、快乐不独享、节令日历），旧活动不恢复。
+
+**业务明细**：
+
+- **1.15 客户端与两段式登录（bot 4eb9b2a）**：proto 整份镜像更新（`activitypb/corepb/illustratedpb/plantpb/solartermspb` 与新增 `globalscenepb/milk-tea/player-login`，一字未改）；`assets/tsdk.wasm` 覆盖为 `v3.9.0.1792070537`（161054 字节，SHA-256 `837bd271…87fc`，`crypto/tsdk.rs` 常量与防呆断言同步）；客户端版本 `1.15.0.2_20261001`（UPDATED_AT `1792029692080`）。`network/login_body.rs` 新增 `uses_player_scene_login` / `build_player_login_body`；`network/gateway.rs` 按版本走 `PlayerLogin` + `GlobalSceneService.PlayerSceneLogin`（校验 `global_scene_id==1` 且 `farm_scene_ext_data` 非空），新增 `validate_player_scene_reply`；worker 登录后串行 `fetch_user_settings` → `player_scene_login`，失败按 `login_init_failed` 终止。
+- **一键施肥（bot e15e72e）**：`farm/api.rs` `fertilize_batch`（字段 4 为 repeated LandOpDrop 语义）；`farm/scheduler.rs` `fertilize_all_pending` + 普通/有机一键施肥——执行前重新读地、单次请求不重试、按实际回包统计 成功/跳过/消耗/余量 与 updatedLands、合并完整地块后重发 `own_lands_detail`；app `farm::fertilize_all`；Tauri IPC `farm_fertilize_all`；desktop-ui FarmPanel 按钮 + 类型确认弹窗；GPUI 一键施肥按钮 + 普通/有机弹窗。
+- **背包种子严格优先级（bot ebb1be6）**：删除 `farm/planting.rs` 的「受限种子先种」重排块——严格按优先级列表顺序种植，受限种子无可用地块时跳过、等待下一轮（与 bot 逐行为一致）。
+- **图鉴奖励 v2（bot 0533264）**：`services/illustrated.rs` 升级 `IllustratedList/Level` V2 字段（fruit_id/rarity/layer/level_list/point_condition/total_progress/total_rewards）；新增手动领取 `ClaimAllRewardsV2`（claimed_level_ids 校验、刷新失败 `refreshRequired`）；`services/task.rs` 自动领取同步 `type=1`；app `friend::illustrated_claim`；Tauri `illustrated_claim`；desktop-ui 图鉴详情弹窗 + 领取按钮；GPUI 图鉴详情弹窗（作物档位/变异 buff）与领取。
+- **节令日历（bot 0533264）**：镜像 `assets/activity-data/solar-calendar.json`（13 节令 / 3 季度，文案剥 HTML 复用 `services/activity_text.rs`）；新增 `services/solar_calendar.rs`——`GetSolarTermsV2` 快照、直接领取、答题（题目一致性 + 已答错项拦截 + 每日一次）、季度奖励，写操作串行并回刷快照；app `solar_calendar::{snapshot,operate}`；Tauri 2 条 IPC；desktop-ui 新页面（季度 tab、1s 时钟与到点刷新、领取/答题弹窗）；GPUI 新页面（时钟、领取/答题弹窗、单元与窗口回归）。
+- **奶茶活动 + 快乐不独享（bot 4eb9b2a/e56d9ae/0533264）**：镜像 `milk-tea-20261015.json`、`milk-tea-assets.json`、`share-reward-instances.json` 与 14 张官图（`desktop-ui/public/activity-assets/milk-tea/`；快乐不独享图标复用 `autumn/happy.png`）。`services/milk_tea.rs` 操作 53-76 全量（开业/改名/店铺/雇佣/工坊/收益/爆单/升级/制作/工作/工资/互动/排行/记录；独立 `MilkTeaGetGroupReply` 回包；费用签名校验、含钻石一律拒绝（用户决策）；`normalize_work` 基础工资与实际互动收益拆分）；`services/share_reward.rs` 实例 `2026110104` 操作 70-74（分享不下发 ark、每日、档位、日志白名单字段、串行锁、refreshRequired）。app 与 Tauri 各 4 条 IPC；desktop-ui 两页面 + 路由（elegant 生成文件）/i18n/typings；GPUI 两页面（奶茶 8 分段 + 改名弹窗；快乐不独享主页）。
+- **双端 UI 与资源**：desktop-ui `FarmPanel`、`IllustratedPanel`、`views/farm/{milk-tea,share-reward,solar-calendar}/index.vue`、zh/en i18n、`farm.d.ts`/`app.d.ts` 同步。GPUI `Page::{SolarCalendar,MilkTea,ShareReward}`（ALL=12）、导航/内容区/行映射/资源解析（`/activity-assets/` 分支）/包装脚本（`package-gpui.sh|ps1` 拷贝 activity-assets）与 `gpui.yml` 触发路径；预览矩阵新增 33 张（节令 3、奶茶 27、快乐不独享 3），187 → **220 张**。
+
+**测试**：`services/milk_tea.rs` 9 项、`services/share_reward.rs` 4 项、`services/solar_calendar.rs` 7 项、`illustrated.rs` 领取门控用例、`farm/scheduler.rs` 一键施肥目标筛选用例、`network/{login_body,gateway}.rs` 两段式登录用例；GPUI 新增 `desktop/tests/{milk_tea,share_reward,solar_calendar}.rs` 窗口回归，预览覆盖测试含新页面全部分段（浅/深/英文）。
+
+**验证通过**：`RUSTFLAGS="-D warnings" CARGO_INCREMENTAL=0 cargo check --workspace --all-targets` 0 错 0 警；`cargo test --workspace` 全绿（core lib 984、GPUI 332、app 21、desktop 6；微信实机端到端用例按既有约定忽略）；`cargo test -p qq-farm-gpui --features ui-preview` **335 项**通过；严格 GPUI Clippy（`--features ui-preview --all-targets --no-deps -- -D warnings`）、`cargo fmt --all -- --check`、`git diff --check` 通过；desktop-ui `corepack pnpm typecheck` + `pnpm build` 通过；预览矩阵重渲染 **220 张**（`/tmp/qq-farm-gpui-preview-1016`，180 主 + 40 英文）。
+
+**待验（实机）**：QQ 账号 1.15 两段式登录（PlayerLogin + PlayerSceneLogin）与长时间挂机；奶茶活动全链路（开店/雇佣/制作/工作/兑换/基金/排行/记录）；快乐不独享分享与领取；节令日历答题与领取（重阳 10-18 起、霜降 10-23 起开放）；图鉴奖励 v2 真实领取；一键施肥普通/有机真实账号各一次（含部分成功响应计数）；背包种子严格优先级（优先级列表同时含受限与不限种子时的实际执行顺序）。
+
+### 2026-10-17 — 热修：恢复「活动中心」菜单入口（活动收归目录页）
+
+**背景/根因**：2026-10-16「全量清理过期活动」把「活动中心」入口连同旧活动实现一起删除了；10-16/10-17 同步的节令日历/奶茶活动/快乐不独享被直接平铺到侧栏（GPUI `Page::ALL`、Tauri `farm` 子路由），偏离「活动中心聚合、后续新活动挂入其中」的入口约定。用户明确：活动中心菜单必须保留，删除范围只能是过期活动内容。
+
+**修复**：
+
+- **Tauri（desktop-ui）**：新增 `/farm/activity` 活动中心目录页（`views/farm/activity/index.vue`，三张活动卡：节令日历/奶茶活动/快乐不独享）；`farm_solar-calendar`、`farm_milk-tea`、`farm_share-reward` 改为 `hideInMenu` + `activeMenu: 'farm_activity'`（保留直达路由与菜单高亮）；elegant 生成文件（routes/imports/transform/elegant-router.d.ts）、`app.d.ts` locale schema、zh/en 文案同步补齐。
+- **GPUI**：新增 `Page::Activities`（ALL=13）与 `desktop/activities.rs` 目录页；侧栏过滤掉节令日历/奶茶活动/快乐不独享三个子页，只保留「活动中心」一个入口；活动中心不依赖账号快照（`refresh` 早返回）；loader/mapper/rows/sections 接线；预览新增 `activity-center-light|dark|english` 3 张（矩阵 220→223）；新增两项窗口回归（目录三卡可点进入、侧栏单入口且子页隐藏）。
+- **文档**：ARCHITECTURE 侧栏说明与模块表、GPUI 对照清单页面行与场景附录同步。
+
+**验证通过**：`RUSTFLAGS="-D warnings" CARGO_INCREMENTAL=0 cargo check --workspace --all-targets` 0 错 0 警；`cargo test --workspace` 全绿（core lib 984、GPUI 334、app 21、desktop 6）；`cargo test -p qq-farm-gpui --features ui-preview` **337 项**；严格 GPUI Clippy、`cargo fmt --all -- --check`、`git diff --check` 通过；desktop-ui `corepack pnpm typecheck` + `pnpm build` 通过；预览重渲染 **223 张**（`/tmp/qq-farm-gpui-preview-1017`）。
+
+**待验（实机）**：GPUI 与 Tauri 侧栏只显示一个「活动中心」；点击三张卡进入对应活动页并可从侧栏返回；三个子页直达路由（`/farm/...`）仍可用且菜单高亮落在活动中心。
+
+### 2026-10-17 — 热修：顶栏精简 + 设置「系统设置」分栏（检查更新内收、搜索下线）
+
+**背景**：实机反馈——顶栏把不常用的折叠/更新按钮与搜索框挂在外面，设置页「界面偏好」缺少归属。用户要求：界面偏好更名为「系统设置」、按主题/语言分栏并把检查更新收进来；顶栏搜索框去掉（功能不需要），折叠按钮不再放右侧。
+
+**修改**：
+
+- **设置页（GPUI）**：「界面偏好」更名「系统设置」（`pages/model.rs` 分栏标题、`navigation/sections.rs` 标签、`settings/messages.rs` 英文映射；页面 section key 仍为 `ui`，既有偏好不受影响）；卡片按 主题 / 语言 / 更新 三行组织；「检查更新」从顶栏移入（复用 `CheckForUpdates` 命令，原生菜单项保留）。
+- **顶栏（GPUI）**：移除搜索框与右侧「侧边栏」按钮；折叠按钮移到标题左侧（图标按钮，保留无障碍名；`ToggleSidebar` 快捷键与菜单项不变）；右侧只保留刷新与页面级操作（保存/新增/批量删除等）。
+- **搜索功能下线（GPUI）**：移除朋友/商城/背包/土地的关键词过滤，以及「全部偷取」「批量全选」按搜索范围的逻辑；删除 `friend_matches_search`、`land_grid::matches_search` 与对应单测；游戏配置页内嵌搜索保留（独立入口，`applied_keyword` 不变）。`focus_page_search` 对无搜索输入的页面改为空操作。
+- **预览/测试**：移除 `mall-search-empty` 场景（矩阵 223→222）；相关窗口测试改为无搜索断言（批量全选选中全部可售、空态文案固定、朋友分页范围按原始列表）。
+- **Tauri**：本轮未改（桌面面板的搜索均为页面内独立控件，顶栏无搜索框；更新检查在原生菜单）。
+
+**验证通过**：`RUSTFLAGS="-D warnings" CARGO_INCREMENTAL=0 cargo check --workspace --all-targets` 0 错 0 警；`cargo test --workspace` 全绿（core lib 984、GPUI 332、app 21、desktop 6）；`cargo test -p qq-farm-gpui --features ui-preview` **335 项**；严格 GPUI Clippy、`cargo fmt --all -- --check`、`git diff --check` 通过；预览重渲染 **222 张**（`/tmp/qq-farm-gpui-preview-1017b`）。
+
+**待验（实机）**：顶栏左侧折叠 + 标题、右侧刷新/页面操作；设置 →「系统设置」三行（主题/语言/更新）与检查更新按钮；游戏配置页内嵌搜索仍可用。
+
+### 2026-10-17 — 热修：设置保存入口收敛 + 更新反馈改弹窗/toast + toast 时长
+
+**背景**：实机反馈——设置页顶部「保存设置」与卡片内保存按钮重复，系统设置本就即时生效；检查更新结果又以内联横幅常驻、切 tab 不消失，违背「操作结果只走 toast」的既有约定；toast 固定 5s 过长，未悬停时应更快消失。
+
+**修改**：
+
+- **保存入口**：移除顶栏「保存设置」；策略设置卡新增「保存策略设置」（`save-strategy-settings`，`strategy_saving` 加载态、未选账号禁用）；自动控制/下线提醒/运行环境沿用各自卡片内保存按钮；系统设置（主题/语言/更新）即时生效，不设保存按钮。`SaveChanges` 动作（Cmd+S/菜单）保留。
+- **更新反馈**：删除页面内 `update-notice` 横幅与 `update_message`/`release_url` 常驻状态；检查结果只走 toast（无更新/失败），发现新版本改为弹窗（`update-open-release` 打开发布页下载、`update-later` 关闭）。
+- **toast 时长与悬停**：替换 gpui-kit 固定 5s 通知为应用内 `app-toast` 浮层（右上角绝对定位）：默认 **2.5s** 自动消失，悬停暂停计时、移出后继续剩余时长；沿用成功/错误配色。
+- **预览/测试**：移除 `friends-update` 更新横幅场景（矩阵 222→221）；新增 toast 自动消失+悬停暂停回归、更新弹窗回归；工具栏/设置保存回归改为卡片按钮。
+
+**验证通过**：`RUSTFLAGS="-D warnings" CARGO_INCREMENTAL=0 cargo check --workspace --all-targets` 0 错 0 警；`cargo test --workspace` 全绿（core lib 984、GPUI 334、app 21、desktop 6）；`cargo test -p qq-farm-gpui --features ui-preview` **337 项**；严格 GPUI Clippy、`cargo fmt --all -- --check`、`git diff --check` 通过；预览重渲染 **221 张**（`/tmp/qq-farm-gpui-preview-1017c`）。
+
+**待验（实机）**：设置各分栏只有一个保存入口；检查更新（无更新）2.5s toast 自动消失；发现新版本弹窗、切换页面不残留横幅；toast 悬停不消失、移出后按时消失。

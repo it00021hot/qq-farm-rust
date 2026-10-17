@@ -58,7 +58,7 @@ pub(super) fn append_value_rows(
                     rows.push(DisplayRow {
                         id: string_at(
                             item,
-                            &["id", "gid", "seedId", "offerId", "activityId"],
+                            &["id", "gid", "seedId", "offerId"],
                             &format!("{}-{index}", prefix),
                         ),
                         section: row_section(page, prefix),

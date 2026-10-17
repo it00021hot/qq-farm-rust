@@ -1,6 +1,6 @@
 use super::{
-    friend_matches_search, friend_number_at, friend_pet_sync_progress, friend_status_localized,
-    has_friend_action, stealable_friends_matching,
+    friend_pet_sync_progress, friend_status_localized, has_friend_action,
+    stealable_friends_matching,
 };
 
 #[test]
@@ -35,22 +35,6 @@ fn friend_status_matches_vue_truthiness_for_raw_action_counts() {
 }
 
 #[test]
-fn friend_search_matches_only_vue_nickname_and_gid_fields() {
-    let friend = serde_json::json!({
-        "nickname": "Alice Green",
-        "gid": "42",
-        "gold": 12345,
-        "pet": {"name": "Fox"}
-    });
-
-    assert!(friend_matches_search(&friend, "  alice "));
-    assert!(friend_matches_search(&friend, "42"));
-    assert!(!friend_matches_search(&friend, "12345"));
-    assert!(!friend_matches_search(&friend, "Fox"));
-    assert!(friend_matches_search(&friend, "  "));
-}
-
-#[test]
 fn pet_sync_progress_excludes_blacklisted_numeric_string_gids() {
     let progress = friend_pet_sync_progress(&serde_json::json!({
         "blacklist": ["42"],
@@ -66,44 +50,21 @@ fn pet_sync_progress_excludes_blacklisted_numeric_string_gids() {
 
 #[test]
 fn steal_all_excludes_blacklist_and_keeps_vue_action_priority() {
-    let friends = stealable_friends_matching(
-        &serde_json::json!({
-            "blacklist": [30],
-            "friends": [
-                {"gid": 20, "level": 20, "plant": {"stealNum": 2}},
-                {"gid": 10, "level": 20, "plant": {"stealNum": 2, "dryNum": 1}},
-                {"gid": 30, "level": 99, "plant": {"stealNum": 8}},
-                {"gid": 15, "level": 21, "plant": {"stealNum": 2}},
-                {"gid": 40, "level": 30, "plant": {"stealNum": 0}},
-                {"gid": "5", "level": "30", "plant": {"stealNum": "2"}}
-            ]
-        }),
-        "",
-    );
+    let friends = stealable_friends_matching(&serde_json::json!({
+        "blacklist": [30],
+        "friends": [
+            {"gid": 20, "level": 20, "plant": {"stealNum": 2}},
+            {"gid": 10, "level": 20, "plant": {"stealNum": 2, "dryNum": 1}},
+            {"gid": 30, "level": 99, "plant": {"stealNum": 8}},
+            {"gid": 15, "level": 21, "plant": {"stealNum": 2}},
+            {"gid": 40, "level": 30, "plant": {"stealNum": 0}},
+            {"gid": "5", "level": "30", "plant": {"stealNum": "2"}}
+        ]
+    }));
 
     let gids =
         friends.iter().map(|friend| super::friend_number_at(friend, "/gid")).collect::<Vec<_>>();
     assert_eq!(gids, vec![10, 5, 15, 20]);
-}
-
-#[test]
-fn steal_all_uses_the_same_search_scope_as_the_vue_friend_page() {
-    let page = serde_json::json!({
-        "blacklist": [3],
-        "friends": [
-            {"gid": 1, "nickname": "Alice", "plant": {"stealNum": 1}},
-            {"gid": 2, "nickname": "Bob", "plant": {"stealNum": 2}},
-            {"gid": 3, "nickname": "Alice blocked", "plant": {"stealNum": 4}}
-        ]
-    });
-
-    let gids = stealable_friends_matching(&page, " alice ")
-        .iter()
-        .map(|friend| friend_number_at(friend, "/gid"))
-        .collect::<Vec<_>>();
-    assert_eq!(gids, vec![1]);
-    assert_eq!(stealable_friends_matching(&page, "missing").len(), 0);
-    assert_eq!(stealable_friends_matching(&page, "  ").len(), 2);
 }
 
 #[test]

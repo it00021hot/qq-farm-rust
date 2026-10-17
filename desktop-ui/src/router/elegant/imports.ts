@@ -27,8 +27,11 @@ export const views: Record<LastLevelRouteKey, RouteComponent | (() => Promise<Ro
   farm_friends: () => import("@/views/farm/friends/index.vue"),
   "farm_game-config": () => import("@/views/farm/game-config/index.vue"),
   "farm_game-mall": () => import("@/views/farm/game-mall/index.vue"),
+  "farm_milk-tea": () => import("@/views/farm/milk-tea/index.vue"),
   "farm_mystery-shop": () => import("@/views/farm/mystery-shop/index.vue"),
   farm_personal: () => import("@/views/farm/personal/index.vue"),
   farm_settings: () => import("@/views/farm/settings/index.vue"),
+  "farm_share-reward": () => import("@/views/farm/share-reward/index.vue"),
+  "farm_solar-calendar": () => import("@/views/farm/solar-calendar/index.vue"),
   home: () => import("@/views/home/index.vue"),
 };

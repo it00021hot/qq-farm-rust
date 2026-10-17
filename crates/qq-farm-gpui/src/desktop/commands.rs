@@ -71,13 +71,7 @@ impl FarmDesktop {
                     level.read(cx).focus_handle(cx).focus(window, cx);
                 });
             }
-            (Page::Activities, "weather") => {
-                if self.weather_is_compact(window) {
-                    self.activities.weather.selected_gid.clear();
-                }
-                self.activities.weather.search.read(cx).focus_handle(cx).focus(window, cx);
-            }
-            _ => self.search.read(cx).focus_handle(cx).focus(window, cx),
+            _ => {}
         }
         cx.notify();
     }
@@ -90,28 +84,11 @@ impl FarmDesktop {
             self.cancel_game_config_delete_confirmation(cx);
         } else if self.game_config.pending_delete.is_some() {
             self.cancel_game_config_delete_confirmation(cx);
-        } else if self.page == Page::Activities
-            && self.page_section == "petDiary"
-            && self
-                .activities
-                .pet_diary_friend_selector
-                .read(cx)
-                .focus_handle(cx)
-                .is_focused(window)
-        {
-            // Let the searchable combobox consume Escape and restore its trigger focus.
-            return;
         } else if self.accounts.column_picker_open {
             self.accounts.column_picker_open = false;
         } else if window.has_active_sheet(cx) {
             window.close_sheet(cx);
             self.close_account_form();
-        } else if self.page == Page::Activities
-            && self.page_section == "weather"
-            && !self.activities.weather.selected_gid.is_empty()
-        {
-            self.activities.weather.selected_gid.clear();
-            self.activities.weather.search.read(cx).focus_handle(cx).focus(window, cx);
         } else {
             self.close_account_form();
             self.cancel_account_delete_confirmation(cx);

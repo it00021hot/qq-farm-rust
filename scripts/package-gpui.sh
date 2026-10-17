@@ -21,9 +21,10 @@ fi
 
 copy_resources() {
   local destination="$1"
-  mkdir -p "$destination/assets" "$destination/activity-assets"
+  mkdir -p "$destination/assets"
   cp -R "$ROOT/assets/game_config" "$destination/assets/game_config"
-  cp -R "$ROOT/desktop-ui/public/activity-assets/." "$destination/activity-assets/"
+  cp -R "$ROOT/desktop-ui/public/activity-assets" "$destination/activity-assets"
+  cp -R "$ROOT/desktop-ui/public/land-assets" "$destination/land-assets"
   cp "$ROOT/assets/tsdk.wasm" "$destination/tsdk.wasm"
   cp "$ROOT/assets/tsdk-wx.wasm" "$destination/tsdk-wx.wasm"
   find "$destination" -name '.DS_Store' -type f -delete

@@ -3,29 +3,6 @@ use gpui_kit::component::input::NumberInput;
 use gpui_kit::component::WindowExt;
 
 impl FarmDesktop {
-    pub(in crate::desktop) fn open_star_sand_confirmation(
-        &mut self,
-        id: String,
-        name: String,
-        fallback_goods: serde_json::Value,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.open_purchase_confirmation(
-            serde_json::json!({
-                "activityGoods": true,
-                "id": id,
-                "name": name,
-                "fallbackItem": fallback_goods.get("item").cloned().unwrap_or_default(),
-                "fallbackGoodsName": fallback_goods
-                    .get("name")
-                    .cloned()
-                    .unwrap_or(serde_json::Value::Null),
-            }),
-            window,
-            cx,
-        );
-    }
     pub(in crate::desktop) fn open_purchase_confirmation(
         &mut self,
         goods: serde_json::Value,
@@ -36,8 +13,6 @@ impl FarmDesktop {
             return;
         }
         self.commerce.purchase_count.update(cx, |state, cx| state.set_value("1", window, cx));
-        let activity_goods =
-            goods.get("activityGoods").and_then(serde_json::Value::as_bool) == Some(true);
         let mystery_goods = self.page == Page::MysteryShop
             || (self.page == Page::Mall && self.commerce.mall_slot_type == -1);
         let language = self.preferences.language.clone();
@@ -47,11 +22,7 @@ impl FarmDesktop {
             .and_then(serde_json::Value::as_str)
             .unwrap_or(crate::i18n::text(&language, "所选商品", "Selected item"))
             .to_string();
-        let title = if activity_goods {
-            crate::i18n::text(&language, "兑换确认", "Confirm exchange")
-        } else {
-            crate::i18n::text(&language, "确认购买", "Confirm purchase")
-        };
+        let title = crate::i18n::text(&language, "确认购买", "Confirm purchase");
         let mystery_summary = if english {
             format!(
                 "Spend {} {} to buy {} ×{}?",
@@ -91,7 +62,7 @@ impl FarmDesktop {
             let purchase_pending = state_entity.read(app).commerce.purchase_pending;
             let confirm_entity = confirm_entity.clone();
             let close_entity = close_entity.clone();
-            let mall_price = if !activity_goods && !mystery_goods {
+            let mall_price = if !mystery_goods {
                 Some(mall_price_summary(&mall_goods, &language, app))
             } else {
                 None
@@ -158,11 +129,7 @@ impl FarmDesktop {
                         )
                         .child(
                             Button::new("purchase-confirm")
-                                .label(if activity_goods {
-                                    crate::i18n::text(&language, "确认兑换", "Confirm exchange")
-                                } else {
-                                    crate::i18n::text(&language, "购买", "Buy")
-                                })
+                                .label(crate::i18n::text(&language, "购买", "Buy"))
                                 .primary()
                                 .loading(purchase_pending)
                                 .disabled(purchase_pending)

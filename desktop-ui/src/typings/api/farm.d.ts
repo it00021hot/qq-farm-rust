@@ -485,6 +485,17 @@ declare namespace Api {
       actions?: string[];
     };
 
+    /** 一键施肥结果（farm_fertilize_all；对齐 bot FertilizeAllResult） */
+    type FertilizeAllResult = {
+      fertilizerType: FertilizerBuyType | string;
+      requestedCount: number;
+      successCount: number;
+      skippedCount: number;
+      fertilizerConsumedSec: number | null;
+      fertilizerRemainingSec: number | null;
+      updatedLands: LandRow[];
+    };
+
     type BagItem = {
       id: number;
       count: number;
@@ -605,66 +616,6 @@ declare namespace Api {
       locked: boolean;
       soldOut: boolean;
       unknownMeta?: boolean;
-    };
-
-    /** activity */
-    type ActivityState = {
-      id: number;
-      accountId: number;
-      activityId: string;
-      stateJson: string;
-      syncedAt: number;
-    };
-
-    type ActivityAction = {
-      supported?: boolean;
-      enabled?: boolean;
-      available?: boolean;
-      count?: number;
-      reason?: string;
-      attemptable?: boolean;
-      availabilityKnown?: boolean;
-      attemptableCount?: number;
-    };
-
-    type ActivitySnapshot = {
-      accountId: number;
-      states: ActivityState[];
-      season: Record<string, unknown>;
-      constellation: Record<string, unknown>;
-      shop: Record<string, unknown>;
-      solarTerms: Record<string, unknown>;
-      greenPlum?: Record<string, unknown>;
-      qixi?: Record<string, unknown>;
-      qingMei?: Record<string, unknown>;
-      charity?: Record<string, unknown> | null;
-      activities?: Array<Record<string, unknown>>;
-      capabilities?: Record<string, boolean>;
-      actions?: Record<string, ActivityAction>;
-      errors?: Record<string, string>;
-      rewards?: Array<{
-        id?: string | number;
-        name?: string;
-        count?: string | number;
-        image?: string;
-      }>;
-      message?: string;
-      outcome?: string;
-      noClaimable?: boolean;
-      snapshot?: Omit<ActivitySnapshot, 'accountId' | 'states' | 'snapshot'>;
-    };
-
-    type ActivityClaimParams = {
-      accountId: number;
-      termId?: string;
-      itemId?: string;
-      count?: number;
-      target?: string;
-      activityId?: string;
-      operateType?: number;
-      ingredients?: Array<{ uid: number | string; count: number }>;
-      friendGid?: string | number;
-      sachetCount?: number;
     };
 
     /** analytics / daily stats */

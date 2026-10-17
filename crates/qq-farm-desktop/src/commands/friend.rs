@@ -130,6 +130,17 @@ pub async fn illustrated_snapshot(
     friend::illustrated_snapshot(&state.app, &account_id).await.map_err(IpcError::from)
 }
 
+/// 手动领取图鉴奖励（type：1 作物 / 2 变异）。
+#[tauri::command]
+pub async fn illustrated_claim(
+    state: State<'_, DesktopState>,
+    account_id: String,
+    kind: i64,
+) -> IpcResult<Value> {
+    ensure(&state, &account_id)?;
+    friend::illustrated_claim(&state.app, &account_id, kind as i32).await.map_err(IpcError::from)
+}
+
 /// 直接购买商店种子（图鉴购买入口；对齐 bot POST /api/seeds/purchase）。
 #[tauri::command]
 pub async fn seeds_purchase(

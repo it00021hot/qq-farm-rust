@@ -46,7 +46,6 @@ pub(super) const EVENT_LABELS: &[(&str, &str, &str)] = &[
     ("kickout", "被踢下线", "Disconnected by server"),
     ("ws_400", "登录失效", "Session expired"),
     ("ws_close", "连接关闭", "Connection closed"),
-    ("charity_settlement_gift_open", "公益结算礼包", "Charity settlement gift"),
     ("pet_op", "宠物操作", "Pet action"),
     ("dog_skill_gift", "同气连枝礼包", "Pet skill gift"),
     ("mystery_shop_watch", "神秘商人", "Mystery merchant"),

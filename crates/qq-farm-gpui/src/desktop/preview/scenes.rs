@@ -19,6 +19,30 @@ pub(super) fn cases() -> Vec<PreviewCase> {
         ("account-sheet-150", ThemeMode::Dark, 1100., 720., "account-sheet", 1.5),
         ("dashboard-light", ThemeMode::Light, 1440., 900., "dashboard", 1.),
         ("dashboard-dark", ThemeMode::Dark, 1440., 900., "dashboard", 1.),
+        ("activity-center-light", ThemeMode::Light, 1440., 900., "activity-center", 1.),
+        ("activity-center-dark", ThemeMode::Dark, 1440., 900., "activity-center", 1.),
+        ("solar-calendar-light", ThemeMode::Light, 1440., 900., "solar-calendar", 1.),
+        ("solar-calendar-dark", ThemeMode::Dark, 1440., 900., "solar-calendar", 1.),
+        ("milk-tea-light", ThemeMode::Light, 1440., 900., "milk-tea", 1.),
+        ("milk-tea-dark", ThemeMode::Dark, 1440., 900., "milk-tea", 1.),
+        ("milk-tea-shop-light", ThemeMode::Light, 1440., 900., "milk-tea-shop", 1.),
+        ("milk-tea-shop-dark", ThemeMode::Dark, 1440., 900., "milk-tea-shop", 1.),
+        ("milk-tea-workshop-light", ThemeMode::Light, 1440., 900., "milk-tea-workshop", 1.),
+        ("milk-tea-workshop-dark", ThemeMode::Dark, 1440., 900., "milk-tea-workshop", 1.),
+        ("milk-tea-hire-light", ThemeMode::Light, 1440., 900., "milk-tea-hire", 1.),
+        ("milk-tea-hire-dark", ThemeMode::Dark, 1440., 900., "milk-tea-hire", 1.),
+        ("milk-tea-work-light", ThemeMode::Light, 1440., 900., "milk-tea-work", 1.),
+        ("milk-tea-work-dark", ThemeMode::Dark, 1440., 900., "milk-tea-work", 1.),
+        ("milk-tea-exchange-light", ThemeMode::Light, 1440., 900., "milk-tea-exchange", 1.),
+        ("milk-tea-exchange-dark", ThemeMode::Dark, 1440., 900., "milk-tea-exchange", 1.),
+        ("milk-tea-fund-light", ThemeMode::Light, 1440., 900., "milk-tea-fund", 1.),
+        ("milk-tea-fund-dark", ThemeMode::Dark, 1440., 900., "milk-tea-fund", 1.),
+        ("milk-tea-rank-light", ThemeMode::Light, 1440., 900., "milk-tea-rank", 1.),
+        ("milk-tea-rank-dark", ThemeMode::Dark, 1440., 900., "milk-tea-rank", 1.),
+        ("milk-tea-logs-light", ThemeMode::Light, 1440., 900., "milk-tea-logs", 1.),
+        ("milk-tea-logs-dark", ThemeMode::Dark, 1440., 900., "milk-tea-logs", 1.),
+        ("share-reward-light", ThemeMode::Light, 1440., 900., "share-reward", 1.),
+        ("share-reward-dark", ThemeMode::Dark, 1440., 900., "share-reward", 1.),
         ("farm-light", ThemeMode::Light, 1440., 900., "farm", 1.),
         ("farm-dark", ThemeMode::Dark, 1440., 900., "farm", 1.),
         ("bag-light", ThemeMode::Light, 1440., 900., "bag", 1.),
@@ -66,7 +90,6 @@ pub(super) fn cases() -> Vec<PreviewCase> {
         ("analytics-no-account-light", ThemeMode::Light, 1440., 900., "analytics-no-account", 1.),
         ("mall-no-account-light", ThemeMode::Light, 1440., 900., "mall-no-account", 1.),
         ("friends-no-account-light", ThemeMode::Light, 1440., 900., "friends-no-account", 1.),
-        ("friends-update-light", ThemeMode::Light, 1440., 900., "friends-update", 1.),
         ("friends-loading-light", ThemeMode::Light, 1440., 900., "friends-loading", 1.),
         ("friends-error-light", ThemeMode::Light, 1440., 900., "friends-error", 1.),
         ("friends-error-dark", ThemeMode::Dark, 1440., 900., "friends-error", 1.),
@@ -171,7 +194,6 @@ pub(super) fn cases() -> Vec<PreviewCase> {
             "analytics-blacklist-empty",
             1.,
         ),
-        ("mall-search-empty-light", ThemeMode::Light, 1440., 900., "mall-search-empty", 1.),
         (
             "game-config-select-open-light",
             ThemeMode::Light,
@@ -274,25 +296,6 @@ pub(super) fn cases() -> Vec<PreviewCase> {
         ("game-config-fruits-dark", ThemeMode::Dark, 1440., 900., "game-config-fruits", 1.),
         ("game-config-items-light", ThemeMode::Light, 1440., 900., "game-config-items", 1.),
         ("game-config-items-dark", ThemeMode::Dark, 1440., 900., "game-config-items", 1.),
-        ("activity-directory-light", ThemeMode::Light, 1440., 900., "activity-directory", 1.),
-        ("activity-directory-dark", ThemeMode::Dark, 1440., 900., "activity-directory", 1.),
-        ("activity-detail-light", ThemeMode::Light, 1440., 900., "activity-detail", 1.),
-        ("pet-diary-light", ThemeMode::Light, 1440., 900., "pet-diary", 1.),
-        ("pet-diary-dark", ThemeMode::Dark, 1440., 900., "pet-diary", 1.),
-        ("charity-light", ThemeMode::Light, 1440., 900., "charity", 1.),
-        ("charity-dark", ThemeMode::Dark, 1440., 900., "charity", 1.),
-        ("qixi-light", ThemeMode::Light, 1440., 900., "qixi", 1.),
-        ("qixi-dark", ThemeMode::Dark, 1440., 900., "qixi", 1.),
-        ("autumn-wish-light", ThemeMode::Light, 1440., 900., "autumn-wish", 1.),
-        ("autumn-wish-dark", ThemeMode::Dark, 1440., 900., "autumn-wish", 1.),
-        ("autumn-happy-light", ThemeMode::Light, 1440., 900., "autumn-happy", 1.),
-        ("weather-light", ThemeMode::Light, 1440., 900., "weather", 1.),
-        ("weather-dark", ThemeMode::Dark, 1440., 900., "weather", 1.),
-        ("weather-friends-light", ThemeMode::Light, 1440., 900., "weather-friends", 1.),
-        ("weather-friends-dark", ThemeMode::Dark, 1440., 900., "weather-friends", 1.),
-        ("weather-minimum", ThemeMode::Light, 1100., 720., "weather-friends", 1.),
-        ("weather-125", ThemeMode::Light, 1100., 720., "weather-friends", 1.25),
-        ("weather-150", ThemeMode::Dark, 1100., 720., "weather-friends", 1.5),
         ("dashboard-minimum", ThemeMode::Light, 1100., 720., "dashboard", 1.),
         ("farm-minimum", ThemeMode::Light, 1100., 720., "farm", 1.),
         ("friends-minimum", ThemeMode::Light, 1100., 720., "friends", 1.),
@@ -328,6 +331,18 @@ pub(super) fn cases() -> Vec<PreviewCase> {
     for (name, scene) in [
         ("accounts-english", "accounts"),
         ("dashboard-english", "dashboard"),
+        ("activity-center-english", "activity-center"),
+        ("solar-calendar-english", "solar-calendar"),
+        ("milk-tea-english", "milk-tea"),
+        ("milk-tea-shop-english", "milk-tea-shop"),
+        ("milk-tea-workshop-english", "milk-tea-workshop"),
+        ("milk-tea-hire-english", "milk-tea-hire"),
+        ("milk-tea-work-english", "milk-tea-work"),
+        ("milk-tea-exchange-english", "milk-tea-exchange"),
+        ("milk-tea-fund-english", "milk-tea-fund"),
+        ("milk-tea-rank-english", "milk-tea-rank"),
+        ("milk-tea-logs-english", "milk-tea-logs"),
+        ("share-reward-english", "share-reward"),
         ("farm-english", "farm"),
         ("bag-english", "bag"),
         ("daily-gifts-english", "daily-gifts"),
@@ -355,14 +370,6 @@ pub(super) fn cases() -> Vec<PreviewCase> {
         ("game-config-english", "game-config"),
         ("game-config-fruits-english", "game-config-fruits"),
         ("game-config-items-english", "game-config-items"),
-        ("activity-directory-english", "activity-directory"),
-        ("activity-detail-english", "activity-detail"),
-        ("pet-diary-english", "pet-diary"),
-        ("charity-english", "charity"),
-        ("qixi-english", "qixi"),
-        ("autumn-happy-english", "autumn-happy"),
-        ("weather-english", "weather"),
-        ("weather-friends-english", "weather-friends"),
     ] {
         cases.push(PreviewCase {
             name,
@@ -399,7 +406,6 @@ fn page_for_scene(scene: &str) -> Page {
         "pets-logs" => Page::Personal,
         "friends" => Page::Friends,
         "friends-no-account" => Page::Friends,
-        "friends-update" => Page::Friends,
         "friends-loading" => Page::Friends,
         "friends-error" => Page::Friends,
         "friends-records-error" => Page::Friends,
@@ -438,6 +444,14 @@ fn page_for_scene(scene: &str) -> Page {
         "settings-system" => Page::Settings,
         "settings-ui" => Page::Settings,
         "settings-strategy-open" => Page::Settings,
+        "solar-calendar" => Page::SolarCalendar,
+        "activity-center" => Page::Activities,
+        "milk-tea" => Page::MilkTea,
+        "milk-tea-shop" | "milk-tea-workshop" | "milk-tea-hire" | "milk-tea-work"
+        | "milk-tea-exchange" | "milk-tea-fund" | "milk-tea-rank" | "milk-tea-logs" => {
+            Page::MilkTea
+        }
+        "share-reward" => Page::ShareReward,
         "game-config" => Page::GameConfig,
         "game-config-empty" => Page::GameConfig,
         "game-config-fruits" => Page::GameConfig,
@@ -453,13 +467,6 @@ fn page_for_scene(scene: &str) -> Page {
         "game-config-columns" => Page::GameConfig,
         "game-config-select-open" => Page::GameConfig,
         "game-config-types-open" => Page::GameConfig,
-        "pet-diary" => Page::Activities,
-        "charity" => Page::Activities,
-        "qixi" => Page::Activities,
-        "autumn-wish" | "autumn-happy" => Page::Activities,
-        "weather" | "weather-friends" | "activity-directory" | "activity-detail" => {
-            Page::Activities
-        }
         "account-delete-confirm" => Page::Accounts,
         "account-sheet-edit" => Page::Accounts,
         "account-sheet-wx" => Page::Accounts,
@@ -479,7 +486,6 @@ fn section_for_scene(scene: &str) -> &'static str {
     match scene {
         "friends" => "friends",
         "friends-no-account" => "friends",
-        "friends-update" => "friends",
         "friends-loading" => "friends",
         "friends-error" => "friends",
         "friends-records-error" => "records",
@@ -540,18 +546,19 @@ fn section_for_scene(scene: &str) -> &'static str {
         "daily-gifts" => "dailyGifts",
         "daily-gifts-empty" => "dailyGifts",
         "illustrated" => "illustrated",
+        "milk-tea-shop" => "shop",
+        "milk-tea-workshop" => "workshop",
+        "milk-tea-hire" => "hireList",
+        "milk-tea-work" => "work",
+        "milk-tea-exchange" => "exchange",
+        "milk-tea-fund" => "fund",
+        "milk-tea-rank" => "rank",
+        "milk-tea-logs" => "logs",
         "illustrated-mutants" => "illustrated",
         "interaction" => "interactionItems",
         "pets" => "pets",
         "pets-empty" => "pets",
         "pets-logs" => "pets",
-        "weather" | "weather-friends" => "weather",
-        "activity-directory" => "directory",
-        "activity-detail" => "season",
-        "pet-diary" => "petDiary",
-        "charity" => "charity",
-        "qixi" => "qixi",
-        "autumn-wish" | "autumn-happy" => "autumn",
         _ => "",
     }
 }
@@ -584,6 +591,17 @@ pub(super) fn seed(
             "dashboard-logs" => super::fixtures::dashboard_many_logs_snapshot(),
             "dashboard-empty-logs" => super::fixtures::dashboard_empty_logs_snapshot(),
             "dashboard-logs-expanded" => super::fixtures::dashboard_many_logs_snapshot(),
+            "solar-calendar" => super::fixtures::solar_calendar_snapshot(),
+            "milk-tea" => super::fixtures::milk_tea_snapshot("shop"),
+            "milk-tea-shop" => super::fixtures::milk_tea_snapshot("shop"),
+            "milk-tea-workshop" => super::fixtures::milk_tea_snapshot("workshop"),
+            "milk-tea-hire" => super::fixtures::milk_tea_snapshot("hireList"),
+            "milk-tea-work" => super::fixtures::milk_tea_snapshot("work"),
+            "milk-tea-exchange" => super::fixtures::milk_tea_snapshot("exchange"),
+            "milk-tea-fund" => super::fixtures::milk_tea_snapshot("fund"),
+            "milk-tea-rank" => super::fixtures::milk_tea_snapshot("rank"),
+            "milk-tea-logs" => super::fixtures::milk_tea_snapshot("logs"),
+            "share-reward" => super::fixtures::share_reward_snapshot(),
             "farm" => super::fixtures::farm_snapshot(),
             "farm-section-error" => super::fixtures::farm_snapshot(),
             "bag" => super::fixtures::bag_snapshot(),
@@ -600,7 +618,6 @@ pub(super) fn seed(
             "pets-logs" => super::fixtures::pets_snapshot(),
             "friends" => super::fixtures::friends_snapshot(),
             "friends-no-account" => super::fixtures::friends_snapshot(),
-            "friends-update" => super::fixtures::friends_snapshot(),
             "friends-loading" => super::fixtures::friends_snapshot(),
             "friends-error" => super::fixtures::friends_snapshot(),
             "friends-records-error" => super::fixtures::friends_visitors_snapshot(),
@@ -626,7 +643,6 @@ pub(super) fn seed(
             "mall-confirm-pending" => super::fixtures::mall_snapshot(),
             "mall-non-svip" => super::fixtures::mall_non_svip_snapshot(),
             "mall-svip-locked" => super::fixtures::mall_svip_non_member_snapshot(),
-            "mall-search-empty" => super::fixtures::mall_snapshot(),
             "mall-notice" => super::fixtures::mall_snapshot(),
             "mystery-shop" => super::fixtures::mystery_shop_snapshot(),
             "mystery-shop-inactive" => super::fixtures::mystery_shop_inactive_snapshot(),
@@ -654,12 +670,6 @@ pub(super) fn seed(
             "game-config-types-open" => super::fixtures::game_config_snapshot(),
             "game-config-search" => super::fixtures::game_config_snapshot(),
             "game-config-columns" => super::fixtures::game_config_snapshot(),
-            "weather" | "weather-friends" => activities::weather_fixture(),
-            "activity-directory" | "activity-detail" => super::fixtures::activity_snapshot(),
-            "pet-diary" => super::fixtures::pet_diary_snapshot(),
-            "charity" => super::fixtures::charity_snapshot(),
-            "qixi" => super::fixtures::qixi_snapshot(),
-            "autumn-wish" | "autumn-happy" => super::fixtures::autumn_snapshot(),
             "accounts-empty" => super::fixtures::accounts_empty_snapshot(),
             "accounts-pagination" => super::fixtures::accounts_many_snapshot(),
             _ => super::fixtures::account_snapshot(),
@@ -670,10 +680,6 @@ pub(super) fn seed(
         }
         if case.scene.ends_with("-no-account") {
             this.selected_account = None;
-        }
-        if case.scene == "friends-update" {
-            this.update_message = Some("发现新版本 v9.9.9".into());
-            this.release_url = Some("https://example.com/releases/tag/v9.9.9".into());
         }
         if case.scene == "friends-loading" {
             this.loading = true;
@@ -691,6 +697,10 @@ pub(super) fn seed(
         }
         if this.page != Page::Accounts {
             this.rows = crate::pages::page_data(this.page, this.page_raw.clone()).rows;
+        }
+        if this.page == Page::SolarCalendar {
+            let calendar = this.page_raw.clone();
+            this.apply_solar_calendar(calendar);
         }
         if this.page == Page::Analytics && this.selected_account.is_some() {
             // Snapshots are injected directly here; run the same level sync the
@@ -772,48 +782,11 @@ pub(super) fn seed(
         }
         match case.scene {
             "mall" | "mall-empty" | "mall-confirm" | "mall-confirm-pending"
-            | "mall-non-svip" | "mall-search-empty" | "mall-notice" => {
+            | "mall-non-svip" | "mall-notice" => {
                 this.commerce.mall_slot_type = 1
             }
             "mall-svip" | "mall-svip-locked" => this.commerce.mall_slot_type = 4,
             _ => {}
-        }
-        if case.scene.starts_with("weather") {
-            this.activities.weather.selected_gid = "12".into();
-            this.apply_weather_result(
-                "scan",
-                &serde_json::json!({"friends":[{
-                    "gid":"12", "availability":"available", "canCollect":true,
-                    "eligibleCloudLandIds":["3"], "weather":{"active":true, "remainingSec":600}
-                }]}),
-            );
-            this.activities.weather.now_sec = this.activities.weather.scanned_friends["12"].at_sec;
-        }
-        if case.scene == "pet-diary" {
-            this.activities.pet_diary_expanded_sections.insert("logs".into());
-            this.activities.pet_diary_log_kind = "plunder".into();
-            this.activities.pet_diary_records.insert(
-                "plunder".into(),
-                serde_json::json!([
-                    {"time": 1791208800000_i64, "name": "农场主人", "level": 42, "won": true,
-                        "challenge": {"id": 1, "name": "挑战书"},
-                        "injected": [{"id": 2, "name": "注入道具"}],
-                        "lost": [{"name": "星砂", "count": 2}], "fake": false},
-                    {"time": 1791201600000_i64, "name": "小镇姑娘", "level": 18, "won": false,
-                        "lost": [], "fake": true}
-                ]),
-            );
-        }
-        if case.scene == "qixi" {
-            this.activities.qixi_selected_friend_gid = "101".into();
-        }
-        if case.scene == "autumn-wish" || case.scene == "autumn-happy" {
-            this.activities.autumn_mode =
-                if case.scene == "autumn-happy" { "happy".into() } else { "wish".into() };
-            this.activities.autumn_log_tab = 1;
-        }
-        if case.scene == "autumn-wish" {
-            this.activities.autumn_choice_id = "1".into();
         }
         if case.scene == "account-sheet" {
             this.open_account_form(None, window, cx);
@@ -862,9 +835,6 @@ pub(super) fn seed(
         }
         if case.scene == "game-config-filter-empty" {
             this.game_config.applied_keyword = "不存在的种子".into();
-        }
-        if case.scene == "mall-search-empty" {
-            this.search.update(cx, |state, cx| state.set_value("不存在", window, cx));
         }
         if case.scene == "game-config-select-open" {
             this.game_config.search_open = true;
@@ -991,20 +961,6 @@ pub(super) fn arrange(
     }
     if case.scene == "friends-delete-confirm" {
         window.click(("friend-delete", 0_usize), cx);
-    }
-    if case.scene == "weather-friends" {
-        window.scroll(
-            "weather-summon",
-            gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-2000.))),
-            cx,
-        );
-    }
-    if case.scene == "pet-diary" && case.mode.name() == "light" {
-        window.scroll(
-            "pet-diary-draw",
-            gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-4000.))),
-            cx,
-        );
     }
 }
 

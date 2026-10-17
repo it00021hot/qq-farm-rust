@@ -120,19 +120,6 @@ impl ShareService {
         ReportShareReply::decode(&body)
     }
 
-    /// 对齐原 `reportActivityShare`：只发送不等待回包（青梅酿 field_1=11 / field_4=215）。
-    pub async fn report_activity_share(&self, source: i32, scene: i32) -> Result<()> {
-        let req = ReportShareRequest { field_1: source, field_4: scene };
-        self.gateway
-            .send_no_reply(
-                "gamepb.sharepb.ShareService",
-                "ReportShare",
-                &prost::Message::encode_to_vec(&req),
-            )
-            .await?;
-        Ok(())
-    }
-
     /// ClaimShareReward RPC
     pub async fn claim_share_reward(&self) -> Result<ClaimShareRewardReply> {
         let req = ClaimShareRewardRequest { field_1: true };

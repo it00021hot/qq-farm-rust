@@ -76,13 +76,6 @@ fn mall_catalog_uses_reward_cards_and_vue_purchase_status_labels(cx: &mut TestAp
 
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
-        window.click("page-search", cx);
-        window.input("番茄", cx);
-        window.render_frame(cx);
-        assert!(window.try_find("mall-buy-32-1").is_none());
-        assert!(window.find("clean").visible());
-        window.click("clean", cx);
-        window.render_frame(cx);
         assert!(window.find("mall-buy-32-1").visible());
         assert_eq!(window.find("mall-name-31-0").label(), Some("打折番茄种子"));
         assert_eq!(window.find("mall-original-price-31-0").label(), Some("原价 100"));

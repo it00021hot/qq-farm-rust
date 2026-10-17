@@ -1,4 +1,4 @@
-//! 刷新 `ActivityService.List` 活动窗口（出售条件 + 活动目录）。
+//! 刷新 `ActivityService.List` 活动窗口（出售条件用）。
 
 use std::sync::Arc;
 use std::time::Instant;

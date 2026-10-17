@@ -12,34 +12,13 @@ impl FarmDesktop {
             .border_b_1()
             .border_color(cx.theme().border)
             .child(
-                div().v_flex().justify_center().child(
-                    div()
-                        .text_xl()
-                        .font_semibold()
-                        .child(self.page.title_for(&self.preferences.language)),
-                ),
-            )
-            .child(
                 h_flex()
-                    .gap_2()
-                    .when(
-                        !matches!(
-                            self.page,
-                            Page::Accounts | Page::Analytics | Page::GameConfig | Page::MysteryShop
-                        ) && !(self.page == Page::Activities && self.page_section == "weather"),
-                        |toolbar| {
-                            toolbar.child(
-                                Input::new(&self.search)
-                                    .id("page-search")
-                                    .cleanable(true)
-                                    .w(px(220.)),
-                            )
-                        },
-                    )
+                    .items_center()
+                    .gap_3()
                     .child(
                         Button::new("toggle-sidebar")
                             .icon(IconName::PanelLeft)
-                            .label(crate::i18n::text(language, "侧边栏", "Sidebar"))
+                            .accessibility_label(crate::i18n::text(language, "侧边栏", "Sidebar"))
                             .ghost()
                             .on_click(cx.listener(|this, _, window, cx| {
                                 // Dispatch the command directly: re-dispatching the action through
@@ -49,21 +28,22 @@ impl FarmDesktop {
                             })),
                     )
                     .child(
+                        div()
+                            .text_xl()
+                            .font_semibold()
+                            .child(self.page.title_for(&self.preferences.language)),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(
                         Button::new("refresh")
                             .icon(IconName::RefreshCw)
                             .label(crate::i18n::text(language, "刷新", "Refresh"))
                             .ghost()
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.dispatch_ui_command(&RefreshPage, window, cx)
-                            })),
-                    )
-                    .child(
-                        Button::new("check-update")
-                            .icon(IconName::Download)
-                            .label(crate::i18n::text(language, "检查更新", "Check for updates"))
-                            .ghost()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.dispatch_ui_command(&CheckForUpdates, window, cx)
                             })),
                     )
                     .when(self.page == Page::Accounts, |row| {
@@ -125,23 +105,6 @@ impl FarmDesktop {
                                     })),
                             )
                         })
-                    })
-                    .when(self.page == Page::Settings, |row| {
-                        let section_saving = self.settings.section_save_pending(&self.page_section);
-                        row.child(
-                            Button::new("save-settings")
-                                .label(crate::i18n::text(language, "保存设置", "Save settings"))
-                                .primary()
-                                .loading(section_saving)
-                                .disabled(
-                                    self.loading
-                                        || section_saving
-                                        || self.selected_account.is_none(),
-                                )
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.dispatch_ui_command(&SaveChanges, window, cx)
-                                })),
-                        )
                     }),
             )
     }

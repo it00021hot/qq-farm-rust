@@ -1351,7 +1351,7 @@ mod tests {
         clear_activity_windows_for_test();
         set_activity_windows(vec![ActivityWindow {
             id: "2026081800".into(),
-            name: "鹊桥寄情".into(),
+            name: "示例活动".into(),
             begin_time: 1,
             end_time: 50,
         }]);

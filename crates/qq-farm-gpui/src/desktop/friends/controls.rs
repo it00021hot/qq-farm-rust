@@ -94,13 +94,7 @@ impl FarmDesktop {
                             ),
                     );
                 }
-                let query = self.search.read(cx).value();
-                let visible_total = self
-                    .rows
-                    .iter()
-                    .filter(|row| row.section == "friends")
-                    .filter(|row| friend_matches_search(&row.record, &query))
-                    .count();
+                let visible_total = self.rows.iter().filter(|row| row.section == "friends").count();
                 // The Vue template binds the filtered range but passes friends.length as total.
                 let total_friends = self
                     .page_raw
@@ -223,9 +217,7 @@ impl FarmDesktop {
                     ));
             }
             if self.page_section == "friends" {
-                let search_keyword = self.search.read(cx).value();
-                let has_stealable =
-                    !stealable_friends_matching(&self.page_raw, &search_keyword).is_empty();
+                let has_stealable = !stealable_friends_matching(&self.page_raw).is_empty();
                 controls = controls.child(
                     Button::new("steal-all-friends")
                         .label(crate::i18n::text(language, "全部偷取", "Steal all"))

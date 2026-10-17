@@ -42,7 +42,6 @@ impl FarmDesktop {
         let selected_count = selected_sellable_count(
             &self.page_raw,
             &self.farm.bag.category,
-            self.search.read(cx).value().trim(),
             &self.farm.bag.selected_ids,
         );
         if self.farm.bag.batch_mode {

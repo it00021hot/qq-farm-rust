@@ -54,28 +54,7 @@ pub(crate) fn friend_action_type_number(value: Option<&Value>) -> Option<f64> {
     })
 }
 
-pub(crate) fn friend_matches_search(record: &Value, query: &str) -> bool {
-    let query = query.trim().to_lowercase();
-    if query.is_empty() {
-        return true;
-    }
-    let nickname = record
-        .get("nickname")
-        .and_then(|value| {
-            value.as_str().map(str::to_owned).or_else(|| value.as_i64().map(|v| v.to_string()))
-        })
-        .unwrap_or_default()
-        .to_lowercase();
-    let gid = record
-        .get("gid")
-        .and_then(|value| {
-            value.as_str().map(str::to_owned).or_else(|| value.as_i64().map(|v| v.to_string()))
-        })
-        .unwrap_or_default();
-    nickname.contains(&query) || gid.contains(&query)
-}
-
-pub(crate) fn stealable_friends_matching(page: &Value, query: &str) -> Vec<Value> {
+pub(crate) fn stealable_friends_matching(page: &Value) -> Vec<Value> {
     let blocked = page
         .get("blacklist")
         .and_then(Value::as_array)
@@ -90,10 +69,7 @@ pub(crate) fn stealable_friends_matching(page: &Value, query: &str) -> Vec<Value
         .flatten()
         .filter(|friend| {
             let gid = friend_number_at(friend, "/gid");
-            gid > 0
-                && friend_number_at(friend, "/plant/stealNum") > 0
-                && !blocked.contains(&gid)
-                && friend_matches_search(friend, query)
+            gid > 0 && friend_number_at(friend, "/plant/stealNum") > 0 && !blocked.contains(&gid)
         })
         .cloned()
         .collect::<Vec<_>>();

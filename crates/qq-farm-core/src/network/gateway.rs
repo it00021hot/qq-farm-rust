@@ -37,7 +37,10 @@ use crate::network::frame::{FrameBuilder, FrameParser};
 use crate::network::notify::NotifyEvent;
 use crate::network::priority::{CriticalLane, InFlightGuard, RequestClass, RpcScheduler};
 use crate::network::request::RequestManager;
-use crate::proto::generated::gamepb::userpb::{HeartbeatReply, LoginReply};
+use crate::proto::generated::gamepb::globalscenepb::{
+    PlayerSceneLoginReply, PlayerSceneLoginRequest,
+};
+use crate::proto::generated::gamepb::userpb::{HeartbeatReply, LoginReply, PlayerLoginReply};
 use crate::proto::generated::gatepb::MessageType;
 
 /// 连接阶段
@@ -146,6 +149,27 @@ fn apply_default_ws_headers(headers: &mut HashMap<String, String>, _server_url: 
             if ua.is_empty() { crate::config::DeviceInfo::windows_pc().user_agent } else { ua };
         headers.insert("User-Agent".to_string(), ua);
     }
+}
+
+/// 登录回包的最小公共视图（`LoginReply` / `PlayerLoginReply` 共有 `basic` 与
+/// `time_now_millis`；1.15 起 QQ 走 `PlayerLoginReply`，字段号一致）。
+#[derive(Debug, Clone, Default)]
+pub struct LoginOutcome {
+    /// 基础账号信息（gid / 昵称 / 等级 / 金币 / 经验 / 头像）
+    pub basic: Option<crate::proto::generated::gamepb::userpb::BasicInfo>,
+    /// 服务器当前毫秒时间（>0 时同步本地时钟）
+    pub time_now_millis: i64,
+}
+
+/// `PlayerSceneLoginReply` 校验（对齐 bot：`global_scene_id` 必须为 1 且
+/// `farm_scene_ext_data` 非空，否则视为登录初始化失败）。
+pub(crate) fn validate_player_scene_reply(
+    reply: &crate::proto::generated::gamepb::globalscenepb::PlayerSceneLoginReply,
+) -> Result<()> {
+    if reply.global_scene_id != 1 || reply.farm_scene_ext_data.is_empty() {
+        return Err(NetworkError::Frame("农场场景登录回包不完整".to_string()));
+    }
+    Ok(())
 }
 
 /// 网关连接（对外接口）
@@ -842,14 +866,15 @@ impl Gateway {
         *self.inner.phase.write() = ConnectionPhase::Online;
     }
 
-    /// 完整登录流程：发 LoginRequest → 等 LoginReply → bindUser → mark_online
+    /// 完整登录流程：发 LoginRequest/PlayerLoginRequest → 解码回包 → bindUser → mark_online
     ///
     /// 1:1 对应原 `network.ts:sendLogin()`。请求体由
-    /// [`crate::network::login_body::build_login_body_for_platform`] 按平台对齐
-    /// （QQ：官方 73 字节抓包逐字节；微信：bot `864caf3` 的 wechat 分支）。
+    /// [`crate::network::login_body`] 按平台/版本对齐（QQ 1.15 起走
+    /// `PlayerLogin` + 后续 `PlayerSceneLogin` 两段式，见 bot `4eb9b2a`；
+    /// 旧 QQ 为官方 73 字节抓包逐字节；微信为 bot `864caf3` 的分支）。
     ///
     /// # Arguments
-    /// - `client_version`: 生效的客户端版本（如 `1.14.2.15_20260922`）
+    /// - `client_version`: 生效的客户端版本（如 `1.15.0.2_20261001`）
     /// - `sys_software`: 系统标识（如 `Windows`）
     /// - `wx_extras`: 微信平台 device_info 扩展字段（network/device_id/memory；QQ 忽略）
     /// - `tsdk`: TSDK runtime（用于 bindUser）
@@ -859,7 +884,7 @@ impl Gateway {
         sys_software: &str,
         wx_extras: &crate::network::login_body::WxDeviceExtras,
         tsdk: &Arc<crate::crypto::tsdk::TsdkRuntime>,
-    ) -> Result<LoginReply> {
+    ) -> Result<LoginOutcome> {
         // 1. 阶段检查：必须在 Login 阶段
         {
             let phase = *self.inner.phase.read();
@@ -870,28 +895,40 @@ impl Gateway {
             }
         }
 
-        // 2. 构造 LoginRequest（平台分支见 login_body 模块文档）
-        let body = crate::network::login_body::build_login_body_for_platform(
-            client_version,
-            sys_software,
-            &self.inner.config.platform,
-            Some(wx_extras),
-        );
+        // 2. 构造登录体（平台 + 版本分支见 login_body 模块文档）
+        let player_scene_login = self.uses_player_scene_login(client_version);
+        let body = if player_scene_login {
+            crate::network::login_body::build_player_login_body(client_version, sys_software)
+        } else {
+            crate::network::login_body::build_login_body_for_platform(
+                client_version,
+                sys_software,
+                &self.inner.config.platform,
+                Some(wx_extras),
+            )
+        };
 
         // 3. 对齐 sendLogin：用 sendMsg（Login 阶段可发），不是 sendMsgAsync
         let reply_bytes = self
             .send_rpc(
                 "gamepb.userpb.UserService",
-                "Login",
+                if player_scene_login { "PlayerLogin" } else { "Login" },
                 &body,
                 Some(crate::constants::LOGIN_TIMEOUT_MS),
                 false,
             )
             .await?;
 
-        // 4. 解码 LoginReply
-        let reply = LoginReply::decode(reply_bytes.as_slice())
-            .map_err(|e| NetworkError::Frame(format!("decode LoginReply: {e}")))?;
+        // 4. 解码登录回包（两种消息的 basic / time_now_millis 字段号一致）
+        let reply = if player_scene_login {
+            let decoded = PlayerLoginReply::decode(reply_bytes.as_slice())
+                .map_err(|e| NetworkError::Frame(format!("decode PlayerLoginReply: {e}")))?;
+            LoginOutcome { basic: decoded.basic, time_now_millis: decoded.time_now_millis }
+        } else {
+            let decoded = LoginReply::decode(reply_bytes.as_slice())
+                .map_err(|e| NetworkError::Frame(format!("decode LoginReply: {e}")))?;
+            LoginOutcome { basic: decoded.basic, time_now_millis: decoded.time_now_millis }
+        };
 
         // 5. 校验 basic 字段
         let Some(basic) = &reply.basic else {
@@ -947,6 +984,32 @@ impl Gateway {
         );
 
         Ok(reply)
+    }
+
+    /// 是否需要 QQ 1.15 两段式登录（`PlayerLogin` + `PlayerSceneLogin`）。
+    ///
+    /// 对齐 bot `network.ts::usesPlayerSceneLogin()`；平台取网关配置。
+    #[must_use]
+    pub fn uses_player_scene_login(&self, client_version: &str) -> bool {
+        crate::network::login_body::uses_player_scene_login(
+            &self.inner.config.platform,
+            client_version,
+        )
+    }
+
+    /// 两段式登录第二段：农场场景登录（对齐 bot `sendLogin` 中的 `PlayerSceneLogin`）。
+    ///
+    /// 回包校验：`global_scene_id` 必须为 1 且 `farm_scene_ext_data` 非空；
+    /// 失败即视为登录初始化失败（bot：抛 `农场场景登录回包不完整`）。
+    pub async fn player_scene_login(&self) -> Result<()> {
+        let req = PlayerSceneLoginRequest { global_scene_id: 1, experiment_keys: Vec::new() };
+        let body = prost::Message::encode_to_vec(&req);
+        let reply_bytes = self
+            .request("gamepb.globalscenepb.GlobalSceneService", "PlayerSceneLogin", &body)
+            .await?;
+        let reply = PlayerSceneLoginReply::decode(reply_bytes.as_slice())
+            .map_err(|e| NetworkError::Frame(format!("decode PlayerSceneLoginReply: {e}")))?;
+        validate_player_scene_reply(&reply)
     }
 
     /// 登录后拉用户设置（对齐 `fetchUserSettings`，失败忽略）
@@ -1237,6 +1300,29 @@ mod tests {
         assert!(rpc_phase_ok(ConnectionPhase::Online, true).is_ok());
         assert!(rpc_phase_ok(ConnectionPhase::Connecting, false).is_err());
         assert!(rpc_phase_ok(ConnectionPhase::Disconnected, false).is_err());
+    }
+
+    /// 农场场景登录回包校验（对齐 bot `player-scene-login.test.js` 的两类失败：
+    /// 缺 `farm_scene_ext_data` 或 global_scene_id 不符）。
+    #[test]
+    fn player_scene_reply_requires_scene_id_and_payload() {
+        use crate::proto::generated::gamepb::globalscenepb::PlayerSceneLoginReply;
+
+        let ok = PlayerSceneLoginReply {
+            global_scene_id: 1,
+            server_time: 1,
+            farm_scene_ext_data: bytes::Bytes::from_static(&[8, 1]),
+            big_farm_scene_ext_data: Default::default(),
+        };
+        assert!(validate_player_scene_reply(&ok).is_ok());
+        let missing_payload = PlayerSceneLoginReply { global_scene_id: 1, ..Default::default() };
+        assert!(validate_player_scene_reply(&missing_payload).is_err());
+        let wrong_scene = PlayerSceneLoginReply {
+            global_scene_id: 2,
+            farm_scene_ext_data: bytes::Bytes::from_static(&[8, 1]),
+            ..Default::default()
+        };
+        assert!(validate_player_scene_reply(&wrong_scene).is_err());
     }
 
     #[test]

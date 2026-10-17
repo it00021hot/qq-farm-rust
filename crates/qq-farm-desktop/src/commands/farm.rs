@@ -189,3 +189,14 @@ pub async fn farm_fertilizer_check_and_buy(
     ensure(&state, &account_id)?;
     farm::fertilizer_check_and_buy(&state.app, &account_id).await.map_err(IpcError::from)
 }
+
+/// 一键施肥：为所有生长中的作物施用一次所选化肥（normal / organic）。
+#[tauri::command]
+pub async fn farm_fertilize_all(
+    state: State<'_, DesktopState>,
+    account_id: String,
+    fertilizer_type: String,
+) -> IpcResult<Value> {
+    ensure(&state, &account_id)?;
+    farm::fertilize_all(&state.app, &account_id, &fertilizer_type).await.map_err(IpcError::from)
+}

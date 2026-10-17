@@ -68,35 +68,21 @@ pub(super) fn can_use(item: &Value) -> bool {
 pub(in crate::desktop::personal) fn filtered_items<'a>(
     raw: &'a Value,
     selected: &str,
-    query: &str,
 ) -> Vec<&'a Value> {
-    filtered_items_with_indices(raw, selected, query).into_iter().map(|(_, item)| item).collect()
+    filtered_items_with_indices(raw, selected).into_iter().map(|(_, item)| item).collect()
 }
 
 pub(super) fn filtered_items_with_indices<'a>(
     raw: &'a Value,
     selected: &str,
-    query: &str,
 ) -> Vec<(usize, &'a Value)> {
-    let query = query.to_lowercase();
     raw.pointer("/bag/items")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .enumerate()
-        .filter(|(_, item)| {
-            !is_hidden(item) && matches_category(item, selected) && matches_query(item, &query)
-        })
+        .filter(|(_, item)| !is_hidden(item) && matches_category(item, selected))
         .collect()
-}
-
-fn matches_query(item: &Value, query: &str) -> bool {
-    query.is_empty()
-        || item
-            .get("name")
-            .and_then(Value::as_str)
-            .is_some_and(|name| name.to_lowercase().contains(query))
-        || item.to_string().to_lowercase().contains(query)
 }
 
 pub(in crate::desktop::personal) fn category_counts(raw: &Value) -> [usize; 5] {
@@ -116,10 +102,9 @@ pub(in crate::desktop::personal) fn category_counts(raw: &Value) -> [usize; 5] {
 pub(in crate::desktop::personal) fn selected_sellable_count(
     raw: &Value,
     selected_category: &str,
-    query: &str,
     selected_ids: &HashSet<i64>,
 ) -> usize {
-    filtered_items(raw, selected_category, query)
+    filtered_items(raw, selected_category)
         .into_iter()
         .filter(|item| can_sell(item) && selected_ids.contains(&number(item.get("id"))))
         .count()
@@ -153,8 +138,7 @@ mod tests {
         ]}});
 
         assert_eq!(category_counts(&raw), [3, 1, 1, 1, 0]);
-        assert_eq!(filtered_items(&raw, "fruit", "").len(), 1);
-        assert_eq!(filtered_items(&raw, "all", "点券").len(), 0);
+        assert_eq!(filtered_items(&raw, "fruit").len(), 1);
     }
 
     #[test]
@@ -165,9 +149,9 @@ mod tests {
             {"id": 9, "itemType": 5, "sellable": true}
         ]}});
         let selected = HashSet::from([7, 9]);
-        assert_eq!(selected_sellable_count(&raw, "fruit", "", &selected), 1);
-        assert_eq!(selected_sellable_count(&raw, "seed", "", &selected), 0);
-        assert_eq!(selected_sellable_count(&raw, "all", "", &selected), 1);
+        assert_eq!(selected_sellable_count(&raw, "fruit", &selected), 1);
+        assert_eq!(selected_sellable_count(&raw, "seed", &selected), 0);
+        assert_eq!(selected_sellable_count(&raw, "all", &selected), 1);
     }
 
     #[test]
@@ -179,14 +163,14 @@ mod tests {
             {"id": 9, "itemType": 17, "name": "青苹果"}
         ]}});
 
-        let indices = |category, query| {
-            filtered_items_with_indices(&raw, category, query)
+        let indices = |category| {
+            filtered_items_with_indices(&raw, category)
                 .into_iter()
                 .map(|(index, _)| index)
                 .collect::<Vec<_>>()
         };
-        assert_eq!(indices("fruit", "苹果"), [1, 3]);
-        assert_eq!(indices("seed", "苹果"), [2]);
-        assert_eq!(indices("all", "系统道具"), Vec::<usize>::new());
+        assert_eq!(indices("fruit"), [1, 3]);
+        assert_eq!(indices("seed"), [2]);
+        assert_eq!(indices("all"), [1, 2, 3]);
     }
 }

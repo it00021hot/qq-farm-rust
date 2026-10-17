@@ -136,7 +136,7 @@ fn friend_card_expands_land_details_inline_and_collapses_on_second_click(cx: &mu
     .expect("friend details render inline and collapse from their card");
 }
 #[gpui_kit::test]
-fn friend_search_range_matches_vue_filtered_bounds_and_raw_total(cx: &mut TestAppContext) {
+fn friend_range_shows_vue_page_bounds_and_raw_total(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (window, desktop, _restore_data_dir) = open_test_desktop(cx);
     cx.update(|cx| {
@@ -161,25 +161,8 @@ fn friend_search_range_matches_vue_filtered_bounds_and_raw_total(cx: &mut TestAp
         assert!(window.find("friend-card-101").visible());
         assert_eq!(window.find("friends-range").label(), Some("第 1-2 名 / 共 3 名好友"));
         assert_eq!(window.find("friend-gold-202").label(), Some("金币 0"));
-
-        desktop.update(cx, |this, cx| {
-            this.search.update(cx, |state, cx| state.set_value("202", window, cx));
-        });
-        window.render_frame(cx);
-        assert!(window.try_find("friend-card-101").is_none());
-        assert!(window.find("friend-card-202").visible());
-        assert_eq!(window.find("friends-range").label(), Some("第 1-1 名 / 共 3 名好友"));
-
-        desktop.update(cx, |this, cx| {
-            this.search.update(cx, |state, cx| state.set_value("12345", window, cx));
-        });
-        window.render_frame(cx);
-        assert!(window.try_find("friend-card-202").is_none());
-        assert_eq!(window.find("friends-range").label(), Some("第 0-0 名 / 共 3 名好友"));
     })
-    .expect(
-        "friend range uses filtered bounds while the label total follows Vue's raw list length",
-    );
+    .expect("friend range uses page bounds while the label total follows Vue's raw list length");
 }
 #[gpui_kit::test]
 fn friend_controls_and_actions_follow_the_selected_locale(cx: &mut TestAppContext) {

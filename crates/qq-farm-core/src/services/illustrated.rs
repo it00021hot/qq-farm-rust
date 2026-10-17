@@ -1,19 +1,21 @@
 //! 图鉴快照（作物 type=1 / 变异 type=2）。
 //!
-//! 1:1 对应原 `core/src/services/illustrated.ts`：
-//! 并行拉 GetIllustratedListV2 + GetIllustratedLevelListV2，合并等级/进度/每级奖励/
-//! 变异分组/超变 buff。自动领取在 task.rs（ClaimAllRewardsV2），这里只做展示。
+//! 1:1 对应 bot `core/src/services/illustrated.ts`（同步 0533264 的 v2 字段与
+//! 领取奖励）：拉 GetIllustratedListV2 + GetIllustratedLevelListV2，合并等级/进度/
+//! 每级奖励/变异分组/超变 buff。自动领取在 task.rs（ClaimAllRewardsV2 type=1），
+//! 手动领取走本服务的 [`IllustratedService::claim_rewards`]。
 
 use std::sync::Arc;
 
 use prost::Message as _;
 
 use crate::config::game_config::global as global_game_config;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::network::gateway::Gateway;
+use crate::proto::generated::corepb::Item;
 use crate::proto::generated::gamepb::illustratedpb::{
-    GetIllustratedLevelListV2Reply, GetIllustratedLevelListV2Request, GetIllustratedListV2Reply,
-    GetIllustratedListV2Request, IllustratedItem, IllustratedReward,
+    ClaimAllRewardsV2Reply, ClaimAllRewardsV2Request, GetIllustratedLevelListV2Reply,
+    GetIllustratedLevelListV2Request, GetIllustratedListV2Reply, IllustratedInfoV2,
 };
 
 const SERVICE: &str = "gamepb.illustratedpb.IllustratedService";
@@ -22,53 +24,50 @@ pub struct IllustratedService {
     gateway: Arc<Gateway>,
     /// 账号 id：商店种子列表（shopSeed 富化）读等级快照用
     account_id: String,
+    /// 领取串行化（对齐 bot `claimTail`）
+    claim_lock: tokio::sync::Mutex<()>,
 }
 
-fn reward_dto(reward: Option<&IllustratedReward>) -> Option<serde_json::Value> {
+fn reward_dto(reward: Option<&Item>) -> Option<serde_json::Value> {
     let reward = reward?;
-    if reward.item_id == 0 {
+    if reward.id == 0 {
         return None;
     }
     let gc = global_game_config();
     let name = gc
-        .get_item_by_id(reward.item_id)
+        .get_item_by_id(reward.id)
         .map(|i| i.name)
-        .unwrap_or_else(|| format!("物品{}", reward.item_id));
+        .unwrap_or_else(|| format!("物品{}", reward.id));
     Some(serde_json::json!({
-        "itemId": reward.item_id,
+        "itemId": reward.id,
         "count": reward.count.max(0),
         "name": name,
-        "image": gc.get_item_image_by_id(reward.item_id).unwrap_or_default(),
+        "image": gc.get_item_image_by_id(reward.id).unwrap_or_default(),
     }))
 }
 
-fn item_dto(item: &IllustratedItem) -> serde_json::Value {
+fn item_dto(item: &IllustratedInfoV2) -> serde_json::Value {
     let gc = global_game_config();
-    let seed_id = item.seed_id;
+    let seed_id = i64::from(item.fruit_id);
     let name = gc
         .get_item_by_id(seed_id)
         .map(|i| i.name)
         .or_else(|| gc.get_plant_by_seed_id(seed_id).map(|p| p.name))
         .unwrap_or_else(|| format!("种子#{seed_id}"));
-    let attributes: Vec<serde_json::Value> = item
-        .attributes
-        .iter()
-        .filter(|a| a.r#type != 0 || a.value != 0)
-        .map(|a| serde_json::json!({ "type": a.r#type, "param": a.param, "value": a.value }))
-        .collect();
     serde_json::json!({
         "seedId": seed_id,
         "name": name,
         "image": gc.get_item_image_by_id(seed_id).unwrap_or_default(),
-        "rewardCategory": item.reward_category,
+        "rewardCategory": item.rarity,
         "group": gc.illustrated_mutant_group(seed_id),
         "sort": gc.get_illustrated_by_param(seed_id).map(|e| e.sort).unwrap_or(0),
-        "cropCategory": item.crop_category,
+        "cropCategory": item.layer,
         "unlocked": item.unlocked,
         "progress": item.progress.max(0),
         "isNew": item.is_new,
-        "reward": reward_dto(item.reward.as_ref()),
-        "attributes": attributes,
+        "reward": reward_dto(item.reward.first()),
+        // v2 协议不再下发 attributes（guarantees 取代），对齐 bot 输出空数组
+        "attributes": Vec::<serde_json::Value>::new(),
     })
 }
 
@@ -86,7 +85,7 @@ fn buff_dto(entry: &crate::config::game_config::BuffConfigItem) -> serde_json::V
 impl IllustratedService {
     #[must_use]
     pub fn new(gateway: Arc<Gateway>) -> Self {
-        Self { gateway, account_id: String::new() }
+        Self { gateway, account_id: String::new(), claim_lock: tokio::sync::Mutex::new(()) }
     }
 
     /// 注入账号 id（面板快照的 shopSeed 需要按账号等级判断 locked）
@@ -97,10 +96,10 @@ impl IllustratedService {
     }
 
     async fn get_list(&self, kind: i32) -> Result<GetIllustratedListV2Reply> {
-        // 对齐抓包：refresh=false 显式编码（field 1 = 0）
-        let req = GetIllustratedListV2Request { refresh: false, r#type: kind };
-        let body =
-            self.gateway.request(SERVICE, "GetIllustratedListV2", &req.encode_to_vec()).await?;
+        // 对齐抓包：rarity=0 显式编码（field 1 = 0；prost 会省略 proto3 默认值，
+        // 与 bot `writer.uint32(8).int32(0); writer.uint32(16).int32(type)` 同构）
+        let body = vec![0x08, 0x00, 0x10, kind as u8];
+        let body = self.gateway.request(SERVICE, "GetIllustratedListV2", &body).await?;
         Ok(GetIllustratedListV2Reply::decode(&body[..])?)
     }
 
@@ -121,43 +120,80 @@ impl IllustratedService {
     ) -> serde_json::Value {
         let gc = global_game_config();
         let levels: Vec<serde_json::Value> = level_reply
-            .levels
+            .level_list
             .iter()
             .map(|entry| {
                 serde_json::json!({
                     "level": entry.level,
-                    "progress": entry.progress.max(0),
+                    "progress": entry.point_condition.max(0),
                     "claimed": entry.claimed,
+                    "canClaim": entry.can_claim && !entry.claimed,
                     "rewards": entry.rewards.iter().filter_map(|r| reward_dto(Some(r))).collect::<Vec<_>>(),
                 })
             })
             .collect();
-        let current_level = list.level.max(level_reply.level);
+        let claimable = level_reply.level_list.iter().any(|v| v.can_claim && !v.claimed);
+        let current_level = list.current_level.max(level_reply.current_level);
         let next_level_progress = if list.next_level_progress > 0 {
             list.next_level_progress
         } else {
             level_reply
-                .levels
+                .level_list
                 .iter()
-                .filter(|l| l.level > current_level)
-                .map(|l| l.progress.max(0))
-                .min()
+                .find(|l| l.level > current_level)
+                .map(|l| l.point_condition.max(0))
                 .unwrap_or(0)
         };
-        let mut items: Vec<serde_json::Value> = list.items.iter().map(item_dto).collect();
+        let mut items: Vec<serde_json::Value> = list.list.iter().map(item_dto).collect();
         items.sort_by_key(|it| it["sort"].as_i64().unwrap_or(0));
         serde_json::json!({
             "type": kind,
             "level": current_level,
-            "progress": list.progress.max(level_reply.progress),
+            "progress": list.total_progress.max(level_reply.total_progress),
             "nextLevelProgress": next_level_progress,
-            "currentBonus": reward_dto(list.current_bonus.as_ref()),
-            "attributeBonuses": list.attribute_bonuses.iter().filter_map(|r| reward_dto(Some(r))).collect::<Vec<_>>(),
+            "claimable": claimable,
+            "rewards": list.total_rewards.iter().filter_map(|r| reward_dto(Some(r))).collect::<Vec<_>>(),
             "buffs": if kind == 2 { gc.illustrated_buffs().iter().map(buff_dto).collect::<Vec<_>>() } else { Vec::new() },
             "currentBuffs": if kind == 2 { gc.illustrated_buffs_by_level(current_level as i64).iter().map(buff_dto).collect::<Vec<_>>() } else { Vec::new() },
             "items": items,
             "levels": levels,
         })
+    }
+
+    /// 手动领取图鉴奖励（对齐 bot `claimIllustratedRewards`，0533264）。
+    ///
+    /// 串行化 → 先确认存在可领 → `ClaimAllRewardsV2(type)` →
+    /// `claimed_level_ids` 非空校验 → 附带最新快照；刷新失败时给
+    /// `refreshRequired`，不把已成功的写操作报成失败。
+    pub async fn claim_rewards(&self, kind: i32) -> Result<serde_json::Value> {
+        if kind != 1 && kind != 2 {
+            return Err(Error::Business("图鉴类型无效".into()));
+        }
+        let _guard = self.claim_lock.lock().await;
+        let levels = self.get_levels(kind).await?;
+        if !levels.level_list.iter().any(|v| v.can_claim && !v.claimed) {
+            return Err(Error::Business("暂无可领取奖励".into()));
+        }
+        let req = ClaimAllRewardsV2Request { r#type: kind };
+        let body = self.gateway.request(SERVICE, "ClaimAllRewardsV2", &req.encode_to_vec()).await?;
+        let decoded = ClaimAllRewardsV2Reply::decode(&body[..])?;
+        if decoded.claimed_level_ids.is_empty() {
+            return Err(Error::Business("领取结果未确认，请刷新图鉴后查看".into()));
+        }
+        let mut result = serde_json::json!({
+            "rewards": decoded.total_rewards.iter().filter_map(|r| reward_dto(Some(r))).collect::<Vec<_>>(),
+            "claimedLevels": decoded.claimed_level_ids,
+        });
+        match self.get_snapshot().await {
+            Ok(snapshot) => {
+                result["snapshot"] = snapshot;
+            }
+            Err(_) => {
+                result["snapshot"] = serde_json::Value::Null;
+                result["refreshRequired"] = serde_json::json!(true);
+            }
+        }
+        Ok(result)
     }
 
     /// 图鉴快照：作物（type=1）+ 变异（type=2）
@@ -247,19 +283,42 @@ mod tests {
     #[test]
     fn item_dto_maps_fields() {
         crate::config::game_config::global().load();
-        let item = IllustratedItem {
-            seed_id: 40002001,
-            reward_category: 2,
+        let item = IllustratedInfoV2 {
+            fruit_id: 40002001,
+            rarity: 2,
             unlocked: true,
             progress: 40,
-            crop_category: 1,
-            reward: Some(IllustratedReward { item_id: 1002, count: 40 }),
+            layer: 1,
+            reward: vec![Item { id: 1002, count: 40, ..Default::default() }],
             is_new: false,
-            attributes: vec![],
+            guarantees: vec![],
         };
         let dto = item_dto(&item);
         assert_eq!(dto["seedId"].as_i64(), Some(40002001));
         assert_eq!(dto["unlocked"].as_bool(), Some(true));
-        assert!(dto["reward"].is_object());
+        assert_eq!(dto["rewardCategory"].as_i64(), Some(2));
+        assert_eq!(dto["cropCategory"].as_i64(), Some(1));
+        assert_eq!(dto["reward"]["itemId"].as_i64(), Some(1002));
+        assert_eq!(dto["reward"]["count"].as_i64(), Some(40));
+        assert!(dto["attributes"].as_array().is_some_and(Vec::is_empty));
+    }
+
+    /// 领取入参校验：只允许 1/2（在触网前拒绝），对齐 bot 图鉴测试.
+    #[tokio::test]
+    async fn claim_rejects_invalid_type_before_network() {
+        let gateway = Arc::new(Gateway::new(
+            crate::network::gateway::GatewayConfig {
+                server_url: "wss://gate.example.com/ws".into(),
+                platform: "qq".into(),
+                os: "Windows".into(),
+                client_version: "1.15.0.2_20261001".into(),
+                auth_code: "test".into(),
+                headers: std::collections::HashMap::new(),
+            },
+            Arc::new(crate::network::encryptor::NoopEncryptor),
+        ));
+        let service = IllustratedService::new(gateway);
+        let error = service.claim_rewards(3).await.expect_err("类型必须被拒绝");
+        assert!(error.to_string().contains("图鉴类型无效"), "{error}");
     }
 }

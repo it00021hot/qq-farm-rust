@@ -35,6 +35,19 @@ pub async fn load_page_for_mall_slot(
             })
         }
         Page::Personal => personal::load(app, account_id, page_section).await,
+        Page::Activities => serde_json::Value::Null,
+        Page::SolarCalendar => qq_farm_app::solar_calendar::snapshot(app, account_id)
+            .await
+            .map_err(|error| error.to_string())?,
+        Page::ShareReward => qq_farm_app::share_reward::snapshot(
+            app,
+            account_id,
+            crate::desktop::SHARE_REWARD_ACTIVITY_ID,
+        )
+        .await
+        .map_err(|error| error.to_string())?,
+        // 奶茶活动页由 GPUI 侧专用加载（refresh 早分支），这里仅兜底
+        Page::MilkTea => serde_json::Value::Null,
         Page::Friends => {
             let load = FriendPageLoad::for_section(page_section);
             let (friends, records, interaction_items) = tokio::join!(
@@ -86,19 +99,6 @@ pub async fn load_page_for_mall_slot(
                 }
             }
             raw
-        }
-        Page::Activities => {
-            let (activity, weather) = tokio::join!(
-                qq_farm_app::activity::snapshot(app, account_id),
-                qq_farm_app::weather::snapshot(app, account_id),
-            );
-            let mut activity = activity.map_err(|error| error.to_string())?;
-            if let Ok(weather) = weather {
-                if let Some(object) = activity.as_object_mut() {
-                    object.insert("weatherActivity".into(), weather);
-                }
-            }
-            activity
         }
         Page::Analytics => {
             let status = qq_farm_app::farm::panel_status_with_progress(app, account_id);

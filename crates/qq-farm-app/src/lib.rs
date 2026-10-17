@@ -9,7 +9,6 @@
 //! - [`bootstrap`] — 加载 store + 组装引擎
 
 pub mod accounts;
-pub mod activity;
 pub mod admin;
 pub mod auth;
 pub mod bootstrap;
@@ -21,12 +20,14 @@ pub mod events;
 pub mod farm;
 pub mod friend;
 pub mod lifecycle;
+pub mod milk_tea;
 pub mod pets;
 pub mod qq_bot_bind;
 pub mod runtime_lease;
 pub mod session;
 pub mod settings;
-pub mod weather;
+pub mod share_reward;
+pub mod solar_calendar;
 pub mod wx_login;
 
 pub use error::{AppError, AppResult};

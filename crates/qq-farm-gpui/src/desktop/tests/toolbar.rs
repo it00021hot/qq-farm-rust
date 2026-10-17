@@ -38,10 +38,25 @@ async fn toolbar_buttons_run_their_commands_without_reentering_the_view(cx: &mut
         window.click("toggle-sidebar", cx);
         assert_eq!(desktop.read(cx).sidebar_collapsed, !collapsed);
 
-        window.click("check-update", cx);
-        assert_eq!(desktop.read(cx).update_message.as_deref(), Some("正在检查发布…"));
+        assert!(window.try_find("check-update").is_none());
+        assert!(window.try_find("page-search").is_none());
     })
-    .expect("click the toolbar refresh, sidebar and update buttons");
+    .expect("toolbar keeps refresh and sidebar controls without search/update");
+
+    // 检查更新已收进设置 → 系统设置。
+    cx.update(|cx| {
+        desktop.update(cx, |this, _| {
+            this.page = Page::Settings;
+            this.page_section = "ui".into();
+            this.page_raw = serde_json::Value::Null;
+        });
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("settings-check-update", cx);
+        assert!(desktop.read(cx).update_checking);
+    })
+    .expect("settings system section runs the update check");
 
     // The settings save button shares the same click path.
     let app = cx.update(|cx| desktop.read(cx).app.clone());
@@ -60,11 +75,12 @@ async fn toolbar_buttons_run_their_commands_without_reentering_the_view(cx: &mut
     });
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
-        window.click("save-settings", cx);
+        assert!(window.try_find("save-settings").is_none());
+        window.click("save-strategy-settings", cx);
         window.render_frame(cx);
         assert!(window.find("settings-save-notice").visible());
     })
-    .expect("click the toolbar settings save button");
+    .expect("click the strategy card save button");
     cx.update(|cx| {
         assert_eq!(desktop.read(cx).settings.save_notice.as_deref(), Some("策略设置已保存"));
     });

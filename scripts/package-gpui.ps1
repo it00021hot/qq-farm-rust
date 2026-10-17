@@ -13,9 +13,10 @@ if (-not (Test-Path $Binary)) { throw "Missing $Binary. Build with cargo build -
 New-Item -ItemType Directory -Force -Path $Package, $Dist | Out-Null
 try {
   Copy-Item $Binary (Join-Path $Package "qq-farm-gpui.exe")
-  New-Item -ItemType Directory -Force -Path (Join-Path $Package "assets"), (Join-Path $Package "activity-assets") | Out-Null
+  New-Item -ItemType Directory -Force -Path (Join-Path $Package "assets") | Out-Null
   Copy-Item (Join-Path $Root "assets\game_config") (Join-Path $Package "assets\game_config") -Recurse
-  Get-ChildItem (Join-Path $Root "desktop-ui\public\activity-assets") | Copy-Item -Destination (Join-Path $Package "activity-assets") -Recurse
+  Copy-Item (Join-Path $Root "desktop-ui\public\activity-assets") (Join-Path $Package "activity-assets") -Recurse
+  Copy-Item (Join-Path $Root "desktop-ui\public\land-assets") (Join-Path $Package "land-assets") -Recurse
   Copy-Item (Join-Path $Root "assets\tsdk.wasm") (Join-Path $Package "tsdk.wasm")
   Copy-Item (Join-Path $Root "assets\tsdk-wx.wasm") (Join-Path $Package "tsdk-wx.wasm")
   Copy-Item (Join-Path $Root "README.md") (Join-Path $Package "README.md")

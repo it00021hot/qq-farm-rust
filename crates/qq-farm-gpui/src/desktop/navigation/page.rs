@@ -5,14 +5,16 @@ impl FarmDesktop {
         if self.page == Page::Mall && page != Page::Mall {
             self.commerce.clear_catalogs();
         }
-        self.activities.view_revision = self.activities.view_revision.wrapping_add(1);
-        self.activities.pending_actions.clear();
-        self.activities.action_notice = None;
-        self.activities.action_notice_generation =
-            self.activities.action_notice_generation.wrapping_add(1);
+        if self.page == Page::SolarCalendar && page != Page::SolarCalendar {
+            self.invalidate_solar_calendar();
+        }
+        if (self.page == Page::MilkTea && page != Page::MilkTea)
+            || (self.page == Page::ShareReward && page != Page::ShareReward)
+        {
+            self.invalidate_milk_tea();
+            self.invalidate_share_reward();
+        }
         self.commerce.invalidate_purchase();
-        self.invalidate_activity_clock();
-        self.activities.weather.invalidate_requests();
         self.invalidate_farm_operations();
         self.invalidate_personal_lands_clock();
         self.invalidate_personal_bag_clock();
@@ -43,15 +45,11 @@ impl FarmDesktop {
         self.dashboard.status_revision = self.dashboard.status_revision.wrapping_add(1);
         self.page = page;
         self.accounts.column_picker_open = false;
-        if page == Page::Activities {
-            self.activities.autumn_logs_load_pending = false;
-        }
         self.page_section = default_page_section(page).into();
         self.preferences.selected_page = page.id().into();
         self.persist_ui_preferences();
         self.rows.clear();
         self.page_raw = serde_json::Value::Null;
-        self.activities.pet_diary_friend_gid.clear();
         if page == Page::GameConfig {
             if let Some(handle) = self.window_handle {
                 let _ = handle.update(cx, |_, window, cx| {
@@ -63,18 +61,11 @@ impl FarmDesktop {
         self.friends.detail_loading_gid = None;
         self.friends.detail_error = None;
         self.error = None;
-        self.activities.pet_diary_battle_target = None;
-        if let Some(handle) = self.window_handle {
-            let _ = handle.update(cx, |_, window, cx| {
-                self.sync_pet_diary_friend_selector(window, cx);
-            });
-        }
-        self.activities.charity_donation_pending = false;
         if page == Page::Dashboard {
             self.start_dashboard_clock(cx);
         }
-        if page == Page::Activities {
-            self.start_activity_clock(cx);
+        if page == Page::SolarCalendar {
+            self.start_solar_calendar_clock(cx);
         }
         if page == Page::Settings {
             if let Some(session_id) = self.settings.qq_bot_session_id.clone() {

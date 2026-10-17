@@ -1059,7 +1059,7 @@ impl PlantingEngine {
     }
 
     /// 用背包种子种植（对齐 bot `plantFromBagSeeds`：bagSeedLandTypes 非空时
-    /// 先拉最新土地构建 landId → 类型映射，受限种子先种且只在命中类型的空地装箱）。
+    /// 先拉最新土地构建 landId → 类型映射，严格按优先级顺序种植，受限种子只在命中类型的空地装箱）。
     pub async fn plant_from_bag_seeds(
         &self,
         lands_to_plant: &[i64],
@@ -1170,23 +1170,8 @@ impl PlantingEngine {
             level_locked.iter().map(|s| s.seed_id).collect();
         let priority =
             crate::models::store::account_config::get_bag_seed_priority(Some(account_id));
+        // 严格按优先级列表顺序种植；受限种子无可用地块时跳过，等待下一轮（bot ebb1be6）
         let ordered = plan_bag_planting_order(&usable, &priority);
-        // 有土地限制的种子先种，否则不限种子会把受限种子唯一可用的地块占光
-        let ordered: Vec<&BagSeedWithLevel> = {
-            let mut restricted = Vec::new();
-            let mut unrestricted = Vec::new();
-            for seed in &ordered {
-                let is_restricted = land_type_available
-                    && resolve_seed_land_types(&restrictions, seed.seed_id).is_some();
-                if is_restricted {
-                    restricted.push(seed);
-                } else {
-                    unrestricted.push(seed);
-                }
-            }
-            restricted.extend(unrestricted);
-            restricted
-        };
         if ordered.is_empty() {
             return Ok(BagPlantResult {
                 remaining_land_ids: target,
@@ -1210,7 +1195,7 @@ impl PlantingEngine {
                 Some(account_id),
             );
 
-        for seed in ordered {
+        for seed in &ordered {
             if target.is_empty() || !fallback_allowed {
                 break;
             }

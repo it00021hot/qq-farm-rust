@@ -1,4 +1,5 @@
 use super::support::open_test_desktop;
+use gpui_kit::component::WindowExt;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{point, px, AppContext as _, TestAppContext};
 
@@ -86,75 +87,64 @@ fn sidebar_account_switcher_switches_between_saved_accounts(cx: &mut TestAppCont
 }
 
 #[gpui_kit::test]
-fn page_search_placeholder_tracks_page_and_locale(cx: &mut TestAppContext) {
+fn game_config_search_placeholder_tracks_locale(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (handle, desktop, _restore) = open_test_desktop(cx);
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         assert_eq!(
             desktop.read(cx).search.read(cx).presentation().placeholder().as_ref(),
-            "搜索当前页面"
+            "请输入关键词搜索"
         );
-        for (page_id, expected) in [
-            ("mall", "搜索商品名称 / ID"),
-            ("friends", "搜索昵称 / GID"),
-            ("game-config", "请输入关键词搜索"),
-        ] {
-            window.click(page_id, cx);
-            window.render_frame(cx);
-            assert_eq!(desktop.read(cx).page.id(), page_id);
-            assert_eq!(
-                desktop.read(cx).search.read(cx).presentation().placeholder().as_ref(),
-                expected,
-                "placeholder after switching to {page_id}"
-            );
-        }
         desktop.update(cx, |this, cx| this.set_language("en-US", window, cx));
         assert_eq!(
             desktop.read(cx).search.read(cx).presentation().placeholder().as_ref(),
             "Please enter keyword"
         );
-        for (page_id, expected) in
-            [("mall", "Search item name / ID"), ("friends", "Search nickname / GID")]
-        {
-            window.click(page_id, cx);
-            window.render_frame(cx);
-            assert_eq!(
-                desktop.read(cx).search.read(cx).presentation().placeholder().as_ref(),
-                expected,
-                "localized placeholder after switching to {page_id}"
-            );
-        }
     })
-    .expect("search placeholder follows the selected page and locale");
+    .expect("embedded game-config search keeps its localized placeholder");
 }
 
 #[gpui_kit::test]
-fn page_level_states_show_update_notice_and_loading_text(cx: &mut TestAppContext) {
+fn page_loading_text_follows_state(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (handle, desktop, _restore) = open_test_desktop(cx);
     cx.update(|cx| {
         desktop.update(cx, |this, _| {
             this.page = crate::pages::Page::Friends;
             this.selected_account = Some("7".into());
-            this.update_message = Some("发现新版本 v9.9.9".into());
-            this.release_url = Some("https://example.com/releases/tag/v9.9.9".into());
             this.loading = true;
         });
     });
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
-        assert_eq!(window.find("update-notice").label(), Some("发现新版本 v9.9.9"));
-        assert_eq!(window.find("open-release").label(), Some("打开发布页下载"));
         assert_eq!(window.find("page-loading").label(), Some("正在加载…"));
         desktop.update(cx, |this, _| {
-            this.release_url = None;
             this.loading = false;
         });
         window.render_frame(cx);
-        assert!(window.find("update-notice").visible());
-        assert!(window.try_find("open-release").is_none());
         assert!(window.try_find("page-loading").is_none());
+        assert!(window.try_find("update-notice").is_none());
     })
-    .expect("page-level update notice and loading text follow their state");
+    .expect("page-level loading text follows its state");
+}
+
+#[gpui_kit::test]
+fn update_available_opens_a_dialog_with_the_release_action(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (handle, desktop, _restore) = open_test_desktop(cx);
+    cx.update(|cx| {
+        desktop.update(cx, |this, cx| {
+            this.show_update_dialog("v9.9.9", "https://example.com/releases/tag/v9.9.9", cx);
+        });
+    });
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.has_active_dialog(cx));
+        assert_eq!(window.find("update-open-release").label(), Some("打开发布页下载"));
+        window.close_dialog(cx);
+        window.render_frame(cx);
+        assert!(!window.has_active_dialog(cx));
+    })
+    .expect("update dialog shows the release action");
 }

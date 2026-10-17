@@ -3,7 +3,7 @@ pub(in crate::desktop) fn settings_text(language: &str, chinese: &str) -> String
         return chinese.to_string();
     }
     let english = match chinese {
-        "界面偏好" => "Appearance and language",
+        "系统设置" => "System settings",
         "跟随系统" => "System",
         "浅色" => "Light",
         "深色" => "Dark",

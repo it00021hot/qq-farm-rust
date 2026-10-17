@@ -155,15 +155,25 @@ impl Api {
         FarmingReply::decode(&*resp).map_err(Error::from)
     }
 
+    /// 一键施肥批量请求：单次请求提交多地块，每个地块只施一次（对齐 bot `fertilizeBatch`）。
+    pub async fn fertilize_batch(
+        &self,
+        land_ids: &[i64],
+        fertilizer_id: i64,
+    ) -> Result<FertilizeReply> {
+        let body = FertilizeRequest { land_ids: land_ids.to_vec(), fertilizer_id }.encode_to_vec();
+        let resp = self.gateway.request("gamepb.plantpb.PlantService", "Fertilize", &body).await?;
+        FertilizeReply::decode(&*resp).map_err(Error::from)
+    }
+
     /// 施肥（单块）。返回容器剩余秒数 + 回包土地（用于 Both 催熟时踢掉已成熟地）。
     pub async fn fertilize(
         &self,
         land_id: i64,
         fertilizer_id: i64,
     ) -> Result<(Option<i64>, Vec<LandInfo>)> {
-        let body = FertilizeRequest { land_ids: vec![land_id], fertilizer_id }.encode_to_vec();
-        let resp = self.gateway.request("gamepb.plantpb.PlantService", "Fertilize", &body).await?;
-        let reply = FertilizeReply::decode(&*resp).map_err(Error::from)?;
+        // 对齐 bot `fertilizeOne` → `fertilizeBatch([landId])`
+        let reply = self.fertilize_batch(&[land_id], fertilizer_id).await?;
         Ok((reply.fertilizer.map(|item| item.count), reply.land))
     }
 

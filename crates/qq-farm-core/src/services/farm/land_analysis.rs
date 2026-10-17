@@ -28,8 +28,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::proto::generated::gamepb::plantpb::{
-    LandInfo, PlantExtendedStatus, PlantInfo, PlantInteractionTargetInfo, PlantInteractionUseInfo,
-    PlantPhaseInfo,
+    LandInfo, PlantInfo, PlantInteractionTargetInfo, PlantInteractionUseInfo, PlantPhaseInfo,
 };
 
 /// 土地 map：land_id -> LandInfo
@@ -43,10 +42,6 @@ pub type LandMap = HashMap<i64, LandInfo>;
 
 /// 农场主可清理的地块级互动道具 ID 集合
 pub const OWNER_CLEANABLE_INTERACTION_ITEM_IDS: &[i64] = &[301_101, 301_102, 5006];
-
-const QIXI_DEW_ITEM_ID: i64 = 301_103;
-const QIXI_MUTANT_CONFIG_ID: i64 = 13;
-const QIXI_DEW_HISTORY_CODES: &[i64] = &[9, 10];
 
 /// 汇总植株的变异配置 ID（对齐 bot `getPlantMutantConfigIds`）。
 ///
@@ -70,24 +65,6 @@ pub fn get_plant_mutant_config_ids(
     values.into_iter().filter(|id| *id > 0 && seen.insert(*id)).collect()
 }
 
-/// 土地扩展记录（field 40）
-fn plant_extended_statuses(plant: &PlantInfo) -> &[PlantExtendedStatus] {
-    &plant.field_40
-}
-
-/// 七夕灵露的保守兜底：变异含 13 且 field_40 存在 `{9|10, 1}` 记录才算生效
-fn qixi_dew_extended_status<'a>(
-    plant: &'a PlantInfo,
-    mutant_ids: &[i64],
-) -> Option<&'a PlantExtendedStatus> {
-    if !mutant_ids.contains(&QIXI_MUTANT_CONFIG_ID) {
-        return None;
-    }
-    plant_extended_statuses(plant)
-        .iter()
-        .find(|status| QIXI_DEW_HISTORY_CODES.contains(&status.value_1) && status.value_2 == 1)
-}
-
 /// 农场主是否有待清理的地块级互动道具（uses + targets 实时记录）
 #[must_use]
 pub fn has_owner_cleanable_interaction(plant: &PlantInfo) -> bool {
@@ -106,13 +83,10 @@ fn interaction_item_metadata(item_id: i64) -> (String, i64) {
     }
 }
 
-/// 合并 uses + targets + 七夕灵露兜底的互动效果展示列表（对齐 bot
-/// `getPlantInteractionEffects`；target 按 `itemId:hostGid:usedAt:landId` 去重）。
+/// 合并 uses + targets 的互动效果展示列表（对齐 bot `getPlantInteractionEffects`；
+/// target 按 `itemId:hostGid:usedAt:landId` 去重）。
 #[must_use]
-pub fn get_plant_interaction_effects(
-    plant: &PlantInfo,
-    mutant_ids: &[i64],
-) -> Vec<serde_json::Value> {
+pub fn get_plant_interaction_effects(plant: &PlantInfo) -> Vec<serde_json::Value> {
     let uses: &[PlantInteractionUseInfo] = &plant.interaction_uses;
     let targets: &[PlantInteractionTargetInfo] = &plant.interaction_targets;
     let mut effects: Vec<serde_json::Value> = Vec::new();
@@ -214,26 +188,6 @@ pub fn get_plant_interaction_effects(
         }));
     }
 
-    // 七夕灵露：field_40 兜底（变异 13 且历史码 {9,10}×1）
-    if let Some(status) = qixi_dew_extended_status(plant, mutant_ids) {
-        let already = effects
-            .iter()
-            .any(|e| e.get("itemId").and_then(|v| v.as_i64()) == Some(QIXI_DEW_ITEM_ID));
-        if !already {
-            let (item_name, activity_id) = interaction_item_metadata(QIXI_DEW_ITEM_ID);
-            effects.push(serde_json::json!({
-                "itemId": QIXI_DEW_ITEM_ID,
-                "itemName": item_name,
-                "activityId": activity_id,
-                "effectType": status.value_1,
-                "landId": 0,
-                "hostGid": 0,
-                "usedAt": 0,
-                "confirmed": true,
-                "source": "protocol-land-field-40",
-            }));
-        }
-    }
     effects
 }
 
@@ -1421,7 +1375,7 @@ pub fn build_lands_panel_dto(lands: &[LandInfo], kind: LandDetailKind) -> Vec<se
                 String::new()
             }
         };
-        let interaction_effects = get_plant_interaction_effects(plant, &mutant_config_ids);
+        let interaction_effects = get_plant_interaction_effects(plant);
         let protocol_field_40: Vec<serde_json::Value> = plant
             .field_40
             .iter()

@@ -56,19 +56,6 @@ impl FarmDesktop {
         )
     }
     pub(super) fn render_page_controls(&self, cx: &mut Context<Self>) -> Div {
-        if self.page == Page::Activities {
-            if self.page_section == "directory" {
-                return div();
-            }
-            let controls = self.append_activity_controls(h_flex().gap_2().flex_wrap(), cx);
-            return div()
-                .px_6()
-                .py_3()
-                .v_flex()
-                .gap_3()
-                .child(self.render_activity_detail_navigation(cx))
-                .child(controls);
-        }
         // Settings tabs mix label/control blocks with tall section cards; top
         // alignment keeps every block on the same reading line instead of
         // floating the shorter ones half-way down the tallest card. Toolbars on
@@ -81,7 +68,6 @@ impl FarmDesktop {
         controls = self.append_dashboard_controls(controls, cx);
         controls = self.append_personal_controls(controls, cx);
         controls = self.append_friend_controls(controls, cx);
-        controls = self.append_activity_controls(controls, cx);
         controls = self.append_settings_controls(controls, cx);
         controls = self.append_game_config_controls(controls, cx);
         div().px_6().py_2().v_flex().gap_2().child(controls)

@@ -15,6 +15,9 @@ pub(crate) struct IllustratedState {
     pub(crate) purchase_dialog_open: bool,
     pub(crate) notice: Option<(String, bool)>,
     pub(crate) notice_generation: u64,
+    /// 手动领取图鉴奖励在途
+    pub(crate) claim_pending: bool,
+    pub(crate) claim_generation: u64,
 }
 
 impl IllustratedState {
@@ -42,6 +45,8 @@ impl IllustratedState {
             purchase_dialog_open: false,
             notice: None,
             notice_generation: 0,
+            claim_pending: false,
+            claim_generation: 0,
         }
     }
 }

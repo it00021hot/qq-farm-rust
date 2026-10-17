@@ -153,6 +153,15 @@ pub(super) fn illustrated_snapshot() -> serde_json::Value {
                 "level": 4,
                 "progress": 46,
                 "nextLevelProgress": 80,
+                "claimable": true,
+                "rewards": [{"itemId": 1002, "name": "点券", "count": 200}],
+                "levels": [
+                    {"level": 4, "progress": 40, "claimed": true, "canClaim": false,
+                        "rewards": [{"itemId": 1002, "name": "点券", "count": 200}]},
+                    {"level": 5, "progress": 80, "claimed": false, "canClaim": true,
+                        "rewards": [{"itemId": 1002, "name": "点券", "count": 200}]},
+                    {"level": 6, "progress": 160, "claimed": false, "canClaim": false, "rewards": []}
+                ],
                 "items": [
                     {"seedId": 1020001, "name": "草莓", "rewardCategory": 2, "progress": 46,
                         "unlocked": true, "image": format!("{SEED_IMAGE_ROOT}/1020001.webp"),
@@ -169,9 +178,14 @@ pub(super) fn illustrated_snapshot() -> serde_json::Value {
                 "level": 2,
                 "progress": 30,
                 "nextLevelProgress": 40,
+                "claimable": false,
                 "currentBuffs": [
                     {"id": 1, "name": "变异几率", "value": 15, "valueType": "probability"},
                     {"id": 2, "name": "变异收获", "value": 3, "valueType": "count"}
+                ],
+                "buffs": [
+                    {"id": 1, "level": 1, "name": "变异几率", "value": 15, "valueType": "probability"},
+                    {"id": 2, "level": 3, "name": "变异收获", "value": 3, "valueType": "count"}
                 ],
                 "items": [
                     {"seedId": 20001, "name": "金色草莓", "rewardCategory": 4, "progress": 30,
@@ -525,6 +539,264 @@ pub(super) fn settings_qq_bot_bound_snapshot() -> serde_json::Value {
     snapshot
 }
 
+pub(super) fn solar_calendar_snapshot() -> serde_json::Value {
+    let now = 1_792_252_900;
+    serde_json::json!({
+        "serverTime": now,
+        "defaultEventId": 401,
+        "events": [
+            {
+                "id": 401, "name": "重阳",
+                "description": "农历 九月初九\n九日登高，云淡天长\n拾级而上，存一襟山光",
+                "startTime": now - 100, "endTime": now + 86_400, "status": 2,
+                "directClaimed": false, "quizClaimed": false, "quizWrongToday": false,
+                "wrongOptions": [],
+                "question": "重阳节又被称为什么节？",
+                "options": ["A.敬老节", "B.儿童节", "C.母亲节", "D.教师节"],
+                "errorTips": "它在农历九月初九，九九谐音久久，有敬老长寿的含义。",
+                "rules": ["【节令奖励】", "节令期间可直接领取基础奖励，答对节令问题后领取额外奖励。"],
+                "rewards": [{"id": 1002, "count": 200, "name": "点券",
+                    "image": format!("{SEED_IMAGE_ROOT}/1020001.webp")}],
+                "questionRewards": [{"id": 1002, "count": 100, "name": "点券", "image": ""}],
+                "canClaim": true, "canAnswer": true
+            },
+            {
+                "id": 402, "name": "霜降",
+                "description": "农历 九月十四\n气肃而凝，丹柿垂檐",
+                "startTime": now + 86_400, "endTime": now + 172_800, "status": 1,
+                "directClaimed": false, "quizClaimed": false, "quizWrongToday": false,
+                "wrongOptions": [], "question": "", "options": [], "errorTips": "",
+                "rules": [], "rewards": [], "questionRewards": [],
+                "canClaim": false, "canAnswer": false
+            }
+        ],
+        "seasons": [
+            {
+                "id": 4, "name": "第四季度", "year": "2026",
+                "description": "第四季度节令：寒露、重阳、霜降",
+                "eventIds": [401, 402], "litCount": 1, "totalCount": 3,
+                "claimed": false, "canClaim": false,
+                "rewards": [{"id": 1002, "count": 10, "name": "点券", "image": ""}]
+            }
+        ]
+    })
+}
+
+pub(super) fn milk_tea_snapshot(section: &str) -> serde_json::Value {
+    let now = 1_792_252_900;
+    let mut value = serde_json::json!({
+        "id": 2_026_110_101_i64,
+        "title": "奶茶补给站",
+        "serverTime": now,
+        "startTime": now - 86_400,
+        "endTime": now + 30 * 86_400,
+        "settleStartTime": now + 25 * 86_400,
+        "active": true,
+        "settling": false,
+        "page": "shop",
+        "recommendedNames": ["奶茶小铺", "奶茶冲鸭", "奶茶补给站"],
+        "rules": ["【营业】开店后由收银台持续产出，及时领取收益。"],
+        "balances": {"1041": 120, "1042": 3, "1002": 800},
+        "summary": {
+            "shopOpenAt": now - 3_600,
+            "shopName": "奶茶补给站",
+            "renameCdUntilAt": 0,
+            "level": 2,
+            "totalRevenue": 320,
+            "hireDisabled": false,
+            "cashierFull": false,
+            "cashierWarning": false,
+            "canUpgrade": true,
+            "openingGiftPreview": [],
+            "hasWorkerShift": true,
+            "hasUnclaimedWage": false,
+            "guideIds": [],
+            "nextCupAt": now + 30
+        },
+        "shop": {
+            "level": 2,
+            "totalRevenue": 320,
+            "nextLevelRevenue": 800,
+            "cashierCapacitySec": 14_400,
+            "cashierElapsedSec": 3_600,
+            "slots": [{
+                "slotIndex": 0,
+                "isRobot": false,
+                "shiftId": 8,
+                "beginAt": now - 600,
+                "endAt": now + 13_800,
+                "cost": 40,
+                "talentId": 9001,
+                "talentName": "金牌销售",
+                "interactType": 0,
+                "interactAt": 0,
+                "employee": {"gid": 102, "name": "小麦", "avatar": "", "level": 12}
+            }],
+            "drinkCups": {"1": 12, "2": 4},
+            "secPerCup": 4.5,
+            "nextFullAt": now + 600,
+            "salesItemId": 1041,
+            "salesDurationSec": 600,
+            "isSettling": false,
+            "pendingRewards": [{"id": 1041, "count": 18, "name": "奶茶券", "image": ""}],
+            "pendingCupsByRecipe": {"1": 12},
+            "pendingCupsBySource": {"1": 12},
+            "boostCupsPerUse": 6,
+            "boostPreviewRewards": [{"id": 1041, "count": 24, "name": "奶茶券", "image": ""}],
+            "effectiveCupsPerHour": 800,
+            "boostCoinPrice": {"1": 3}
+        },
+        "recipes": [{
+            "recipeId": 1,
+            "recipeName": "普通奶茶",
+            "unlocked": true,
+            "isAdvanced": false,
+            "tokenPrice": 12,
+            "coinPrice": 3,
+            "stockCups": 12,
+            "clearCoinPrice": 0,
+            "clearCoinTotal": 0,
+            "image": "/activity-assets/milk-tea/recipe-1.png",
+            "description": "普通奶茶，不限量供应。",
+            "fruitId": 0,
+            "boostTokenPrice": 12
+        }],
+        "levels": [{"level": 1, "revenueRequired": 0, "basePopularity": 40, "advancedPricePercent": 0, "employeeSlotCount": 1, "rewards": [], "recipes": ["普通奶茶"]}]
+    });
+    match section {
+        "workshop" => {
+            value["fruits"] = serde_json::json!([
+                {"id": 41_221, "count": 3, "name": "青梅", "image": "", "uid": "1001", "locked": false, "mutations": []},
+                {"id": 41_222, "count": 1, "name": "草莓", "image": "", "uid": "1002", "locked": true, "mutations": []}
+            ]);
+        }
+        "hireList" => {
+            value["hire"] = serde_json::json!({
+                "durationId": 1,
+                "wageTotal": 40,
+                "minRemainBizSec": 600,
+                "inviteEntry": false,
+                "friends": [
+                    {"friend": {"gid": 102, "name": "小麦", "avatar": "", "level": 12}, "isRobot": false, "talentId": 9001, "talentName": "金牌销售", "state": 0, "stateUntilAt": 0, "rehireAvailableAt": 0},
+                    {"friend": {"gid": 103, "name": "阿远", "avatar": "", "level": 8}, "isRobot": false, "talentId": 0, "talentName": "", "state": 1, "stateUntilAt": now + 3600, "rehireAvailableAt": now + 7200}
+                ],
+                "robots": []
+            });
+            value["durations"] = serde_json::json!([
+                {"durationId": 1, "durationSec": 14_400, "displayOrder": 1, "cost": 40, "minRemainingBusinessSec": 600},
+                {"durationId": 2, "durationSec": 43_200, "displayOrder": 2, "cost": 130, "minRemainingBusinessSec": 14_401}
+            ]);
+        }
+        "work" => {
+            value["work"] = serde_json::json!({
+                "talentId": 0,
+                "talentName": "",
+                "talentDescription": "",
+                "interactDone": false,
+                "myShift": {
+                    "employer": {"gid": 101, "name": "农场主人", "avatar": "", "level": 42},
+                    "shopName": "快乐奶茶屋",
+                    "shiftId": 9,
+                    "talentId": 9001,
+                    "talentName": "金牌销售",
+                    "beginAt": now - 600,
+                    "endAt": now + 13_800,
+                    "settleStartAt": now + 20 * 86_400,
+                    "interactCount": 1,
+                    "interactLimit": 3,
+                    "wageTotal": 40,
+                    "baseWage": 40,
+                    "interactionResult": null
+                },
+                "slips": [
+                    {"employer": {"gid": 104, "name": "小镇姑娘", "avatar": "", "level": 18}, "shopName": "奶茶星球", "shiftId": 7, "beginAt": now - 20_000, "endAt": now - 5_600, "workSec": 14_400, "wages": {"baseWage": 40, "finalWage": 52}, "truncated": false, "wageStatus": 1, "interactionResult": {"name": "宣传推广", "reward": {"name": "奶茶券", "count": 8}}}
+                ]
+            });
+            value["interactions"] = serde_json::json!([
+                {"interactionId": 1, "name": "宣传推广", "image": "/activity-assets/milk-tea/interact-1.png", "description": "帮助老板立即卖出8杯奶茶，你将获得本班工资20%的奖金", "ready": true},
+                {"interactionId": 2, "name": "花式摇杯", "image": "/activity-assets/milk-tea/interact-2.png", "description": "老板未来3小时的奶茶券收益+10%", "ready": true},
+                {"interactionId": 3, "name": "招牌试饮", "image": "/activity-assets/milk-tea/interact-3.png", "description": "老板未来2小时的奶茶券收益+20%", "ready": true},
+                {"interactionId": 4, "name": "划水摸鱼", "image": "/activity-assets/milk-tea/interact-4.png", "description": "有40%概率获得宣传喇叭x1", "ready": true},
+                {"interactionId": 5, "name": "申请涨薪", "image": "/activity-assets/milk-tea/interact-5.png", "description": "有60%概率工资翻倍", "ready": true}
+            ]);
+        }
+        "exchange" => {
+            value["goods"] = serde_json::json!([
+                {"id": "1", "name": "化肥礼包", "description": "", "rewards": [{"id": 1001, "count": 2, "name": "金币", "image": ""}], "costs": [{"id": 1041, "count": 30, "name": "奶茶券", "image": ""}], "remaining": 2, "conditions": [], "category": "", "available": true},
+                {"id": "2", "name": "限定种子", "description": "", "rewards": [{"id": 1002, "count": 5, "name": "点券", "image": ""}], "costs": [{"id": 1041, "count": 60, "name": "奶茶券", "image": ""}], "remaining": null, "conditions": [{"type": "level", "satisfied": true, "current": 3, "target": 2}], "category": "seed", "available": false}
+            ]);
+        }
+        "fund" => {
+            value["fund"] = serde_json::json!({
+                "unlocked": true,
+                "costs": [{"id": 1002, "count": 60, "name": "点券", "image": ""}],
+                "tiers": [
+                    {"id": 1, "state": 3, "rewards": [{"id": 1002, "count": 20, "name": "点券", "image": ""}], "conditions": [{"type": "harvest", "current": 20, "target": 20, "reached": true}]},
+                    {"id": 2, "state": 2, "rewards": [{"id": 1002, "count": 40, "name": "点券", "image": ""}], "conditions": [{"type": "harvest", "current": 41, "target": 40, "reached": true}]}
+                ]
+            });
+        }
+        "rank" => {
+            value["rank"] = serde_json::json!({
+                "page": 1,
+                "myRank": 12,
+                "snapshotTime": now,
+                "hasMore": true,
+                "ranks": [
+                    {"owner": {"gid": 101, "name": "农场主人", "avatar": "", "level": 42}, "shopName": "快乐奶茶屋", "level": 4, "totalRevenue": 12_800, "rank": 1, "canShowOff": true},
+                    {"owner": {"gid": 102, "name": "小麦", "avatar": "", "level": 12}, "shopName": "奶茶星球", "level": 3, "totalRevenue": 9_600, "rank": 2, "canShowOff": false}
+                ]
+            });
+        }
+        "logs" => {
+            value["logs"] = serde_json::json!({
+                "day": now - (now % 86_400) - 28_800,
+                "token": 320,
+                "coin": 480,
+                "cups": 92,
+                "cupsByRecipe": {"1": 60, "2": 32},
+                "cupsBySource": {"1": 92},
+                "hires": [
+                    {"friend": {"gid": 102, "name": "小麦", "avatar": "", "level": 12}, "hireAt": now - 20_000, "durationSec": 14_400, "workSec": 14_400, "settled": true, "shiftId": 7, "talentName": "金牌销售", "wages": {"baseWage": 40, "finalWage": 52}, "interactionResult": {"name": "宣传推广", "reward": {"name": "奶茶券", "count": 8}}}
+                ],
+                "items": [{"id": 1041, "count": 320, "name": "奶茶券", "image": ""}]
+            });
+        }
+        _ => {}
+    }
+    value
+}
+
+pub(super) fn share_reward_snapshot() -> serde_json::Value {
+    let now = 1_792_252_900;
+    serde_json::json!({
+        "id": "2026110104",
+        "title": "快乐不独享",
+        "icon": "/activity-assets/autumn/happy.png",
+        "serverTime": now * 1_000_i64,
+        "startTime": (now - 86_400) * 1_000_i64,
+        "endTime": (now + 30 * 86_400) * 1_000_i64,
+        "active": true,
+        "rules": ["把快乐值分享给好友，双方都有奖励。"],
+        "score": 45,
+        "scoreItemId": 1043,
+        "dailyReward": 5,
+        "firstShareReward": 10,
+        "claimedCount": 1,
+        "claimLimit": 3,
+        "poolClaimedCount": 2,
+        "poolClaimLimit": 8,
+        "canClaimDaily": true,
+        "canShare": false,
+        "firstShareAwarded": true,
+        "canClaimMilestones": true,
+        "milestones": [
+            {"id": "20", "threshold": 20, "state": 3, "rewards": [{"id": 1002, "count": 10, "name": "点券", "image": ""}]},
+            {"id": "40", "threshold": 40, "state": 2, "rewards": [{"id": 1002, "count": 20, "name": "点券", "image": ""}]}
+        ]
+    })
+}
+
 pub(super) fn settings_snapshot() -> serde_json::Value {
     serde_json::json!({
         "plantingStrategy": "max_profit",
@@ -578,251 +850,5 @@ pub(super) fn game_config_snapshot() -> serde_json::Value {
             {"id": 30001, "name": "普通化肥", "type": 7, "rarity": 2, "price": 5, "priceId": 1},
             {"id": 30002, "name": "同气连枝礼包", "type": 9, "rarity": 1, "price": 0, "priceId": 1}
         ]
-    })
-}
-
-pub(super) fn activity_snapshot() -> serde_json::Value {
-    serde_json::json!({
-        "activities": [
-            {
-                "id": "2026100100", "name": "千星游记", "startTime": 1790812800_i64,
-                "endTime": 1793404800_i64, "gameplayKey": "stellar", "detailTarget": "travel",
-                "gameplayTargets": ["travel", "constellation", "shop", "solar"]
-            },
-            {
-                "id": "2026100200", "name": "秋日祈愿", "startTime": 1790812800_i64,
-                "endTime": 1793404800_i64, "gameplayKey": "autumnWish", "detailTarget": "wish"
-            },
-            {
-                "id": "2026110100", "name": "即将开放的活动", "startTime": 1793491200_i64,
-                "endTime": 1796083200_i64
-            },
-            {
-                "id": "2026090100", "name": "已结束的活动", "startTime": 1788220800_i64,
-                "endTime": 1789862400_i64
-            }
-        ],
-        "season": {
-            "title": "千星游记",
-            "pass": {
-                "level": "5", "progress": 25, "progressMax": 50,
-                "nodes": [
-                    {"id":"4", "level":"4", "claimed":true, "rewards":[{"name":"星砂", "count":2}]},
-                    {"id":"5", "level":"5", "current":true, "claimable":true, "rewards":[{"name":"种子", "count":1}]}
-                ]
-            }
-        },
-        "actions": {"claimPass":{"enabled":true}}
-    })
-}
-
-pub(super) fn pet_diary_snapshot() -> serde_json::Value {
-    serde_json::json!({
-        "petDiary": {
-            "title": "萌宠成长日记",
-            "active": true,
-            "startTime": 1790812800000_i64,
-            "endTime": 1793404800000_i64,
-            "balances": [
-                {"id": "luckyStar", "name": "幸运星", "count": 128},
-                {"id": "coupon", "name": "", "count": null},
-                {"id": "cake", "name": "元气糕", "count": 6}
-            ],
-            "nurture": {
-                "initialized": true, "adult": false, "growth": 46, "adultGrowth": 100,
-                "feedCount": 3, "feedLimit": 16, "canFeed": true,
-                "feedCosts": [{"id": 3001, "name": "元气糕", "count": 1, "image": "/activity-assets/pet-diary/img_exchange_item1.webp"}]
-            },
-            "hunt": {
-                "count": 2, "limit": 10, "total": "5", "luckyStarTotal": "18",
-                "costs": [{"id": 3002, "name": "骨头", "count": 2}],
-                "canDraw": true, "canPlunder": true
-            },
-            "charms": {
-                "canRefresh": true, "canChoose": false,
-                "freeRefreshRemaining": 1, "refreshNote": "每日免费刷新 1 次",
-                "paidRefreshCount": 0, "refreshCost": {"count": 30}, "refreshBalance": "75",
-                "pool": [
-                    {"id": 11, "name": "金钟罩", "shortDescription": "被夺时保护部分宝藏", "image": "/activity-assets/pet-diary/img_exchange_item2.webp"},
-                    {"id": 12, "name": "吸星大法", "shortDescription": "夺宝时提升胜率"}
-                ],
-                "equipped": [{"id": 9, "name": "凌波微步", "remaining": [2, 3]}]
-            },
-            "treasures": [
-                {"id": 71, "status": 2, "item": {"id": 4001, "name": "红包", "count": 1, "image": "/activity-assets/pet-diary/img_exchange_item3.webp"},
-                    "protectedCount": "3", "originalCount": "5", "plunderCount": 1, "maxPlunderCount": 2, "endTime": 1791300000000_i64},
-                {"id": 72, "status": 3, "item": {"id": 4002, "name": "星砂", "count": 2},
-                    "protectedCount": "2", "originalCount": "2", "plunderCount": 0, "maxPlunderCount": 2}
-            ],
-            "compensationCount": "1",
-            "seeds": {"canClaim": true, "days": [
-                {"day": 1, "claimed": true, "rewards": [{"id": 1, "name": "种子", "count": 1, "image": format!("{SEED_IMAGE_ROOT}/1020145.webp")}]},
-                {"day": 2, "claimable": true, "rewards": [{"id": 2, "name": "种子", "count": 1, "image": format!("{SEED_IMAGE_ROOT}/1020145.webp")}]},
-                {"day": 3, "rewards": []}
-            ]},
-            "shop": [
-                {"id": "201", "name": "元气糕", "image": "/activity-assets/pet-diary/img_exchange_item1.webp", "exchangeable": true,
-                    "costs": [{"name": "幸运星", "count": 5}], "limit": "3", "purchased": "1", "remaining": "2"},
-                {"id": "202", "name": "星砂袋", "exchangeable": false,
-                    "costs": [{"name": "幸运星", "count": 20}], "limit": "0", "purchased": "0", "remaining": null}
-            ],
-            "stories": [
-                {"order": 1, "unlocked": true, "claimed": true, "photo": "/activity-assets/pet-diary/img_s3PhotoWall_photo0.webp"},
-                {"order": 2, "unlocked": true, "claimed": false, "photo": "/activity-assets/pet-diary/img_s3PhotoWall_photo1.webp"},
-                {"order": 3}
-            ],
-            "solarTerms": {"terms": [
-                {"id": 9, "name": "白露", "canClaim": true, "rewards": [{"name": "幸运星", "count": 3}]},
-                {"id": 10, "name": "秋分", "claimed": true, "rewards": [{"name": "元气糕", "count": 2}]}
-            ]},
-            "battleCount": 3, "battleLimit": 20, "skipBattle": false
-        },
-        "petDiaryRecords": [],
-        "petDiaryFriends": [{"gid": "42", "nickname": "Alice"}]
-    })
-}
-
-pub(super) fn charity_snapshot() -> serde_json::Value {
-    serde_json::json!({
-        "charity": {
-            "groupId": "charity-demo",
-            "name": "公益小红花",
-            "active": true,
-            "love": {"name": "爱心", "image": format!("{SEED_IMAGE_ROOT}/1020145.webp")},
-            "loveBalance": "36",
-            "donatedLove": "128",
-            "settlement": {
-                "requiredLove": "200",
-                "eligible": false,
-                "reward": {"name": "公益礼盒", "image": format!("{SEED_IMAGE_ROOT}/1020145.webp")}
-            },
-            "globalProgress": {
-                "donated": "1250",
-                "target": "5000",
-                "rewardTarget": "3000",
-                "reward": {"name": "全服奖励", "image": format!("{SEED_IMAGE_ROOT}/1020145.webp")}
-            },
-            "seedReward": {
-                "claimed": false,
-                "reward": {"name": "小红花种子", "count": 5, "image": format!("{SEED_IMAGE_ROOT}/1020145.webp")}
-            },
-            "dailyGift": {"claimed": true, "reward": {"name": "每日礼包", "count": 1}},
-            "progressRewards": [
-                {"target": "100", "reached": true, "claimed": true, "reward": {"name": "星砂", "count": 2}},
-                {"target": "300", "reached": true, "claimed": false, "claimable": true, "claimSupported": true, "reward": {"name": "化肥", "count": 3}},
-                {"target": "800", "reached": false, "reward": {"name": "种子", "count": 5}}
-            ],
-            "rules": {
-                "title": "公益规则",
-                "paragraphs": ["捐赠爱心可获得奖励", "全服达标解锁共同目标奖励"],
-                "lines": ["活动结束后按结算资格发放"]
-            },
-            "actions": {
-                "claimSeeds": {"enabled": true},
-                "donateLove": {"enabled": true},
-                "claimDailyGift": {"enabled": false}
-            }
-        }
-    })
-}
-
-pub(super) fn qixi_snapshot() -> serde_json::Value {
-    let image = format!("{SEED_IMAGE_ROOT}/1020145.webp");
-    serde_json::json!({
-        "qixi": {
-            "title": "鹊桥寄情",
-            "active": true,
-            "startTime": 1790812800000_i64,
-            "endTime": 1793404800000_i64,
-            "feather": {"name": "鹊羽", "image": image},
-            "sachet": {"name": "鹊羽香囊", "image": image},
-            "receivedSachet": {"image": image},
-            "balances": {"known": true, "feather": "80", "sachet": "6", "receivedSachet": "3"},
-            "gift": {"sentCount": "12"},
-            "bridge": {
-                "currentStage": 3,
-                "claimable": true,
-                "stages": [
-                    {"id": 1, "stage": 1, "completed": true, "claimed": true,
-                        "cost": {"name": "鹊羽", "count": 20},
-                        "rewards": [{"name": "钻石", "count": 5}]},
-                    {"id": 2, "stage": 2, "completed": true,
-                        "cost": {"name": "鹊羽", "count": 30},
-                        "rewards": [{"name": "香囊", "count": 1, "image": image}]},
-                    {"id": 3, "stage": 3, "current": true, "claimable": true,
-                        "cost": {"name": "鹊羽", "count": 40, "image": image},
-                        "rewards": [{"name": "星砂", "count": 3}]}
-                ]
-            },
-            "actions": {"bridge": {"enabled": true}, "gift": {"enabled": true}},
-            "rules": {
-                "title": "活动规则",
-                "paragraphs": ["筑建鹊桥领取阶段奖励", "把鹊羽香囊赠给好友"],
-                "lines": ["赠送数量不超过当前香囊余额"]
-            }
-        },
-        "activityFriends": [
-            {"gid": 101, "nickname": "小麦", "level": 12},
-            {"gid": 102, "nickname": "阿远", "level": 8}
-        ]
-    })
-}
-
-pub(super) fn autumn_snapshot() -> serde_json::Value {
-    let image = format!("{SEED_IMAGE_ROOT}/1020145.webp");
-    serde_json::json!({
-        "autumn": {
-            "wish": {
-                "title": "秋祈良愿",
-                "active": true,
-                "startTime": 1790812800000_i64,
-                "endTime": 1793404800000_i64,
-                "rules": ["每日可祈愿领取奖励", "连续祈愿可获得额外奖励"],
-                "day": 3,
-                "remaining": 2,
-                "canDraw": true,
-                "canClaim": true,
-                "choices": [
-                    {"id": 1, "name": "祈愿丰收"},
-                    {"id": 2, "name": "祈愿好运"}
-                ],
-                "pending": {
-                    "chooseId": 1, "textId": 1, "day": 2, "text": "收获满满",
-                    "rewards": [{"name": "秋日果实", "count": 2, "image": image}]
-                },
-                "rewardDays": [
-                    {"day": 1, "reward": {"name": "秋日种子", "count": 1, "image": image}},
-                    {"day": 2, "reward": {"name": "化肥", "count": 2, "image": image}},
-                    {"day": 3, "reward": {"name": "钻石", "count": 5, "image": image}}
-                ]
-            },
-            "happy": {
-                "title": "快乐不独享",
-                "active": true,
-                "startTime": 1790812800000_i64,
-                "endTime": 1793404800000_i64,
-                "rules": ["分享快乐值给好友", "累积快乐值解锁档位奖励"],
-                "score": 45,
-                "dailyReward": 5,
-                "firstShareReward": 10,
-                "claimedCount": 1,
-                "claimLimit": 3,
-                "poolClaimedCount": 2,
-                "poolClaimLimit": 8,
-                "canClaimDaily": true,
-                "canShare": true,
-                "firstShareAwarded": false,
-                "canClaimMilestones": true,
-                "milestones": [
-                    {"id": "20", "threshold": 20, "state": 3, "rewards": [{"name": "星砂", "count": 1, "image": image}]},
-                    {"id": "40", "threshold": 40, "state": 2, "rewards": [{"name": "化肥", "count": 2, "image": image}]},
-                    {"id": "80", "threshold": 80, "state": 0, "rewards": [{"name": "钻石", "count": 5, "image": image}]}
-                ],
-                "logs": {"total": 2, "logs": [
-                    {"seq": 1, "score": 3, "createdAt": 1790000000, "actor": {"name": "好友A"}},
-                    {"seq": 2, "score": -1, "createdAt": 1790000600, "actor": {}}
-                ]}
-            }
-        }
     })
 }
