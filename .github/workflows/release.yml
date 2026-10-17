@@ -161,6 +161,9 @@ jobs:
           retryAttempts: 3
 
   gpui-package:
+    # GPUI 暂不随桌面版打包发布（用户决策 2026-10-17）。
+    # 恢复时移除下面这行，并把 checksums.needs 加回 gpui-package。
+    if: false
     name: GPUI Kit · ${{ matrix.name }}
     needs: publish
     strategy:
@@ -260,7 +263,7 @@ jobs:
 
   checksums:
     name: SHA256SUMS
-    needs: [updater-manifest, gpui-package]
+    needs: [updater-manifest]
     runs-on: ubuntu-latest
     steps:
       - name: Resolve version

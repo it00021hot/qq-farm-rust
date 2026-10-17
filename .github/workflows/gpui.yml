@@ -88,15 +88,17 @@ jobs:
         run: cargo build --release -p qq-farm-gpui
 
       - name: Package desktop client
-        if: runner.os != 'Windows'
+        # GPUI 暂不打包（用户决策 2026-10-17）。
+        if: false
         run: bash scripts/package-gpui.sh release
 
       - name: Package desktop client (Windows)
-        if: runner.os == 'Windows'
+        if: false
         shell: pwsh
         run: ./scripts/package-gpui.ps1 release
 
       - uses: actions/upload-artifact@v4
+        if: false
         with:
           name: qq-farm-gpui-${{ matrix.artifact }}
           path: dist/qq-farm-gpui-*
