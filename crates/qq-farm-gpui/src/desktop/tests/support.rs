@@ -30,6 +30,9 @@ pub(super) fn open_test_desktop(
     let data_dir_guard =
         TEST_DATA_DIR_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     cx.update(crate::theme::init);
+    // 关闭动效：入场动画期间元素注册坐标与命中位置存在位移偏差，
+    // 合成点击会落空；测试需要对话框首帧即位于最终位置。
+    cx.update(|cx| cx.set_reduce_motion(true));
     let runtime = Arc::new(
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()

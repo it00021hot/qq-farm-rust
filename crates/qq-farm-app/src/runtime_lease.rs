@@ -60,18 +60,18 @@ impl EngineLease {
                     .spawn(move || {
                         while !shutdown.load(Ordering::Relaxed) {
                             match listener.accept() {
-                                Ok((mut stream, _)) => {
-                                    let _ = stream.set_read_timeout(Some(WAKE_TIMEOUT));
-                                    let mut request = String::new();
-                                    let accepted = stream.read_to_string(&mut request).is_ok()
-                                        && request.trim() == token
-                                        && wake_sender.send(()).is_ok();
-                                    let _ = stream.write_all(if accepted { b"ok" } else { b"no" });
+                                Ok((stream, _)) => {
+                                    let token = token.clone();
+                                    let wake_sender = wake_sender.clone();
+                                    // 慢连接只拖住自己的处理线程，不能阻塞 accept 循环
+                                    let _ = thread::spawn(move || {
+                                        handle_wake_connection(stream, &token, &wake_sender);
+                                    });
                                 }
-                                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                                    thread::sleep(Duration::from_millis(35));
-                                }
-                                Err(_) => break,
+                                // accept 对队列中被客户端提前中止的连接会返回
+                                // ECONNABORTED 等错误；这类错误一旦终结循环，
+                                // 监听器被丢弃时会 RST 掉排队中的唤醒连接。
+                                Err(_) => thread::sleep(Duration::from_millis(35)),
                             }
                         }
                     })?;
@@ -119,17 +119,29 @@ impl EngineLease {
         ) else {
             return None;
         };
-        if stream.set_write_timeout(Some(WAKE_TIMEOUT)).is_err()
+        // 超时必须在收发前设置：连接若已被对端重置，迟到的 setsockopt 在
+        // macOS 上会以 EINVAL 失败，掩盖真实的读写错误。
+        if stream.set_read_timeout(Some(WAKE_TIMEOUT)).is_err()
+            || stream.set_write_timeout(Some(WAKE_TIMEOUT)).is_err()
             || stream.write_all(token.as_bytes()).is_err()
             || stream.shutdown(std::net::Shutdown::Write).is_err()
         {
             return None;
         }
-        stream.set_read_timeout(Some(WAKE_TIMEOUT)).ok()?;
         let mut response = [0; 2];
         stream.read_exact(&mut response).ok()?;
         (response == *b"ok").then_some(owner)
     }
+}
+
+/// 应答单个唤醒请求：token 匹配则通知宿主进程并回 `ok`，否则回 `no`。
+fn handle_wake_connection(mut stream: TcpStream, token: &str, wake_sender: &mpsc::Sender<()>) {
+    let _ = stream.set_read_timeout(Some(WAKE_TIMEOUT));
+    let mut request = String::new();
+    let accepted = stream.read_to_string(&mut request).is_ok()
+        && request.trim() == token
+        && wake_sender.send(()).is_ok();
+    let _ = stream.write_all(if accepted { b"ok" } else { b"no" });
 }
 
 impl Drop for EngineLease {

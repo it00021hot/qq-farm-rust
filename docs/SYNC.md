@@ -3707,3 +3707,19 @@ bot 本轮 13 个提交**玩法层零变化**（活动/商城/日常自动化均
 **验证通过**：`RUSTFLAGS="-D warnings" CARGO_INCREMENTAL=0 cargo check --workspace --all-targets` 0 错 0 警；`cargo test --workspace` 全绿（core lib 984、GPUI 334、app 21、desktop 6）；`cargo test -p qq-farm-gpui --features ui-preview` **337 项**；严格 GPUI Clippy、`cargo fmt --all -- --check`、`git diff --check` 通过；预览重渲染 **221 张**（`/tmp/qq-farm-gpui-preview-1017c`）。
 
 **待验（实机）**：设置各分栏只有一个保存入口；检查更新（无更新）2.5s toast 自动消失；发现新版本弹窗、切换页面不残留横幅；toast 悬停不消失、移出后按时消失。
+
+### 2026-10-17 — 热修：v0.3.10 发版失败归因与修复（Linux 托盘编译、单实例唤醒竞态、Windows 换行符、对话框测试动画竞态）
+
+**背景**：v0.3.10 Release 流水线在「GPUI Kit · Linux」编译失败（6×E0277 + 1×E0308，exit 101），发版未产出；GPUI desktop CI 自 73cc4eb 引入起从未全绿（Windows Format、macOS Test、Linux Clippy 分别挂）。排查确认为四个互相独立的问题 + 一处调试残留。macOS CI job 一直先挂在 app crate 测试，导致 GPUI 侧测试从未在 CI 上跑到，问题被掩盖。
+
+**修改**：
+
+- **tray.rs（Linux 编译，发版阻断根因）**：`mpsc::channel()` 无类型标注，闭包内 `tray_menu(&language)` 把通道元素反推为 `str`（未 Sized），与 `TrayLifetime::language_sender: Sender<String>` 冲突。显式改为 `mpsc::channel::<String>()`；`build_tray` 的 `let mut builder` 改为 cfg 条件 shadow 绑定，消除 Linux 下 unused_mut（`-D warnings` 会挂）。
+- **runtime_lease.rs（真实竞态，非测试抖动）**：wake 线程 accept 循环 `Err(_) => break`，而 macOS 的 accept 对队列中被客户端中止的连接会返回 ECONNABORTED 等错误——一次即静默杀死监听线程，监听器丢弃时 RST 排队中的唤醒连接，实机表现为单实例唤醒偶发失效。修复：accept 出错一律 sleep 35ms 继续、只由 shutdown 标志结束循环；连接改为独立线程处理，慢连接不再阻塞 accept；客户端 connect 后先设 read/write 超时再收发（对已重置连接迟设 setsockopt 在 macOS 报 EINVAL，会掩盖真实读写错误）。
+- **.gitattributes**：补 `*.rs text eol=lf`。rustfmt 要求 `newline_style = "Unix"`，Windows runner 的 autocrlf 把源码签出成 CRLF，`cargo fmt --check` 整批报 "Incorrect newline style"。
+- **对话框测试动画竞态**：`solar_calendar_quiz_dialog_selects_an_answer_option`、`fertilize_all_dialog_offers_fertilizer_types` 在对话框内合成点击不生效——slide-down 入场动画进行中，元素注册坐标与实际命中位置存在位移偏差（实测差 6px）。机制修复：`open_test_desktop` 统一 `cx.set_reduce_motion(true)`，对话框首帧即最终位置，测试不再依赖动画时序。
+- **调试残留**：删除 `personal/bag/mod.rs` 背包视口遗留的 `eprintln!("DEBUG wheel reached bag viewport")`（每次滚轮滚动都打 stderr，会进发布版）。
+
+**验证通过**：`RUSTFLAGS="-D warnings" cargo check --workspace --all-targets` 0 错 0 警；`cargo test --workspace` 全绿（core lib 984、GPUI 334、app 21、desktop 6）；`cargo fmt --all --check`、严格 GPUI Clippy 通过；runtime_lease `--test-threads=21` 高并行压测 30 轮全绿；两个对话框测试连跑 5 轮全绿。
+
+**待验（CI）**：GPUI Kit · Linux 编译与 Clippy（本地缺 wayland/GTK 系统库无法交叉编译实测）；Windows Format（.gitattributes 需 CI 实测生效）；修复推送后重跑 Release 应全绿。

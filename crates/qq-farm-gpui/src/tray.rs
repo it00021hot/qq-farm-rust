@@ -50,7 +50,7 @@ pub fn install(sender: UnboundedSender<Action>, language: &str) -> Option<TrayLi
     install_event_handlers(sender);
     let language = language.to_owned();
     let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
-    let (language_sender, language_receiver) = mpsc::channel();
+    let (language_sender, language_receiver) = mpsc::channel::<String>();
     let thread = std::thread::Builder::new()
         .name("qq-farm-gpui-tray".into())
         .spawn(move || {
@@ -135,14 +135,12 @@ fn tray_menu(language: &str) -> Option<Box<dyn tray_icon::menu::ContextMenu>> {
 }
 
 fn build_tray(language: &str) -> Option<TrayIcon> {
-    let mut builder = TrayIconBuilder::new()
+    let builder = TrayIconBuilder::new()
         .with_tooltip(tray_tooltip(language))
         .with_menu(tray_menu(language)?)
         .with_icon(farm_icon()?);
     #[cfg(target_os = "macos")]
-    {
-        builder = builder.with_icon_as_template(true);
-    }
+    let builder = builder.with_icon_as_template(true);
     builder.build().ok()
 }
 
