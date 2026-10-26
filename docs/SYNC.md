@@ -3798,4 +3798,11 @@ bot 本轮 13 个提交**玩法层零变化**（活动/商城/日常自动化均
 
 上一轮保留了「0/N 失败（可能化肥不足）」日志（判断为可行动信号），判断错误：普通化肥容器耗尽后（截图账号 普通 0.0h），智能/多季模式每轮巡田都尝试 19 块并全部失败，该日志以 20-25s 频率刷屏。按用户既定原则「真正施肥成功再输出日志」：`fertilize_normal_step` 仅在 `normal > 0` 时输出成功日志，0/N 失败静默（化肥状态看总览「化肥容器」卡片）。化肥成功/失败对 bot 的偏离同前条记录。`cargo test -p qq-farm-core planting` 29 项全绿。
 
+### 2026-10-26 — 热修：奶茶活动图标 404 + BuffCfg 数字 attr_id 整表解析失败（发版 v0.3.13）
+
+- **奶茶配方/互动图标全占位图**：后端 DTO 的 `/activity-assets/milk-tea/recipe-N.png`（dist 静态文件）被视图经 `resolveCatalogImage()` 转成 `farmcfg://localhost/activity-assets/...`，而 farmcfg 协议只挂载 `assets/game_config`，整批 404。修复：`resolveCatalogImage` 对 `/activity-assets/` 前缀原样返回（落实 pitfalls「activity-assets 不需要转换」契约，统一入口保护所有调用方）；分享奖励 `autumn/happy.png` 同批受益。
+- **BuffCfg.json parse failed; using empty list**：官方新批次「活动加成」条目 `attr_id` 直接写数字 ID（「超变升级」条目仍是字符串名，审计 25 条 str / 10 条 int-str 混合），serde 期望 String 整表拒绝，超变 buff 回退空表。对齐 bot `String(entry.attr_id || '')`：新增 `string_or_number_to_string` 助手（string|number|bool→字符串、null→空串）挂到 `BuffConfigItem.attr_id`。消费侧无改动——`illustrated_buffs()` 本就只取「超变升级」，数字 attr_id 条目仅随表携带。
+- 回归测试：`buff_cfg_parses_with_numeric_attr_id`（三种形态内联 JSON）+ `embedded_buff_cfg_yields_non_empty_upgrade_buffs`（内嵌真表必须解析出非空超变 buff，正补上这次漏掉的兜底）。验证：`RUSTFLAGS="-D warnings" cargo check --workspace --all-targets` 0 错；`cargo test --workspace` 1354 项 0 失败；`cargo fmt --all --check` 通过；`corepack pnpm -C desktop-ui typecheck && build` 通过。
+- **待验（实机）**：奶茶活动页配方/工坊果实/互动图标、分享奖励图标的渲染（dev 实例已载新前端，用户未复核即关窗）。
+
 **待验（实机）**：微信账号 ≥1.15 两段式登录（新 PlayerLogin wire：`game_scene_id=1`、report_data 收敛）；微信客户端版本独立配置生效（设置页「微信客户端版本」输入）；QQ 1.15.1.4 登录与心跳；会员礼包失败重试路径（partial → 当天冷却后重试）；节令答题「正确答案」标注（Tauri + GPUI）；新增物品图标在背包/图鉴/商城的显示。

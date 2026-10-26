@@ -164,6 +164,7 @@ pub struct BuffConfigItem {
     pub id: i64,
     pub source_type: String,
     pub source_param: i64,
+    #[serde(deserialize_with = "string_or_number_to_string")]
     pub attr_id: String,
     pub attr_value: i64,
 }
@@ -176,6 +177,22 @@ where
 {
     let value: Option<T> = Option::deserialize(deserializer)?;
     Ok(value.unwrap_or_default())
+}
+
+/// 官方 BuffCfg 新批次的「活动加成」条目 attr_id 直接写数字 ID（「超变升级」条目仍是字符串
+/// 名），bot 侧以 `String(entry.attr_id || '')` 归一，这里对齐为 string|number|null 三容忍。
+fn string_or_number_to_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::String(s) => Ok(s),
+        serde_json::Value::Number(n) => Ok(n.to_string()),
+        serde_json::Value::Bool(b) => Ok(b.to_string()),
+        serde_json::Value::Null => Ok(String::new()),
+        other => Err(serde::de::Error::custom(format!("unexpected attr_id value: {other:?}"))),
+    }
 }
 
 /// 变异效果原始配置（MutantEffect.json；可空字段一律 null 容错）
@@ -1283,6 +1300,31 @@ mod tests {
         assert!(!gc.get_all_items().is_empty());
         assert!(!gc.get_all_land_configs().is_empty());
         assert!(!gc.get_level_exp_table().is_empty());
+    }
+
+    #[test]
+    fn buff_cfg_parses_with_numeric_attr_id() {
+        // 官方新批次「活动加成」条目 attr_id 写数字 ID，「超变升级」条目仍是字符串名，
+        // 两种形态（外加 null）都必须能整表解析——回归 2026-10-26 BuffCfg 空表事故。
+        let json = r#"[
+            {"id":1,"source_type":"超变升级","source_param":1,"attr_id":"闪电变异概率提升","attr_value":60},
+            {"id":1005,"source_type":"活动加成","source_param":2026092201,"attr_id":1005,"attr_value":5000},
+            {"id":1007,"source_type":"活动加成","source_param":2026092201,"attr_id":null,"attr_value":10000}
+        ]"#;
+        let items: Vec<BuffConfigItem> = serde_json::from_str(json).expect("parse BuffConfigItem");
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].attr_id, "闪电变异概率提升");
+        assert_eq!(items[1].attr_id, "1005");
+        assert_eq!(items[2].attr_id, "");
+    }
+
+    #[test]
+    fn embedded_buff_cfg_yields_non_empty_upgrade_buffs() {
+        let gc = reload_for_test();
+        assert!(
+            !gc.illustrated_buffs().is_empty(),
+            "内嵌 BuffCfg.json 必须能整表解析出超变升级 buff"
+        );
     }
 
     #[test]
