@@ -3,6 +3,27 @@ use super::super::super::*;
 use gpui_kit::component::switch::Switch;
 
 impl FarmDesktop {
+    /// 表单标签：140px 固定宽列内左对齐（对齐 Tauri NForm label-placement=left
+    /// label-width=140），控件占剩余宽度——设置各分栏的行都走这一列保持对齐。
+    pub(super) fn settings_form_label(
+        &self,
+        id: String,
+        text: String,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let label = div()
+            .id(id)
+            .w(px(140.))
+            .flex_shrink_0()
+            .text_sm()
+            .text_color(cx.theme().muted_foreground)
+            .aria_label(text.clone())
+            .child(text);
+        #[cfg(test)]
+        let label = label.test_support();
+        label.into_any_element()
+    }
+
     pub(super) fn append_setting_switch(
         &self,
         mut controls: Div,
@@ -18,13 +39,22 @@ impl FarmDesktop {
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         controls = controls.child(
-            Switch::new(format!("settings-switch-{path}"))
-                .label(settings_text(&self.preferences.language, label))
-                .checked(checked)
-                .disabled(disabled)
-                .on_change(cx.listener(move |this, checked, _, cx| {
-                    this.set_setting_path_value(path, serde_json::json!(*checked), cx)
-                })),
+            h_flex()
+                .items_center()
+                .gap_3()
+                .child(self.settings_form_label(
+                    format!("settings-switch-label-{path}"),
+                    settings_text(&self.preferences.language, label).to_string(),
+                    cx,
+                ))
+                .child(
+                    Switch::new(format!("settings-switch-{path}"))
+                        .checked(checked)
+                        .disabled(disabled)
+                        .on_change(cx.listener(move |this, checked, _, cx| {
+                            this.set_setting_path_value(path, serde_json::json!(*checked), cx)
+                        })),
+                ),
         );
         controls
     }
@@ -111,9 +141,12 @@ impl FarmDesktop {
         controls = controls.child(
             h_flex()
                 .items_center()
-                .justify_between()
                 .gap_3()
-                .child(div().text_sm().child(settings_text(&self.preferences.language, label)))
+                .child(self.settings_form_label(
+                    format!("settings-number-label-{path}"),
+                    settings_text(&self.preferences.language, label).to_string(),
+                    cx,
+                ))
                 .child(control),
         );
         controls

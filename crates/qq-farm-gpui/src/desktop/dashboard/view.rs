@@ -36,6 +36,9 @@ impl FarmDesktop {
             .child(
                 h_flex()
                     .flex_1()
+                    // 长日志消息的不换行宽度会顶开 flex 行（min-content 溢出把
+                    // 右栏推出窗外），允许整行收缩才能让消息换行
+                    .min_w_0()
                     .min_h_0()
                     .items_stretch()
                     .gap_3()

@@ -971,11 +971,8 @@ impl RuntimeEngine {
         } else {
             "Windows".to_string()
         };
-        let client_version = if !rt.client_version.trim().is_empty() {
-            rt.client_version.clone()
-        } else {
-            self.config.gateway_template.client_version.clone()
-        };
+        // bot cc78f2b：QQ / 微信版本独立配置，按账号平台取各自的生效版本
+        let client_version = crate::config::effective_client_version(&platform);
         let auth_code = if !account.code.trim().is_empty() {
             account.code.trim().to_string()
         } else {

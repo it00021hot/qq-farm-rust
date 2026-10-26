@@ -163,21 +163,6 @@ impl FarmDesktop {
                         ),
                 )
             })
-            .when(self.page == Page::Settings, |panel| {
-                panel.when_some(self.settings.save_notice.as_ref(), |panel, notice| {
-                    let message = div()
-                        .id("settings-save-notice")
-                        .test_support()
-                        .text_sm()
-                        .text_color(if self.settings.save_notice_warning {
-                            cx.theme().warning_foreground
-                        } else {
-                            cx.theme().success
-                        })
-                        .child(notice.clone());
-                    panel.child(message)
-                })
-            })
     }
 }
 

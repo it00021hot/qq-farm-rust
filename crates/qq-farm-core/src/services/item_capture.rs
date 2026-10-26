@@ -100,7 +100,7 @@ pub fn gain_dtos(entries: &[GainEntry]) -> Vec<serde_json::Value> {
                 "id": e.id,
                 "count": e.delta,
                 "name": gain_display_name(e.id),
-                "image": crate::config::game_config::mapped_item_image(e.id),
+                "image": crate::config::game_config::global().get_item_image_by_id(e.id).unwrap_or_default(),
             })
         })
         .collect()

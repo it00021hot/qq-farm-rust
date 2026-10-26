@@ -17,8 +17,8 @@
 
 | 仓库 | Commit | 日期 | 说明 |
 |------|--------|------|------|
-| **qq-farm-rust** | `main`（本提交：bot 10-15/10-16 增量：1.15 客户端 + 奶茶活动 + 节令日历 + 图鉴奖励） | 2026-10-16 | 客户端 1.15.0.2 + PlayerLogin/PlayerSceneLogin 两段式登录 + QQ TSDK `v3.9.0.1792070537`；奶茶活动（开店/工坊/雇佣/工作/兑换/基金/排行/记录）、快乐不独享（分享/档位/日志）、节令日历（GetSolarTermsV2/答题/季度）、图鉴奖励 v2（领取 + 总奖励）、一键施肥、背包种子严格优先级；Tauri 与 GPUI 双端同步（实机待验） |
-| **qq-farm-bot** | `1f49191` | 2026-10-16 | 1.15 客户端与 PlayerSceneLogin（4eb9b2a）+ 奶茶活动（4eb9b2a/e56d9ae/0533264）+ 节令日历与图鉴奖励（0533264）+ 一键施肥（e15e72e）+ 种子优先级修复（ebb1be6/ba2dc9e） |
+| **qq-farm-rust** | `main`（本提交：bot 10-17/10-22 增量：连接平台分离 + 会员礼包修复 + 节令答案标注 + 20261022 资源与物品图标） | 2026-10-25 | 客户端 1.15.1.4（QQ `1792637519008` / 微信 `1792639106589` 独立演进）+ 双 TSDK wasm 20261022 构建 + PlayerLogin 现代布局（game_scene_id=1、report_data 收敛，微信 ≥1.15 同走两段式）；会员礼包独立容错（partial 态 + lastError 面板化）+ SVIP 目录免 refresh；节令答题官方答案下标双端标注；奶茶互动 items_gained 实数 + 排行 shopOpened + 物品图标存在性映射（91 张新图）；Tauri 与 GPUI 双端同步（实机待验） |
+| **qq-farm-bot** | `28a9614` | 2026-10-25 | PR #106（80488ec 统一导航与配置存储 + 20261022 资源）+ cc78f2b（QQ/微信连接配置分离与微信登录更新）+ fecf531（会员礼包领取与失败状态）+ 57cddb3（节令答题答案标注）+ 46bb710（物品小图标与映射）+ 8aaa5d0（奶茶爆单收益，JS-only）+ 一批 web 样式提交 |
 
 文档范围：**业务行为 + 面板 HTTP/Socket 契约**（不含改 Vue 面板本身）。
 
@@ -26,10 +26,10 @@
 
 | 概念 | 当前值 | 用途 |
 |------|--------|------|
-| 客户端版本 `FARM_CLIENT_VERSION` | 默认 `1.15.0.2_20261001`（与 bot `config.ts` 默认一致，UPDATED_AT `1792029692080`；QQ/微信统一；QQ ≥1.15 走 PlayerLogin + PlayerSceneLogin 两段式） | 进游戏网关声明 |
-| bot `core` 包版本号 | `20261016` | 原项目发布标签，≠ 客户端版本字符串 |
-| TSDK wasm（QQ） | `v3.9.0.1792070537`（161054 字节，SHA-256 `837bd271557d…`；加载时校验；bot 0533264 对齐已核验构建） | QQ 账号网关加密 + ACE |
-| TSDK wasm（微信） | `v3.9.0.1790237209`（160992 字节，SHA-256 `4bf6aa0ede9677fe…`；加载时校验） | 微信账号网关加密 + ACE（bot 864caf3 新增，`assets/tsdk-wx.wasm`） |
+| 客户端版本 `FARM_CLIENT_VERSION` | 默认 `1.15.1.4_20261001`，UPDATED_AT `1792637519008`（与 bot `config.ts` 默认一致，2026-10-22 QQ 抓包验证）；微信独立默认同串、UPDATED_AT `1792639106589`（`FARM_WX_*` 不设环境变量，bot cc78f2b 平台分离）；QQ/微信 ≥1.15 均走 PlayerLogin + PlayerSceneLogin 两段式 | 进游戏网关声明（按账号平台取 QQ / 微信版本） |
+| bot `core` 包版本号 | `20261022` | 原项目发布标签，≠ 客户端版本字符串 |
+| TSDK wasm（QQ） | `v3.9.0.1792566360`（160956 字节，SHA-256 `d1cd42c1f4f4…`；加载时校验；bot 80488ec 20261022 构建） | QQ 账号网关加密 + ACE |
+| TSDK wasm（微信） | `v3.9.0.1792565883`（161135 字节，SHA-256 `9c8b1ca061d8…`；加载时校验；bot 80488ec 20261022 构建） | 微信账号网关加密 + ACE（`assets/tsdk-wx.wasm`） |
 | 奶茶活动 ID | 组 `2026110100` / 主体 `2026110101` / 兑换商店 `2026110102` / 成长基金 `2026110103` | 活动协议（Operate 53-76） |
 | 快乐不独享实例 ID | `2026110104`（组 `2026110100`；另一个已过期实例 `2026092501`） | 分享奖励协议（Operate 70-74） |
 
@@ -63,21 +63,21 @@
 
 | 能力 | 状态 | 期望行为（摘要） | 定位（非验收标准） |
 |------|------|------------------|-------------------|
-| 连网进游戏 | 齐 | 经 Gateway + TSDK 登录并维持心跳；登录/心跳包字节级对齐官方抓包（QQ 73/27 字节向量）；微信登录分支对齐 bot（device_info 扩展 network/device_id/memory、scene_id 省略、channel `other`）；会话结束输出 connection_summary 汇总诊断（心跳计数/pending/queued/ACE·TSDK 诊断/断开原因），踢下线日志带 reasonCode | `network/*`, `crypto/tsdk.rs` |
+| 连网进游戏 | 齐 | 经 Gateway + TSDK 登录并维持心跳；旧版 Login/心跳字节级对齐官方抓包（QQ 73/27 字节向量）；≥1.15 两段式 PlayerLogin（现代布局：report_data 只写渠道/platid、share_key 空串、`game_scene_id=1`，QQ/微信一致，bot cc78f2b/80488ec；微信保留 device_info 扩展、scene_id 省略、channel `other`）；客户端版本按账号平台取 QQ / 微信独立配置并随连接快照（心跳用快照），网关 URL 微信归一 `platform=wx`、握手超时 20s；会话结束输出 connection_summary 汇总诊断，踢下线日志带 reasonCode | `network/*`, `crypto/tsdk.rs` |
 | QQ 小程序扫码拿码 | 齐 | 面板可走 QQ 码登录流程 | `services/qrlogin.rs` |
-| 微信扫码拿码并启动 | 齐 | 扫码 → 应用宝 login_buffer 落盘 → 换一次性网关 code 启动；掉线/重启可用授权再换码重连；TSDK 按平台选 wasm（QQ `tsdk.wasm` / 微信 `tsdk-wx.wasm`，各自 SHA-256 校验，bot 864caf3 双构建） | `services/wx_login/*`, `routes/wx_login.rs` |
+| 微信扫码拿码并启动 | 齐 | 扫码 → 应用宝 login_buffer 落盘 → 换一次性网关 code 启动；掉线/重启可用授权再换码重连；TSDK 按平台选 wasm（QQ `tsdk.wasm` / 微信 `tsdk-wx.wasm`，各自 SHA-256 校验，bot 80488ec 20261022 双构建） | `services/wx_login/*`, `routes/wx_login.rs` |
 | 本田务农循环 | 齐 | 除草除虫浇水 → 收获 → 铲除 → 种植（含多格 + `bagSeedMultiLandReservationEnabled` 优先多格种子预留空地，默认关；bot #89：按种子登记目标布局、各组整组互斥、优先已预留格数更多的布局，种子可种即清登记）→ 施肥/解锁升级；默认策略/skip_own_weed_bug/smart 秒数对齐 bot | `services/farm/*`, `runtime/worker_loop.rs` |
 | 土地详情 / 等级预测 / 图鉴购种 | 齐 | 土地面板 DTO 携带 `landInfo`（当前/下一级加成对比、解锁/升级条件与成本；服务器条件优先、官方 LandLevel(Need).json 回退，bot e5f3552）；状态快照携带 `levelForecast`（按当前作物排期推算升级时间，不足时用会话速率在最后一笔收获后外推；土地快照随 PlantService 写回包/ItemService.Use/土地推送/断线失效，bot 62e1880）与 `sessionElapsedSeconds`；图鉴快照作物条目挂 `shopSeed`（服务器商店失败回落本地目录 `unknownMeta`），`seeds_purchase` 直购（参数校验/解锁卡/限购/金币门控与文案逐条照抄 bot 0f09702） | `farm/land_upgrade.rs`, `services/level_forecast.rs`, `farm/planting.rs`, `services/illustrated.rs` |
 | 宠物（护主犬） | 齐 | 上场/收回/喂粮/守护记录 + `ActivateDog` 消耗背包卡片激活图鉴项；快照含 `activatable` 三态（field_6=1 或背包有未锁定同 ID 卡） | `services/pets.rs` |
 | 好友帮助 / 偷菜 / 捣乱 | 齐 | 列表、访问、帮助（经验门控）、偷菜（气泡+自巡/空访/一键 Harvest 主地回退/先偷后帮）、静默仅挡好友、黑名单落盘；捣乱按日限/启动筛选/`1001046` 停 | `services/friend/*` |
-| 背包展示与操作 | 齐 | 按 UID 堆分行；含 `key`/`uid`/`mutantTypes`/`groupKey`；系统物品分离 | `services/warehouse.rs` |
+| 背包展示与操作 | 齐 | 按 UID 堆分行；含 `key`/`uid`/`mutantTypes`/`groupKey`；系统物品分离；物品/种子图标按磁盘存在性下发（bot 46bb710：无图不发死链，`icon_res`/`asset_name` 同键复用作物图，加载时扫描一次索引） | `services/warehouse.rs`, `config/game_config.rs` |
 | 自动/手动出售果实 | 齐 | 自动受 `sell` 开关；`sell_cond` 满足后用 `cond_sells`（活动结束后 / 道具过期后等）；手动预检拒绝不可售。活动窗口缓存（`ActivityService.List`）随活动清理保留并改为登录后直连刷新 | `warehouse` + `game_config` + `activity_windows` |
-| 商城 / 神秘商店 / 月卡 / 钻石 | 齐 | 列表（slot 1 普通 + slot 4 SVIP，非会员禁购 + expectedPrice 防涨价）、购买（回包 success 校验 + 不限购/售罄/广告/分享状态机）、神秘商人并入商城 tab、月卡、充值信息 | `mall`, `mystery_shop`, `monthcard`, `pay`, `commerce` |
-| 日常领取 | 齐 | 任务（成长 claim 后刷新 TaskInfo + `currentTask`）、邮件、分享等 | `task`, `email`, `share`, … |
+| 商城 / 神秘商店 / 月卡 / 钻石 | 齐 | 列表（slot 1 普通 + slot 4 SVIP，非会员禁购 + expectedPrice 防涨价）、购买（回包 success 校验 + 不限购/售罄/广告/分享状态机）、神秘商人并入商城 tab、月卡、充值信息；slot 4 会员身份直接查 `GetQQVipRewardsStatus`（bot fecf531 起不再先 `refreshVipInfo`；保留「非会员 1021001 降级为目录照常返回」rust 增强） | `mall`, `mystery_shop`, `monthcard`, `pay`, `commerce` |
+| 日常领取 | 齐 | 任务（成长 claim 后刷新 TaskInfo + `currentTask`）、邮件、分享等；会员礼包按 bot fecf531 重构：免 refreshVipInfo 直查权益、非会员由 `is_qq_vip` 判定、会员礼包与 SVIP 商城礼包独立容错（部分失败 `partial` 不 markDoneToday 当天重试）、强制重查先清完成标记；面板概览 vip 卡片带 `isVip/hasGift/canClaim/result/lastError`（Tauri + GPUI 同步失败态展示），「已领取」错误仅认 `code=1021002` /「今日已领取」 | `task`, `email`, `share`, `qqvip`, … |
 | 活动中心（旧活动） | 已删除 | 2026-10-16 用户决策「活动全部过期」：千星游记（通行证/观星/星砂/节令）、青梅、鹊桥、公益小红花、萌宠成长日记、秋日活动、天气活动（雨落成诗）全部从 GPUI / Tauri / 后端 / 资源删除 | —（活动窗口缓存保留，供出售条件使用） |
-| 奶茶活动（1.15） | 齐 | 开店（店名 2—8 字 + 推荐名）、店铺（收益进度/改名/升级/雇佣开关）、收银台（领取收益/加速）、工坊（果实制作）、好友雇佣（时长档/工资/雇佣）、我的工作（班次/互动 ×5/领取工资）、兑换商店（限购/条件/费用校验）、成长基金（解锁/领取）、排行榜、营业记录；费用签名校验 + 钻石一律拒绝（用户决策） | `services/milk_tea.rs` |
+| 奶茶活动（1.15） | 齐 | 开店（店名 2—8 字 + 推荐名）、店铺（收益进度/改名/升级/雇佣开关）、收银台（领取收益/加速）、工坊（果实制作）、好友雇佣（时长档/工资/雇佣）、我的工作（班次/互动 ×5/领取工资）、兑换商店（限购/条件/费用校验）、成长基金（解锁/领取）、排行榜（含 `shopOpened`）、营业记录；我的工作互动奖励按回包 `items_gained` 实数展示（缺失回活动配置 `item_reward`，bot 80488ec）、互动 4 次数取配置喇叭数；费用签名校验 + 钻石一律拒绝（用户决策） | `services/milk_tea.rs` |
 | 快乐不独享（1.15） | 齐 | 实例 2026110104：分享（不下发 ark）、每日奖励、档位奖励、互动日志（host/guest）；操作 70-74 对齐官方编码器 | `services/share_reward.rs` |
-| 节令日历 | 齐 | GetSolarTermsV2 事件/季度快照、直接领取、答题（题目一致性 + 已答错项拦截 + 每日一次）、季度奖励；文案配置镜像 bot solar-calendar.json | `services/solar_calendar.rs` |
+| 节令日历 | 齐 | GetSolarTermsV2 事件/季度快照、直接领取、答题（题目一致性 + 已答错项拦截 + 每日一次）、季度奖励；事件 DTO 下发官方 `answerIndex`（非法/缺失归一 null，bot 57cddb3），Tauri 与 GPUI 答题弹层标注正确答案；文案配置镜像 bot solar-calendar.json（含 answer_index） | `services/solar_calendar.rs` |
 | 图鉴奖励 v2 | 齐 | IllustratedList/Level V2 新字段（fruit_id/rarity/layer/level_list/total_rewards）+ 手动领取 ClaimAllRewardsV2（claimed_level_ids 校验、刷新失败 refreshRequired）；自动领取 task 同步 type=1 | `services/illustrated.rs`, `services/task.rs` |
 | 一键施肥 | 齐 | 面板手动一键施肥（普通/有机，单次批量请求、不重试、成功/跳过/消耗/余量 + updatedLands）；土地读回合并多格归属 | `farm/scheduler.rs`, `farm/api.rs` |
 | 背包种子优先 | 齐 | 严格按优先级列表顺序种植（限制种子无地可种时留待下一轮），不再重排土地限制种子优先 | `farm/planting.rs` |
@@ -3723,3 +3723,79 @@ bot 本轮 13 个提交**玩法层零变化**（活动/商城/日常自动化均
 **验证通过**：`RUSTFLAGS="-D warnings" cargo check --workspace --all-targets` 0 错 0 警；`cargo test --workspace` 全绿（core lib 984、GPUI 334、app 21、desktop 6）；`cargo fmt --all --check`、严格 GPUI Clippy 通过；runtime_lease `--test-threads=21` 高并行压测 30 轮全绿；两个对话框测试连跑 5 轮全绿。
 
 **待验（CI）**：GPUI Kit · Linux 编译与 Clippy（本地缺 wayland/GTK 系统库无法交叉编译实测）；Windows Format（.gitattributes 需 CI 实测生效）；修复推送后重跑 Release 应全绿。
+
+### 2026-10-25 — 同步 bot 1f49191→28a9614：连接平台分离 + 会员礼包修复 + 节令答案标注 + 20261022 资源
+
+**基准**：bot `28a9614`（PR #106 合并），实际业务提交 cc78f2b / fecf531 / 57cddb3 / 8aaa5d0 / 80488ec / 46bb710；其余 7 个为 bot web 样式提交（按约定不移植 Vue 面板视觉改动）。
+
+**业务明细**：
+
+- **cc78f2b（连接平台分离）**：`DEFAULT_CLIENT_VERSION` → `1.15.1.4_20261001`/`1792637519008`，新增微信独立默认（同串、UPDATED_AT `1792639106589`）；`SystemConfig`/`RuntimeConfig` 新增 `wxClientVersion/UpdatedAt`（serde default 兼容旧 store.json），保存/加载按平台解析时间戳；网关按账号平台取版本、URL 微信归一 `platform=wx`、握手超时 15s→20s；`usesPlayerSceneLogin` 平台无关化（微信 ≥1.15 同走两段式）；PlayerLogin 现代布局对齐官方 1.15 编码器（report_data 只写 channel/platid、share_key 显式空串、`game_scene_id=1`，QQ/微信同构）；心跳/登录改用连接建立时的版本快照（bot `context.clientVersion`）；TSDK wx 构建 `v3.9.0.1792070005` 中间值被 80488ec 最终值覆盖，直接落 20261022 终值。
+- **fecf531（会员礼包修复）**：`perform_daily_vip_gift` 重构——免 refreshVipInfo 直查权益（`RefreshVipInfo` 为订阅同步、独立失败不再挡流程，rust 侧方法删除）、非会员由 `is_qq_vip` 判定、会员礼包与 SVIP 商城礼包独立容错（部分失败 `partial`、不 markDoneToday 当天重试）、强制重查先清完成标记；`is_already_claimed_error` 收窄（仅 `code=1021002`/「今日已领取」）；`VipDailyState` 新增 `last_error`/`is_vip`；面板概览 vip 卡片补 `isVip/hasGift/canClaim/result/lastError` + `lastAt=max(claim,check)`（Tauri DailyOverview 与 GPUI 礼包卡片同步失败态：领取失败/部分失败/未开通/暂无礼包 + lastError）；commerce slot 4 免 refresh（保留非会员 1021001 降级 rust 增强）。
+- **57cddb3（节令答案标注）**：solar-calendar.json 整份覆盖（含 `answer_index`）；事件 DTO 下发 `answerIndex`（题目存在且 0 ≤ idx < options.len() 才下发，否则 null——**反转旧「不下发答案」决策**，对应测试已改）；Tauri 答题弹层 + GPUI 测验对话框标注「正确答案」。
+- **80488ec（20261022 资源 + 奶茶行为）**：游戏配置 5 份经 `tools/sync-from-bot.mjs --only config` 镜像；`milk-tea-20261015.json` 覆盖（coin_formula 1459→7296/1094→5472 等、互动 `item_reward` 新字段）；milk-tea/shoppb/player-login proto 整份镜像（`MilkTeaRankItem.shop_opened`、`MilkTeaHireInteract.items_gained`、`MilkTeaActivityHead` 新字段、`ShopType` 枚举、`GoodsInfo.owned`）；互动 4 奖励按回包 `items_gained` 实数（缺失回配置 `1042:N`）、我的工作互动 4 次数取配置喇叭数；排行 DTO 补 `shopOpened`；双 TSDK wasm 更新（QQ `v3.9.0.1792566360`/160956 字节、微信 `v3.9.0.1792565883`/161135 字节，SHA-256 校验）；bot 的 config-storage 账号配置分文件重构为存储内部实现，按对齐原则不移植。
+- **8aaa5d0（奶茶爆单收益）**：bot 为 JS 动态类型缺陷（`recipe_ids_string.split(';')` 得字符串、`"101" === 101` 严格相等失败），rust 侧 `recipe_config` 全程强类型 i64，**无需改动**。
+- **46bb710（物品图标）**：91 张新增物品小图标以 webp 并入 `assets/game_config/seed_images_named/seed_images/`（cwebp 转换，1097 张）；`get_item_image_by_id` 改存在性映射（加载时扫描一次索引：无图不发死链、`bundle:icon_res`/`bundle:asset_name` 同键复用其它物品图），种子列表/图鉴/道具/捕获等调用点统一切换；Item 结构补 `bundle_name`。
+- **顺手修复（预先存在）**：`tools/sync-from-bot.test.mjs` 夹具只写 4 份配置而工具要求 7 份（CONFIG_FILES 扩容时未同步），改为直接复用工具导出的 `CONFIG_FILES` 并让断言跟随数量。
+- **预览对齐核验**：solar/daily-gifts 预览夹具补齐新 DTO 字段（事件 `answerIndex`、vip 卡片 `isVip/hasGift/canClaim/result/lastError`）；新增预览场景 `solar-calendar-quiz-light`（arrange 打开答题弹层，核验正确答案徽标；221→222 张）；GPUI 正确答案徽标补主题成功色 + 半透明底色，视觉对齐 Tauri emerald 标签。
+- **热修：GPUI 答题弹层垂直居中（用户反馈）**：gpui-component Dialog 顶部锚定（默认视口高度 1/10）观感偏上，`open_solar_quiz` 按选项数估算弹层高度（骨架 ≈102px + 每选项 ≈50px）取 `margin_top` 近似居中（下限 80px）；预览 harness 补 `set_reduce_motion(true)`（与测试窗口 2026-10-17 热修同理），否则截图截到 SlideDown 入场中间帧、位置虚高。
+
+**验证通过**：`RUSTFLAGS="-D warnings" cargo check --workspace --all-targets` 0 错 0 警；`cargo test --workspace` 全绿（core lib 989、GPUI 334、app 21、desktop 6）；`cargo fmt --all --check` 通过；`corepack pnpm -C desktop-ui typecheck && build` 通过；`node --test tools/sync-from-bot.test.mjs` 5/5 通过；TSDK wasm SHA-256 与 bot `tsdk-runtime.ts` 常量逐一比对一致；GPUI 预览重渲染 **222 张**（`/tmp/qq-farm-gpui-preview-1025`），人工核对 solar-calendar-quiz / daily-gifts / settings-system 三张与 Tauri 布局一致。
+
+### 2026-10-26 — 热修：GPUI 实机对照批量修复（toast 竖条 / 面板宽度 / 表单对齐 / 好友头像与提示）
+
+**背景**：用户实机对照 Tauri 版反馈一批 GPUI 对齐问题。根因各自独立：
+
+- **提示成竖条**：`render_toast` 绝对定位下 auto 宽度被 Taffy 收缩包裹成约 1 字宽的竖排条。改为固定 `w(px(360.))`，多行文本稳定换行；全页共用同一组件，一处修复全局生效。
+- **设置保存双重提示**：`show_settings_notice` 同时发 toast 和内联横幅，违背「操作结果只走 toast」约定（10-17 热修的本意）。删除内联 `save_notice`（字段/渲染/4s 定时器），`show_settings_notice` 只发 toast；相关测试断言全部改到 `app-toast`。
+- **好友操作提示老样子**：好友模块保留着旧的页头内联反馈（`set_friend_feedback` + 4s 清除），未并入统一 toast。`set_friend_feedback` 改为转发 `show_toast`，删除 `friends.feedback` 字段/内联渲染/失效逻辑，预览 `friends-feedback` 场景改为定格 toast。
+- **自动控制/下线提醒面板半窗宽**：`render_page_controls` 是 `flex_wrap` 行容器，卡片未设 `w_full` 被收缩成内容宽（策略页自己补过所以正常）。两张卡片补 `.w_full()`。
+- **策略表单不对齐**：表单标签列 `text_right` 右对齐导致「种植策略」前留大块空白（Tauri NaiveUI label 默认左对齐）——改左对齐；静默时段「开始/结束」行 `justify_between` 把时间输入推到 640px 行尾——改标签与输入相邻。
+- **好友头像出不来**：后端 `FriendSummary` 按 camelCase 序列化为 `avatarUrl`，GPUI 行却读 `avatar`（Tauri 在 `toFriendRecord` 做了 `avatarUrl→avatar` 映射所以正常）。GPUI 改读 `avatarUrl`（保留 `avatar` 兜底）。
+
+**验证通过**：`cargo test -p qq-farm-gpui` 334 项全绿（6 处断言迁到 toast）；`RUSTFLAGS="-D warnings" cargo check -p qq-farm-gpui --features ui-preview` 0 错 0 警；`cargo fmt --all --check` 通过；预览重渲染 **224 张**（`/tmp/qq-farm-gpui-preview-1026`，新增 `settings-strategy-bag-light/dark`），人工核对 friends-feedback（toast 横条）、settings-strategy-bag（开关/标签/时间行）、settings-automation（全宽）。
+
+**待验（实机）**：好友头像远程加载（qlogo URL）；好友操作 toast 观感；设置保存仅 toast 无横幅。
+
+### 2026-10-26 — 热修：总览面板右栏与日志过滤条丢失（长日志消息撑爆 flex 行）
+
+**背景**：用户实机反馈总览缺「下次巡查倒计时/今日统计」右栏和日志过滤条件。根因：日志消息文本不换行，其实际宽度计入日志面板的 min-content（面板 `flex_1` 无 `min_w_0`，收缩被 min-content 顶住），长施肥/出售日志（约 800-1000px 单行）把「日志+右栏」flex 行撑到超过窗口宽度——右栏与过滤按钮被整体推出窗外裁掉。代码本身未改动该区域，是布局缺陷首次被实机长消息触发（预览夹具全是短消息，故未暴露）。
+
+**修改**：`dashboard/view.rs` 日志行与 `dashboard/logs/view.rs` 日志面板补 `.min_w_0()` 允许 flex 收缩，长消息在面板内换行；`preview/fixtures.rs` 多日志夹具混入与实机同长度的长消息（短消息夹具再也无法覆盖该回归），复现→修复→复验均在预览完成（`/tmp/qq-farm-gpui-preview-1026/dashboard-logs-light.png`）。
+
+**验证通过**：`cargo test -p qq-farm-gpui` 334 项全绿；`RUSTFLAGS="-D warnings" cargo check` 0 错 0 警；`cargo fmt --all --check` 通过；预览复现（修复前右栏消失/过滤条被推出）→修复后右栏、过滤条、消息换行全部正常。
+
+### 2026-10-26 — 热修：施肥空转日志刷屏 + 日志滚动条内嵌（用户反馈）
+
+- **施肥刷屏**：「普通化肥目标为空…跳过普通施肥」随每轮巡田输出（约 30-60s 一条）。该日志 1:1 对齐 bot `planting.ts`，但属无操作噪音——按用户决策「真正施肥成功再输出日志」：删除施肥流程全部空转 skip 日志（策略为不施肥 / 未勾选范围 / 没有可施肥地块 / 普通化肥目标为空四个分支静默返回）；保留真实动作日志（施肥成功、0/N 失败[化肥不足，可行动]）、获取土地失败 warn。对 bot 的这一处刻意偏离记录在案。
+- **滚动条浮在列表外**：日志滚动条挂在无滚动的包装层上，绘制在卡片 padding 区，视觉上游离于列表之外。改为挂在滚动列表元素自身（`vertical_scrollbar` 内嵌覆盖），包装层删除。
+- 多日志预览夹具的长消息回归保持生效；`cargo test -p qq-farm-core planting` 29 项全绿，`cargo test -p qq-farm-gpui` 334 项全绿，fmt / 严格 check 通过，预览复核滚动条不再浮在卡片边缘。
+
+### 2026-10-26 — 热修：一键施肥「之前阶段已使用了该化肥」不再报错（用户反馈）
+
+手动一键施肥在全部地块当前阶段已施过肥时，服务端拒绝 `code=1001025` 被原样抛成红色错误。对齐 bot `isSkippableFertilizeLandError`（1001024/1001025 视为可跳过）：`fertilize_all_inner` 捕获这两类错误码，返回 `skippedCount=目标数` + `note`（「所选地块当前阶段已施肥，暂无可施肥目标」）的正常结果；面板既有 `success == 0` 分支展示「当前没有可施肥的作物」。错误码常量入 `constants/game_ids.rs`。自动施肥逐块路径本就静默容错，不受影响。对 bot 的偏离（bot 逐块跳过并打 skip 日志）不适用本路径——rust 手动施肥为单次批量请求，跳过即无日志。
+
+### 2026-10-26 — 热修：暗色下未选中开关不可见 + 策略表单标签列对齐（用户反馈）
+
+- **开关看不见**：应用主题未覆盖 `switch` 令牌，暗色下未选中轨道回退到库默认色，与卡片底色（#28282A）几乎一致——所有未选中开关（多格种子预留空地、自动化页一批）都"看不见"。`theme.rs` 补 `colors.switch`（浅 #D4D4D8 / 深 #55555A，对齐 NaiveUI 灰轨观感）。
+- **标签列对齐**：新增共享 `settings_form_label`（140px 固定列左对齐，与顶部「种植策略」行同列），「多格种子预留空地」开关与「第二优先策略」下拉改为表单行（裸开关不自带文字）；planting.rs 本地闭包改为委托共享方法。此前 bag 段标签徒手摆放、无标签列，观感散乱。
+- 测试：planting 选择器断言迁移到 `bag-multi-land-label`；334 项全绿；暗/亮预览复核（settings-strategy-bag-dark / settings-automation-dark）开关与对齐正常。
+
+### 2026-10-26 — 热修：自动控制页结构化 + 巡田间隔数值清零根因（用户反馈）
+
+- **巡田间隔显示 0（数据丢失观感）**：`sync_setting_selectors` 的 JSON 指针误用 `path.replace('/', ".")` 生成 `"/intervals.farmMin"`（单键名），永远查不中 draft，载入/切号时把**全部数字输入框** `set_value(0)`——显示清零，且此时保存会把 0 写回配置（数据破坏路径）。改用 `json_pointer(path)`（`"/intervals/farmMin"`）。用户存储的真实值（farm 20/25、help 20/25、steal 60/90）未受损，重开后正常显示。
+- **好友互动标题孤行**：关闭「自动好友互动」后正文隐藏但标题仍渲染。标题移入 `.when(friend_enabled, …)` 内——对齐 Tauri `<template v-if="automation.friend">`（标题+内容整段隐藏）。
+- **好友互动内容挤成一团**：开关+数字+开关混排单个 flex-wrap 行。重构为 Tauri 同构：四个互动开关一行（auto-switch-grid 语义）；好友申请过滤项改为 140px 标签列的两列表单行（好友申请自动通过 / 最低等级 / 不低于自己等级 / 收偷比过滤 / 收获份数 / 偷菜份数）。
+- `append_setting_switch` / `append_integer_setting_disabled` 统一改为 `settings_form_label` 行样式（此前 justify_between 把控件推到行尾）。测试 id 断言迁移（settings-switch-friend_auto_accept）；334 项全绿；fmt / 严格 check 通过；暗色预览复核（settings-automation-dark）结构清晰。
+
+### 2026-10-26 — 热修：日志滚动条不再覆盖列表内容（用户反馈）
+
+滚动条是覆盖层（`absolute inset-0` 容器 + 右缘 16px 轨道），直接盖在日志文字与分隔线上。修复：`#dashboard-logs-scroll` 内容补 `pr_4`（16px，恰好等于滚动条总宽 `4*2+8`），行与分隔线在轨道前收住——滚动条占用自己的专用槽，不压内容。未直接照抄好友页 `overflow_y_scrollbar()`：该包装器持有私有 scroll handle，曾静默断开 follow-tail（见 view.rs 内注释），日志面板需要自持 handle 做贴尾跟随，故保留自管滚动 + 预留轨道的方案。334 项测试全绿，fmt 通过，预览复核内容与分隔线在轨道前收住。
+
+**二次修正（滚动条不铺满列表）**：把滚动条挂进滚动内容元素后，其覆盖层几何随内容/滚动位置错位（只画出列表上半段）。滚动条必须挂在**相对定位包装层**上作为滚动区域的兄弟覆盖层（库 `Scrollable` 同构：`relative().child(scroll_area).child(scrollbar_overlay)`）；内容 `pr_4` 轨道保留。最终结构：包装层（relative + 覆盖滚动条）→ 滚动区（overflow + pr_4 轨道）→ 行。滚动条贯穿列表全高、在自己的槽内、不压文字。
+
+### 2026-10-26 — 热修：「普通化肥施肥 0/N 块」每轮刷屏（用户反馈）
+
+上一轮保留了「0/N 失败（可能化肥不足）」日志（判断为可行动信号），判断错误：普通化肥容器耗尽后（截图账号 普通 0.0h），智能/多季模式每轮巡田都尝试 19 块并全部失败，该日志以 20-25s 频率刷屏。按用户既定原则「真正施肥成功再输出日志」：`fertilize_normal_step` 仅在 `normal > 0` 时输出成功日志，0/N 失败静默（化肥状态看总览「化肥容器」卡片）。化肥成功/失败对 bot 的偏离同前条记录。`cargo test -p qq-farm-core planting` 29 项全绿。
+
+**待验（实机）**：微信账号 ≥1.15 两段式登录（新 PlayerLogin wire：`game_scene_id=1`、report_data 收敛）；微信客户端版本独立配置生效（设置页「微信客户端版本」输入）；QQ 1.15.1.4 登录与心跳；会员礼包失败重试路径（partial → 当天冷却后重试）；节令答题「正确答案」标注（Tauri + GPUI）；新增物品图标在背包/图鉴/商城的显示。

@@ -60,7 +60,9 @@ impl FarmDesktop {
                     .absolute()
                     .top(px(16.))
                     .right(px(16.))
-                    .max_w(px(360.))
+                    // 绝对定位下 auto 宽度会被收缩成竖条（Taffy 收缩包裹不可靠），
+                    // 固定宽度让多行文本稳定换行
+                    .w(px(360.))
                     .rounded(cx.theme().radius)
                     .border_1()
                     .border_color(cx.theme().border)

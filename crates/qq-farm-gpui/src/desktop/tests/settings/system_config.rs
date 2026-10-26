@@ -105,7 +105,7 @@ fn system_configuration_exposes_applies_and_persists_runtime_fields(cx: &mut Tes
     cx.update_window(window, |_, window, cx| {
         window.click("save-system-config", cx);
         window.render_frame(cx);
-        assert!(window.find("settings-save-notice").visible());
+        assert!(window.find("app-toast").visible());
     })
     .expect("save the edited runtime configuration");
 
@@ -153,7 +153,7 @@ fn system_configuration_exposes_applies_and_persists_runtime_fields(cx: &mut Tes
     cx.update_window(window, |_, window, cx| {
         window.click("reset-system-config", cx);
         window.render_frame(cx);
-        assert!(window.find("settings-save-notice").visible());
+        assert!(window.find("app-toast").visible());
     })
     .expect("reset only the runtime environment settings");
 

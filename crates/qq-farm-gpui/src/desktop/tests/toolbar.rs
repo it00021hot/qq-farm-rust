@@ -78,10 +78,11 @@ async fn toolbar_buttons_run_their_commands_without_reentering_the_view(cx: &mut
         assert!(window.try_find("save-settings").is_none());
         window.click("save-strategy-settings", cx);
         window.render_frame(cx);
-        assert!(window.find("settings-save-notice").visible());
+        assert!(window.find("app-toast").visible());
     })
     .expect("click the strategy card save button");
     cx.update(|cx| {
-        assert_eq!(desktop.read(cx).settings.save_notice.as_deref(), Some("策略设置已保存"));
+        let toast = desktop.read(cx).toast.as_ref().expect("toast state");
+        assert_eq!(toast.message, "策略设置已保存");
     });
 }

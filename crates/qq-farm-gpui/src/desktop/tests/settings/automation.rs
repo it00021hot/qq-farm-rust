@@ -61,7 +61,7 @@ fn settings_save_state_is_section_scoped_and_stale_completion_unlocks_the_page(
             assert!(!this.settings.strategy_saving);
             assert!(this.settings.automation_saving);
             assert!(!this.loading, "a stale save must not leave the global page locked");
-            assert!(this.settings.save_notice.is_none());
+            assert!(this.toast.is_none());
         });
         window.render_frame(cx);
         assert!(window.find("automation-switch-farm").visible());
@@ -362,7 +362,7 @@ fn disabled_auto_accept_keeps_its_threshold_fields_visible_but_inactive(cx: &mut
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
         for id in [
-            "automation-switch-friend_auto_accept",
+            "settings-switch-friend_auto_accept",
             "settings-number-autoAcceptFriendMinLevel",
             "settings-switch-autoAcceptRequireOwnLevel",
             "settings-switch-autoAcceptHarvestStealEnabled",

@@ -39,6 +39,9 @@ fn config(dark: bool) -> ThemeConfig {
     colors.input = color(dark, "#C5C5CB", "#55555A");
     colors.muted = color(dark, "#EEEEF1", "#353538");
     colors.muted_foreground = color(dark, "#636368", "#B5B5BB");
+    // 未选中开关轨道：库默认色与暗色卡片底几乎一致，开关「看不见」；对齐
+    // NaiveUI 的灰轨观感（浅色 rgba(0,0,0,.2)、深色 rgba(255,255,255,.2) 的实色近似）
+    colors.switch = color(dark, "#D4D4D8", "#55555A");
     colors.popover = neutral.clone();
     colors.popover_foreground = foreground.clone();
     colors.accent = accent.clone();

@@ -299,9 +299,10 @@ impl CommerceService {
 
     /// 获取商城目录（含货币余额 + 商品 DTO）
     ///
-    /// 对齐 bot `getMallCatalog`：slot 4（SVIP）先 `refreshVipInfo` +
-    /// `getQQVipRewardsStatus` 注入 `membership`，非会员可浏览但禁购
-    /// （`purchaseStatus = 'svip_required'`）。
+    /// 对齐 bot `getMallCatalog`（fecf531 起 slot 4 不再先调 `refreshVipInfo`，
+    /// 直接 `getQQVipRewardsStatus` 注入 `membership`）。非会员可浏览但禁购
+    /// （`purchaseStatus = 'svip_required'`）；rust 保留「非会员降级为目录照常
+    /// 返回」的既有增强，不因 1021001 整体报错。
     ///
     /// # Errors
     /// - 拉取商城列表 / 背包失败
@@ -313,29 +314,19 @@ impl CommerceService {
         let slot_type = bounded_integer(slot_type_input, 1, 1, 100);
         let sub_slot_type = bounded_integer(sub_slot_type_input, 0, 0, 100);
         // bot：仅 SVIP 分页注入会员身份；subSlotType 只在显式为 1 时作为 is_manual_open。
-        // 实机确认：非 QQ 会员调 RefreshVipInfo / GetQQVipRewardsStatus 会回
-        // code=1021001 —— 此处按「非会员」降级（目录照常返回，商品全部标
-        // svip_required 禁购），不整体报错。
+        // 实机确认：非 QQ 会员调 GetQQVipRewardsStatus 会回 code=1021001 ——
+        // 此处按「非会员」降级（目录照常返回，商品全部标 svip_required 禁购）。
         let membership = if slot_type == 4 {
             let not_vip = |e: &crate::error::Error| {
                 crate::services::qqvip::is_not_qq_vip_error(&e.to_string())
             };
-            if let Err(e) = self.qqvip.refresh_vip_info().await {
-                if !not_vip(&e) {
-                    return Err(e);
-                }
-                Some(MembershipDto { is_svip: false, remaining_days: 0 })
-            } else {
-                match self.qqvip.get_qq_vip_rewards_status().await {
-                    Ok(status) => Some(MembershipDto {
-                        is_svip: status.is_qq_vip,
-                        remaining_days: status.remaining_days.max(0),
-                    }),
-                    Err(e) if not_vip(&e) => {
-                        Some(MembershipDto { is_svip: false, remaining_days: 0 })
-                    }
-                    Err(e) => return Err(e),
-                }
+            match self.qqvip.get_qq_vip_rewards_status().await {
+                Ok(status) => Some(MembershipDto {
+                    is_svip: status.is_qq_vip,
+                    remaining_days: status.remaining_days.max(0),
+                }),
+                Err(e) if not_vip(&e) => Some(MembershipDto { is_svip: false, remaining_days: 0 }),
+                Err(e) => return Err(e),
             }
         } else {
             None

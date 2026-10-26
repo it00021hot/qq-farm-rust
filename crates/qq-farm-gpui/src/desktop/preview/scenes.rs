@@ -23,6 +23,7 @@ pub(super) fn cases() -> Vec<PreviewCase> {
         ("activity-center-dark", ThemeMode::Dark, 1440., 900., "activity-center", 1.),
         ("solar-calendar-light", ThemeMode::Light, 1440., 900., "solar-calendar", 1.),
         ("solar-calendar-dark", ThemeMode::Dark, 1440., 900., "solar-calendar", 1.),
+        ("solar-calendar-quiz-light", ThemeMode::Light, 1440., 900., "solar-calendar-quiz", 1.),
         ("milk-tea-light", ThemeMode::Light, 1440., 900., "milk-tea", 1.),
         ("milk-tea-dark", ThemeMode::Dark, 1440., 900., "milk-tea", 1.),
         ("milk-tea-shop-light", ThemeMode::Light, 1440., 900., "milk-tea-shop", 1.),
@@ -218,6 +219,8 @@ pub(super) fn cases() -> Vec<PreviewCase> {
             "settings-strategy-open",
             1.,
         ),
+        ("settings-strategy-bag-light", ThemeMode::Light, 1440., 900., "settings-strategy-bag", 1.),
+        ("settings-strategy-bag-dark", ThemeMode::Dark, 1440., 900., "settings-strategy-bag", 1.),
         (
             "friends-blacklist-confirm-light",
             ThemeMode::Light,
@@ -444,7 +447,9 @@ fn page_for_scene(scene: &str) -> Page {
         "settings-system" => Page::Settings,
         "settings-ui" => Page::Settings,
         "settings-strategy-open" => Page::Settings,
+        "settings-strategy-bag" => Page::Settings,
         "solar-calendar" => Page::SolarCalendar,
+        "solar-calendar-quiz" => Page::SolarCalendar,
         "activity-center" => Page::Activities,
         "milk-tea" => Page::MilkTea,
         "milk-tea-shop" | "milk-tea-workshop" | "milk-tea-hire" | "milk-tea-work"
@@ -522,6 +527,7 @@ fn section_for_scene(scene: &str) -> &'static str {
         "settings-system" => "systemConfig",
         "settings-ui" => "ui",
         "settings-strategy-open" => "strategy",
+        "settings-strategy-bag" => "strategy",
         "game-config" => "seeds",
         "game-config-empty" => "seeds",
         "game-config-fruits" => "fruits",
@@ -592,6 +598,7 @@ pub(super) fn seed(
             "dashboard-empty-logs" => super::fixtures::dashboard_empty_logs_snapshot(),
             "dashboard-logs-expanded" => super::fixtures::dashboard_many_logs_snapshot(),
             "solar-calendar" => super::fixtures::solar_calendar_snapshot(),
+            "solar-calendar-quiz" => super::fixtures::solar_calendar_snapshot(),
             "milk-tea" => super::fixtures::milk_tea_snapshot("shop"),
             "milk-tea-shop" => super::fixtures::milk_tea_snapshot("shop"),
             "milk-tea-workshop" => super::fixtures::milk_tea_snapshot("workshop"),
@@ -733,9 +740,10 @@ pub(super) fn seed(
                 | "settings-offline"
                 | "settings-dingtalk"
                 | "settings-offline-bound"
-                | "settings-system"
-                | "settings-ui"
-                | "settings-strategy-open"
+            | "settings-system"
+            | "settings-ui"
+            | "settings-strategy-open"
+            | "settings-strategy-bag"
         ) {
             this.settings.draft = match case.scene {
                 "settings-dingtalk" => super::fixtures::settings_dingtalk_snapshot(),
@@ -748,6 +756,20 @@ pub(super) fn seed(
                     required_level: 18,
                     name: "草莓".into(),
                 });
+            }
+            if case.scene == "settings-strategy-bag" {
+                // 背包优先策略页：验证多格种子开关、标签对齐与种子排序面板
+                this.settings.draft["plantingStrategy"] = serde_json::json!("bag_priority");
+                this.settings.draft["bagSeedPriority"] =
+                    serde_json::json!([29005, 20525, 22254]);
+                this.page_raw["bagSeeds"] = serde_json::json!([
+                    {"seedId": 29005, "name": "森野黄金芽", "count": 2,
+                        "requiredLevel": 200, "plantSize": 2},
+                    {"seedId": 20525, "name": "森野甜莓", "count": 108,
+                        "requiredLevel": 21, "plantSize": 1},
+                    {"seedId": 22254, "name": "天山红枫", "count": 30,
+                        "requiredLevel": 41, "plantSize": 1}
+                ]);
             }
             if matches!(case.scene, "settings-offline" | "settings-offline-bound") {
                 this.settings.qq_bot_app_id.update(cx, |state, cx| {
@@ -846,8 +868,13 @@ pub(super) fn seed(
             this.commerce.notice = Some(("购买成功".into(), true));
         }
         if case.scene == "friends-feedback" {
-            this.friends.feedback =
-                Some(("黑名单已更新".into(), crate::desktop::FriendFeedbackLevel::Success));
+            // 好友操作结果已并入全局 toast；预览直接设置 toast 状态定格截图
+            this.toast = Some(crate::desktop::ToastState {
+                message: "黑名单已更新".into(),
+                success: true,
+                remaining_ms: 2_500,
+                hovered: false,
+            });
         }
         if case.scene == "bag-notice" {
             this.farm.bag.notice = Some(("出售成功".into(), true));
@@ -961,6 +988,10 @@ pub(super) fn arrange(
     }
     if case.scene == "friends-delete-confirm" {
         window.click(("friend-delete", 0_usize), cx);
+    }
+    if case.scene == "solar-calendar-quiz" {
+        // 打开答题弹层，验证官方答案标注（bot 57cddb3 answerIndex）
+        view.update(cx, |this, cx| this.open_solar_quiz(401, window, cx));
     }
 }
 

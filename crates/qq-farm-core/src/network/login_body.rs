@@ -49,15 +49,13 @@ pub fn is_wechat_platform(platform: &str) -> bool {
     normalized == "wx" || normalized == "wechat"
 }
 
-/// 是否走 QQ 1.15 的两段式登录（`PlayerLogin` + `PlayerSceneLogin`）。
+/// 是否走 1.15 的两段式登录（`PlayerLogin` + `PlayerSceneLogin`）。
 ///
-/// 对齐 bot `network.ts::usesPlayerSceneLogin()`：微信平台固定走旧 `Login`；
-/// 其余平台按客户端版本解析（`^(\d+)\.(\d+)`，主版本 > 1 或 1.x 且次版本 ≥ 15）。
+/// 对齐 bot `network.ts::usesPlayerSceneLogin()`（cc78f2b 起 QQ 与微信一致）：
+/// 按客户端版本解析（`^(\d+)\.(\d+)`，主版本 > 1 或 1.x 且次版本 ≥ 15），
+/// 历史版本保留单段 `Login`。
 #[must_use]
-pub fn uses_player_scene_login(platform: &str, client_version: &str) -> bool {
-    if is_wechat_platform(platform) {
-        return false;
-    }
+pub fn uses_player_scene_login(client_version: &str) -> bool {
     let mut parts = client_version.trim().split('.');
     let (Some(major), Some(minor)) = (parts.next(), parts.next()) else {
         return false;
@@ -68,40 +66,66 @@ pub fn uses_player_scene_login(platform: &str, client_version: &str) -> bool {
     major > 1 || (major == 1 && minor >= 15)
 }
 
-/// QQ 1.15 PlayerLogin 体（字段号与旧 LoginRequest 不同，对齐 `player-login.proto`）。
+/// 1.15 PlayerLogin 体（字段号与旧 LoginRequest 不同，对齐 `player-login.proto`）。
 ///
-/// 对齐 bot `buildLoginBody()` 在 `PlayerLoginRequest` 下的字段集合：
-/// sharer_id=1 / sharer_open_id=2 / device_info=3 / share_cfg_id=4 /
-/// scene_id=5（QQ 固定 `1234567`）/ report_data=6；`extra` 不在该消息中，不写。
+/// 对齐 bot `buildLoginBody()` 在 `PlayerLoginRequest` 下的字段集合
+/// （cc78f2b 起 QQ / 微信共用现代布局，仅场景与渠道分支不同）：
+/// sharer_id=1（显式 0）/ sharer_open_id=2（显式空串）/ device_info=3 /
+/// share_cfg_id=4（显式 0）/ scene_id=5（QQ 固定 `1234567`，微信整字段省略）/
+/// report_data=6（1.15 官方编码器不再赋值 6 个空字符串字段，只写渠道与 platid）/
+/// share_key=7（显式空串）/ game_scene_id=13（固定 1）。
 #[must_use]
-pub fn build_player_login_body(client_version: &str, sys_software: &str) -> Vec<u8> {
-    let mut b = Vec::with_capacity(60);
+pub fn build_player_login_body_for_platform(
+    client_version: &str,
+    sys_software: &str,
+    platform: &str,
+    wx_extras: Option<&WxDeviceExtras>,
+) -> Vec<u8> {
+    let wechat = is_wechat_platform(platform);
+    let mut b = Vec::with_capacity(64);
     // field 1 sharer_id = 0（显式 varint 0）
     push_tag(&mut b, 1, WIRE_VARINT);
     push_varint(&mut b, 0);
     // field 2 sharer_open_id = ""（显式空串）
     push_len_delim(&mut b, 2, &[]);
-    // field 3 device_info { 1: client_version, 2: sys_software }
+    // field 3 device_info { 1: client_version, 2: sys_software, [wx: 5/10/13] }
     let mut di = Vec::with_capacity(client_version.len() + sys_software.len() + 4);
     push_len_delim(&mut di, 1, client_version.as_bytes());
     push_len_delim(&mut di, 2, sys_software.as_bytes());
+    if wechat {
+        if let Some(extras) = wx_extras {
+            if !extras.network.is_empty() {
+                push_len_delim(&mut di, 5, extras.network.as_bytes());
+            }
+            if extras.memory > 0 {
+                push_tag(&mut di, 10, WIRE_VARINT);
+                push_varint(&mut di, extras.memory as u64);
+            }
+            if !extras.device_id.is_empty() {
+                push_len_delim(&mut di, 13, extras.device_id.as_bytes());
+            }
+        }
+    }
     push_len_delim(&mut b, 3, &di);
     // field 4 share_cfg_id = 0（显式 varint 0）
     push_tag(&mut b, 4, WIRE_VARINT);
     push_varint(&mut b, 0);
-    // field 5 scene_id = "1234567"（QQ）
-    push_len_delim(&mut b, 5, b"1234567");
-    // field 6 report_data { 1..4 空串, 5 = "other-qq", 6 = 2, 7..8 空串 }
-    let mut rd = Vec::with_capacity(24);
-    for field in [1, 2, 3, 4] {
-        push_len_delim(&mut rd, field, &[]);
+    // field 5 scene_id：微信省略整字段（bot：启动场景独立、拿不到）
+    if !wechat {
+        push_len_delim(&mut b, 5, b"1234567");
     }
-    push_len_delim(&mut rd, 5, b"other-qq");
+    // field 6 report_data { 5 = channel, 6 = 2 }；1.15 起不再赋值空字符串字段
+    let mut rd = Vec::with_capacity(16);
+    let channel: &[u8] = if wechat { b"other" } else { b"other-qq" };
+    push_len_delim(&mut rd, 5, channel);
     push_tag(&mut rd, 6, WIRE_VARINT);
     push_varint(&mut rd, 2);
-    push_len_delim(&mut rd, 7, &[]);
-    push_len_delim(&mut rd, 8, &[]);
     push_len_delim(&mut b, 6, &rd);
+    // field 7 share_key = ""（显式空串，bot cc78f2b 现代登录新增赋值）
+    push_len_delim(&mut b, 7, &[]);
+    // field 13 game_scene_id = 1（bot cc78f2b 现代登录新增）
+    push_tag(&mut b, 13, WIRE_VARINT);
+    push_varint(&mut b, 1);
     b
 }
 
@@ -438,47 +462,86 @@ mod tests {
         assert!(!is_wechat_platform("unknown"));
     }
 
-    // ===== QQ 1.15 两段式登录（bot 4eb9b2a）=====
+    // ===== 1.15 两段式登录（bot 4eb9b2a；cc78f2b 起微信同样两段式）=====
 
-    /// 版本分界对齐 bot `usesPlayerSceneLogin`：QQ ≥1.15 走两段式，微信固定旧登录。
+    /// 版本分界对齐 bot `usesPlayerSceneLogin`：QQ / 微信 ≥1.15 都走两段式，
+    /// 历史版本保留单段 Login。
     #[test]
     fn player_scene_login_version_boundary_matches_bot() {
-        assert!(uses_player_scene_login("qq", "1.15.0.2_20261001"));
-        assert!(uses_player_scene_login("qq", "1.15.0.1_20261001"));
-        assert!(uses_player_scene_login("qq", "1.16.0"));
-        assert!(uses_player_scene_login("qq", "2.0.0_20270101"));
-        assert!(uses_player_scene_login("", "1.15.0.2_20261001"), "空平台按 QQ 处理");
-        assert!(!uses_player_scene_login("qq", "1.14.2.15_20260922"));
-        assert!(!uses_player_scene_login("qq", "1.4.9"));
-        assert!(!uses_player_scene_login("qq", ""));
-        assert!(!uses_player_scene_login("qq", "abc"));
-        assert!(!uses_player_scene_login("wx", "1.15.0.2_20261001"));
-        assert!(!uses_player_scene_login("wechat", "1.15.0.2_20261001"));
+        assert!(uses_player_scene_login("1.15.0.2_20261001"));
+        assert!(uses_player_scene_login("1.15.0.1_20261001"));
+        assert!(uses_player_scene_login("1.16.0"));
+        assert!(uses_player_scene_login("2.0.0_20270101"));
+        assert!(!uses_player_scene_login("1.14.2.15_20260922"));
+        assert!(!uses_player_scene_login("1.4.9"));
+        assert!(!uses_player_scene_login(""));
+        assert!(!uses_player_scene_login("abc"));
     }
 
-    /// PlayerLogin 体字段号来自 `player-login.proto`（与旧 LoginRequest 不同），
-    /// 且不写旧消息的 field 9 `extra`（对齐 bot `PlayerLoginRequest.create` 字段集合）。
+    /// PlayerLogin 体字段号来自 `player-login.proto`（与旧 LoginRequest 不同）：
+    /// 现代布局顶层字段 = {1,2,3,4,5,6,7,13}，report_data 只有 {5,6}
+    /// （对齐 bot cc78f2b：`Object.keys(report_data)` 仅渠道与 platid，
+    /// share_key 显式空串、game_scene_id=1）。
     #[test]
     fn player_login_body_matches_1_15_field_layout() {
         use prost::Message;
 
         use crate::proto::generated::gamepb::userpb::PlayerLoginRequest;
 
-        let version = "1.15.0.2_20261001";
-        let body = build_player_login_body(version, "Windows");
+        let version = "1.15.1.4_20261001";
+        let body = build_player_login_body_for_platform(version, "Windows", "qq", None);
         assert_eq!(body[0], 0x08, "field 1 sharer_id 显式 varint 0");
         let decoded = PlayerLoginRequest::decode(body.as_slice()).expect("decode");
         assert_eq!(decoded.sharer_id, 0);
         assert_eq!(decoded.share_cfg_id, 0);
         assert_eq!(decoded.scene_id, "1234567");
+        assert_eq!(decoded.game_scene_id, 1, "bot cc78f2b 新增 game_scene_id=1");
         let di = decoded.device_info.expect("device_info");
         assert_eq!(di.client_version, version);
         assert_eq!(di.sys_software, "Windows");
         let rd = decoded.report_data.expect("report_data");
         assert_eq!(rd.minigame_channel, "other-qq");
         assert_eq!(rd.minigame_platid, 2);
-        // 旧 Login 的 field 9 (`extra`) 不属于 PlayerLoginRequest：解码后
-        // 顶层剩余字段为空（previously 可被旧 builder 产出，这里兜底防串车）。
-        assert_ne!(hex(&body), hex(&build_login_body("1.15.0.2_20261001", "Windows")));
+        // wire 层：顶层字段 = {1,2,3,4,5,6,7,13}；report_data 子字段 = {5,6}
+        let top = wire_fields(&body);
+        assert_eq!(top.iter().map(|(f, _)| *f).collect::<Vec<_>>(), vec![1, 2, 3, 4, 5, 6, 7, 13],);
+        let (_, _, rd_payload) = split_len_field(&body, 6).expect("report_data payload");
+        assert_eq!(wire_fields(rd_payload), vec![(5, WIRE_LEN), (6, WIRE_VARINT)]);
+        // 与旧 LoginRequest 布局不同（旧体为 {3,4,5,6,7,8,9}），兜底防串车。
+        assert_ne!(hex(&body), hex(&build_login_body(version, "Windows")));
+    }
+
+    /// 微信 PlayerLogin：device_info 携带有值扩展、scene_id 整字段缺席、
+    /// channel=other；其余与 QQ 现代布局一致（bot wechat-connection.test.js）。
+    #[test]
+    fn wechat_player_login_omits_scene_id_and_uses_wx_extras() {
+        use prost::Message;
+
+        use crate::proto::generated::gamepb::userpb::PlayerLoginRequest;
+
+        let extras = WxDeviceExtras {
+            network: "wifi".into(),
+            device_id: "test-device".into(),
+            memory: 8_192,
+        };
+        let version = "1.15.1.4_20261001";
+        let body =
+            build_player_login_body_for_platform(version, "Windows test", "wx", Some(&extras));
+        let decoded = PlayerLoginRequest::decode(body.as_slice()).expect("decode");
+        assert_eq!(decoded.game_scene_id, 1);
+        let di = decoded.device_info.expect("device_info");
+        assert_eq!(di.client_version, version);
+        assert_eq!(di.network, "wifi");
+        assert_eq!(di.memory, 8_192);
+        assert_eq!(di.device_id, "test-device");
+        let rd = decoded.report_data.expect("report_data");
+        assert_eq!(rd.minigame_channel, "other");
+        assert_eq!(rd.minigame_platid, 2);
+
+        let top = wire_fields(&body);
+        assert!(!top.iter().any(|(f, _)| *f == 5), "scene_id (field 5) 必须整字段缺席");
+        assert!(top.iter().any(|(f, _)| *f == 13), "game_scene_id (field 13) 必须在");
+        // 顶层 share_key (field 7) 显式空串
+        assert!(top.contains(&(7, WIRE_LEN)), "share_key 显式空串");
     }
 }

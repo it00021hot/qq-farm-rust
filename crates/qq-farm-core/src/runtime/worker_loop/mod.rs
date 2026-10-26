@@ -952,11 +952,9 @@ impl WorkerLoop {
                     let last_resp = last_resp.clone();
                     let miss = miss.clone();
                     let acc_id = acc_id.clone();
-                    // 对齐 network.ts:811 每拍实时读 client_version（配置热更立即生效）
-                    let cv_for_req = {
-                        let rt = crate::config::get_runtime_config();
-                        if rt.client_version.is_empty() { cv_snapshot.clone() } else { rt.client_version }
-                    };
+                    // bot cc78f2b：心跳改用连接建立时的版本快照（context.clientVersion），
+                    // 不再每拍实时读配置——同一条连接的 Login/Heartbeat 版本必须一致
+                    let cv_for_req = cv_snapshot.clone();
                     let on_timeout = on_timeout.clone();
                     tokio::spawn(async move {
                         let (_now_start, prev_hb, prev_rx, rebuilding) = {

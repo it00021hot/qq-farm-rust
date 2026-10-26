@@ -456,8 +456,14 @@ pub async fn daily_gift_overview(ctx: &AppContext, account_id: &str) -> AppResul
             {
                 "key": "vip_daily_gift",
                 "label": "会员礼包",
+                "enabled": true,
                 "doneToday": vip_state.done_today,
-                "lastAt": vip_state.last_claim_at,
+                "lastAt": vip_state.last_claim_at.max(vip_state.last_check_at),
+                "isVip": vip_state.is_vip,
+                "hasGift": vip_state.has_gift,
+                "canClaim": vip_state.can_claim,
+                "result": vip_state.result,
+                "lastError": vip_state.last_error,
             },
             {
                 "key": "month_card_gift",

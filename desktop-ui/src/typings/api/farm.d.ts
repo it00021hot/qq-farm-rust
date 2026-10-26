@@ -573,11 +573,13 @@ declare namespace Api {
       mode?: string;
       checkStatus?: string;
       canShare?: boolean | null;
+      isVip?: boolean | null;
       hasGift?: boolean | null;
       canClaim?: boolean | null;
       hasCard?: boolean | null;
       hasClaimable?: boolean | null;
       result?: string;
+      lastError?: string;
     };
 
     type GrowthTaskRow = {

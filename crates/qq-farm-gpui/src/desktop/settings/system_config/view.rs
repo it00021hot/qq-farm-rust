@@ -145,6 +145,7 @@ impl FarmDesktop {
                     .grid_cols(2)
                     .gap_3()
                     .child(text_field("system-client-version", "客户端版本", &self.settings.system_client_version))
+                    .child(text_field("system-wx-client-version", "微信客户端版本", &self.settings.system_wx_client_version))
                     .child(text_field("system-software", "系统软件", &self.settings.system_software))
                     .child(text_field("system-device-id", "设备 ID", &self.settings.system_device_id))
                     .child(text_field("system-memory", "内存 (MB)", &self.settings.system_memory))
@@ -180,6 +181,7 @@ fn system_config_label_en(id: &str) -> &'static str {
     match id {
         "system-server-url" => "Gateway URL",
         "system-client-version" => "Client version",
+        "system-wx-client-version" => "WeChat client version",
         "system-software" => "System software",
         "system-device-id" => "Device ID",
         "system-memory" => "Memory",

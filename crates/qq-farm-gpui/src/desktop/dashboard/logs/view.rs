@@ -165,6 +165,10 @@ impl FarmDesktop {
             div()
                 .flex_1()
                 .min_h_0()
+                // 滚动条挂在相对定位的包装层（= 列表区域的兄弟覆盖层，库 Scrollable
+                // 同构）。挂在滚动内容上几何会随滚动/内容尺寸错位——既不铺满列表
+                // 也会盖字。配合内容 pr_4 预留 16px 轨道（= 滚动条总宽），滚动条
+                // 在自己的槽内、不压文字、贯穿整个列表高度。
                 .relative()
                 .vertical_scrollbar(&self.dashboard.logs_scroll)
                 .child(
@@ -177,6 +181,8 @@ impl FarmDesktop {
                         .v_flex()
                         .gap_2()
                         .track_scroll(&self.dashboard.logs_scroll)
+                        // 内容留出等宽右轨道，行与分隔线不再延伸到滚动条下面
+                        .pr_4()
                         .on_scroll_wheel(cx.listener(
                             |this, event: &ScrollWheelEvent, window, cx| {
                                 let delta_y =
@@ -232,6 +238,8 @@ impl FarmDesktop {
             .id("dashboard-logs-panel")
             .v_flex()
             .flex_1()
+            // 允许被 flex 收缩：长消息在面板内换行，而不是撑大面板把右栏推出窗外
+            .min_w_0()
             .min_h(px(280.))
             .gap_3()
             .rounded(cx.theme().radius_lg)

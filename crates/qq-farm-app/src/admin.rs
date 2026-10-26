@@ -16,14 +16,25 @@ pub fn set_system_config(cfg: Value) -> AppResult<Value> {
     let mut sys: SystemConfig =
         serde_json::from_value(cfg).map_err(|e| AppError::BadRequest(e.to_string()))?;
     // 版本时间戳对齐 bot `resolveClientVersionUpdatedAt`：版本变化记 now；
+    // QQ / 微信按各自平台解析默认值（bot cc78f2b 平台分离）。
     // 归一化时区，避免存进白名单外的值。
     let current = qq_farm_core::config::get_runtime_config();
+    let now_ms = qq_farm_core::utils::time::now_ms();
     sys.client_version_updated_at = qq_farm_core::config::resolve_client_version_updated_at(
         &sys.client_version,
         &current.client_version,
         current.client_version_updated_at,
         sys.client_version_updated_at,
-        qq_farm_core::utils::time::now_ms(),
+        now_ms,
+        "qq",
+    );
+    sys.wx_client_version_updated_at = qq_farm_core::config::resolve_client_version_updated_at(
+        &sys.wx_client_version,
+        &current.wx_client_version,
+        current.wx_client_version_updated_at,
+        sys.wx_client_version_updated_at,
+        now_ms,
+        "wx",
     );
     if sys.device_info.client_version.trim().is_empty() {
         sys.device_info.client_version = sys.client_version.clone();

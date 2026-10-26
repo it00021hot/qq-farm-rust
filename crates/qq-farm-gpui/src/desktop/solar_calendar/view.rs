@@ -443,6 +443,17 @@ impl FarmDesktop {
         let language = self.preferences.language.clone();
         let radius = cx.theme().radius;
         let group_box = cx.theme().group_box;
+        let success_color = cx.theme().success;
+        // gpui-component 的 Dialog 顶部锚定（默认落在视口高度 1/10 处，观感偏上），
+        // 按选项数估算弹层高度取 margin_top 近似垂直居中（对齐 Tauri NModal 居中观感）：
+        // 实测骨架（标题/题干/页脚/内边距）≈102px + 每个选项行 ≈50px。
+        let option_count = event
+            .get("options")
+            .and_then(serde_json::Value::as_array)
+            .map(|options| options.len())
+            .unwrap_or(0) as f32;
+        let margin_top =
+            ((window.viewport_size().height - px(102. + 50. * option_count)) / 2.).max(px(80.));
         let event = event.clone();
         let desktop = cx.entity();
         window.open_dialog(cx, move |dialog, _, app| {
@@ -468,10 +479,13 @@ impl FarmDesktop {
                 .and_then(serde_json::Value::as_array)
                 .map(|values| values.iter().filter_map(serde_json::Value::as_i64).collect())
                 .unwrap_or_default();
+            // bot 57cddb3：官方答案下标（非法值后端已归一为 null）
+            let answer_index = event.get("answerIndex").and_then(serde_json::Value::as_i64);
             let mut options_column = div().v_flex().gap_2();
             for (index, option) in options.iter().enumerate() {
                 let (letter, text) = solar_option_parts(option, index);
                 let is_wrong = wrong.contains(&(index as i64));
+                let is_correct = answer_index == Some(index as i64);
                 let select_entity = desktop.clone();
                 let selectable = !is_wrong && !pending;
                 let row = h_flex()
@@ -494,7 +508,21 @@ impl FarmDesktop {
                     })
                     .child(div().font_semibold().child(format!("{letter}.")))
                     .child(div().child(text))
-                    .when(is_wrong, |row| {
+                    .when(is_correct, |row| {
+                        // 对齐 Tauri 正确答案标签：主题成功色 + 半透明底色小徽标
+                        row.child(
+                            div()
+                                .ml_auto()
+                                .rounded(radius)
+                                .bg(success_color.opacity(0.14))
+                                .px_2()
+                                .text_xs()
+                                .font_semibold()
+                                .text_color(success_color)
+                                .child(crate::i18n::text(&language, "正确答案", "Correct")),
+                        )
+                    })
+                    .when(!is_correct && is_wrong, |row| {
                         row.child(div().ml_auto().text_xs().child(crate::i18n::text(
                             &language,
                             "已答错",
@@ -516,6 +544,7 @@ impl FarmDesktop {
             dialog
                 .title(title)
                 .w(px(460.))
+                .margin_top(margin_top)
                 .child(
                     div()
                         .v_flex()

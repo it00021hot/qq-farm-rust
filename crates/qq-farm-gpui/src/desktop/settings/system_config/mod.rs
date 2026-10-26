@@ -76,6 +76,7 @@ impl FarmDesktop {
         let fields = [
             (&self.settings.system_server_url, "serverUrl"),
             (&self.settings.system_client_version, "deviceInfo/clientVersion"),
+            (&self.settings.system_wx_client_version, "wxClientVersion"),
             (&self.settings.system_software, "deviceInfo/sysSoftware"),
             (&self.settings.system_device_id, "deviceInfo/deviceId"),
             (&self.settings.system_memory, "deviceInfo/memory"),

@@ -115,9 +115,8 @@ fn section_save_snapshot(section: &str, draft: &serde_json::Value) -> Option<ser
 
 impl FarmDesktop {
     pub(in crate::desktop) fn clear_settings_notice(&mut self) {
-        self.settings.save_notice_generation = self.settings.save_notice_generation.wrapping_add(1);
-        self.settings.save_notice = None;
-        self.settings.save_notice_warning = false;
+        // 操作结果只走 toast；保留空实现别名以兼容既有调用点
+        self.toast = None;
     }
 
     pub(in crate::desktop) fn show_settings_notice(
@@ -127,25 +126,10 @@ impl FarmDesktop {
         warning: bool,
         cx: &mut Context<Self>,
     ) {
+        // 对齐「操作结果只走 toast」约定：不再渲染内联横幅（曾与 toast 双重提示）
         self.error = None;
         let message = crate::i18n::text(&self.preferences.language, chinese, english).to_string();
-        self.show_toast(message.clone(), !warning, cx);
-        self.settings.save_notice_generation = self.settings.save_notice_generation.wrapping_add(1);
-        let generation = self.settings.save_notice_generation;
-        self.settings.save_notice = Some(message);
-        self.settings.save_notice_warning = warning;
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(std::time::Duration::from_secs(4)).await;
-            let _ = this.update(cx, |this, cx| {
-                if this.settings.save_notice_generation == generation {
-                    this.settings.save_notice = None;
-                    this.settings.save_notice_warning = false;
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
+        self.show_toast(message, !warning, cx);
     }
 
     pub(in crate::desktop) fn complete_settings_save(

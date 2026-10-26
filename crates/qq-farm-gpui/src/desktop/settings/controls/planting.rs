@@ -33,22 +33,10 @@ impl FarmDesktop {
             .or_else(|| self.settings.draft.get("strategy"))
             .and_then(serde_json::Value::as_str)
             .unwrap_or("max_exp");
-        // 顶部两列并排（对齐 Tauri md:grid-cols-2 + label-placement=left：
-        // label 固定宽右对齐，控件占满剩余宽度）。
-        let form_label = |id: &'static str, label: String| {
-            let label = div()
-                .id(id)
-                .w(px(140.))
-                .flex_shrink_0()
-                .text_right()
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .aria_label(label.clone())
-                .child(label);
-            #[cfg(test)]
-            let label = label.test_support();
-            label
-        };
+        // 顶部两列并排（对齐 Tauri md:grid-cols-2 + NForm label-placement=left
+        // label-width=140：标签在固定宽列内左对齐——右对齐会在标签前留出一大块空白）。
+        let form_label =
+            |id: &'static str, label: String| self.settings_form_label(id.to_string(), label, cx);
         let strategy_row = h_flex()
             .items_center()
             .gap_3()

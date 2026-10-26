@@ -77,13 +77,20 @@ pub struct GatewayConfig {
 
 impl GatewayConfig {
     /// 构造完整 WS URL（含 query）
+    ///
+    /// 微信平台 query 一律 `platform=wx`（bot cc78f2b：`isWechatPlatform() ? 'wx' : …`）。
     pub fn build_ws_url(&self) -> String {
         let separator = if self.server_url.contains('?') { '&' } else { '?' };
+        let platform = if crate::config::is_wechat_platform(&self.platform) {
+            "wx"
+        } else {
+            self.platform.as_str()
+        };
         format!(
             "{}{}platform={}&os={}&ver={}&code={}",
             self.server_url,
             separator,
-            urlencoding(&self.platform),
+            urlencoding(platform),
             urlencoding(&self.os),
             urlencoding(&self.client_version),
             urlencoding(&self.auth_code),
@@ -869,9 +876,9 @@ impl Gateway {
     /// 完整登录流程：发 LoginRequest/PlayerLoginRequest → 解码回包 → bindUser → mark_online
     ///
     /// 1:1 对应原 `network.ts:sendLogin()`。请求体由
-    /// [`crate::network::login_body`] 按平台/版本对齐（QQ 1.15 起走
-    /// `PlayerLogin` + 后续 `PlayerSceneLogin` 两段式，见 bot `4eb9b2a`；
-    /// 旧 QQ 为官方 73 字节抓包逐字节；微信为 bot `864caf3` 的分支）。
+    /// [`crate::network::login_body`] 按平台/版本对齐（1.15 起走
+    /// `PlayerLogin` + 后续 `PlayerSceneLogin` 两段式，QQ/微信一致见 bot `cc78f2b`；
+    /// 旧版本为官方 73 字节抓包逐字节；微信分支为 bot `864caf3`）。
     ///
     /// # Arguments
     /// - `client_version`: 生效的客户端版本（如 `1.15.0.2_20261001`）
@@ -898,7 +905,12 @@ impl Gateway {
         // 2. 构造登录体（平台 + 版本分支见 login_body 模块文档）
         let player_scene_login = self.uses_player_scene_login(client_version);
         let body = if player_scene_login {
-            crate::network::login_body::build_player_login_body(client_version, sys_software)
+            crate::network::login_body::build_player_login_body_for_platform(
+                client_version,
+                sys_software,
+                &self.inner.config.platform,
+                Some(wx_extras),
+            )
         } else {
             crate::network::login_body::build_login_body_for_platform(
                 client_version,
@@ -986,15 +998,12 @@ impl Gateway {
         Ok(reply)
     }
 
-    /// 是否需要 QQ 1.15 两段式登录（`PlayerLogin` + `PlayerSceneLogin`）。
+    /// 是否需要 1.15 两段式登录（`PlayerLogin` + `PlayerSceneLogin`）。
     ///
-    /// 对齐 bot `network.ts::usesPlayerSceneLogin()`；平台取网关配置。
+    /// 对齐 bot `network.ts::usesPlayerSceneLogin()`（cc78f2b 起平台无关，仅看版本）。
     #[must_use]
     pub fn uses_player_scene_login(&self, client_version: &str) -> bool {
-        crate::network::login_body::uses_player_scene_login(
-            &self.inner.config.platform,
-            client_version,
-        )
+        crate::network::login_body::uses_player_scene_login(client_version)
     }
 
     /// 两段式登录第二段：农场场景登录（对齐 bot `sendLogin` 中的 `PlayerSceneLogin`）。

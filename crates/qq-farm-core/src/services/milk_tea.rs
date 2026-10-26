@@ -110,9 +110,13 @@ struct InteractionTypeConfig {
 
 #[derive(Debug, Deserialize)]
 struct InteractionConfig {
+    interaction_id: i64,
     interaction_type: i64,
     duration_id: i64,
     random_drink_count: i64,
+    /// 道具奖励（bot 80488ec 新增，如 `"1042:1"`；null 表示无）
+    #[serde(default)]
+    item_reward: Option<String>,
 }
 
 fn milk_tea_config() -> &'static MilkTeaConfig {
@@ -606,7 +610,23 @@ fn hire_list_dto(
     })
 }
 
-/// 互动结果展示（对齐 bot `interactionResult`）。
+/// 宣传喇叭道具数解析（对齐 bot `hornCount`：仅接受 `1042:正整数`）。
+fn horn_count(value: Option<&str>) -> Option<i64> {
+    let value = value?;
+    let (id, count) = value.split_once(':')?;
+    if id.trim() != "1042" {
+        return None;
+    }
+    let count = count.trim();
+    // [1-9]\d*：无前导零的正整数
+    if count.is_empty() || count.starts_with('0') || !count.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    count.parse::<i64>().ok()
+}
+
+/// 互动结果展示（对齐 bot `interactionResult`，80488ec 起 type 4 按回包
+/// `items_gained` 实际数量展示，回包缺失时回活动配置 `item_reward`）。
 fn interaction_result(interact: Option<&MilkTeaHireInteract>) -> Option<serde_json::Value> {
     let interact = interact?;
     if interact.interaction_id == 0 {
@@ -620,7 +640,24 @@ fn interaction_result(interact: Option<&MilkTeaHireInteract>) -> Option<serde_js
     let mut reward =
         reward_dto(TOKEN_ITEM_ID, friend.map(|friend| friend.bonus_amount).unwrap_or(0));
     if interact.r#type == 4 && interact.success {
-        reward = reward_dto(HORN_ITEM_ID, 1);
+        let gained_count: i64 = interact
+            .items_gained
+            .iter()
+            .filter(|item| item.id == HORN_ITEM_ID)
+            .map(|item| item.count)
+            .sum();
+        let detail = milk_tea_config()
+            .interactions
+            .iter()
+            .find(|entry| entry.interaction_id == interact.interaction_id);
+        // 回包有 items_gained 用实际合计（可能为 0 → 无奖励），否则回配置数量
+        let count = if interact.items_gained.is_empty() {
+            horn_count(detail.and_then(|entry| entry.item_reward.as_deref()))
+        } else {
+            Some(gained_count)
+        };
+        let count = count.filter(|count| *count > 0)?;
+        reward = reward_dto(HORN_ITEM_ID, count);
     } else if interact.r#type == 3 && interact.success {
         let recipe_id = friend.map(|friend| friend.taste_recipe_id).unwrap_or(0);
         let recipe = recipe_config(recipe_id);
@@ -725,6 +762,9 @@ fn normalize_work(
             });
             let count = if entry.interaction_id == 1 {
                 promote
+            } else if entry.interaction_id == 4 {
+                // bot 80488ec：互动 4 的次数来自配置 item_reward（宣传喇叭数）
+                detail.and_then(|d| horn_count(d.item_reward.as_deref()))
             } else {
                 detail.map(|d| d.random_drink_count)
             };
@@ -775,6 +815,7 @@ fn rank_dto(
                 "totalRevenue": item.total_revenue,
                 "rank": item.rank,
                 "canShowOff": item.can_show_off,
+                "shopOpened": item.shop_opened,
             })
         })
         .collect();
@@ -1818,9 +1859,28 @@ mod tests {
             interaction_id: 90_004,
             ..Default::default()
         };
+        // 回包无 items_gained → 回活动配置 90004 → "1042:1"
         let result = interaction_result(Some(&horn)).unwrap();
         assert_eq!(result["name"], "划水摸鱼");
         assert_eq!(result["reward"]["id"].as_i64(), Some(HORN_ITEM_ID));
+        assert_eq!(result["reward"]["count"].as_i64(), Some(1));
+        // 回包带 items_gained → 按实际合计展示（bot 80488ec）
+        let actual = MilkTeaHireInteract {
+            items_gained: vec![
+                Item { id: HORN_ITEM_ID, count: 2, ..Default::default() },
+                Item { id: HORN_ITEM_ID, count: 1, ..Default::default() },
+                Item { id: 1041, count: 5, ..Default::default() },
+            ],
+            ..horn.clone()
+        };
+        let result = interaction_result(Some(&actual)).unwrap();
+        assert_eq!(result["reward"]["count"].as_i64(), Some(3));
+        // 回包 items_gained 无 1042 → 合计 0 → 无奖励展示
+        let zero = MilkTeaHireInteract {
+            items_gained: vec![Item { id: 1041, count: 5, ..Default::default() }],
+            ..horn.clone()
+        };
+        assert!(interaction_result(Some(&zero)).is_none());
         let none = MilkTeaHireInteract { r#type: 4, success: true, ..Default::default() };
         assert!(interaction_result(Some(&none)).is_none());
         let token = MilkTeaHireInteract {
@@ -1839,6 +1899,20 @@ mod tests {
         assert_eq!(result["name"], "宣传推广");
         assert_eq!(result["reward"]["id"].as_i64(), Some(TOKEN_ITEM_ID));
         assert_eq!(result["reward"]["count"].as_i64(), Some(12));
+    }
+
+    /// 对齐 bot `hornCount`：仅 `1042:正整数`（无前导零）合法。
+    #[test]
+    fn horn_count_parses_config_reward_only() {
+        assert_eq!(horn_count(Some("1042:1")), Some(1));
+        assert_eq!(horn_count(Some("1042:12")), Some(12));
+        assert_eq!(horn_count(Some("1042:0")), None, "0 不合法");
+        assert_eq!(horn_count(Some("1042:01")), None, "前导零不合法");
+        assert_eq!(horn_count(Some("1042:-1")), None);
+        assert_eq!(horn_count(Some("1041:1")), None, "道具 ID 必须是 1042");
+        assert_eq!(horn_count(Some("1042")), None);
+        assert_eq!(horn_count(Some("")), None);
+        assert_eq!(horn_count(None), None);
     }
 
     #[test]

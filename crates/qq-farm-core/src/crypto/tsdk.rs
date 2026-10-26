@@ -69,15 +69,15 @@ struct TsdkBuild {
 const TSDK_BUILD_QQ: TsdkBuild = TsdkBuild {
     key: "qq",
     file: "tsdk.wasm",
-    version: "v3.9.0.1792070537",
-    sha256: "837bd271557dc9a21d5cd28b66076ea012eb39a4f4cbe298f529716469c087fc",
+    version: "v3.9.0.1792566360",
+    sha256: "d1cd42c1f4f4cb15f111f16879f0edf7bf8d4a69a1bfe80d40138fdf3132dc15",
 };
 
 const TSDK_BUILD_WX: TsdkBuild = TsdkBuild {
     key: "wx",
     file: "tsdk-wx.wasm",
-    version: "v3.9.0.1790237209",
-    sha256: "4bf6aa0ede9677fe82186c1a76f8df8a14ccd6d14b6ff1280230923189f4e972",
+    version: "v3.9.0.1792565883",
+    sha256: "9c8b1ca061d8e122dd902ff651755d9d2f2006fdf5483765bffd9b9c10aee6ad",
 };
 
 /// 平台归一（对齐 bot `resolveTsdkPlatform`）：`wx`/`wechat` → 微信，其余（含空/未知）→ QQ。
@@ -2184,28 +2184,28 @@ mod tests {
         assert_eq!(HostProfile::resolve("foo").build.key, "qq");
     }
 
-    /// 双平台构建表对齐 bot `TSDK_BUILDS` 字面量（tsdk-runtime.ts:13-18）。
+    /// 双平台构建表对齐 bot `TSDK_BUILDS` 字面量（tsdk-runtime.ts:15-18，20261022 资源）。
     #[test]
     fn tsdk_builds_match_bot_literals() {
         assert_eq!(TSDK_BUILD_QQ.file, "tsdk.wasm");
-        assert_eq!(TSDK_BUILD_QQ.version, "v3.9.0.1792070537");
+        assert_eq!(TSDK_BUILD_QQ.version, "v3.9.0.1792566360");
         assert_eq!(
             TSDK_BUILD_QQ.sha256,
-            "837bd271557dc9a21d5cd28b66076ea012eb39a4f4cbe298f529716469c087fc"
+            "d1cd42c1f4f4cb15f111f16879f0edf7bf8d4a69a1bfe80d40138fdf3132dc15"
         );
         assert_eq!(TSDK_BUILD_WX.file, "tsdk-wx.wasm");
-        assert_eq!(TSDK_BUILD_WX.version, "v3.9.0.1790237209");
+        assert_eq!(TSDK_BUILD_WX.version, "v3.9.0.1792565883");
         assert_eq!(
             TSDK_BUILD_WX.sha256,
-            "4bf6aa0ede9677fe82186c1a76f8df8a14ccd6d14b6ff1280230923189f4e972"
+            "9c8b1ca061d8e122dd902ff651755d9d2f2006fdf5483765bffd9b9c10aee6ad"
         );
-        // QQ 构建体积 161,054 字节（bot 0533264 tsdk.wasm 实际大小），防呆
+        // QQ 构建体积 160,956 字节（bot 80488ec tsdk.wasm 实际大小），防呆
         let qq_bytes = std::fs::read(resolve_wasm_path("qq")).expect("tsdk.wasm readable");
-        assert_eq!(qq_bytes.len(), 161_054);
+        assert_eq!(qq_bytes.len(), 160_956);
         verify_wasm_sha256(&qq_bytes, &TSDK_BUILD_QQ).expect("qq wasm sha256");
-        // wx 构建体积 160,992 字节（bot tsdk-wx.wasm 实际大小），防呆
+        // wx 构建体积 161,135 字节（bot 80488ec tsdk-wx.wasm 实际大小），防呆
         let wx_bytes = std::fs::read(resolve_wasm_path("wx")).expect("tsdk-wx.wasm readable");
-        assert_eq!(wx_bytes.len(), 160_992);
+        assert_eq!(wx_bytes.len(), 161_135);
         verify_wasm_sha256(&wx_bytes, &TSDK_BUILD_WX).expect("wx wasm sha256");
     }
 

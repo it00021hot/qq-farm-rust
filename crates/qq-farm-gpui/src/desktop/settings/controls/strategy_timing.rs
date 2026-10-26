@@ -191,9 +191,9 @@ impl FarmDesktop {
             "friendQuietHours/end" => ("quiet-hours-end-field", &self.settings.quiet_hours_end),
             _ => return row,
         };
+        // 对齐 Tauri NFormItem：标签与时间输入相邻，不再 justify_between 推到行尾
         row =
             row.items_center()
-                .justify_between()
                 .max_w(px(640.))
                 .gap_3()
                 .child(div().text_sm().child(settings_text(&self.preferences.language, label)))

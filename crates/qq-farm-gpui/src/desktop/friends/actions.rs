@@ -79,8 +79,6 @@ impl FarmDesktop {
         self.friends.blacklist_loading = false;
         self.friends.delete_generation = self.friends.delete_generation.wrapping_add(1);
         self.friends.delete_loading.clear();
-        self.friends.feedback_generation = self.friends.feedback_generation.wrapping_add(1);
-        self.friends.feedback = None;
         self.friends.interaction_generation = self.friends.interaction_generation.wrapping_add(1);
         self.friends.interaction_using = false;
         self.friends.records_refresh_generation =

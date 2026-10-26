@@ -72,16 +72,14 @@ fn planting_selectors_restore_vue_strategy_and_seed_choices(cx: &mut TestAppCont
         assert!(window.find("planting-strategy-select").visible());
         assert!(window.find("bag-seed-fallback-select").visible());
         assert!(window.find("preferred-seed-select").visible());
-        assert_eq!(
-            window.find("settings-switch-bagSeedMultiLandReservationEnabled").label(),
-            Some("多格种子预留空地")
-        );
+        // 开关为裸控件，文字在表单标签列（对齐 Tauri NFormItem）
+        assert_eq!(window.find("bag-multi-land-label").label(), Some("多格种子预留空地"));
         assert_eq!(window.find("bag-seed-priority-reset").label(), Some("重置顺序"));
         assert!(window.try_find("strategy-preview-value").is_none());
         desktop.update(cx, |this, cx| this.set_language("en-US", window, cx));
         window.render_frame(cx);
         assert_eq!(
-            window.find("settings-switch-bagSeedMultiLandReservationEnabled").label(),
+            window.find("bag-multi-land-label").label(),
             Some("Reserve Lands for Multi-Land Seeds")
         );
         assert_eq!(window.find("bag-seed-priority-reset").label(), Some("Reset Order"));

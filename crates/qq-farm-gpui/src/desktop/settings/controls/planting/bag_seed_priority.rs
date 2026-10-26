@@ -1,5 +1,6 @@
 use super::super::super::super::*;
 use gpui_kit::component::select::Select;
+use gpui_kit::component::switch::Switch;
 
 #[derive(Clone)]
 struct BagSeedDrag(i64);
@@ -16,33 +17,50 @@ impl FarmDesktop {
         mut controls: Div,
         cx: &mut Context<Self>,
     ) -> Div {
-        controls = self.append_setting_switch(
-            controls,
-            "bagSeedMultiLandReservationEnabled",
-            "多格种子预留空地",
-            self.loading,
-            cx,
-        );
-        controls = controls.child(
-            div()
-                .v_flex()
-                .gap_1()
-                .child(
-                    div()
-                        .text_sm()
-                        .child(settings_text(&self.preferences.language, "第二优先策略")),
-                )
-                .child(
-                    Select::new(&self.settings.bag_fallback)
-                        .id("bag-seed-fallback-select")
-                        .w(rems(24.))
-                        .accessibility_label(settings_text(
-                            &self.preferences.language,
-                            "第二优先策略",
-                        ))
-                        .disabled(self.loading),
-                ),
-        );
+        // 对齐 Tauri NForm：开关与下拉进 140px 标签列的表单行（裸开关不自带文字，
+        // 避免内联开关在暗色下只剩一行孤零零的标签文字）
+        let checked = self
+            .settings
+            .draft
+            .pointer(&json_pointer("bagSeedMultiLandReservationEnabled"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let multi_land_row = h_flex()
+            .items_center()
+            .gap_3()
+            .child(self.settings_form_label(
+                "bag-multi-land-label".to_string(),
+                settings_text(&self.preferences.language, "多格种子预留空地").to_string(),
+                cx,
+            ))
+            .child(
+                Switch::new("settings-switch-bagSeedMultiLandReservationEnabled")
+                    .checked(checked)
+                    .disabled(self.loading)
+                    .on_change(cx.listener(move |this, checked, _, cx| {
+                        this.set_setting_path_value(
+                            "bagSeedMultiLandReservationEnabled",
+                            serde_json::json!(*checked),
+                            cx,
+                        )
+                    })),
+            );
+        let fallback_row = h_flex()
+            .items_center()
+            .gap_3()
+            .child(self.settings_form_label(
+                "bag-fallback-label".to_string(),
+                settings_text(&self.preferences.language, "第二优先策略").to_string(),
+                cx,
+            ))
+            .child(
+                Select::new(&self.settings.bag_fallback)
+                    .id("bag-seed-fallback-select")
+                    .w(px(460.))
+                    .accessibility_label(settings_text(&self.preferences.language, "第二优先策略"))
+                    .disabled(self.loading),
+            );
+        controls = controls.child(multi_land_row).child(fallback_row);
         let language = &self.preferences.language;
         let mut panel = div()
             .v_flex()

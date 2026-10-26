@@ -523,6 +523,8 @@ interface DeviceInfoPayload {
 export interface SystemConfigPayload {
   serverUrl: string;
   clientVersion: string;
+  /** 微信客户端版本（与 QQ 版本独立配置） */
+  wxClientVersion: string;
   platform: string;
   os: string;
   timeZone?: string;
@@ -542,6 +544,7 @@ function normalizeSystemConfig(source: unknown, fallback: SystemConfigPayload): 
   return {
     serverUrl: String(row.serverUrl ?? row.server_url ?? fallback.serverUrl ?? ''),
     clientVersion: String(row.clientVersion ?? row.client_version ?? fallback.clientVersion ?? ''),
+    wxClientVersion: String(row.wxClientVersion ?? row.wx_client_version ?? fallback.wxClientVersion ?? ''),
     platform: String(row.platform ?? fallback.platform ?? 'qq'),
     os: String(row.os ?? fallback.os ?? 'Windows'),
     timeZone: String(row.timeZone ?? row.time_zone ?? fallback.timeZone ?? 'Asia/Shanghai'),
@@ -572,6 +575,7 @@ const DEFAULT_DEVICE_INFO: DeviceInfoPayload = {
 const DEFAULT_SYSTEM_CONFIG: SystemConfigPayload = {
   serverUrl: '',
   clientVersion: '',
+  wxClientVersion: '',
   platform: 'qq',
   os: 'Windows',
   timeZone: 'Asia/Shanghai',

@@ -300,11 +300,21 @@ impl Worker {
                         crate::services::mystery_shop::MysteryShopService::new(gateway.clone()),
                     );
 
+                    // bot cc78f2b：loop 快照版本按平台取（微信读 wx_client_version），
+                    // 空值回网关配置（engine 已按平台解析过默认值）
                     let rt = crate::config::get_runtime_config();
-                    let client_version = if rt.client_version.is_empty() {
-                        config.gateway.client_version.clone()
-                    } else {
-                        rt.client_version.clone()
+                    let client_version = {
+                        let configured =
+                            if crate::config::is_wechat_platform(&config.gateway.platform) {
+                                &rt.wx_client_version
+                            } else {
+                                &rt.client_version
+                            };
+                        if configured.trim().is_empty() {
+                            config.gateway.client_version.clone()
+                        } else {
+                            configured.clone()
+                        }
                     };
                     let mut loop_cfg = crate::runtime::worker_loop::WorkerLoopConfig {
                         status_interval: config.status_interval,
@@ -523,11 +533,10 @@ impl Worker {
 
                     let rt = crate::config::get_runtime_config();
                     let di = &rt.device_info;
-                    let client_version = if di.client_version.is_empty() {
-                        config.gateway.client_version.clone()
-                    } else {
-                        di.client_version.clone()
-                    };
+                    // bot getLoginDeviceInfo：device_info.client_version 一律取
+                    // 平台生效版本（cc78f2b 起微信独立），不直接读设备字段
+                    let client_version =
+                        crate::config::effective_client_version(&config.gateway.platform);
                     let sys_software = if di.sys_software.is_empty() {
                         "Windows".to_string()
                     } else {

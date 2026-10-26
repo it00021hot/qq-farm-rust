@@ -402,7 +402,17 @@ impl FarmService {
         let fertilizer_id =
             if fertilizer_type == "organic" { ORGANIC_FERTILIZER_ID } else { NORMAL_FERTILIZER_ID };
         // 仅发送一次；超时和部分成功均不自动重试，避免重复推进阶段或消耗化肥
-        let reply = self.api.fertilize_batch(&targets, fertilizer_id).await?;
+        let reply = match self.api.fertilize_batch(&targets, fertilizer_id).await {
+            Ok(reply) => reply,
+            // 所选地块当前阶段已施过该化肥（bot `isSkippableFertilizeLandError`）：
+            // 属「无可施肥目标」，不作为错误抛给面板
+            Err(error) if is_skippable_fertilize_error(&error.to_string()) => {
+                result["skippedCount"] = serde_json::json!(targets.len());
+                result["note"] = serde_json::json!("所选地块当前阶段已施肥，暂无可施肥目标");
+                return Ok(result);
+            }
+            Err(error) => return Err(error),
+        };
         let target_set: HashSet<i64> = targets.iter().copied().collect();
         let succeeded: HashSet<i64> =
             reply.land.iter().map(|land| land.id).filter(|id| target_set.contains(id)).collect();
@@ -1038,6 +1048,16 @@ fn select_fertilize_all_targets(
         .collect()
 }
 
+/// bot `isSkippableFertilizeLandError`：服务端拒绝（该阶段已使用该化肥 / 当前不可施肥）
+/// 视为「无可施肥目标」跳过，不作为错误上报。
+fn is_skippable_fertilize_error(message: &str) -> bool {
+    use crate::constants::game_ids::{
+        FERTILIZE_ERR_ALREADY_FERTILIZED, FERTILIZE_ERR_NOT_FERTILIZABLE,
+    };
+    message.contains(&format!("code={FERTILIZE_ERR_ALREADY_FERTILIZED}"))
+        || message.contains(&format!("code={FERTILIZE_ERR_NOT_FERTILIZABLE}"))
+}
+
 #[cfg(test)]
 pub struct NoopEncryptor;
 
@@ -1055,6 +1075,17 @@ impl crate::network::encryptor::Encryptor for NoopEncryptor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// bot `isSkippableFertilizeLandError`：1001024 / 1001025 可跳过，其余报错。
+    #[test]
+    fn skippable_fertilize_error_matches_bot_codes() {
+        assert!(is_skippable_fertilize_error(
+            "gateway error: gamepb.plantpb.PlantService.Fertilize code=1001025 之前阶段已使用了该化肥"
+        ));
+        assert!(is_skippable_fertilize_error("业务错误: code=1001024"));
+        assert!(!is_skippable_fertilize_error("code=1000019 余额不足"));
+        assert!(!is_skippable_fertilize_error("网络超时"));
+    }
 
     #[tokio::test]
     async fn event_channel_works() {

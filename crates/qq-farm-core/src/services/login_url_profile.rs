@@ -147,11 +147,14 @@ pub fn apply_login_client_hints_to_system_config(
         current.client_version_updated_at,
         0,
         crate::utils::time::now_ms(),
+        "qq",
     );
     let next = SystemConfig {
         server_url: current.server_url.clone(),
         client_version: resolved_top_version,
         client_version_updated_at: next_version_updated_at,
+        wx_client_version: current.wx_client_version.clone(),
+        wx_client_version_updated_at: current.wx_client_version_updated_at,
         platform: resolved_platform,
         os: next_device.os.clone(),
         time_zone: current.time_zone.clone(),

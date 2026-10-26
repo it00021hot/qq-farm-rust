@@ -31,8 +31,21 @@ function formatTime(timestamp: number) {
 }
 
 function giftStatusText(gift: Api.Farm.DailyGiftCard) {
-  if (gift.key === 'vip_daily_gift' && gift.hasGift === false) {
+  // 失败态优先（bot fecf531：错误必须可见，不得被「已完成」掩盖）
+  if (gift.result === 'error') {
+    return $t('page.farm.personal.giftClaimFailed');
+  }
+  if (gift.result === 'partial') {
+    return $t('page.farm.personal.giftPartialFailed');
+  }
+  if (
+    gift.key === 'vip_daily_gift' &&
+    (gift.isVip === false || (gift.isVip == null && gift.hasGift === false))
+  ) {
     return $t('page.farm.personal.giftNotOpened');
+  }
+  if (gift.key === 'vip_daily_gift' && gift.isVip === true && gift.hasGift === false) {
+    return $t('page.farm.personal.giftNoGiftPack');
   }
   if (gift.key === 'month_card_gift' && gift.hasCard === false) {
     return $t('page.farm.personal.giftNotOpened');
@@ -43,8 +56,12 @@ function giftStatusText(gift: Api.Farm.DailyGiftCard) {
 }
 
 function giftStatusType(gift: Api.Farm.DailyGiftCard): NaiveUI.ThemeColor {
+  if (gift.result === 'error' || gift.result === 'partial') {
+    return 'error';
+  }
   if (
-    (gift.key === 'vip_daily_gift' && gift.hasGift === false) ||
+    (gift.key === 'vip_daily_gift' &&
+      (gift.isVip === false || (gift.isVip == null && gift.hasGift === false))) ||
     (gift.key === 'month_card_gift' && gift.hasCard === false)
   ) {
     return 'default';
@@ -55,8 +72,14 @@ function giftStatusType(gift: Api.Farm.DailyGiftCard): NaiveUI.ThemeColor {
 }
 
 function giftSubText(gift: Api.Farm.DailyGiftCard) {
-  if (gift.key === 'vip_daily_gift' && gift.hasGift === false) {
+  if (gift.result === 'error' || gift.result === 'partial') {
+    return gift.lastAt ? `最近检查 ${formatTime(Number(gift.lastAt))}` : '等待下次检查';
+  }
+  if (gift.key === 'vip_daily_gift' && gift.isVip === false) {
     return '未开通QQ会员或无每日礼包';
+  }
+  if (gift.key === 'vip_daily_gift' && gift.isVip === true && gift.hasGift === false) {
+    return '已开通会员，当前没有可领取礼包';
   }
   if (gift.key === 'month_card_gift' && gift.hasCard === false) {
     return '未购买月卡或已过期';
@@ -95,6 +118,14 @@ function giftSubText(gift: Api.Farm.DailyGiftCard) {
         </div>
         <div v-if="giftSubText(gift)" class="text-12px opacity-55">
           {{ giftSubText(gift) }}
+        </div>
+        <div
+          v-if="(gift.result === 'error' || gift.result === 'partial') && gift.lastError"
+          class="mt-4px truncate text-12px"
+          :title="gift.lastError"
+          style="color: var(--n-error-color, #d03050)"
+        >
+          {{ gift.lastError }}
         </div>
       </div>
     </div>

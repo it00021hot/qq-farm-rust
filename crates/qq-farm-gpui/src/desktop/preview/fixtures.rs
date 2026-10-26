@@ -125,7 +125,8 @@ pub(super) fn daily_gifts_snapshot() -> serde_json::Value {
                 {"key": "daily_share", "label": "每日分享", "doneToday": true, "enabled": true,
                     "lastAt": 1791208800000_i64},
                 {"key": "vip_daily_gift", "label": "QQ 会员每日礼包", "doneToday": false,
-                    "enabled": false, "hasGift": false},
+                    "enabled": true, "lastAt": 1791208800000_i64, "isVip": true,
+                    "hasGift": true, "canClaim": false, "result": "ok", "lastError": ""},
                 {"key": "month_card_gift", "label": "月卡每日礼包", "doneToday": false,
                     "enabled": true, "hasCard": true, "completedCount": 1, "totalCount": 1}
             ],
@@ -321,9 +322,16 @@ pub(super) fn dashboard_many_logs_snapshot() -> serde_json::Value {
     let mut snapshot = dashboard_snapshot();
     let tags = ["农场", "好友", "系统", "其他"];
     let events = ["harvest_crop", "friend_help", "ws_reconnected"];
+    // 偶数条用长消息（对齐实机施肥/出售日志长度），回归日志换行与右栏布局
+    let long_message = "常规施肥: 普通施肥目标为空 (传入 0 块, 范围: 紫金土地、金土地、黑土地、红土地、普通土地), 跳过普通施肥；多季施肥: 已为 18/18 块地施用强化化肥, 剩 417.8h，本次巡田同步完成收获 24/种植 18/补种 18 与出售 灯笼果x15200 获得金币 6105120";
     let logs: Vec<_> = (1..=305)
         .map(|index| {
             let seconds = 36_000 + index * 137;
+            let message = if index % 2 == 0 {
+                format!("{long_message}")
+            } else {
+                format!("运行事件 #{index}")
+            };
             serde_json::json!({
                 "ts": index,
                 "time": format!(
@@ -333,7 +341,7 @@ pub(super) fn dashboard_many_logs_snapshot() -> serde_json::Value {
                     seconds % 60
                 ),
                 "tag": tags[index as usize % 4],
-                "msg": format!("运行事件 #{index}"),
+                "msg": message,
                 "isWarn": index % 50 == 0,
                 "meta": {"event": events[index as usize % 3]},
             })
@@ -553,6 +561,7 @@ pub(super) fn solar_calendar_snapshot() -> serde_json::Value {
                 "wrongOptions": [],
                 "question": "重阳节又被称为什么节？",
                 "options": ["A.敬老节", "B.儿童节", "C.母亲节", "D.教师节"],
+                "answerIndex": 0,
                 "errorTips": "它在农历九月初九，九九谐音久久，有敬老长寿的含义。",
                 "rules": ["【节令奖励】", "节令期间可直接领取基础奖励，答对节令问题后领取额外奖励。"],
                 "rewards": [{"id": 1002, "count": 200, "name": "点券",
@@ -565,7 +574,8 @@ pub(super) fn solar_calendar_snapshot() -> serde_json::Value {
                 "description": "农历 九月十四\n气肃而凝，丹柿垂檐",
                 "startTime": now + 86_400, "endTime": now + 172_800, "status": 1,
                 "directClaimed": false, "quizClaimed": false, "quizWrongToday": false,
-                "wrongOptions": [], "question": "", "options": [], "errorTips": "",
+                "wrongOptions": [], "question": "", "options": [], "answerIndex": serde_json::Value::Null,
+                "errorTips": "",
                 "rules": [], "rewards": [], "questionRewards": [],
                 "canClaim": false, "canAnswer": false
             }

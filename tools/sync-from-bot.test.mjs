@@ -3,9 +3,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { parseArgs, syncFromBot } from './sync-from-bot.mjs';
+import { parseArgs, syncFromBot, CONFIG_FILES } from './sync-from-bot.mjs';
 
-const CONFIG_FILES = ['ItemInfo.json', 'Plant.json', 'RoleLevel.json', 'Land.json'];
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 async function makeFixture() {
@@ -17,6 +16,7 @@ async function makeFixture() {
   await mkdir(gameConfig, { recursive: true });
   await mkdir(proto, { recursive: true });
   await mkdir(repoRoot, { recursive: true });
+  // 夹具必须覆盖工具要求的全部配置文件（与 CONFIG_FILES 保持同步，缺一个即校验失败）
   for (const [index, name] of CONFIG_FILES.entries()) {
     await writeFile(path.join(gameConfig, name), `${JSON.stringify([{ id: index + 1, name }], null, 2)}\n`);
   }
@@ -49,7 +49,8 @@ test('dry-run reports config changes without writing target', async t => {
   );
 
   assert.equal(results[0].diff.modified.length, 1);
-  assert.equal(results[0].diff.added.length, 3);
+  // 其余全部配置文件按新增报告（跟随 CONFIG_FILES 数量，避免夹具再漂移）
+  assert.equal(results[0].diff.added.length, CONFIG_FILES.length - 1);
   assert.equal(await readFile(path.join(target, 'ItemInfo.json'), 'utf8'), '[{"id":999}]\n');
 });
 

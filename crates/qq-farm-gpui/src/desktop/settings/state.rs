@@ -28,9 +28,6 @@ pub(crate) struct SettingsState {
     pub(crate) qq_bot_poll_generation: u64,
     pub(crate) qq_bot_qr_path: Option<PathBuf>,
     pub(crate) qq_bot_status: Option<String>,
-    pub(crate) save_notice: Option<String>,
-    pub(crate) save_notice_warning: bool,
-    pub(crate) save_notice_generation: u64,
     pub(crate) draft: serde_json::Value,
     pub(crate) strategy_preview: Option<StrategyPreview>,
     pub(crate) strategy_preview_generation: u64,
@@ -40,6 +37,7 @@ pub(crate) struct SettingsState {
     pub(crate) quiet_hours_end: Entity<TimeFieldState>,
     pub(crate) system_server_url: Entity<InputState>,
     pub(crate) system_client_version: Entity<InputState>,
+    pub(crate) system_wx_client_version: Entity<InputState>,
     pub(crate) system_software: Entity<InputState>,
     pub(crate) system_device_id: Entity<InputState>,
     pub(crate) system_memory: Entity<InputState>,
@@ -234,6 +232,7 @@ impl SettingsState {
         .detach();
         let system_server_url = cx.new(|cx| InputState::new(window, cx).placeholder("wss://..."));
         let system_client_version = cx.new(|cx| InputState::new(window, cx));
+        let system_wx_client_version = cx.new(|cx| InputState::new(window, cx));
         let system_software = cx.new(|cx| InputState::new(window, cx));
         let system_device_id = cx.new(|cx| InputState::new(window, cx));
         let system_memory = cx.new(|cx| InputState::new(window, cx));
@@ -257,6 +256,7 @@ impl SettingsState {
         for (input, path) in [
             (&system_server_url, "systemConfig/serverUrl"),
             (&system_client_version, "systemConfig/deviceInfo/clientVersion"),
+            (&system_wx_client_version, "systemConfig/wxClientVersion"),
             (&system_software, "systemConfig/deviceInfo/sysSoftware"),
             (&system_device_id, "systemConfig/deviceInfo/deviceId"),
             (&system_memory, "systemConfig/deviceInfo/memory"),
@@ -312,9 +312,6 @@ impl SettingsState {
             qq_bot_poll_generation: 0,
             qq_bot_qr_path: None,
             qq_bot_status: None,
-            save_notice: None,
-            save_notice_warning: false,
-            save_notice_generation: 0,
             draft: serde_json::Value::Null,
             strategy_preview: None,
             strategy_preview_generation: 0,
@@ -327,6 +324,7 @@ impl SettingsState {
             quiet_hours_end,
             system_server_url,
             system_client_version,
+            system_wx_client_version,
             system_software,
             system_device_id,
             system_memory,

@@ -50,6 +50,9 @@ impl FarmDesktop {
             div()
                 .v_flex()
                 .gap_3()
+                // 外层 render_page_controls 是 flex_wrap 行容器，不设 w_full
+                // 会被收缩成内容宽（面板曾只有半窗宽）
+                .w_full()
                 .rounded(cx.theme().radius_lg)
                 .border_1()
                 .border_color(cx.theme().border)

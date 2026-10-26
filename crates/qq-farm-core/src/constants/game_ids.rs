@@ -18,6 +18,11 @@ pub const GOLD_BEAN_ITEM_ID: i64 = 1005;
 /// 商城商品：有机肥（数字碰巧与点券 1002 相同，但是不同域）
 pub const MALL_ORGANIC_FERTILIZER_GOODS_ID: i32 = 1002;
 
+/// 施肥网关错误码：地块当前阶段已使用该化肥 / 当前不可施肥
+/// （bot `isSkippableFertilizeLandError`：1001024 / 1001025，视为「无可施肥目标」跳过）
+pub const FERTILIZE_ERR_ALREADY_FERTILIZED: i64 = 1_001_025;
+pub const FERTILIZE_ERR_NOT_FERTILIZABLE: i64 = 1_001_024;
+
 /// 植物操作 ID（`OperationLimit.id` / `CheckCanOperate`）
 pub const OP_HARVEST: i64 = 10001;
 pub const OP_REMOVE: i64 = 10002;

@@ -55,7 +55,7 @@ async fn offline_reminder_can_be_saved_and_reloaded_without_an_account(cx: &mut 
         assert!(window.find("settings-dingtalk-endpoint").visible());
         window.click("save-offline-reminder", cx);
         window.render_frame(cx);
-        assert!(window.find("settings-save-notice").visible());
+        assert!(window.find("app-toast").visible());
     })
     .expect("save DingTalk reminder settings from the account-free form");
     cx.update(|cx| {
@@ -130,7 +130,7 @@ fn offline_test_pending_state_only_disables_its_save_controls(cx: &mut TestAppCo
         let state = desktop.read(cx);
         assert!(state.settings.offline_test_loading, "the test action stays pending");
         assert!(!state.loading, "testing a reminder must not lock the settings page");
-        assert!(state.settings.save_notice.is_none(), "saving stays inactive while the test runs");
+        assert!(state.toast.is_none(), "saving stays inactive while the test runs");
     })
     .expect("render reminder-specific pending controls without locking settings");
 }

@@ -677,6 +677,7 @@ declare namespace App {
             quizTitle: string;
             submitAnswer: string;
             wrongOption: string;
+            correctOption: string;
             claimSuccess: string;
             tomorrow: string;
             refreshRequired: string;
@@ -965,6 +966,9 @@ declare namespace App {
             giftWaiting: string;
             giftDisabled: string;
             giftNotOpened: string;
+            giftClaimFailed: string;
+            giftPartialFailed: string;
+            giftNoGiftPack: string;
             giftNeedLogin: string;
             giftEmpty: string;
             growthEmpty: string;
@@ -1278,6 +1282,7 @@ declare namespace App {
             platform: string;
             deviceOs: string;
             clientVersion: string;
+            wxClientVersion: string;
             sysSoftware: string;
             deviceId: string;
             memory: string;

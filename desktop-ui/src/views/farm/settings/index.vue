@@ -120,6 +120,7 @@ function createDefaultSystemConfig(): SystemConfigPayload {
   return {
     serverUrl: '',
     clientVersion: '',
+    wxClientVersion: '',
     platform: 'qq',
     os: 'Windows',
     timeZone: 'Asia/Shanghai',
@@ -1749,6 +1750,9 @@ onUnmounted(() => {
                 <div class="grid gap-16px md:grid-cols-2">
                   <NFormItem :label="$t('page.farm.settings.clientVersion')">
                     <NInput v-model:value="localSystemConfig.deviceInfo.clientVersion" />
+                  </NFormItem>
+                  <NFormItem :label="$t('page.farm.settings.wxClientVersion')">
+                    <NInput v-model:value="localSystemConfig.wxClientVersion" />
                   </NFormItem>
                   <NFormItem :label="$t('page.farm.settings.sysSoftware')">
                     <NInput v-model:value="localSystemConfig.deviceInfo.sysSoftware" />

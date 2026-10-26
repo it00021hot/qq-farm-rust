@@ -54,6 +54,8 @@ impl FarmDesktop {
         let mut panel = div()
             .v_flex()
             .gap_3()
+            // 同自动控制面板：外层 flex_wrap 行容器下需要 w_full
+            .w_full()
             .rounded(cx.theme().radius_lg)
             .border_1()
             .border_color(cx.theme().border)

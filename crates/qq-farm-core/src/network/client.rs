@@ -186,7 +186,8 @@ async fn run_read_task(
     tracing::debug!("ws read task exited");
 }
 
-const WS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
+/// 20s（对齐 bot cc78f2b 的 `handshakeTimeout: 20000`）
+const WS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// 对齐 Go gorilla / Node `ws`：自己写握手字节，保留 `Origin` / `User-Agent` 规范大小写。
 /// tungstenite 会把额外头写成小写（只特判 Origin），腾讯网关经常直接 400。

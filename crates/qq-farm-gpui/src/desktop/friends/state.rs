@@ -40,8 +40,6 @@ pub(crate) struct FriendsState {
     pub(crate) steal_all_current_gid: Option<i64>,
     pub(crate) blacklist_loading: bool,
     pub(crate) blacklist_generation: u64,
-    pub(crate) feedback: Option<(String, FriendFeedbackLevel)>,
-    pub(crate) feedback_generation: u64,
 }
 
 impl FriendsState {
@@ -106,8 +104,6 @@ impl FriendsState {
             steal_all_current_gid: None,
             blacklist_loading: false,
             blacklist_generation: 0,
-            feedback: None,
-            feedback_generation: 0,
         }
     }
 }

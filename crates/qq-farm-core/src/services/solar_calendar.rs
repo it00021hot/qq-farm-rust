@@ -34,6 +34,9 @@ struct SolarEventConfig {
     name: Option<String>,
     question: Option<String>,
     answer: Option<String>,
+    /// 正确答案下标（bot 57cddb3 起随题目下发面板做正确答案标注；
+    /// 非法值（负数 / 越界 / 非整数）在下发时校验为 null）
+    answer_index: Option<i64>,
     error_tips: Option<String>,
     help: Option<String>,
     description: Option<String>,
@@ -103,6 +106,11 @@ fn event_dto(value: &SolarTermsEventInfo, now: i64) -> serde_json::Value {
         }
         _ => Vec::new(),
     };
+    // bot 57cddb3：仅当题目存在且配置下标是合法整数（0 ≤ idx < options.len()）才下发，
+    // 否则 null（对齐 bot `answerIndex` 的运行时校验）
+    let answer_index = entry
+        .and_then(|entry| entry.answer_index)
+        .filter(|idx| !question.is_empty() && *idx >= 0 && (*idx as usize) < options.len());
     serde_json::json!({
         "id": id,
         "name": entry.and_then(|entry| entry.name.clone()).unwrap_or_else(|| format!("节令 {id}")),
@@ -116,6 +124,7 @@ fn event_dto(value: &SolarTermsEventInfo, now: i64) -> serde_json::Value {
         "wrongOptions": value.wrong_options,
         "question": question,
         "options": options,
+        "answerIndex": answer_index,
         "errorTips": entry.and_then(|entry| entry.error_tips.clone()).unwrap_or_default(),
         "rules": rule_lines(entry.and_then(|entry| entry.help.as_deref())),
         "rewards": rewards(&value.rewards),
@@ -359,7 +368,8 @@ mod tests {
         assert_eq!(dto["options"][0], "A.敬老节");
         assert_eq!(dto["canClaim"], true);
         assert_eq!(dto["canAnswer"], true);
-        assert!(dto.get("answer_index").is_none(), "不得下发答案索引");
+        // bot 57cddb3 起下发官方答案下标（401 → A.敬老节）
+        assert_eq!(dto["answerIndex"], 0, "下发官方答案下标");
 
         for status in [0, 1, 3] {
             let closed = SolarTermsEventInfo { window_status: status, ..event.clone() };
@@ -373,6 +383,29 @@ mod tests {
         assert_eq!(event_dto(&wrong_today, now)["canAnswer"], false);
         let quiz_done = SolarTermsEventInfo { quiz_claimed: true, ..event };
         assert_eq!(event_dto(&quiz_done, now)["canAnswer"], false);
+    }
+
+    /// bot 57cddb3：非法 / 缺失的 answer_index 一律 null，且不影响 canAnswer。
+    #[test]
+    fn event_dto_omits_invalid_answer_index() {
+        crate::config::game_config::global().load();
+        let now = 1_792_252_900;
+        let event = |id| SolarTermsEventInfo {
+            id,
+            window_status: 2,
+            open_start_time: now - 100,
+            open_end_time: now + 86_400,
+            ..Default::default()
+        };
+        // 402（霜降）答案下标 2 → C
+        let dto = event_dto(&event(402), now);
+        assert_eq!(dto["answerIndex"], 2);
+        assert_eq!(dto["options"][2], "C.最后一个");
+        // 101（无题目）与 999（无条目）→ null
+        assert_eq!(event_dto(&event(101), now)["answerIndex"], serde_json::Value::Null);
+        assert_eq!(event_dto(&event(999), now)["answerIndex"], serde_json::Value::Null);
+        // 无题目条目不影响 canAnswer 门控（canAnswer=false 因无题目）
+        assert_eq!(event_dto(&event(101), now)["canAnswer"], false);
     }
 
     #[test]

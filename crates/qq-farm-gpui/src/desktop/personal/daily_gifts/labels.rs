@@ -4,7 +4,13 @@ use gpui_kit::{App, Hsla};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum GiftStatusKind {
+    /// 领取失败（bot fecf531：错误可见，优先级高于一切）
+    Error,
+    /// 部分领取失败
+    Partial,
     NotActivated,
+    /// 已开通会员但当前无礼包
+    NoGift,
     Done,
     Waiting,
     Disabled,
@@ -13,9 +19,17 @@ pub(super) enum GiftStatusKind {
 impl GiftStatusKind {
     pub(super) fn from_gift(gift: &serde_json::Value) -> Self {
         let key = gift.get("key").and_then(serde_json::Value::as_str).unwrap_or_default();
+        // 失败态优先（对齐 bot DailyOverview：错误不得被「已完成」掩盖）
+        match gift.get("result").and_then(serde_json::Value::as_str) {
+            Some("error") => return Self::Error,
+            Some("partial") => return Self::Partial,
+            _ => {}
+        }
         let not_activated = match key {
             "vip_daily_gift" => {
-                gift.get("hasGift").and_then(serde_json::Value::as_bool) == Some(false)
+                let is_vip = gift.get("isVip").and_then(serde_json::Value::as_bool);
+                let has_gift = gift.get("hasGift").and_then(serde_json::Value::as_bool);
+                is_vip == Some(false) || (is_vip.is_none() && has_gift == Some(false))
             }
             "month_card_gift" => {
                 gift.get("hasCard").and_then(serde_json::Value::as_bool) == Some(false)
@@ -24,6 +38,11 @@ impl GiftStatusKind {
         };
         if not_activated {
             Self::NotActivated
+        } else if key == "vip_daily_gift"
+            && gift.get("isVip").and_then(serde_json::Value::as_bool) == Some(true)
+            && gift.get("hasGift").and_then(serde_json::Value::as_bool) == Some(false)
+        {
+            Self::NoGift
         } else if gift_done(gift) {
             Self::Done
         } else if gift.get("enabled").and_then(serde_json::Value::as_bool).unwrap_or(false) {
@@ -37,7 +56,8 @@ impl GiftStatusKind {
         match self {
             Self::Done => cx.theme().success,
             Self::Waiting => cx.theme().info,
-            Self::NotActivated | Self::Disabled => cx.theme().muted_foreground,
+            Self::Error | Self::Partial => cx.theme().danger,
+            Self::NotActivated | Self::NoGift | Self::Disabled => cx.theme().muted_foreground,
         }
     }
 }
@@ -60,7 +80,10 @@ pub(super) fn gift_done(gift: &serde_json::Value) -> bool {
 
 pub(super) fn gift_status(gift: &serde_json::Value, language: &str) -> String {
     let (chinese, english) = match GiftStatusKind::from_gift(gift) {
+        GiftStatusKind::Error => ("领取失败", "Claim failed"),
+        GiftStatusKind::Partial => ("部分领取失败", "Partially failed"),
         GiftStatusKind::NotActivated => ("未开通", "Not activated"),
+        GiftStatusKind::NoGift => ("暂无礼包", "No gift available"),
         GiftStatusKind::Done => ("今日已完成", "Done today"),
         GiftStatusKind::Waiting => ("等待执行", "Waiting"),
         GiftStatusKind::Disabled => ("未开启", "Disabled"),
@@ -70,14 +93,47 @@ pub(super) fn gift_status(gift: &serde_json::Value, language: &str) -> String {
 
 pub(super) fn gift_detail(gift: &serde_json::Value, language: &str) -> String {
     let key = gift.get("key").and_then(serde_json::Value::as_str).unwrap_or_default();
+    let result = gift.get("result").and_then(serde_json::Value::as_str).unwrap_or_default();
+    // 失败态：优先展示具体错误（bot 面板以 tooltip 展示 lastError）
+    if result == "error" || result == "partial" {
+        if let Some(error) = gift.get("lastError").and_then(serde_json::Value::as_str) {
+            if !error.is_empty() {
+                return error.to_string();
+            }
+        }
+        let timestamp = value_i64(gift.get("lastAt"));
+        return if timestamp > 0 {
+            match chrono::Local.timestamp_millis_opt(timestamp).single() {
+                Some(time) => {
+                    crate::i18n::text(language, "最近检查", "Last checked").to_string()
+                        + " "
+                        + &time.format("%H:%M").to_string()
+                }
+                None => String::new(),
+            }
+        } else {
+            crate::i18n::text(language, "等待下次检查", "Waiting for next check").into()
+        };
+    }
     match key {
         "vip_daily_gift"
-            if gift.get("hasGift").and_then(serde_json::Value::as_bool) == Some(false) =>
+            if gift.get("isVip").and_then(serde_json::Value::as_bool) == Some(false) =>
         {
             return crate::i18n::text(
                 language,
                 "未开通 QQ 会员或无每日礼包",
                 "QQ membership or a daily gift is not active",
+            )
+            .into();
+        }
+        "vip_daily_gift"
+            if gift.get("isVip").and_then(serde_json::Value::as_bool) == Some(true)
+                && gift.get("hasGift").and_then(serde_json::Value::as_bool) == Some(false) =>
+        {
+            return crate::i18n::text(
+                language,
+                "已开通会员，当前没有可领取礼包",
+                "Membership active but no gift available",
             )
             .into();
         }
@@ -144,8 +200,33 @@ mod tests {
     #[test]
     fn daily_gift_labels_follow_vue_status_and_subscription_rules() {
         assert_eq!(
-            gift_status(&serde_json::json!({"key":"vip_daily_gift", "hasGift":false}), "zh-CN"),
+            gift_status(
+                &serde_json::json!({"key":"vip_daily_gift", "isVip":false, "hasGift":false}),
+                "zh-CN"
+            ),
             "未开通"
+        );
+        // bot fecf531：失败态优先，错误详情进 detail
+        assert_eq!(
+            gift_status(
+                &serde_json::json!({"key":"vip_daily_gift", "result":"error", "doneToday":false}),
+                "zh-CN"
+            ),
+            "领取失败"
+        );
+        assert_eq!(
+            gift_detail(
+                &serde_json::json!({"key":"vip_daily_gift", "result":"error", "lastError":"领取会员礼包失败: 超时"}),
+                "en-US"
+            ),
+            "领取会员礼包失败: 超时"
+        );
+        assert_eq!(
+            gift_status(
+                &serde_json::json!({"key":"vip_daily_gift", "isVip":true, "hasGift":false}),
+                "en-US"
+            ),
+            "No gift available"
         );
         assert_eq!(
             gift_status(&serde_json::json!({"key":"task_claim", "doneToday":true}), "en-US"),
@@ -160,11 +241,37 @@ mod tests {
 
     #[test]
     fn daily_gift_status_kind_matches_vue_badge_priority() {
+        // bot fecf531：result=error 优先于一切（包括 doneToday）
+        assert_eq!(
+            GiftStatusKind::from_gift(&serde_json::json!({
+                "key":"vip_daily_gift", "result":"error", "doneToday":true, "enabled":true
+            })),
+            GiftStatusKind::Error
+        );
+        assert_eq!(
+            GiftStatusKind::from_gift(&serde_json::json!({
+                "key":"vip_daily_gift", "result":"partial", "doneToday":true
+            })),
+            GiftStatusKind::Partial
+        );
+        // isVip=false 未开通；isVip 缺失时回退 hasGift
+        assert_eq!(
+            GiftStatusKind::from_gift(&serde_json::json!({
+                "key":"vip_daily_gift", "isVip":false, "hasGift":false, "doneToday":true, "enabled":true
+            })),
+            GiftStatusKind::NotActivated
+        );
         assert_eq!(
             GiftStatusKind::from_gift(&serde_json::json!({
                 "key":"vip_daily_gift", "hasGift":false, "doneToday":true, "enabled":true
             })),
             GiftStatusKind::NotActivated
+        );
+        assert_eq!(
+            GiftStatusKind::from_gift(&serde_json::json!({
+                "key":"vip_daily_gift", "isVip":true, "hasGift":false, "doneToday":true
+            })),
+            GiftStatusKind::NoGift
         );
         assert_eq!(
             GiftStatusKind::from_gift(&serde_json::json!({"key":"task_claim", "doneToday":true})),

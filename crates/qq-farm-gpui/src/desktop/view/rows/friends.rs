@@ -89,7 +89,12 @@ impl FarmDesktop {
             None
         };
 
-        let url = row.record.get("avatar").and_then(serde_json::Value::as_str);
+        // 后端 FriendSummary 序列化为 camelCase（avatarUrl）；`avatar` 仅旧数据兜底
+        let url = row
+            .record
+            .get("avatarUrl")
+            .or_else(|| row.record.get("avatar"))
+            .and_then(serde_json::Value::as_str);
         let avatar = avatar::render_avatar(
             url,
             title.chars().next().unwrap_or('友'),

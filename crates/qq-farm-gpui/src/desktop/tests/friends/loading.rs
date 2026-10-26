@@ -11,15 +11,12 @@ fn leaving_friends_invalidates_pending_row_and_bulk_operations(cx: &mut TestAppC
             desktop.friends.operation_loading.insert((123, "steal"), 1);
             desktop.friends.steal_all_loading = true;
             desktop.friends.blacklist_loading = true;
-            desktop.friends.feedback =
-                Some(("旧账号的结果".into(), crate::desktop::FriendFeedbackLevel::Info));
 
             desktop.set_page(Page::Dashboard, cx);
 
             assert!(desktop.friends.operation_loading.is_empty());
             assert!(!desktop.friends.steal_all_loading);
             assert!(!desktop.friends.blacklist_loading);
-            assert!(desktop.friends.feedback.is_none());
             assert_eq!(desktop.page, Page::Dashboard);
         });
     });

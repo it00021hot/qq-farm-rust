@@ -13,25 +13,72 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
-/// 默认客户端版本（与原 TS DEFAULT_CLIENT_VERSION 一致；QQ/微信统一，对齐 bot 4eb9b2a..0533264）
-pub const DEFAULT_CLIENT_VERSION: &str = "1.15.0.2_20261001";
+/// 默认客户端版本（对齐 bot `DEFAULT_CLIENT_VERSION`，2026-10-22 QQ 抓包验证）。
+pub const DEFAULT_CLIENT_VERSION: &str = "1.15.1.4_20261001";
 
 /// 默认客户端版本的发布时间（毫秒）。保存的版本只有在其时间戳**更新**时才沿用，
 /// 防止旧存档把升级链锁死在过期版本上（对齐 bot `resolveClientVersion`）。
-pub const DEFAULT_CLIENT_VERSION_UPDATED_AT: i64 = 1_792_029_692_080;
+pub const DEFAULT_CLIENT_VERSION_UPDATED_AT: i64 = 1_792_637_519_008;
 
-/// 解析生效的 client_version：保存值比默认值新才沿用，否则回默认。
+/// 微信默认客户端版本（bot `DEFAULT_WX_CLIENT_VERSION`，2026-10-22 微信握手 /
+/// PlayerLogin / 心跳独立验证；与 QQ 版本串相同但时间戳独立演进）。
+pub const DEFAULT_WX_CLIENT_VERSION: &str = "1.15.1.4_20261001";
+
+/// 微信默认客户端版本时间戳（bot `DEFAULT_WX_CLIENT_VERSION_UPDATED_AT`）。
+pub const DEFAULT_WX_CLIENT_VERSION_UPDATED_AT: i64 = 1_792_639_106_589;
+
+/// 平台判定（对齐 bot `isWechatPlatform`：`['wx','wechat']`，trim + lowercase）。
 #[must_use]
-pub fn resolve_client_version(saved_version: &str, saved_updated_at: i64) -> (String, i64) {
+pub fn is_wechat_platform(platform: &str) -> bool {
+    let normalized = platform.trim().to_ascii_lowercase();
+    normalized == "wx" || normalized == "wechat"
+}
+
+/// 平台默认版本（对齐 bot `resolveClientVersion` 的平台分支）。
+fn platform_defaults(platform: &str) -> (&'static str, i64) {
+    if is_wechat_platform(platform) {
+        (DEFAULT_WX_CLIENT_VERSION, DEFAULT_WX_CLIENT_VERSION_UPDATED_AT)
+    } else {
+        (DEFAULT_CLIENT_VERSION, DEFAULT_CLIENT_VERSION_UPDATED_AT)
+    }
+}
+
+/// 运行时生效版本：按平台读 QQ / 微信配置，空值回各自默认
+/// （对齐 bot `getClientVersion`，cc78f2b 平台分离）。
+#[must_use]
+pub fn effective_client_version(platform: &str) -> String {
+    let rt = get_runtime_config();
+    if is_wechat_platform(platform) {
+        if rt.wx_client_version.trim().is_empty() {
+            DEFAULT_WX_CLIENT_VERSION.to_string()
+        } else {
+            rt.wx_client_version.clone()
+        }
+    } else if rt.client_version.trim().is_empty() {
+        DEFAULT_CLIENT_VERSION.to_string()
+    } else {
+        rt.client_version.clone()
+    }
+}
+
+/// 解析生效的 client_version：保存值比该平台默认值新才沿用，否则回默认。
+#[must_use]
+pub fn resolve_client_version(
+    saved_version: &str,
+    saved_updated_at: i64,
+    platform: &str,
+) -> (String, i64) {
+    let (default_version, default_updated_at) = platform_defaults(platform);
     let version = saved_version.trim();
-    if !version.is_empty() && saved_updated_at > DEFAULT_CLIENT_VERSION_UPDATED_AT {
+    if !version.is_empty() && saved_updated_at > default_updated_at {
         return (version.to_string(), saved_updated_at);
     }
-    (DEFAULT_CLIENT_VERSION.to_string(), DEFAULT_CLIENT_VERSION_UPDATED_AT)
+    (default_version.to_string(), default_updated_at)
 }
 
 /// 保存 client_version 时计算落库的时间戳：
-/// 显式传入的 `requested_updated_at` 优先；版本发生变化记 `now`；否则保留当前值。
+/// 显式传入的 `requested_updated_at` 优先；版本发生变化记 `now`；否则保留当前值
+/// （当前值缺失时回该平台默认，对齐 bot `resolveClientVersionUpdatedAt`）。
 #[must_use]
 pub fn resolve_client_version_updated_at(
     client_version: &str,
@@ -39,6 +86,7 @@ pub fn resolve_client_version_updated_at(
     current_updated_at: i64,
     requested_updated_at: i64,
     now_ms: i64,
+    platform: &str,
 ) -> i64 {
     if requested_updated_at > 0 {
         return requested_updated_at;
@@ -49,7 +97,7 @@ pub fn resolve_client_version_updated_at(
     if current_updated_at > 0 {
         current_updated_at
     } else {
-        DEFAULT_CLIENT_VERSION_UPDATED_AT
+        platform_defaults(platform).1
     }
 }
 
@@ -321,6 +369,15 @@ pub struct SystemConfig {
     /// 客户端版本的保存时间（毫秒）；决定保存版本能否覆盖更新的默认值
     #[serde(alias = "client_version_updated_at", default)]
     pub client_version_updated_at: i64,
+    /// 微信客户端版本（bot cc78f2b 平台分离；旧存档缺字段时回 `DEFAULT_WX_CLIENT_VERSION`）
+    #[serde(alias = "wx_client_version", default = "default_wx_client_version")]
+    pub wx_client_version: String,
+    /// 微信客户端版本时间戳
+    #[serde(
+        alias = "wx_client_version_updated_at",
+        default = "default_wx_client_version_updated_at"
+    )]
+    pub wx_client_version_updated_at: i64,
     pub platform: String,
     pub os: String,
     /// 系统时区（跨日重置 / 静默时段等日期计算的基准）
@@ -332,6 +389,14 @@ pub struct SystemConfig {
 
 fn default_time_zone() -> String {
     DEFAULT_TIME_ZONE.to_string()
+}
+
+fn default_wx_client_version() -> String {
+    DEFAULT_WX_CLIENT_VERSION.to_string()
+}
+
+fn default_wx_client_version_updated_at() -> i64 {
+    DEFAULT_WX_CLIENT_VERSION_UPDATED_AT
 }
 
 impl SystemConfig {
@@ -348,6 +413,8 @@ impl SystemConfig {
             server_url: DEFAULT_GATEWAY_URL.to_string(),
             client_version,
             client_version_updated_at: DEFAULT_CLIENT_VERSION_UPDATED_AT,
+            wx_client_version: DEFAULT_WX_CLIENT_VERSION.to_string(),
+            wx_client_version_updated_at: DEFAULT_WX_CLIENT_VERSION_UPDATED_AT,
             platform: "qq".to_string(),
             os,
             time_zone: DEFAULT_TIME_ZONE.to_string(),
@@ -372,6 +439,13 @@ pub struct RuntimeConfig {
     pub client_version: String,
     #[serde(alias = "client_version_updated_at", default)]
     pub client_version_updated_at: i64,
+    #[serde(alias = "wx_client_version", default = "default_wx_client_version")]
+    pub wx_client_version: String,
+    #[serde(
+        alias = "wx_client_version_updated_at",
+        default = "default_wx_client_version_updated_at"
+    )]
+    pub wx_client_version_updated_at: i64,
     pub platform: String,
     pub os: String,
     #[serde(alias = "time_zone", default = "default_time_zone")]
@@ -417,6 +491,8 @@ impl RuntimeConfig {
             server_url: sys.server_url,
             client_version: sys.client_version,
             client_version_updated_at: sys.client_version_updated_at,
+            wx_client_version: sys.wx_client_version,
+            wx_client_version_updated_at: sys.wx_client_version_updated_at,
             platform: sys.platform,
             os: sys.os,
             time_zone: sys.time_zone,
@@ -559,32 +635,63 @@ mod tests {
     #[test]
     fn resolve_client_version_prefers_newer_saved() {
         // 保存时间不比默认新 → 回默认
-        let (v, t) = resolve_client_version("9.9.9.9_20991231", 0);
+        let (v, t) = resolve_client_version("9.9.9.9_20991231", 0, "qq");
         assert_eq!(v, DEFAULT_CLIENT_VERSION);
         assert_eq!(t, DEFAULT_CLIENT_VERSION_UPDATED_AT);
         // 旧存档无时间戳 → 回默认
-        let (v, _) = resolve_client_version("1.13.2.10_20260723", 0);
+        let (v, _) = resolve_client_version("1.13.2.10_20260723", 0, "qq");
         assert_eq!(v, DEFAULT_CLIENT_VERSION);
         // 比默认新 → 沿用
-        let (v, t) =
-            resolve_client_version("1.13.4.0_20260901", DEFAULT_CLIENT_VERSION_UPDATED_AT + 1);
+        let (v, t) = resolve_client_version(
+            "1.13.4.0_20260901",
+            DEFAULT_CLIENT_VERSION_UPDATED_AT + 1,
+            "qq",
+        );
         assert_eq!(v, "1.13.4.0_20260901");
         assert_eq!(t, DEFAULT_CLIENT_VERSION_UPDATED_AT + 1);
+    }
+
+    /// bot cc78f2b：微信版本独立解析——空/过期回 `DEFAULT_WX_CLIENT_VERSION`，
+    /// 时间戳比微信默认新才沿用；两个平台互不影响。
+    #[test]
+    fn resolve_client_version_splits_platforms() {
+        let (v, t) = resolve_client_version("", 0, "wx");
+        assert_eq!(v, DEFAULT_WX_CLIENT_VERSION);
+        assert_eq!(t, DEFAULT_WX_CLIENT_VERSION_UPDATED_AT);
+        // 与 QQ 默认相同版本串 + 过期 QQ 时间戳 → 微信仍回微信默认
+        let (v, t) = resolve_client_version(DEFAULT_CLIENT_VERSION, 1, "wx");
+        assert_eq!(v, DEFAULT_WX_CLIENT_VERSION);
+        assert_eq!(t, DEFAULT_WX_CLIENT_VERSION_UPDATED_AT);
+        // 比微信默认新 → 沿用
+        let (v, t) = resolve_client_version(
+            "1.15.1.5_20261022",
+            DEFAULT_WX_CLIENT_VERSION_UPDATED_AT + 1,
+            "wechat",
+        );
+        assert_eq!(v, "1.15.1.5_20261022");
+        assert_eq!(t, DEFAULT_WX_CLIENT_VERSION_UPDATED_AT + 1);
+        // wechat 大小写 / 空白归一
+        let (v, _) = resolve_client_version("", 0, " WeChat ");
+        assert_eq!(v, DEFAULT_WX_CLIENT_VERSION);
     }
 
     #[test]
     fn resolve_client_version_updated_at_rules() {
         let now = 1_800_000_000_000_i64;
         // 显式请求优先
-        assert_eq!(resolve_client_version_updated_at("a", "b", 5, 42, now), 42);
+        assert_eq!(resolve_client_version_updated_at("a", "b", 5, 42, now, "qq"), 42);
         // 版本变化 → now
-        assert_eq!(resolve_client_version_updated_at("a", "b", 5, 0, now), now);
+        assert_eq!(resolve_client_version_updated_at("a", "b", 5, 0, now, "qq"), now);
         // 版本不变 → 保留当前值
-        assert_eq!(resolve_client_version_updated_at("a", "a", 5, 0, now), 5);
-        // 无当前值 → 默认
+        assert_eq!(resolve_client_version_updated_at("a", "a", 5, 0, now, "qq"), 5);
+        // 无当前值 → 各平台默认
         assert_eq!(
-            resolve_client_version_updated_at("a", "a", 0, 0, now),
+            resolve_client_version_updated_at("a", "a", 0, 0, now, "qq"),
             DEFAULT_CLIENT_VERSION_UPDATED_AT
+        );
+        assert_eq!(
+            resolve_client_version_updated_at("a", "a", 0, 0, now, "wx"),
+            DEFAULT_WX_CLIENT_VERSION_UPDATED_AT
         );
     }
 
@@ -602,9 +709,28 @@ mod tests {
         let sys = SystemConfig::default_system();
         assert_eq!(sys.client_version, DEFAULT_CLIENT_VERSION);
         assert_eq!(sys.client_version_updated_at, DEFAULT_CLIENT_VERSION_UPDATED_AT);
+        assert_eq!(sys.wx_client_version, DEFAULT_WX_CLIENT_VERSION);
+        assert_eq!(sys.wx_client_version_updated_at, DEFAULT_WX_CLIENT_VERSION_UPDATED_AT);
         assert_eq!(sys.server_url, DEFAULT_GATEWAY_URL);
         assert_eq!(sys.platform, "qq");
         assert_eq!(sys.time_zone, DEFAULT_TIME_ZONE);
+    }
+
+    /// 旧存档（store.json）缺微信版本字段：serde default 回默认值而不是解析失败。
+    #[test]
+    fn system_config_parses_legacy_store_without_wx_fields() {
+        let legacy = serde_json::json!({
+            "serverUrl": "wss://gate.example.com/ws",
+            "clientVersion": "1.15.0.2_20261001",
+            "clientVersionUpdatedAt": 1_792_029_692_080_i64,
+            "platform": "qq",
+            "os": "Windows",
+            "timeZone": "Asia/Shanghai",
+            "deviceInfo": DeviceInfo::windows_pc(),
+        });
+        let sys: SystemConfig = serde_json::from_value(legacy).expect("parse legacy store");
+        assert_eq!(sys.wx_client_version, DEFAULT_WX_CLIENT_VERSION);
+        assert_eq!(sys.wx_client_version_updated_at, DEFAULT_WX_CLIENT_VERSION_UPDATED_AT);
     }
 
     #[test]
@@ -625,6 +751,8 @@ mod tests {
             server_url: "wss://test.example.com/ws".to_string(),
             client_version: "v1".to_string(),
             client_version_updated_at: 0,
+            wx_client_version: DEFAULT_WX_CLIENT_VERSION.to_string(),
+            wx_client_version_updated_at: DEFAULT_WX_CLIENT_VERSION_UPDATED_AT,
             platform: "wx".to_string(),
             os: "Android".to_string(),
             time_zone: DEFAULT_TIME_ZONE.to_string(),

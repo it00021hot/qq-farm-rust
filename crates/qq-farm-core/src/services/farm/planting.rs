@@ -634,12 +634,7 @@ impl PlantingEngine {
                 FertilizeMode::Smart => FertilizerMode::Smart,
             });
         if matches!(mode, FertilizerMode::None) {
-            log_ctx.log(
-                format!("{}：当前施肥策略为不施肥，跳过", log_ctx.reason_label),
-                serde_json::json!({
-                    "module": "farm", "result": "skip", "reason": log_ctx.reason, "type": "none",
-                }),
-            );
+            // 无操作不输出日志：每轮巡田都会走到这里，输出即刷屏（用户决策）
             return Ok(FertilizeResult::default());
         }
 
@@ -648,12 +643,6 @@ impl PlantingEngine {
             .map(|a| fertilizer_types_to_analysis(&a.fertilizer_land_types))
             .unwrap_or_else(|| ALL_FERTILIZER_LAND_TYPES.to_vec());
         if selected.is_empty() {
-            log_ctx.log(
-                format!("{}：未勾选施肥范围，跳过本轮施肥", log_ctx.reason_label),
-                serde_json::json!({
-                    "module": "farm", "result": "skip", "reason": log_ctx.reason, "scope": "none",
-                }),
-            );
             return Ok(FertilizeResult::default());
         }
         let scope = FertScope::new(&selected);
@@ -668,12 +657,6 @@ impl PlantingEngine {
                 FertilizerMode::Organic | FertilizerMode::Both | FertilizerMode::Smart
             )
         {
-            log_ctx.log(
-                format!("{}：没有可施肥地块，跳过", log_ctx.reason_label),
-                serde_json::json!({
-                    "module": "farm", "result": "skip", "reason": log_ctx.reason, "count": 0,
-                }),
-            );
             return Ok(FertilizeResult::default());
         }
 
@@ -705,7 +688,6 @@ impl PlantingEngine {
             result.normal = self
                 .fertilize_normal_step(
                     &normal_targets,
-                    planted.len(),
                     &log_ctx,
                     &scope,
                     matches!(mode, FertilizerMode::Both),
@@ -869,24 +851,12 @@ impl PlantingEngine {
     async fn fertilize_normal_step(
         &self,
         normal_targets: &[i64],
-        planted_count: usize,
         log_ctx: &FertLogCtx<'_>,
         scope: &FertScope,
         continue_on_error: bool,
     ) -> usize {
         if normal_targets.is_empty() {
-            log_ctx.log(
-                format!(
-                    "{}：普通化肥目标为空（传入 {} 块，范围: {}），跳过普通施肥",
-                    log_ctx.reason_label,
-                    planted_count,
-                    scope.label()
-                ),
-                serde_json::json!({
-                    "module": "farm", "result": "skip", "reason": log_ctx.reason,
-                    "type": "normal", "count": 0, "landTypes": scope.ids(),
-                }),
-            );
+            // 目标为空属每轮常态（如强化化肥已催熟全部地块），输出即刷屏（用户决策）
             return 0;
         }
         let mut normal = 0usize;
@@ -907,8 +877,10 @@ impl PlantingEngine {
             Some(secs) => format!("，剩 {:.1}h", secs as f64 / 3600.0),
             None => String::new(),
         };
-        let (msg, result_field) = if normal > 0 {
-            (
+        // 只有真正施上才输出（用户决策）：0/N 失败（化肥耗尽等）每轮都会发生，
+        // 输出即刷屏；化肥状态看面板「化肥容器」卡片
+        if normal > 0 {
+            log_ctx.log(
                 format!(
                     "{}：已为{}/{} 块地施普通化肥（范围: {}）{}",
                     log_ctx.reason_label,
@@ -917,26 +889,12 @@ impl PlantingEngine {
                     scope.label(),
                     left_label
                 ),
-                "ok",
-            )
-        } else {
-            (
-                format!(
-                    "{}：普通化肥施肥 0/{} 块（可能化肥不足或地块不可施）{}",
-                    log_ctx.reason_label,
-                    normal_targets.len(),
-                    left_label
-                ),
-                "skip",
-            )
-        };
-        log_ctx.log(
-            msg,
-            serde_json::json!({
-                "module": "farm", "result": result_field, "reason": log_ctx.reason,
-                "type": "normal", "count": normal, "landTypes": scope.ids(),
-            }),
-        );
+                serde_json::json!({
+                    "module": "farm", "result": "ok", "reason": log_ctx.reason,
+                    "type": "normal", "count": normal, "landTypes": scope.ids(),
+                }),
+            );
+        }
         normal
     }
 

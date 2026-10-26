@@ -331,7 +331,7 @@ pub fn list_seeds() -> Value {
                 if !obj.contains_key("image") {
                     obj.insert(
                         "image".into(),
-                        json!(qq_farm_core::config::game_config::mapped_item_image(s.seed_id)),
+                        json!(gc.get_item_image_by_id(s.seed_id).unwrap_or_default()),
                     );
                 }
             }
@@ -380,7 +380,7 @@ pub fn list_fruits() -> Value {
                 "plantId": plant.as_ref().map(|p| p.id),
                 "seedId": plant.as_ref().and_then(|p| p.seed_id),
                 "plantName": plant.as_ref().map(|p| p.name.clone()),
-                "image": qq_farm_core::config::game_config::mapped_item_image(fruit.id),
+                "image": gc.get_item_image_by_id(fruit.id).unwrap_or_default(),
             })
         })
         .collect();
@@ -412,7 +412,7 @@ pub fn list_items() -> Value {
                 "desc": item.desc.clone().unwrap_or_default(),
                 "effectDesc": item.effect_desc.clone().unwrap_or_default(),
                 "rarity": item.rarity.unwrap_or(0),
-                "image": qq_farm_core::config::game_config::mapped_item_image(item.id),
+                "image": gc.get_item_image_by_id(item.id).unwrap_or_default(),
             })
         })
         .collect();

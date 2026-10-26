@@ -1,20 +1,24 @@
 //! QQ 会员 — 每日礼包自动领取 + SVIP 商城免费礼包。
 //!
-//! 1:1 翻译原 `core/src/services/qqvip.ts`（189 行，2026-09-24 协议重写后）。
+//! 1:1 翻译原 `core/src/services/qqvip.ts`（bot fecf531 重构后）。
 //!
 //! ## 协议
 //!
-//! - `gamepb.qqvippb.QQVipService.RefreshVipInfo` — 刷新会员信息
 //! - `gamepb.qqvippb.QQVipService.GetQQVipRewardsStatus` — 拉取会员礼包状态
 //!   （field 2 = can_claim、3 = claimed_today、4 = rewards_can_claim、7 = remaining_days、
 //!   9 = mall_free_can_claim；子项 field 1 = type、3 = is_enable、4 = reward_type）
 //! - `gamepb.qqvippb.QQVipService.ClaimQQVipRewards` — 领取会员礼包
 //!
-//! ## 业务
+//! ## 业务（bot fecf531 后）
 //!
-//! - 每日限领一次（跨天重置 + 10min 检查冷却）
-//! - 可领判定：`type === 1 ? can_claim : rewards_can_claim`，且要求 `is_qq_vip`
-//! - SVIP 商城免费礼包（slot 4 免费、非广告、非分享、未拥有、未达限购）自动逐个购买
+//! - 每日限领一次（跨天重置 + 10min 检查冷却）；强制重查先清「已完成」标记，
+//!   避免旧标记掩盖本次失败
+//! - 常规日查直接查权益（`GetQQVipRewardsStatus`，与游戏客户端一致）；
+//!   `RefreshVipInfo` 是订阅状态同步、可能独立失败，不再参与日查
+//! - 非会员由 `is_qq_vip` 直接判定；可领判定：`type === 1 ? can_claim : rewards_can_claim`
+//! - 会员礼包与 SVIP 商城免费礼包两个来源**独立容错**：部分失败记 `partial`
+//!   且不 markDoneToday（当天冷却后重试）；SVIP 商城礼包（slot 4 免费、非广告、
+//!   非分享、未拥有、未达限购）自动逐个购买
 //! - "已领取"错误（`code=1021002` / "今日已领取"）视为成功
 
 use std::sync::Arc;
@@ -29,7 +33,7 @@ use crate::proto::generated::corepb::Item;
 use crate::proto::generated::gamepb::mallpb::MallGoods;
 use crate::proto::generated::gamepb::qqvippb::{
     ClaimQqVipRewardsReply, ClaimQqVipRewardsRequest, GetQqVipRewardsStatusReply,
-    GetQqVipRewardsStatusRequest, RefreshVipInfoRequest,
+    GetQqVipRewardsStatusRequest,
 };
 
 use crate::services::mall::{is_svip_free_gift_goods, MallService};
@@ -37,7 +41,6 @@ use crate::services::mall::{is_svip_free_gift_goods, MallService};
 const VIP_SERVICE: &str = "gamepb.qqvippb.QQVipService";
 const DAILY_KEY: &str = "vip_daily_gift";
 const CHECK_COOLDOWN_MS: i64 = 10 * 60 * 1000;
-
 /// 会员每日状态
 #[derive(Debug, Clone, Serialize)]
 pub struct VipDailyState {
@@ -46,6 +49,10 @@ pub struct VipDailyState {
     pub last_check_at: i64,
     pub last_claim_at: i64,
     pub result: &'static str,
+    /// 最近一次失败详情（bot fecf531；空串表示无失败）
+    pub last_error: String,
+    /// 三态：None=尚未检查（bot `isVip: null`）
+    pub is_vip: Option<bool>,
     pub has_gift: Option<bool>,
     pub can_claim: Option<bool>,
 }
@@ -59,6 +66,8 @@ pub struct QQVipService {
     last_check_at: Mutex<i64>,
     last_claim_at: Mutex<i64>,
     last_result: Mutex<&'static str>,
+    last_error: Mutex<String>,
+    last_is_vip: Mutex<Option<bool>>,
     last_has_gift: Mutex<Option<bool>>,
     last_can_claim: Mutex<Option<bool>>,
 }
@@ -73,21 +82,11 @@ impl QQVipService {
             last_check_at: Mutex::new(0),
             last_claim_at: Mutex::new(0),
             last_result: Mutex::new(""),
+            last_error: Mutex::new(String::new()),
+            last_is_vip: Mutex::new(None),
             last_has_gift: Mutex::new(None),
             last_can_claim: Mutex::new(None),
         }
-    }
-
-    /// 刷新会员信息（bot `refreshVipInfo`）
-    ///
-    /// # Errors
-    /// - 网络 / 网关错误
-    pub async fn refresh_vip_info(&self) -> Result<()> {
-        let _ = self
-            .gateway
-            .request(VIP_SERVICE, "RefreshVipInfo", &RefreshVipInfoRequest {}.encode_to_vec())
-            .await?;
-        Ok(())
     }
 
     /// 拉取会员礼包状态（bot `getQQVipRewardsStatus`）
@@ -113,7 +112,8 @@ impl QQVipService {
     /// - 网络 / 网关错误；「已领取 / 非 QQ 会员」由调用方按错误文案识别
     pub async fn claim_daily_gift(&self) -> Result<ClaimQqVipRewardsReply> {
         let status = self.get_qq_vip_rewards_status().await?;
-        let reward_types = claimable_reward_types(&status);
+        let mut reward_types = claimable_reward_types(&status);
+        reward_types.dedup();
         if reward_types.is_empty() {
             return Ok(ClaimQqVipRewardsReply::default());
         }
@@ -152,7 +152,14 @@ impl QQVipService {
         Ok(!goods.is_empty())
     }
 
-    /// 每日自动领取
+    /// 每日自动领取（对齐 bot fecf531 后的 `performDailyVipGift`）。
+    ///
+    /// 与旧版的关键差异：
+    /// - 不再先调 `RefreshVipInfo`：常规日查直接查权益（与游戏客户端一致），
+    ///   订阅状态同步是独立请求、可能独立失败，不再挡住整个流程；
+    /// - 非会员由 `status.is_qq_vip` 直接判定（错误分支只作兜底）；
+    /// - 会员礼包与 SVIP 商城礼包两个来源独立容错，部分失败记 `partial` 且
+    ///   **不** markDoneToday（当天还会重试）。
     pub async fn perform_daily_vip_gift(&self, force: bool) -> bool {
         let now = now_ms();
         if !force && self.is_done_today() {
@@ -162,99 +169,119 @@ impl QQVipService {
             return false;
         }
         *self.last_check_at.lock() = now;
+        // 强制重查不得让更早的「已完成」标记掩盖本次失败
+        *self.done_date_key.lock() = String::new();
+        *self.last_error.lock() = String::new();
+        *self.last_is_vip.lock() = None;
+        *self.last_has_gift.lock() = None;
+        *self.last_can_claim.lock() = None;
 
-        // bot：先 refreshVipInfo —— 非 QQ 会员这里就回 1021001，按「非会员，跳过」收口
-        if let Err(e) = self.refresh_vip_info().await {
-            if is_not_qq_vip_error(&e.to_string()) {
-                self.mark_done_today();
-                *self.last_result.lock() = "none";
-                *self.last_has_gift.lock() = Some(false);
-                *self.last_can_claim.lock() = Some(false);
-                tracing::info!("[会员] 当前账号非 QQ 会员，今日跳过会员礼包");
-                return false;
-            }
-            *self.last_result.lock() = "error";
-            tracing::warn!("[会员] 刷新会员信息失败: {}", e);
-            return false;
-        }
         let status = match self.get_qq_vip_rewards_status().await {
             Ok(s) => s,
             Err(e) => {
                 if is_not_qq_vip_error(&e.to_string()) {
-                    self.mark_done_today();
-                    *self.last_result.lock() = "none";
-                    *self.last_has_gift.lock() = Some(false);
-                    *self.last_can_claim.lock() = Some(false);
-                    tracing::info!("[会员] 当前账号非 QQ 会员，今日跳过会员礼包");
-                    return false;
+                    self.mark_non_member();
+                } else {
+                    *self.last_result.lock() = "error";
+                    let message = Self::record_failure("查询会员资格", &e);
+                    *self.last_error.lock() = message;
                 }
-                *self.last_result.lock() = "error";
-                tracing::warn!("[会员] 拉取会员礼包状态失败: {}", e);
                 return false;
             }
         };
-        // 可领判定（bot qqvip.ts:96-101）：需要 is_qq_vip，type==1 看 can_claim，
-        // 否则看 rewards_can_claim；hasGift 只要求 is_enable && is_qq_vip。
-        let reward_types = claimable_reward_types(&status);
-        *self.last_has_gift.lock() =
-            Some(status.is_qq_vip && status.reward_statuses.iter().any(|item| item.is_enable));
-        *self.last_can_claim.lock() = Some(!reward_types.is_empty());
 
-        // bot：先尝试 SVIP 商城免费礼包，再决定是否领常规奖励
-        let mall_claimed = match self.claim_svip_mall_free_gift(&status).await {
-            Ok(v) => v,
-            Err(e) => {
-                *self.last_result.lock() = "error";
-                tracing::warn!("[会员] 领取会员礼包失败: {}", e);
-                return false;
-            }
-        };
-        if mall_claimed {
-            *self.last_claim_at.lock() = now_ms();
+        *self.last_is_vip.lock() = Some(status.is_qq_vip);
+        if !status.is_qq_vip {
+            self.mark_non_member();
+            return false;
         }
-        if reward_types.is_empty() {
+
+        let mut reward_types = claimable_reward_types(&status);
+        reward_types.dedup();
+        let mall_can_claim = status.mall_free_can_claim;
+        *self.last_has_gift.lock() =
+            Some(status.reward_statuses.iter().any(|item| item.is_enable) || mall_can_claim);
+        *self.last_can_claim.lock() = Some(!reward_types.is_empty() || mall_can_claim);
+
+        let mut errors: Vec<String> = Vec::new();
+        let mut claimed = false;
+        let mut already_claimed = status.claimed_today;
+
+        // 两个奖励来源相互独立：商城失败不挡会员礼包，反之亦然
+        if !reward_types.is_empty() {
+            match self.claim_reward_types(reward_types).await {
+                Ok(rep) => {
+                    let reward = get_reward_summary(&rep.items);
+                    claimed = true;
+                    *self.last_claim_at.lock() = now_ms();
+                    if reward.is_empty() {
+                        tracing::info!("[会员] 会员礼包领取成功");
+                    } else {
+                        tracing::info!("[会员] 会员礼包领取成功 → {reward}");
+                    }
+                }
+                Err(e) => {
+                    if is_not_qq_vip_error(&e.to_string()) {
+                        self.mark_non_member();
+                        return false;
+                    }
+                    if is_already_claimed_error(&e.to_string()) {
+                        already_claimed = true;
+                        tracing::info!("[会员] 今日会员礼包已领取");
+                    } else {
+                        let message = Self::record_failure("领取会员礼包", &e);
+                        errors.push(message);
+                    }
+                }
+            }
+        }
+
+        if mall_can_claim {
+            match self.claim_svip_mall_free_gift(&status).await {
+                Ok(true) => {
+                    claimed = true;
+                    *self.last_claim_at.lock() = now_ms();
+                    tracing::info!("[会员] SVIP 商城免费礼包领取成功");
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    let message = Self::record_failure("领取 SVIP 商城免费礼包", &e);
+                    errors.push(message);
+                }
+            }
+        }
+
+        if errors.is_empty() {
             self.mark_done_today();
-            *self.last_result.lock() = if mall_claimed { "ok" } else { "none" };
-            if mall_claimed {
-                tracing::info!("[会员] SVIP 商城免费礼包领取成功");
-            } else {
+            *self.last_can_claim.lock() = Some(false);
+            *self.last_result.lock() = if claimed || already_claimed { "ok" } else { "none" };
+            if !claimed && !already_claimed {
                 tracing::info!("[会员] 今日暂无可领取会员礼包");
             }
-            return mall_claimed;
+        } else {
+            *self.last_result.lock() = if claimed || already_claimed { "partial" } else { "error" };
+            *self.last_error.lock() = errors.join("；");
         }
-        match self.claim_reward_types(reward_types).await {
-            Ok(rep) => {
-                let reward = get_reward_summary(&rep.items);
-                if reward.is_empty() {
-                    tracing::info!("[会员] 领取成功");
-                } else {
-                    tracing::info!("[会员] 领取成功 → {}", reward);
-                }
-                *self.last_claim_at.lock() = now_ms();
-                self.mark_done_today();
-                *self.last_result.lock() = "ok";
-                true
-            }
-            Err(e) => {
-                if is_already_claimed_error(&e.to_string()) {
-                    self.mark_done_today();
-                    *self.last_claim_at.lock() = now_ms();
-                    *self.last_result.lock() = "ok";
-                    tracing::info!("[会员] 今日会员礼包已领取");
-                    return false;
-                }
-                // 非 QQ 会员（1021001）：当天不再重试（对齐 bot `not_qq_vip`）
-                if is_not_qq_vip_error(&e.to_string()) {
-                    self.mark_done_today();
-                    *self.last_result.lock() = "none";
-                    tracing::info!("[会员] 当前账号非 QQ 会员，今日跳过会员礼包");
-                    return false;
-                }
-                *self.last_result.lock() = "error";
-                tracing::warn!("[会员] 领取会员礼包失败: {}", e);
-                false
-            }
-        }
+        claimed
+    }
+
+    fn record_failure(stage: &str, error: &crate::error::Error) -> String {
+        // 对齐 bot：截断到 500（bot slice 按字节，这里按字符边界截，防中文劈半 panic）
+        let text = error.to_string();
+        let truncated: String = text.chars().take(500).collect();
+        let message = format!("{stage}失败: {truncated}");
+        tracing::warn!("[会员] {message}");
+        message
+    }
+
+    fn mark_non_member(&self) {
+        self.mark_done_today();
+        *self.last_result.lock() = "none";
+        *self.last_error.lock() = String::new();
+        *self.last_is_vip.lock() = Some(false);
+        *self.last_has_gift.lock() = Some(false);
+        *self.last_can_claim.lock() = Some(false);
+        tracing::info!("[会员] 当前账号非 QQ 会员，今日跳过会员礼包");
     }
 
     async fn claim_reward_types(&self, reward_types: Vec<i64>) -> Result<ClaimQqVipRewardsReply> {
@@ -277,6 +304,8 @@ impl QQVipService {
             last_check_at: *self.last_check_at.lock(),
             last_claim_at: *self.last_claim_at.lock(),
             result: *self.last_result.lock(),
+            last_error: self.last_error.lock().clone(),
+            is_vip: *self.last_is_vip.lock(),
             has_gift: *self.last_has_gift.lock(),
             can_claim: *self.last_can_claim.lock(),
         }
@@ -334,9 +363,10 @@ pub fn get_reward_summary(items: &[Item]) -> String {
     parts.join("/")
 }
 
-/// 判断错误信息是否表示"已领取"
+/// 判断错误信息是否表示"已领取"（bot fecf531 收窄：仅错误码与「今日已领取」，
+/// 泛化的「已领取」子串不再命中，避免把其它业务文案误判成成功）
 pub fn is_already_claimed_error(msg: &str) -> bool {
-    msg.contains("code=1021002") || msg.contains("今日已领取") || msg.contains("已领取")
+    msg.contains("code=1021002") || msg.contains("今日已领取")
 }
 
 /// 判断错误信息是否表示"非 QQ 会员"（bot `NOT_QQ_VIP_ERROR_CODE`）
@@ -433,7 +463,8 @@ mod tests {
     fn already_claimed_detection() {
         assert!(is_already_claimed_error("code=1021002"));
         assert!(is_already_claimed_error("今日已领取"));
-        assert!(is_already_claimed_error("已领取该奖励"));
+        // bot fecf531：泛化「已领取」子串不再命中
+        assert!(!is_already_claimed_error("已领取该奖励"));
         assert!(!is_already_claimed_error("其他错误"));
     }
 

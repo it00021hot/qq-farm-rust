@@ -49,12 +49,24 @@ pub fn gateway_template_from_env(gateway_origin: &str) -> GatewayConfigTemplate 
         let (resolved_version, resolved_at) = qq_farm_core::config::resolve_client_version(
             saved_version,
             sys.client_version_updated_at,
+            "qq",
+        );
+        // 微信版本独立解析（bot cc78f2b：旧存档可能缺字段，serde default 已回
+        // DEFAULT_WX_CLIENT_VERSION；这里同样按「时间戳更新才沿用」收敛一次）
+        let (resolved_wx_version, resolved_wx_at) = qq_farm_core::config::resolve_client_version(
+            &sys.wx_client_version,
+            sys.wx_client_version_updated_at,
+            "wx",
         );
         let mut changed = resolved_version != sys.client_version
-            || resolved_version != sys.device_info.client_version;
+            || resolved_version != sys.device_info.client_version
+            || resolved_wx_version != sys.wx_client_version
+            || resolved_wx_at != sys.wx_client_version_updated_at;
         sys.client_version = resolved_version;
         sys.client_version_updated_at = resolved_at;
         sys.device_info.client_version = sys.client_version.clone();
+        sys.wx_client_version = resolved_wx_version;
+        sys.wx_client_version_updated_at = resolved_wx_at;
         let tz = qq_farm_core::config::normalize_time_zone(&sys.time_zone);
         if tz != sys.time_zone {
             sys.time_zone = tz;

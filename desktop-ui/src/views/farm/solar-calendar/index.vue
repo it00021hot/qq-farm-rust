@@ -386,11 +386,16 @@ defineExpose({ refresh: load });
           <label
             v-for="(option, index) in question.options"
             :key="index"
-            class="flex items-center gap-8px rounded-6px border border-gray-200 px-10px py-8px text-13px dark:border-gray-700"
-            :class="{
-              'border-emerald-400 bg-emerald-50/50 dark:bg-emerald-900/20': answer === index,
-              'opacity-50': question.wrongOptions.includes(index)
-            }"
+            class="flex items-center gap-8px rounded-6px border px-10px py-8px text-13px"
+            :class="[
+              answer === index
+                ? 'border-emerald-400 bg-emerald-50/50 dark:bg-emerald-900/20'
+                : 'border-gray-200 dark:border-gray-700',
+              question.answerIndex === index
+                ? 'border-emerald-500/60'
+                : '',
+              question.wrongOptions.includes(index) ? 'opacity-50' : ''
+            ]"
           >
             <input
               v-model="answer"
@@ -400,8 +405,14 @@ defineExpose({ refresh: load });
               :disabled="busy || question.wrongOptions.includes(index)"
             />
             <b>{{ optionParts(option, index).letter }}</b>
-            <span>{{ optionParts(option, index).text }}</span>
-            <small v-if="question.wrongOptions.includes(index)" class="ml-auto text-gray-400">
+            <span class="min-w-0 break-all">{{ optionParts(option, index).text }}</span>
+            <small
+              v-if="question.answerIndex === index"
+              class="ml-auto shrink-0 rounded-4px bg-emerald-100 px-6px py-2px font-semibold text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
+            >
+              {{ $t('page.farm.solarCalendar.correctOption') }}
+            </small>
+            <small v-else-if="question.wrongOptions.includes(index)" class="ml-auto text-gray-400">
               {{ $t('page.farm.solarCalendar.wrongOption') }}
             </small>
           </label>

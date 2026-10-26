@@ -17,14 +17,6 @@ impl FarmDesktop {
     ) -> Div {
         if self.page == Page::Friends {
             let language = self.preferences.language.as_str();
-            if let Some((message, level)) = &self.friends.feedback {
-                let color = match level {
-                    FriendFeedbackLevel::Success => cx.theme().success,
-                    FriendFeedbackLevel::Info => cx.theme().muted_foreground,
-                    FriendFeedbackLevel::Error => cx.theme().danger,
-                };
-                controls = controls.child(div().text_sm().text_color(color).child(message.clone()));
-            }
             match self.page_section.as_str() {
                 "friends" => {
                     controls = controls.child(

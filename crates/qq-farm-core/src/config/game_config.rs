@@ -105,6 +105,9 @@ pub struct Item {
     pub target_id: Option<i64>,
     pub asset_name: Option<String>,
     pub icon_res: Option<String>,
+    /// 资源所在 bundle（bot 46bb710 图片映射键的一部分）
+    #[serde(default)]
+    pub bundle_name: Option<String>,
     pub max_count: Option<i64>,
     pub can_use: Option<i64>,
     pub desc: Option<String>,
@@ -286,6 +289,69 @@ pub struct GameConfig {
     buffs: RwLock<Option<Vec<BuffConfigItem>>>,
     /// 变异效果配置（MutantEffect.json）
     mutant_effects: RwLock<Option<Vec<MutantEffectEntry>>>,
+    /// 物品图片索引（bot 46bb710：磁盘存在才发 URL，icon_res/asset_name 同键复用）
+    item_image_index: RwLock<ItemImageIndex>,
+}
+
+/// 物品图片索引（对齐 bot `gameConfig.ts` 46bb710 的三个集合）。
+#[derive(Default, Debug, Clone)]
+struct ItemImageIndex {
+    /// 磁盘上存在图片文件的物品 ID → 扩展名（rust 资源统一 webp，同步工具可能带 png）
+    file_ext: std::collections::HashMap<i64, &'static str>,
+    /// `bundle:icon_res` → 拥有该图标的物品 ID（仅登记自身图片存在的物品）
+    by_icon: std::collections::HashMap<String, i64>,
+    /// `bundle:asset_name` → 拥有该模型的物品 ID（无 icon_res 才登记）
+    by_asset: std::collections::HashMap<String, i64>,
+}
+
+/// bot `getItemImageKey`：`bundle:resource`（去尾部 `/spriteFrame`，resource 为空则无键）。
+fn item_image_key(item: &Item, resource: Option<&str>) -> Option<String> {
+    let resource = resource?.trim();
+    let resource = resource.strip_suffix("/spriteFrame").unwrap_or(resource);
+    if resource.is_empty() {
+        return None;
+    }
+    Some(format!("{}:{resource}", item.bundle_name.as_deref().unwrap_or("").trim()))
+}
+
+/// 扫描图片目录构建索引；目录不可读时索引为空（记 warn，与 bot 同为降级）。
+fn scan_item_image_index(items: &[Item]) -> ItemImageIndex {
+    let mut index = ItemImageIndex::default();
+    let dir = crate::config::paths::game_config_static_dir()
+        .join("seed_images_named")
+        .join("seed_images");
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            tracing::warn!(dir = %dir.display(), error = %e, "物品图片目录读取失败，物品图标将不可见");
+            return index;
+        }
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        for (ext, parsed) in
+            [("webp", name.strip_suffix(".webp")), ("png", name.strip_suffix(".png"))]
+        {
+            if let Some(id) = parsed.and_then(|base| base.parse::<i64>().ok()).filter(|id| *id > 0)
+            {
+                // webp 优先：同 ID 双文件时以 rust 惯用格式为准
+                index.file_ext.entry(id).or_insert(ext);
+            }
+        }
+    }
+    // bot：按 ItemInfo 顺序登记 icon_res / asset_name 键（仅自身图片存在的物品）
+    for item in items {
+        if !index.file_ext.contains_key(&item.id) {
+            continue;
+        }
+        if let Some(key) = item_image_key(item, item.icon_res.as_deref()) {
+            index.by_icon.entry(key).or_insert(item.id);
+        } else if let Some(key) = item_image_key(item, item.asset_name.as_deref()) {
+            index.by_asset.entry(key).or_insert(item.id);
+        }
+    }
+    index
 }
 
 /// 默认 GameConfig（未加载）
@@ -307,6 +373,7 @@ impl GameConfig {
             illustrated: RwLock::new(None),
             buffs: RwLock::new(None),
             mutant_effects: RwLock::new(None),
+            item_image_index: RwLock::new(ItemImageIndex::default()),
         }
     }
 
@@ -320,6 +387,9 @@ impl GameConfig {
         self.load_buffs();
         self.load_mutant_effects();
         self.apply_overlay();
+        // 图片目录只在加载配置时扫描一次（bot 46bb710：避免列表请求反复访问磁盘）
+        let items = self.item_map.read().clone().unwrap_or_default();
+        *self.item_image_index.write() = scan_item_image_index(&items);
     }
 
     fn load_plants(&self) {
@@ -673,7 +743,8 @@ impl GameConfig {
                         .unwrap_or(0),
                     plant_id: x.id,
                     price: self.get_seed_price(sid),
-                    image: mapped_item_image(sid),
+                    // bot 46bb710：getMappedSeedImage 走 getItemImageById（存在性检查 + 映射）
+                    image: self.get_item_image_by_id(sid).unwrap_or_default(),
                     seasons: x.seasons.unwrap_or(1),
                     exp: x.exp.unwrap_or(0),
                     grow_phases: x.grow_phases.clone().unwrap_or_default(),
@@ -941,15 +1012,29 @@ impl GameConfig {
         obj.get("count").and_then(|v| v.as_i64())
     }
 
-    /// 物品图标 URL（对齐 TS `/game-config/seed_images_named/seed_images/{id}.webp`）
+    /// 物品图标 URL（对齐 bot `getItemImageById`，46bb710）：
+    /// 自身图片文件存在 → 直接用；否则按 `icon_res` / `asset_name` 键复用
+    /// 同一资源的其它物品图（解锁卡用对应作物模型图）；都没有 → None。
     #[must_use]
     pub fn get_item_image_by_id(&self, item_id: i64) -> Option<String> {
-        let url = mapped_item_image(item_id);
-        if url.is_empty() {
-            None
-        } else {
-            Some(url)
+        if item_id <= 0 {
+            return None;
         }
+        let index = self.item_image_index.read();
+        let image_id = match index.file_ext.get(&item_id) {
+            Some(_) => item_id,
+            None => {
+                let item = self.get_item_by_id(item_id)?;
+                item_image_key(&item, item.icon_res.as_deref())
+                    .and_then(|key| index.by_icon.get(&key).copied())
+                    .or_else(|| {
+                        item_image_key(&item, item.asset_name.as_deref())
+                            .and_then(|key| index.by_asset.get(&key).copied())
+                    })?
+            }
+        };
+        let ext = index.file_ext.get(&image_id).copied().unwrap_or("webp");
+        Some(format!("/game-config/seed_images_named/seed_images/{image_id}.{ext}"))
     }
 
     /// 种子图标 URL（与物品同一路径规则）
@@ -1115,18 +1200,6 @@ fn json_trimmed_string(value: Option<&serde_json::Value>) -> Option<String> {
 
 // ===== 全局单例 =====
 
-/// 面板图标 URL，对齐 `gameConfig.ts` 的 `getItemImageById`。
-///
-/// 490cddf 起普通种子/物品图迁入 `seed_images/` 子目录；`mutant/` 仍按变异 ID 命名。
-#[must_use]
-pub fn mapped_item_image(item_id: i64) -> String {
-    if item_id <= 0 {
-        String::new()
-    } else {
-        format!("/game-config/seed_images_named/seed_images/{item_id}.webp")
-    }
-}
-
 static GLOBAL: OnceLock<GameConfig> = OnceLock::new();
 
 /// 获取全局 GameConfig（首次调用时自动 load）
@@ -1252,13 +1325,16 @@ mod tests {
 
     #[test]
     fn item_image_url_matches_panel_path() {
-        assert_eq!(mapped_item_image(0), "");
-        assert_eq!(mapped_item_image(1), "/game-config/seed_images_named/seed_images/1.webp");
         let gc = reload_for_test();
+        assert_eq!(gc.get_item_image_by_id(0), None);
+        assert_eq!(gc.get_item_image_by_id(-1), None);
+        // bot 46bb710：磁盘有图的物品直接命中（100001 是新增解锁卡图标）
         assert_eq!(
-            gc.get_item_image_by_id(10000).as_deref(),
-            Some("/game-config/seed_images_named/seed_images/10000.webp")
+            gc.get_item_image_by_id(100_001).as_deref(),
+            Some("/game-config/seed_images_named/seed_images/100001.webp")
         );
+        // 磁盘无图的物品不再发死链（bot：getItemImageById 返回空）
+        assert_eq!(gc.get_item_image_by_id(10_000), None);
     }
 
     #[test]

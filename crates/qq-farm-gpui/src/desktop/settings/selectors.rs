@@ -224,12 +224,15 @@ impl FarmDesktop {
     }
 
     pub(in crate::desktop) fn sync_setting_selectors(&self, window: &mut Window, cx: &mut App) {
+        use super::draft::json_pointer;
         // draft → 数字输入框（账号切换/载入后同步显示值）
         for (path, input) in &self.settings.number_inputs {
             let value = self
                 .settings
                 .draft
-                .pointer(&format!("/{}", path.replace('/', ".")))
+                // 此前误用 `.` 分隔（"/intervals.farmMin"），指针永远落空，
+                // 载入/切号时把全部数字输入框清零
+                .pointer(&json_pointer(path))
                 .and_then(serde_json::Value::as_i64)
                 .unwrap_or(0);
             input.update(cx, |state, cx| {

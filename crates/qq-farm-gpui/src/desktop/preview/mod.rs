@@ -52,6 +52,9 @@ fn render_case(
     );
     cx.update(|cx| {
         gpui_kit::init(cx);
+        // 与测试窗口同理（2026-10-17 热修）：关闭动效，截图首帧即最终位置，
+        // 否则对话框 SlideDown 入场未完成时截到的是中间帧（位置偏高）。
+        cx.set_reduce_motion(true);
         crate::theme::init(cx);
         Theme::change(case.mode, None, cx);
         Theme::update(cx, |theme| theme.font_size *= case.font_scale);
