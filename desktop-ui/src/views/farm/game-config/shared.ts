@@ -28,6 +28,11 @@ export function resolveCatalogImage(path?: string | null): string {
   if (path.startsWith('asset:')) {
     return path;
   }
+  // /activity-assets/... 是 dist 内静态文件（public/ 打包产物），按应用 origin 的根相对
+  // 路径原样加载；farmcfg 协议只挂载 game_config 目录，转换过去会 404。
+  if (path.startsWith('/activity-assets/')) {
+    return path;
+  }
 
   const rel = catalogRelativePath(path);
   if (!rel) return '';
