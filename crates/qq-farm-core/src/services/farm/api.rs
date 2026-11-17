@@ -310,7 +310,7 @@ impl Api {
 
     /// 购买商品
     pub async fn buy_goods(&self, goods_id: i64, num: i64, price: i64) -> Result<BuyGoodsReply> {
-        let body = BuyGoodsRequest { goods_id, num, price }.encode_to_vec();
+        let body = BuyGoodsRequest { goods_id, num, price, auto_add: false }.encode_to_vec();
         let resp = self.gateway.request("gamepb.shoppb.ShopService", "BuyGoods", &body).await?;
         BuyGoodsReply::decode(&*resp).map_err(Error::from)
     }

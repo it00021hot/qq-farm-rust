@@ -453,12 +453,15 @@ pub enum LandType {
     Black,
     /// 金土地（等级 4）
     Gold,
-    /// 紫金土地（等级 ≥5）
+    /// 紫金土地（等级 5，以及 7 级以上）
     PurpleGold,
+    /// 蓝晶土地（等级 6）
+    BlueCrystal,
 }
 
 /// 按等级返回土地类型（1:1 对齐原 TS `getLandTypeByLevel`）
 ///
+/// - `==6` → 蓝晶 `blue-crystal`
 /// - `>=5` → 紫金 `purple-gold`
 /// - `==4` → 金 `gold`
 /// - `==3` → 黑 `black`
@@ -470,20 +473,28 @@ pub fn land_type_by_level(level: i64) -> LandType {
         2 => LandType::Red,
         3 => LandType::Black,
         4 => LandType::Gold,
+        6 => LandType::BlueCrystal,
         n if n >= 5 => LandType::PurpleGold,
         _ => LandType::Normal,
     }
 }
 
-/// 全部施肥土地类型（用于"全选"判断，1:1 对齐 TS 的 5 类）
-pub const ALL_FERTILIZER_LAND_TYPES: &[LandType] =
-    &[LandType::PurpleGold, LandType::Gold, LandType::Black, LandType::Red, LandType::Normal];
+/// 全部施肥土地类型（用于“全选”判断，含蓝晶）
+pub const ALL_FERTILIZER_LAND_TYPES: &[LandType] = &[
+    LandType::BlueCrystal,
+    LandType::PurpleGold,
+    LandType::Gold,
+    LandType::Black,
+    LandType::Red,
+    LandType::Normal,
+];
 
 /// 施肥土地类型中文名（1:1 对齐 TS `FERTILIZER_LAND_TYPE_LABELS`）
 #[must_use]
 pub fn fertilizer_land_type_label(t: LandType) -> &'static str {
     match t {
         LandType::PurpleGold => "紫金土地",
+        LandType::BlueCrystal => "蓝晶土地",
         LandType::Gold => "金土地",
         LandType::Black => "黑土地",
         LandType::Red => "红土地",
@@ -496,6 +507,7 @@ pub fn fertilizer_land_type_label(t: LandType) -> &'static str {
 pub fn fertilizer_land_type_id(t: LandType) -> &'static str {
     match t {
         LandType::PurpleGold => "purple-gold",
+        LandType::BlueCrystal => "blue-crystal",
         LandType::Gold => "gold",
         LandType::Black => "black",
         LandType::Red => "red",
@@ -752,6 +764,29 @@ pub struct HarvestableInfo {
     pub plant_id: i64,
     pub name: String,
     pub exp: i64,
+}
+
+const TIANGONG_SEED_RARITY: i64 = 4;
+
+/// 巡田收获目标。`include_tiangong` 为假时去掉种子稀有度是天工的地，其余成熟地保留。
+#[must_use]
+pub fn auto_harvest_land_ids(status: &LandAnalysis, include_tiangong: bool) -> Vec<i64> {
+    if include_tiangong {
+        return status.harvestable.clone();
+    }
+    let skipped: HashSet<i64> = status
+        .harvestable_info
+        .iter()
+        .filter(|info| seed_rarity(info.plant_id) == Some(TIANGONG_SEED_RARITY))
+        .map(|info| info.land_id)
+        .collect();
+    status.harvestable.iter().copied().filter(|id| !skipped.contains(id)).collect()
+}
+
+fn seed_rarity(plant_id: i64) -> Option<i64> {
+    let config = crate::config::game_config::global();
+    let seed_id = config.get_plant_by_id(plant_id)?.seed_id?;
+    config.get_item_by_id(seed_id)?.rarity
 }
 
 /// 分析全部土地状态
@@ -1567,6 +1602,48 @@ mod tests {
     }
 
     #[test]
+    fn auto_harvest_skips_tiangong_seeds_when_asked() {
+        let config = crate::config::game_config::global();
+        let mut tiangong = None;
+        let mut ordinary = None;
+        for plant in config.get_all_plants() {
+            let rarity = plant
+                .seed_id
+                .and_then(|seed_id| config.get_item_by_id(seed_id))
+                .and_then(|item| item.rarity);
+            if rarity == Some(super::TIANGONG_SEED_RARITY) && tiangong.is_none() {
+                tiangong = Some(plant.id);
+            } else if rarity.is_some_and(|rarity| rarity != super::TIANGONG_SEED_RARITY)
+                && ordinary.is_none()
+            {
+                ordinary = Some(plant.id);
+            }
+            if tiangong.is_some() && ordinary.is_some() {
+                break;
+            }
+        }
+        let status = LandAnalysis {
+            harvestable: vec![1, 2, 3],
+            harvestable_info: vec![
+                HarvestableInfo {
+                    land_id: 1,
+                    plant_id: ordinary.expect("ordinary seed"),
+                    ..HarvestableInfo::default()
+                },
+                HarvestableInfo {
+                    land_id: 2,
+                    plant_id: tiangong.expect("tiangong seed"),
+                    ..HarvestableInfo::default()
+                },
+            ],
+            ..LandAnalysis::default()
+        };
+        assert_eq!(auto_harvest_land_ids(&status, true), vec![1, 2, 3]);
+        assert_eq!(auto_harvest_land_ids(&status, false), vec![1, 3]);
+        assert!(auto_harvest_land_ids(&LandAnalysis::default(), false).is_empty());
+    }
+
+    #[test]
     fn harvestable_only_ripe() {
         let ripe = make_land(1, true, Some(PlantPhase::Ripe));
         let dead = make_land(2, true, Some(PlantPhase::Dead));
@@ -1619,7 +1696,7 @@ mod tests {
         assert_eq!(land_type_by_level(3), LandType::Black);
         assert_eq!(land_type_by_level(4), LandType::Gold);
         assert_eq!(land_type_by_level(5), LandType::PurpleGold);
-        assert_eq!(land_type_by_level(6), LandType::PurpleGold);
+        assert_eq!(land_type_by_level(6), LandType::BlueCrystal);
         assert_eq!(land_type_by_level(7), LandType::PurpleGold);
         assert_eq!(land_type_by_level(100), LandType::PurpleGold);
     }

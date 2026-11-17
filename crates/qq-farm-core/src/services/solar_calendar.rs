@@ -370,6 +370,30 @@ mod tests {
         assert_eq!(dto["canAnswer"], true);
         // bot 57cddb3 起下发官方答案下标（401 → A.敬老节）
         assert_eq!(dto["answerIndex"], 0, "下发官方答案下标");
+        let snow = event_dto(
+            &SolarTermsEventInfo {
+                id: 404,
+                window_status: 2,
+                open_start_time: now - 100,
+                open_end_time: now + 86_400,
+                ..Default::default()
+            },
+            now,
+        );
+        assert_eq!(snow["name"], "小雪");
+        assert!(snow["description"].as_str().unwrap().contains("拨雪而视"));
+        let heavy = event_dto(
+            &SolarTermsEventInfo {
+                id: 405,
+                window_status: 2,
+                open_start_time: now - 100,
+                open_end_time: now + 86_400,
+                ..Default::default()
+            },
+            now,
+        );
+        assert_eq!(heavy["name"], "大雪");
+        assert!(heavy["description"].as_str().unwrap().contains("堆一冬欢喜"));
 
         for status in [0, 1, 3] {
             let closed = SolarTermsEventInfo { window_status: status, ..event.clone() };

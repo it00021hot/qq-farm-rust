@@ -41,7 +41,17 @@ pub const ALLOWED_BAG_SEED_FALLBACK_STRATEGIES: [BagSeedFallbackStrategy; 6] = [
     BagSeedFallbackStrategy::MaxFertProfit,
 ];
 
-/// 默认施肥土地类型
+/// 全部施肥土地类型。蓝晶需单独勾选，不在默认范围内。
+pub const ALL_FERTILIZER_LAND_TYPES: &[FertilizerLandType] = &[
+    FertilizerLandType::BlueCrystal,
+    FertilizerLandType::PurpleGold,
+    FertilizerLandType::Gold,
+    FertilizerLandType::Black,
+    FertilizerLandType::Red,
+    FertilizerLandType::Normal,
+];
+
+/// 默认施肥土地类型（不含蓝晶）
 pub const DEFAULT_FERTILIZER_LAND_TYPES: &[FertilizerLandType] = &[
     FertilizerLandType::PurpleGold,
     FertilizerLandType::Gold,
@@ -191,6 +201,7 @@ pub fn default_account_config() -> AccountConfig {
         automation: AutomationConfig {
             farm: true,
             farm_push: true,
+            farm_harvest_tiangong: true,
             land_upgrade: true,
             friend: true,
             friend_help_exp_limit: false,
@@ -217,6 +228,30 @@ pub fn default_account_config() -> AccountConfig {
             mystery_shop_allow_coupon: false,
             mystery_shop_allow_gold_bean: false,
             mystery_shop_allow_diamond: false,
+            ranch_share: true,
+            ranch_task: true,
+            ranch_check_minutes: 5,
+            ranch_daily_benefit: true,
+            ranch_harvest: true,
+            ranch_produce: true,
+            ranch_clean: true,
+            ranch_sell: true,
+            ranch_fill_cans: true,
+            ranch_feed_normal: true,
+            ranch_feed_organic: true,
+            ranch_friend_steal: true,
+            ranch_stroke: true,
+            ranch_friend_clean: true,
+            ranch_friend_mosquito: true,
+            ranch_upgrade: true,
+            ranch_buy: true,
+            ranch_strategy: crate::models::types::RanchStrategy::Level,
+            ranch_bag_fallback: crate::models::types::RanchStrategy::Level,
+            ranch_coop_animal: 0,
+            ranch_shed_animal: 0,
+            ranch_grass: true,
+            ranch_grass_buy: true,
+            ranch_grass_threshold_percent: 20,
         },
         planting_strategy: PlantingStrategy::BagPriority,
         preferred_seed_id: 0,
@@ -244,6 +279,7 @@ pub fn default_account_config() -> AccountConfig {
         steal_delay_seconds: 1,
         plant_order_random: true,
         plant_delay_seconds: 2,
+        email_claim_hour: 10,
         fertilizer_buy_organic_count: 1,
         fertilizer_buy_organic_threshold_hours: 10,
         fertilizer_buy_normal_count: 1,
@@ -348,6 +384,23 @@ mod tests {
         assert!(!cfg.automation.fertilizer_buy_normal);
         assert!(cfg.automation.skip_own_weed_bug);
         assert_eq!(cfg.automation.fertilizer_smart_seconds, 360);
+        assert!(cfg.automation.ranch_share);
+        assert!(cfg.automation.ranch_task);
+        assert_eq!(cfg.automation.ranch_check_minutes, 5);
+        assert!(cfg.automation.ranch_daily_benefit);
+        assert!(cfg.automation.ranch_harvest);
+        assert!(cfg.automation.ranch_feed_organic);
+        assert!(cfg.automation.ranch_friend_steal);
+        assert!(cfg.automation.ranch_stroke);
+        assert!(cfg.automation.ranch_friend_clean);
+        assert!(cfg.automation.ranch_friend_mosquito);
+        assert!(cfg.automation.ranch_upgrade);
+        assert!(cfg.automation.ranch_buy);
+        assert_eq!(cfg.automation.ranch_strategy, crate::models::types::RanchStrategy::Level);
+        assert_eq!(cfg.automation.ranch_coop_animal, 0);
+        assert!(cfg.automation.ranch_grass);
+        assert!(cfg.automation.ranch_grass_buy);
+        assert_eq!(cfg.automation.ranch_grass_threshold_percent, 20);
         assert_eq!(cfg.intervals.steal_min, 60);
         assert_eq!(cfg.intervals.steal_max, 90);
         assert!(cfg.friend_quiet_hours.enabled);
@@ -369,7 +422,9 @@ mod tests {
     }
 
     #[test]
-    fn fertilizer_land_types_default_all_5() {
+    fn fertilizer_land_types_default_excludes_blue_crystal() {
         assert_eq!(DEFAULT_FERTILIZER_LAND_TYPES.len(), 5);
+        assert_eq!(ALL_FERTILIZER_LAND_TYPES.len(), 6);
+        assert!(!DEFAULT_FERTILIZER_LAND_TYPES.contains(&FertilizerLandType::BlueCrystal));
     }
 }

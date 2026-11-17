@@ -24,7 +24,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -291,6 +291,10 @@ struct Inner {
     land_forecast_revision: AtomicU64,
     /// 本账号 gid（登录成功时记录；土地变更推送只在本账号农场变化时使快照失效）
     own_gid: AtomicI64,
+    /// 当前游戏场景。农场登录后为 1；进入牧场时改为 2，离开后改回。
+    current_scene: AtomicI32,
+    /// 登录回包里的已解锁场景。旧登录协议没有该字段，按只解锁农场处理。
+    unlocked_scenes: parking_lot::Mutex<Vec<i32>>,
 }
 
 impl Inner {
@@ -332,6 +336,8 @@ impl Gateway {
                 land_forecast: parking_lot::Mutex::new(None),
                 land_forecast_revision: AtomicU64::new(0),
                 own_gid: AtomicI64::new(0),
+                current_scene: AtomicI32::new(1),
+                unlocked_scenes: parking_lot::Mutex::new(vec![1]),
             }),
         }
     }
@@ -935,10 +941,12 @@ impl Gateway {
         let reply = if player_scene_login {
             let decoded = PlayerLoginReply::decode(reply_bytes.as_slice())
                 .map_err(|e| NetworkError::Frame(format!("decode PlayerLoginReply: {e}")))?;
+            *self.inner.unlocked_scenes.lock() = decoded.unlocked_scene_ids;
             LoginOutcome { basic: decoded.basic, time_now_millis: decoded.time_now_millis }
         } else {
             let decoded = LoginReply::decode(reply_bytes.as_slice())
                 .map_err(|e| NetworkError::Frame(format!("decode LoginReply: {e}")))?;
+            *self.inner.unlocked_scenes.lock() = vec![1];
             LoginOutcome { basic: decoded.basic, time_now_millis: decoded.time_now_millis }
         };
 
@@ -1011,14 +1019,45 @@ impl Gateway {
     /// 回包校验：`global_scene_id` 必须为 1 且 `farm_scene_ext_data` 非空；
     /// 失败即视为登录初始化失败（bot：抛 `农场场景登录回包不完整`）。
     pub async fn player_scene_login(&self) -> Result<()> {
-        let req = PlayerSceneLoginRequest { global_scene_id: 1, experiment_keys: Vec::new() };
+        self.login_game_scene(1).await.map(|_| ())
+    }
+
+    /// 当前游戏场景。
+    #[must_use]
+    pub fn current_scene(&self) -> i32 {
+        self.inner.current_scene.load(Ordering::SeqCst)
+    }
+
+    /// 登录回包是否包含这个场景。
+    #[must_use]
+    pub fn scene_unlocked(&self, scene_id: i32) -> bool {
+        self.inner.unlocked_scenes.lock().contains(&scene_id)
+    }
+
+    /// 切换游戏场景。场景 1 仍要求农场扩展数据；场景 2 要求牧场扩展数据。
+    pub async fn login_game_scene(
+        &self,
+        global_scene_id: i32,
+    ) -> Result<crate::proto::generated::gamepb::globalscenepb::PlayerSceneLoginReply> {
+        let req = PlayerSceneLoginRequest { global_scene_id, experiment_keys: Vec::new() };
         let body = prost::Message::encode_to_vec(&req);
         let reply_bytes = self
             .request("gamepb.globalscenepb.GlobalSceneService", "PlayerSceneLogin", &body)
             .await?;
         let reply = PlayerSceneLoginReply::decode(reply_bytes.as_slice())
             .map_err(|e| NetworkError::Frame(format!("decode PlayerSceneLoginReply: {e}")))?;
-        validate_player_scene_reply(&reply)
+        if global_scene_id == 1 {
+            validate_player_scene_reply(&reply)?;
+        } else if reply.global_scene_id != global_scene_id
+            || reply.big_farm_scene_ext_data.is_empty()
+        {
+            return Err(NetworkError::Frame("游戏场景登录回包不完整".to_string()));
+        }
+        if reply.server_time > 0 {
+            crate::utils::time::sync_server_time(reply.server_time);
+        }
+        self.inner.current_scene.store(global_scene_id, Ordering::SeqCst);
+        Ok(reply)
     }
 
     /// 登录后拉用户设置（对齐 `fetchUserSettings`，失败忽略）

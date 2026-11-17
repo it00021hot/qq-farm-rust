@@ -1,19 +1,21 @@
 # Architecture — qq-farm-rust
 
-只维护桌面版：Tauri 和 GPUI Kit 是两个并行桌面宿主，共用进程内引擎与 `qq-farm-app` 门面（原 HTTP API 服务 crate `qq-farm-server` 已删除）。
+只维护桌面版。当前桌面宿主是 NSH（`qq-farm-nsh`），与 Tauri、GPUI Kit 共用进程内引擎和 `qq-farm-app` 门面。Tauri 与 GPUI 不再作为主前端；页面迁完之前两个旧宿主仍留在仓库里。原 HTTP API 服务 crate `qq-farm-server` 已删除。
 
 ## Crate 拓扑
 
 ```text
 desktop-ui (SoybeanAdmin) ──Tauri IPC──► qq-farm-desktop ──┐
-                                                         ├──► qq-farm-app ──► qq-farm-core
-GPUI Kit ─────────────────────────────────► qq-farm-gpui ──┘
+                                                           ├──► qq-farm-app ──► qq-farm-core
+GPUI Kit ─────────────────────────────────► qq-farm-gpui ──┤
+NSH ──────────────────────────────────────► qq-farm-nsh ───┘
 ```
 
 - `qq-farm-core`：零 UI、零进程入口的库。
-- `qq-farm-app`：UI 无关门面（Account / Farm / Friend / Commerce / Settings / Config / Admin + `AppEvent` + `bootstrap`）。**禁止**依赖 `tauri`。
+- `qq-farm-app`：UI 无关门面（Account / Farm / Friend / Commerce / Settings / Config / Admin + `AppEvent` + `bootstrap`）。**禁止**依赖 `tauri` 或 `nsh`。
 - `qq-farm-desktop`：Tauri v2 适配层；进程内嵌引擎；前端为仓库根 `desktop-ui/`。
 - `qq-farm-gpui`：GPUI Kit 原生桌面适配层；页面按业务能力组织，通过 app 门面操作真实引擎，不依赖 Tauri IPC。
+- `qq-farm-nsh`：NSH 桌面宿主。`shell/` 管窗口导航，`ui/` 管共享控件，`features/` 管页面；只调用 `qq-farm-app`。
 - `qq-farm-app::runtime_lease::EngineLease`：两个宿主启动时锁住同一数据目录的 `engine.lock`，由进程持有到退出，避免重复 worker 和并发写入。
 
 ### GPUI crate 内部结构

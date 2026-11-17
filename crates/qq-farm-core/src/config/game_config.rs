@@ -889,6 +889,18 @@ impl GameConfig {
         }
     }
 
+    /// 指定来源的 buff。藏品积分奖励使用「藏品属性」。
+    #[must_use]
+    pub fn buffs_by_source(&self, source_type: &str) -> Vec<BuffConfigItem> {
+        self.buffs
+            .read()
+            .as_ref()
+            .map(|items| {
+                items.iter().filter(|buff| buff.source_type == source_type).cloned().collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// 超变升级 buff 全表（source_type = 超变升级）
     #[must_use]
     pub fn illustrated_buffs(&self) -> Vec<BuffConfigItem> {

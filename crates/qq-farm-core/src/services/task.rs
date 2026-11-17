@@ -43,13 +43,15 @@ use crate::proto::generated::gamepb::illustratedpb::{
 };
 use crate::proto::generated::gamepb::taskpb::{
     ClaimDailyRewardReply, ClaimDailyRewardRequest, ClaimTaskRewardReply, ClaimTaskRewardRequest,
-    Task, TaskInfo, TaskInfoReply, TaskInfoRequest,
+    ClientReportProgressReply, ClientReportProgressRequest, Task, TaskInfo, TaskInfoReply,
+    TaskInfoRequest,
 };
 
 use super::automation::{category, is_automation_on_for};
 use super::stats::record_operation_for;
 use super::warehouse::{get_bag_items, WarehouseService};
 
+const CLIENT_REPORT_COND_TYPE: i64 = 15;
 const TASK_SERVICE: &str = "gamepb.taskpb.TaskService";
 const ILLUSTRATED_SERVICE: &str = "gamepb.illustratedpb.IllustratedService";
 
@@ -166,7 +168,11 @@ impl TaskService {
     pub async fn get_task_info(&self) -> Result<TaskInfoReply> {
         let body = self
             .gateway
-            .request(TASK_SERVICE, "TaskInfo", &TaskInfoRequest {}.encode_to_vec())
+            .request(
+                TASK_SERVICE,
+                "TaskInfo",
+                &TaskInfoRequest { global_scene_id: 0 }.encode_to_vec(),
+            )
             .await?;
         Ok(TaskInfoReply::decode(&body[..])?)
     }
@@ -201,6 +207,82 @@ impl TaskService {
         let body =
             self.gateway.request(TASK_SERVICE, "ClaimDailyReward", &req.encode_to_vec()).await?;
         Ok(ClaimDailyRewardReply::decode(&body[..])?)
+    }
+
+    async fn report_client_progress(
+        &self,
+        task_id: i64,
+        progress: i64,
+    ) -> Result<ClientReportProgressReply> {
+        let req = ClientReportProgressRequest { task_id, progress };
+        let body = self
+            .gateway
+            .request(TASK_SERVICE, "ClientReportProgress", &req.encode_to_vec())
+            .await?;
+        Ok(ClientReportProgressReply::decode(&body[..])?)
+    }
+
+    async fn complete_client_reported_tasks(&self, growth_tasks: &[Task]) -> bool {
+        let account_id = self.account_id.lock().clone();
+        let mut advanced = false;
+        for task in client_reported_tasks(growth_tasks) {
+            let total = task.total_progress.max(1);
+            let desc =
+                if task.desc.is_empty() { format!("成长任务#{}", task.id) } else { task.desc };
+            match self.report_client_progress(task.id, total).await {
+                Ok(reply) => {
+                    let reached = reply.task_info.as_ref().is_some_and(|info| {
+                        normalize_task_info(info)
+                            .growth_tasks
+                            .iter()
+                            .any(|row| row.id == task.id && row.progress >= total)
+                    });
+                    if reached {
+                        advanced = true;
+                        crate::services::panel_log::log(
+                            &account_id,
+                            "任务",
+                            format!("成长任务进度已补齐: {desc} ({total}/{total})"),
+                            crate::constants::PanelEvent::TaskScan,
+                            Some(serde_json::json!({
+                                "module": "task",
+                                "event": "上报成长任务",
+                                "result": "ok",
+                                "taskId": task.id,
+                            })),
+                        );
+                    } else {
+                        crate::services::panel_log::log_warn(
+                            &account_id,
+                            "任务",
+                            format!("成长任务进度上报未生效: {desc}"),
+                            crate::constants::PanelEvent::TaskScan,
+                            Some(serde_json::json!({
+                                "module": "task",
+                                "event": "上报成长任务",
+                                "result": "ignored",
+                                "taskId": task.id,
+                            })),
+                        );
+                    }
+                }
+                Err(error) => {
+                    crate::services::panel_log::log_warn(
+                        &account_id,
+                        "任务",
+                        format!("成长任务进度上报失败: {desc} - {error}"),
+                        crate::constants::PanelEvent::TaskScan,
+                        Some(serde_json::json!({
+                            "module": "task",
+                            "event": "上报成长任务",
+                            "result": "error",
+                            "taskId": task.id,
+                        })),
+                    );
+                }
+            }
+        }
+        advanced
     }
 
     /// 领取图鉴所有奖励
@@ -241,7 +323,14 @@ impl TaskService {
             Some(ti) => ti,
             None => return Ok(()),
         };
-        let normalized = normalize_task_info(&task_info);
+        let mut normalized = normalize_task_info(&task_info);
+        if self.complete_client_reported_tasks(&normalized.growth_tasks).await {
+            if let Ok(refreshed) = self.get_task_info().await {
+                if let Some(info) = refreshed.task_info {
+                    normalized = normalize_task_info(&info);
+                }
+            }
+        }
 
         let daily_claimable = analyze_task_list(&normalized.daily_tasks, "daily");
         let growth_claimable = analyze_task_list(&normalized.growth_tasks, "growth");
@@ -654,6 +743,21 @@ pub fn normalize_task_info(task_info: &TaskInfo) -> NormalizedTaskInfo {
     }
 }
 
+fn client_reported_tasks(tasks: &[Task]) -> Vec<Task> {
+    tasks
+        .iter()
+        .filter(|task| {
+            task.id > 0
+                && task.cond_type == CLIENT_REPORT_COND_TYPE
+                && task.is_unlocked
+                && !task.is_claimed
+                && task.total_progress > 0
+                && task.progress < task.total_progress
+        })
+        .cloned()
+        .collect()
+}
+
 /// 归一化结果
 #[derive(Debug, Clone, Default)]
 pub struct NormalizedTaskInfo {
@@ -849,6 +953,27 @@ mod tests {
         t.desc = String::new();
         let dto = format_task(&t, "daily");
         assert_eq!(dto.desc, "任务#999");
+    }
+
+    #[test]
+    fn client_report_picks_unfinished_invite_tasks() {
+        let mut invite = make_task(15, 1, 0, 1, false);
+        invite.cond_type = CLIENT_REPORT_COND_TYPE;
+        let mut finished = invite.clone();
+        finished.id = 16;
+        finished.progress = 1;
+        let mut other = invite.clone();
+        other.id = 17;
+        other.cond_type = 1;
+        let mut claimed = invite.clone();
+        claimed.id = 18;
+        claimed.is_claimed = true;
+        let mut locked = invite.clone();
+        locked.id = 19;
+        locked.is_unlocked = false;
+        let picked = client_reported_tasks(&[invite, finished, other, claimed, locked]);
+        assert_eq!(picked.len(), 1);
+        assert_eq!(picked[0].id, 15);
     }
 
     #[test]

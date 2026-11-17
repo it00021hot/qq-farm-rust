@@ -32,6 +32,12 @@ message GoodsInfo {
     int64 item_id = 6;         // 物品ID (即种子ID)
     int64 item_count = 7;      // 每次购买获得数量
     repeated Cond conds = 8;   // 解锁条件
+    bool is_display_countdown = 9;
+    int64 end_time = 10;
+    int64 discount_price = 11;
+    int64 discount_start_time = 12;
+    int64 discount_end_time = 13;
+    repeated ShowCond show_conds = 14;
     bool owned = 15;           // 是否已拥有（如装扮）
 }
 
@@ -45,6 +51,11 @@ enum CondType {
 message Cond {
     int32 type = 1;    // CondType
     int64 param = 2;   // 参数值 (如等级要求的等级数)
+}
+
+message ShowCond {
+    string type = 1;
+    string params = 2;
 }
 
 // ============ 请求/回复 ============
@@ -70,6 +81,7 @@ message BuyGoodsRequest {
     int64 goods_id = 1;   // 商品ID (GoodsInfo.id)
     int64 num = 2;        // 购买数量
     int64 price = 3;      // 单价
+    bool auto_add = 4;
 }
 
 message BuyGoodsReply {

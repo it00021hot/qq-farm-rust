@@ -6,6 +6,7 @@
 //! - [`auto_plant_empty_lands`]：背包优先，不足再走商店选种
 //! - [`fertilize_by_config`]：normal / organic / both / smart / none
 
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -72,6 +73,7 @@ fn resolve_seed_land_types(
 ) -> Option<Vec<crate::models::types::FertilizerLandType>> {
     use crate::models::types::FertilizerLandType;
     const ALL: &[FertilizerLandType] = &[
+        FertilizerLandType::BlueCrystal,
         FertilizerLandType::PurpleGold,
         FertilizerLandType::Gold,
         FertilizerLandType::Black,
@@ -98,6 +100,7 @@ fn fertilizer_types_to_analysis(
             FertilizerLandType::Black => AnalysisLandType::Black,
             FertilizerLandType::Red => AnalysisLandType::Red,
             FertilizerLandType::PurpleGold => AnalysisLandType::PurpleGold,
+            FertilizerLandType::BlueCrystal => AnalysisLandType::BlueCrystal,
         })
         .collect()
 }
@@ -439,6 +442,20 @@ pub struct PlantingEngine {
     /// 已登记的「未来布局」（seedId → 布局，bot `registeredLayouts`）。
     /// bot 用模块级 Map 靠每账号独立进程隔离；rust 多账号同进程，挂引擎实例隔离。
     registered_layouts: parking_lot::Mutex<std::collections::HashMap<i64, PlantingLayout>>,
+    slice_planting: AtomicBool,
+    plant_gap_ms: AtomicI64,
+    plant_resume_ms: AtomicI64,
+}
+
+/// 自动种植两次请求之间要等的时间。0 表示不拆开，仍按原来的短间隔连续种。
+#[must_use]
+pub fn automatic_plant_gap_ms(delay_seconds: i64) -> i64 {
+    let seconds = delay_seconds.clamp(0, 60);
+    if seconds <= 0 {
+        0
+    } else {
+        seconds.saturating_mul(1000).max(50)
+    }
 }
 
 impl PlantingEngine {
@@ -449,6 +466,21 @@ impl PlantingEngine {
             api,
             config,
             registered_layouts: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            slice_planting: AtomicBool::new(false),
+            plant_gap_ms: AtomicI64::new(0),
+            plant_resume_ms: AtomicI64::new(0),
+        }
+    }
+
+    /// 取走本轮种下一块之前要等的时间。没有后续地块时为 0。
+    pub fn take_plant_resume_ms(&self) -> i64 {
+        self.plant_resume_ms.swap(0, Ordering::Relaxed)
+    }
+
+    fn note_plant_resume(&self) {
+        let gap = self.plant_gap_ms.load(Ordering::Relaxed);
+        if gap > 0 {
+            self.plant_resume_ms.store(gap, Ordering::Relaxed);
         }
     }
 
@@ -504,11 +536,15 @@ impl PlantingEngine {
         max_plant_count: usize,
         host_gid: i64,
     ) -> Result<PlantSeedsResult> {
-        let selected: Vec<PlantingLayout> = layouts
+        let mut selected: Vec<PlantingLayout> = layouts
             .into_iter()
             .filter(|l| l.anchor_land_id > 0 && !l.land_ids.is_empty())
             .take(max_plant_count)
             .collect();
+        let more_layouts = self.slice_planting.load(Ordering::Relaxed) && selected.len() > 1;
+        if more_layouts {
+            selected.truncate(1);
+        }
         if selected.is_empty() {
             return Ok(PlantSeedsResult::default());
         }
@@ -581,9 +617,15 @@ impl PlantingEngine {
             for id in &layout.land_ids {
                 reserved_land_ids.insert(*id);
             }
-            if selected.len() > 1 && index + 1 < selected.len() {
+            if !self.slice_planting.load(Ordering::Relaxed)
+                && selected.len() > 1
+                && index + 1 < selected.len()
+            {
                 sleep(Duration::from_millis(50)).await;
             }
+        }
+        if more_layouts && !planted_land_ids.is_empty() {
+            self.note_plant_resume();
         }
 
         Ok(PlantSeedsResult {
@@ -932,6 +974,49 @@ impl PlantingEngine {
         host_gid: i64,
         account_id: &str,
     ) -> Result<AutoPlantResult> {
+        self.auto_plant_empty_lands_paced(
+            dead_land_ids,
+            empty_land_ids,
+            host_gid,
+            account_id,
+            false,
+        )
+        .await
+    }
+
+    /// 自动种空地。`pace` 为真时按账号的种植间隔种一块就停，等锁放开后再继续。
+    pub async fn auto_plant_empty_lands_paced(
+        &self,
+        dead_land_ids: &[i64],
+        empty_land_ids: &[i64],
+        host_gid: i64,
+        account_id: &str,
+        pace: bool,
+    ) -> Result<AutoPlantResult> {
+        let gap = if pace {
+            automatic_plant_gap_ms(crate::models::store::account_config::get_plant_delay_seconds(
+                Some(account_id),
+            ))
+        } else {
+            0
+        };
+        self.plant_gap_ms.store(gap, Ordering::Relaxed);
+        self.plant_resume_ms.store(0, Ordering::Relaxed);
+        self.slice_planting.store(gap > 0, Ordering::Relaxed);
+        let planted = self
+            .auto_plant_empty_lands_inner(dead_land_ids, empty_land_ids, host_gid, account_id)
+            .await;
+        self.slice_planting.store(false, Ordering::Relaxed);
+        planted
+    }
+
+    async fn auto_plant_empty_lands_inner(
+        &self,
+        dead_land_ids: &[i64],
+        empty_land_ids: &[i64],
+        host_gid: i64,
+        account_id: &str,
+    ) -> Result<AutoPlantResult> {
         let mut lands_to_plant: Vec<i64> = {
             let mut seen = std::collections::HashSet::new();
             empty_land_ids.iter().copied().filter(|id| *id > 0 && seen.insert(*id)).collect()
@@ -973,7 +1058,10 @@ impl PlantingEngine {
             };
             let mut planted = bag.planted_land_ids.clone();
             let mut deferred = bag.deferred_land_ids.clone();
-            if bag.fallback_allowed && !bag.remaining_land_ids.is_empty() {
+            if bag.fallback_allowed
+                && !bag.remaining_land_ids.is_empty()
+                && self.plant_resume_ms.load(Ordering::Relaxed) == 0
+            {
                 let fallback = crate::models::store::account_config::get_bag_seed_fallback_strategy(
                     Some(account_id),
                 );
@@ -1279,6 +1367,16 @@ impl PlantingEngine {
             if result.uncertain && !level_locked_ids.contains(&seed.seed_id) {
                 fallback_allowed = false;
             }
+            if self.slice_planting.load(Ordering::Relaxed)
+                && result.planted > 0
+                && !target.is_empty()
+            {
+                self.note_plant_resume();
+                break;
+            }
+            if self.plant_resume_ms.load(Ordering::Relaxed) > 0 {
+                break;
+            }
         }
         planted_land_ids.sort_unstable();
         planted_land_ids.dedup();
@@ -1321,6 +1419,10 @@ impl PlantingEngine {
             let plant_size = get_plant_size_by_seed_id(candidate.seed_id);
             let all_layouts = build_planting_layouts(&remaining, plant_size);
             let mut layouts = select_non_overlapping_layouts(&all_layouts, all_layouts.len());
+            let more_shop_lands = self.slice_planting.load(Ordering::Relaxed) && layouts.len() > 1;
+            if more_shop_lands {
+                layouts.truncate(1);
+            }
             if layouts.is_empty() {
                 continue;
             }
@@ -1377,6 +1479,13 @@ impl PlantingEngine {
             remaining.retain(|id| !consumed.contains(id));
             if result.uncertain {
                 uncertain = true;
+            }
+            if self.slice_planting.load(Ordering::Relaxed)
+                && result.planted > 0
+                && (more_shop_lands || !remaining.is_empty())
+            {
+                self.note_plant_resume();
+                break;
             }
         }
         planted_lands.sort_unstable();
@@ -2126,6 +2235,14 @@ mod tests {
         let plan = plan_bag_planting_order(&seeds, &[300, 100]);
         assert_eq!(plan[0].seed_id, 300);
         assert_eq!(plan[1].seed_id, 100);
+    }
+
+    #[test]
+    fn automatic_planting_waits_between_requests() {
+        assert_eq!(automatic_plant_gap_ms(0), 0);
+        assert_eq!(automatic_plant_gap_ms(2), 2_000);
+        assert_eq!(automatic_plant_gap_ms(60), 60_000);
+        assert_eq!(automatic_plant_gap_ms(61), 60_000);
     }
 
     #[test]

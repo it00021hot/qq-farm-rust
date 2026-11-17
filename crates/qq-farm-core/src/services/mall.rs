@@ -158,7 +158,11 @@ impl MallService {
         slot_type: i32,
         sub_slot_type: i32,
     ) -> Result<GetMallListBySlotTypeResponse> {
-        let req = GetMallListBySlotTypeRequest { slot_type, is_manual_open: sub_slot_type == 1 };
+        let req = GetMallListBySlotTypeRequest {
+            slot_type,
+            is_manual_open: sub_slot_type == 1,
+            global_scene_id: 0,
+        };
         let body = self
             .gateway
             .request(MALL_SERVICE, "GetMallListBySlotType", &req.encode_to_vec())

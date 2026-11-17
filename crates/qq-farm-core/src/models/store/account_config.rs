@@ -448,6 +448,44 @@ pub fn apply_config_snapshot(
                         );
                     }
                 }
+                "ranch_grass_threshold_percent" | "ranchGrassThresholdPercent" => {
+                    if let Some(percent) = v.as_i64() {
+                        if (1..=100).contains(&percent) {
+                            next.automation.ranch_grass_threshold_percent = percent;
+                        }
+                    }
+                }
+                "ranch_strategy" | "ranchStrategy" => {
+                    if let Some(strategy) = v.as_str().and_then(ranch_strategy) {
+                        next.automation.ranch_strategy = strategy;
+                    }
+                }
+                "ranch_bag_fallback" | "ranchBagFallback" => {
+                    if let Some(strategy) = v.as_str().and_then(ranch_bag_fallback) {
+                        next.automation.ranch_bag_fallback = strategy;
+                    }
+                }
+                "ranch_coop_animal" | "ranchCoopAnimal" => {
+                    if let Some(id) = v.as_i64() {
+                        if id == 0 || crate::services::ranch::animal_fits(id, true) {
+                            next.automation.ranch_coop_animal = id;
+                        }
+                    }
+                }
+                "ranch_shed_animal" | "ranchShedAnimal" => {
+                    if let Some(id) = v.as_i64() {
+                        if id == 0 || crate::services::ranch::animal_fits(id, false) {
+                            next.automation.ranch_shed_animal = id;
+                        }
+                    }
+                }
+                "ranch_check_minutes" | "ranchCheckMinutes" => {
+                    if let Some(minutes) = v.as_i64() {
+                        if (1..=60).contains(&minutes) {
+                            next.automation.ranch_check_minutes = minutes;
+                        }
+                    }
+                }
                 "fertilizer_smart_seconds" => {
                     next.automation.fertilizer_smart_seconds = v
                         .as_i64()
@@ -475,6 +513,16 @@ pub fn apply_config_snapshot(
 
     if let Some(p) = snapshot.get("preferredSeedId").and_then(|v| v.as_i64()) {
         next.preferred_seed_id = p.max(0);
+    }
+
+    if let Some(hour) = snapshot
+        .get("emailClaimHour")
+        .or_else(|| snapshot.get("email_claim_hour"))
+        .and_then(serde_json::Value::as_i64)
+    {
+        if let Some(hour) = crate::services::email::normalize_email_claim_hour(hour) {
+            next.email_claim_hour = hour;
+        }
     }
 
     if let Some(intervals) = snapshot.get("intervals").and_then(|v| v.as_object()) {
@@ -570,7 +618,7 @@ pub fn apply_config_snapshot(
                 // 空 / 勾满全部类型（5 类）等价不限制，省略该 key
                 if types.is_empty()
                     || types.len()
-                        >= crate::models::store::normalize::DEFAULT_FERTILIZER_LAND_TYPES.len()
+                        >= crate::models::store::normalize::ALL_FERTILIZER_LAND_TYPES.len()
                 {
                     continue;
                 }
@@ -617,10 +665,28 @@ pub fn apply_config_snapshot(
     serde_json::to_value(&next).unwrap_or_default()
 }
 
+fn ranch_strategy(value: &str) -> Option<crate::models::types::RanchStrategy> {
+    match value {
+        "level" => Some(crate::models::types::RanchStrategy::Level),
+        "preferred" => Some(crate::models::types::RanchStrategy::Preferred),
+        "bag_priority" | "bagPriority" => Some(crate::models::types::RanchStrategy::BagPriority),
+        _ => None,
+    }
+}
+
+fn ranch_bag_fallback(value: &str) -> Option<crate::models::types::RanchStrategy> {
+    match value {
+        "level" => Some(crate::models::types::RanchStrategy::Level),
+        "preferred" => Some(crate::models::types::RanchStrategy::Preferred),
+        _ => None,
+    }
+}
+
 fn apply_automation_bool(a: &mut AutomationConfig, key: &str, value: bool) {
     match key {
         "farm" => a.farm = value,
         "farm_push" | "farmPush" => a.farm_push = value,
+        "farm_harvest_tiangong" | "farmHarvestTiangong" => a.farm_harvest_tiangong = value,
         "land_upgrade" | "landUpgrade" => a.land_upgrade = value,
         "friend" => a.friend = value,
         "friend_auto_accept" | "friendAutoAccept" => a.friend_auto_accept = value,
@@ -656,6 +722,24 @@ fn apply_automation_bool(a: &mut AutomationConfig, key: &str, value: bool) {
         "mystery_shop_allow_diamond" | "mysteryShopAllowDiamond" => {
             a.mystery_shop_allow_diamond = value
         }
+        "ranch_share" | "ranchShare" => a.ranch_share = value,
+        "ranch_task" | "ranchTask" => a.ranch_task = value,
+        "ranch_daily_benefit" | "ranchDailyBenefit" => a.ranch_daily_benefit = value,
+        "ranch_harvest" | "ranchHarvest" => a.ranch_harvest = value,
+        "ranch_produce" | "ranchProduce" => a.ranch_produce = value,
+        "ranch_clean" | "ranchClean" => a.ranch_clean = value,
+        "ranch_sell" | "ranchSell" => a.ranch_sell = value,
+        "ranch_fill_cans" | "ranchFillCans" => a.ranch_fill_cans = value,
+        "ranch_feed_normal" | "ranchFeedNormal" => a.ranch_feed_normal = value,
+        "ranch_feed_organic" | "ranchFeedOrganic" => a.ranch_feed_organic = value,
+        "ranch_friend_steal" | "ranchFriendSteal" => a.ranch_friend_steal = value,
+        "ranch_stroke" | "ranchStroke" => a.ranch_stroke = value,
+        "ranch_friend_clean" | "ranchFriendClean" => a.ranch_friend_clean = value,
+        "ranch_friend_mosquito" | "ranchFriendMosquito" => a.ranch_friend_mosquito = value,
+        "ranch_upgrade" | "ranchUpgrade" => a.ranch_upgrade = value,
+        "ranch_buy" | "ranchBuy" => a.ranch_buy = value,
+        "ranch_grass" | "ranchGrass" => a.ranch_grass = value,
+        "ranch_grass_buy" | "ranchGrassBuy" => a.ranch_grass_buy = value,
         _ => {}
     }
 }
@@ -671,6 +755,16 @@ mod tests {
 
     fn reset() {
         set_state(AccountConfigState::new());
+    }
+
+    #[test]
+    fn old_automation_json_still_harvests_tiangong() {
+        let mut value = serde_json::to_value(AutomationConfig::default()).expect("config");
+        value.as_object_mut().expect("object").remove("farm_harvest_tiangong");
+        let mut parsed: AutomationConfig = serde_json::from_value(value).expect("parse");
+        assert!(parsed.farm_harvest_tiangong);
+        apply_automation_bool(&mut parsed, "farmHarvestTiangong", false);
+        assert!(!parsed.farm_harvest_tiangong);
     }
 
     #[test]

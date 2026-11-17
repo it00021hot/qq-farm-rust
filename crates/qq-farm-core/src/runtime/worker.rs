@@ -280,8 +280,10 @@ impl Worker {
                         gateway.clone(),
                         5,
                     ));
-                    let email =
-                        Arc::new(crate::services::email::EmailService::new(gateway.clone()));
+                    let email = Arc::new(crate::services::email::EmailService::new(
+                        gateway.clone(),
+                        account_id.clone(),
+                    ));
                     let share =
                         Arc::new(crate::services::share::ShareService::new(gateway.clone()));
                     let monthcard = Arc::new(crate::services::monthcard::MonthCardService::new(
@@ -589,6 +591,10 @@ impl Worker {
                             emit_login_log(&account_id, &login_msg, false);
                             if let Some(basic) = &reply.basic {
                                 worker_loop.set_gid(basic.gid);
+                                crate::services::ranch_share::remember(
+                                    &account_id,
+                                    &basic.share_infos,
+                                );
                                 crate::services::status::update_status_from_login_for(
                                     &account_id,
                                     &serde_json::json!({

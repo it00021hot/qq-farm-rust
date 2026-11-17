@@ -1,6 +1,6 @@
 # qq-farm-rust
 
-QQ 农场多账号挂机的 Rust 重写。协议与调度对齐原 [qq-farm-bot](https://github.com/it00021hot/qq-farm-bot)（TypeScript + Vue），提供 Tauri/SoybeanAdmin 与 GPUI Kit 两种桌面宿主（原 HTTP API 服务 crate `qq-farm-server` 已删除）。
+QQ 农场多账号挂机的 Rust 重写。协议与调度对齐原 [qq-farm-bot](https://github.com/it00021hot/qq-farm-bot)（TypeScript + Vue）。桌面宿主是 NSH（`qq-farm-nsh`）。Tauri/SoybeanAdmin 与 GPUI Kit 仍在仓库中，不再作为主前端。原 HTTP API 服务 crate `qq-farm-server` 已删除。
 
 与原 `core` 的**业务同步状态、缺口与更新记录**见 [docs/SYNC.md](docs/SYNC.md)（对齐以业务目标一致为准；每次业务对齐请追加更新记录）。
 
@@ -10,9 +10,10 @@ QQ 农场多账号挂机的 Rust 重写。协议与调度对齐原 [qq-farm-bot]
 qq-farm-rust/
 ├── crates/
 │   ├── qq-farm-core/      # 网关、登录、农场/好友调度、活动中心、统计
-│   ├── qq-farm-app/       # UI 无关应用门面（desktop 经 IPC 调用）
-│   └── qq-farm-desktop/   # Tauri v2 桌面宿主（IPC → app）
-│   └── qq-farm-gpui/      # GPUI Kit 原生桌面宿主（GPUI → app）
+│   ├── qq-farm-app/       # UI 无关应用门面
+│   ├── qq-farm-nsh/       # NSH 桌面宿主（当前前端）
+│   ├── qq-farm-desktop/   # Tauri v2 桌面宿主（IPC → app，旧）
+│   └── qq-farm-gpui/      # GPUI Kit 原生桌面宿主（旧）
 ├── desktop-ui/            # SoybeanAdmin 桌面前端（与客户端共存）
 ├── proto/                 # 游戏 protobuf
 ├── scripts/               # 辅助脚本
@@ -30,7 +31,18 @@ qq-farm-rust/
 - Node.js + pnpm（desktop-ui 前端）
 - Windows / macOS
 
-## 编译与启动（桌面端，Tauri v2 + SoybeanAdmin）
+## 编译与启动（NSH 桌面端）
+
+需要与仓库匹配的 NSH CLI 0.5.1。在 `qq-farm-rust` 目录：
+
+```bash
+nsh run crates/qq-farm-nsh
+nsh check crates/qq-farm-nsh
+```
+
+同一数据目录仍由 `qq-farm-app` 的进程锁保护，NSH、Tauri、GPUI 一次只能运行一个。
+
+## 编译与启动（旧桌面端，Tauri v2 + SoybeanAdmin）
 
 ```bash
 # 前端依赖

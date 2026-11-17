@@ -83,23 +83,27 @@ pub fn current_holder(account_id: &str) -> Option<(String, i64)> {
 ///   （释放 permit 与任务持有的锁守卫），账号自动化从此不可能被单个挂死
 ///   任务永久瘫痪。
 ///
-/// 所有调用方均不消费返回值，故统一不返回。
-pub async fn run_exclusive_automation_task<F, T>(account_id: &str, name: &str, task: F)
+/// 超时取消时返回 `None`，正常结束返回任务结果。
+pub async fn run_exclusive_automation_task<F, T>(account_id: &str, name: &str, task: F) -> Option<T>
 where
     F: std::future::Future<Output = T>,
 {
-    run_exclusive_with_limit(account_id, name, task, MAX_EXEC_MS).await;
+    run_exclusive_with_limit(account_id, name, task, MAX_EXEC_MS).await
 }
 
 /// 带执行上限的互斥执行（测试用短时限走这里）。
-async fn run_exclusive_with_limit<F, T>(account_id: &str, name: &str, task: F, max_exec_ms: u64)
+async fn run_exclusive_with_limit<F, T>(
+    account_id: &str,
+    name: &str,
+    task: F,
+    max_exec_ms: u64,
+) -> Option<T>
 where
     F: std::future::Future<Output = T>,
 {
     let already_exclusive = EXCLUSIVE.try_with(|_| true).unwrap_or(false);
     if already_exclusive {
-        task.await;
-        return;
+        return Some(task.await);
     }
 
     let slot = lock_for(account_id);
@@ -159,7 +163,7 @@ where
     HOLDERS.lock().as_mut().map(|m| m.remove(account_id));
     drop(permit);
     match outcome {
-        Ok(_) => {}
+        Ok(value) => Some(value),
         Err(_) => {
             let held_s = (crate::utils::time::now_ms() - started) / 1000;
             tracing::error!(
@@ -168,6 +172,7 @@ where
                 held_s,
                 "自动化任务执行超时，已取消并释放互斥锁（排队任务将自动恢复）"
             );
+            None
         }
     }
 }

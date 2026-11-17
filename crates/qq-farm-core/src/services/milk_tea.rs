@@ -502,9 +502,55 @@ fn levels_dto() -> Vec<serde_json::Value> {
         .collect()
 }
 
+fn operating_only(action: &str) -> bool {
+    matches!(action, "create" | "rename" | "hire" | "boost" | "interact")
+}
+
+fn action_phase_error(action: &str, state: &serde_json::Value, now: i64) -> Option<&'static str> {
+    let (start_key, end_key) = if action == "exchange" {
+        ("exchangeStartTime", "exchangeEndTime")
+    } else {
+        ("startTime", "endTime")
+    };
+    let start = state.get(start_key).and_then(serde_json::Value::as_i64).unwrap_or(0);
+    let end = state.get(end_key).and_then(serde_json::Value::as_i64).unwrap_or(0);
+    if !(now >= start && now < end) {
+        return Some("活动尚未开放或已经结束");
+    }
+    let opened =
+        state.pointer("/summary/shopOpenAt").and_then(serde_json::Value::as_i64).unwrap_or(0);
+    if action != "create" && opened == 0 {
+        return Some("请先开业");
+    }
+    let settle = state.get("settleStartTime").and_then(serde_json::Value::as_i64).unwrap_or(0);
+    if settle > 0 && now >= settle && operating_only(action) {
+        return Some("结算期不可进行此操作");
+    }
+    None
+}
+
+fn limit_period(kind: i64) -> &'static str {
+    match kind {
+        1 => "daily",
+        2 => "weekly",
+        3 => "monthly",
+        4 => "permanent",
+        _ => "unknown",
+    }
+}
+
+fn goods_rank(goods: &crate::proto::generated::gamepb::activitypb::ShopGoodsInfo) -> i32 {
+    if !goods.cond_hints.iter().all(|hint| hint.satisfied) {
+        3
+    } else if goods.purchase_limit > 0 && goods.purchased_count >= goods.purchase_limit {
+        2
+    } else {
+        1
+    }
+}
+
 fn goods_dto(
     goods: &crate::proto::generated::gamepb::activitypb::ShopGoodsInfo,
-    settling: bool,
 ) -> serde_json::Value {
     let limit = goods.purchase_limit;
     let bought = goods.purchased_count;
@@ -523,11 +569,8 @@ fn goods_dto(
     // 官方商店以正数 purchase_limit 表示有限购上限
     let remaining = if limit > 0 { Some((limit - bought).max(0)) } else { None };
     let conditions_ok = goods.cond_hints.iter().all(|hint| hint.satisfied);
-    // 用户决策：钻石商品一律不可用
-    let available = remaining != Some(0)
-        && conditions_ok
-        && !(settling && goods.category_tag == "seed")
-        && goods.diamond_cost_count <= 0;
+    // 钻石商品不在客户端兑换。结算期不再单独关掉种子。
+    let available = remaining != Some(0) && conditions_ok && goods.diamond_cost_count <= 0;
     serde_json::json!({
         "id": goods.id.to_string(),
         "name": goods.name,
@@ -535,6 +578,8 @@ fn goods_dto(
         "rewards": shop_items_dto(&goods.item),
         "costs": shop_items_dto(&goods.cost),
         "remaining": remaining,
+        "purchaseLimit": if limit > 0 { Some(limit) } else { None::<i64> },
+        "limitPeriod": limit_period(goods.restriction_type),
         "conditions": conditions,
         "category": goods.category_tag,
         "available": available,
@@ -1013,6 +1058,7 @@ impl MilkTeaService {
         let now = crate::utils::time::get_server_time_secs();
         let active = now >= head.begin_time && now < head.end_time;
         let settling = head.settle_start_time > 0 && now >= head.settle_start_time;
+        let exchange_head = child(&group, SHOP).and_then(|entry| entry.head.clone());
         let mut result = serde_json::json!({
             "id": MILK,
             "title": head.name,
@@ -1020,6 +1066,8 @@ impl MilkTeaService {
             "startTime": head.begin_time,
             "endTime": head.end_time,
             "settleStartTime": head.settle_start_time,
+            "exchangeStartTime": exchange_head.as_ref().map(|head| head.begin_time).unwrap_or(0),
+            "exchangeEndTime": exchange_head.as_ref().map(|head| head.end_time).unwrap_or(0),
             "active": active,
             "settling": settling,
             "summary": summary_dto(summary),
@@ -1034,11 +1082,11 @@ impl MilkTeaService {
             let shop = child(&group, SHOP)
                 .and_then(|entry| entry.shop.as_ref())
                 .ok_or_else(|| Error::Business("兑换商店未返回".into()))?;
-            result["goods"] = serde_json::json!(shop
-                .goods
-                .iter()
-                .map(|goods| goods_dto(goods, settling))
-                .collect::<Vec<_>>());
+            let mut goods = shop.goods.clone();
+            goods.sort_by(|left, right| {
+                goods_rank(left).cmp(&goods_rank(right)).then(left.order.cmp(&right.order))
+            });
+            result["goods"] = serde_json::json!(goods.iter().map(goods_dto).collect::<Vec<_>>());
         } else if page == "fund" {
             let fund = child(&group, FUND)
                 .and_then(|entry| entry.growth_fund.as_ref())
@@ -1166,6 +1214,11 @@ impl MilkTeaService {
                 }
             }
         }
+        result["actionAvailability"] = serde_json::json!({
+            "craft": action_phase_error("craft", &result, now).is_none(),
+            "exchange": action_phase_error("exchange", &result, now).is_none(),
+            "hire": action_phase_error("hire", &result, now).is_none(),
+        });
         Ok(result)
     }
 
@@ -1201,25 +1254,20 @@ impl MilkTeaService {
         let page = page_for_action(action);
         let state = self.get_activity(page, input).await?;
         let now = crate::utils::time::get_server_time_secs();
-        if state.get("active").and_then(serde_json::Value::as_bool) != Some(true) {
-            return Err(Error::Business("活动尚未开放或已经结束".into()));
+        if let Some(message) = action_phase_error(action, &state, now) {
+            return Err(Error::Business(message.into()));
         }
         let shop_open_at =
             state.pointer("/summary/shopOpenAt").and_then(serde_json::Value::as_i64).unwrap_or(0);
-        if action != "create" && shop_open_at == 0 {
-            return Err(Error::Business("请先开业".into()));
-        }
-        let settling = state.get("settling").and_then(serde_json::Value::as_bool) == Some(true);
-        if settling && ["create", "rename", "hire", "boost", "interact", "craft"].contains(&action)
-        {
-            return Err(Error::Business("结算期不可进行此操作".into()));
-        }
         let balances: HashMap<i64, i64> = state
             .get("balances")
             .and_then(|value| serde_json::from_value(value.clone()).ok())
             .unwrap_or_default();
         let request =
             self.build_operate_request(action, input, &state, &balances, now, shop_open_at)?;
+        if let Some(message) = action_phase_error(action, &state, now) {
+            return Err(Error::Business(message.into()));
+        }
         let reply = self.send_operate(action, request).await?;
         let (result, mut rewards) = consume_reply(action, &reply)?;
         if action == "boost" {
@@ -1998,6 +2046,28 @@ mod tests {
             )
             .unwrap_err();
         assert!(error.to_string().contains("店铺已经开业"), "{error}");
+    }
+
+    #[test]
+    fn settlement_keeps_workshop_and_exchange_open() {
+        let state = serde_json::json!({
+            "startTime": 100,
+            "endTime": 500,
+            "exchangeStartTime": 100,
+            "exchangeEndTime": 800,
+            "settleStartTime": 300,
+            "summary": { "shopOpenAt": 120 }
+        });
+        assert!(action_phase_error("craft", &state, 350).is_none());
+        assert!(action_phase_error("exchange", &state, 350).is_none());
+        assert_eq!(action_phase_error("hire", &state, 350), Some("结算期不可进行此操作"));
+        assert_eq!(action_phase_error("exchange", &state, 900), Some("活动尚未开放或已经结束"));
+        assert_eq!(action_phase_error("craft", &state, 50), Some("活动尚未开放或已经结束"));
+        assert_eq!(limit_period(1), "daily");
+        assert_eq!(limit_period(2), "weekly");
+        assert_eq!(limit_period(3), "monthly");
+        assert_eq!(limit_period(4), "permanent");
+        assert_eq!(limit_period(9), "unknown");
     }
 
     #[test]

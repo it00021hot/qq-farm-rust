@@ -13,19 +13,19 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
-/// 默认客户端版本（对齐 bot `DEFAULT_CLIENT_VERSION`，2026-10-22 QQ 抓包验证）。
-pub const DEFAULT_CLIENT_VERSION: &str = "1.15.1.4_20261001";
+/// 默认客户端版本（对齐 bot `DEFAULT_CLIENT_VERSION`，2026-11-17 QQ 登录与心跳抓包）。
+pub const DEFAULT_CLIENT_VERSION: &str = "1.17.0.4_20261117";
 
 /// 默认客户端版本的发布时间（毫秒）。保存的版本只有在其时间戳**更新**时才沿用，
 /// 防止旧存档把升级链锁死在过期版本上（对齐 bot `resolveClientVersion`）。
-pub const DEFAULT_CLIENT_VERSION_UPDATED_AT: i64 = 1_792_637_519_008;
+pub const DEFAULT_CLIENT_VERSION_UPDATED_AT: i64 = 1_794_888_024_122;
 
-/// 微信默认客户端版本（bot `DEFAULT_WX_CLIENT_VERSION`，2026-10-22 微信握手 /
-/// PlayerLogin / 心跳独立验证；与 QQ 版本串相同但时间戳独立演进）。
-pub const DEFAULT_WX_CLIENT_VERSION: &str = "1.15.1.4_20261001";
+/// 微信默认客户端版本（bot `DEFAULT_WX_CLIENT_VERSION`，2026-11-17 微信包配置；
+/// 与 QQ 版本串相同但时间戳独立演进）。
+pub const DEFAULT_WX_CLIENT_VERSION: &str = "1.17.0.4_20261117";
 
 /// 微信默认客户端版本时间戳（bot `DEFAULT_WX_CLIENT_VERSION_UPDATED_AT`）。
-pub const DEFAULT_WX_CLIENT_VERSION_UPDATED_AT: i64 = 1_792_639_106_589;
+pub const DEFAULT_WX_CLIENT_VERSION_UPDATED_AT: i64 = 1_794_891_946_317;
 
 /// 平台判定（对齐 bot `isWechatPlatform`：`['wx','wechat']`，trim + lowercase）。
 #[must_use]
@@ -640,6 +640,8 @@ mod tests {
         assert_eq!(t, DEFAULT_CLIENT_VERSION_UPDATED_AT);
         // 旧存档无时间戳 → 回默认
         let (v, _) = resolve_client_version("1.13.2.10_20260723", 0, "qq");
+        assert_eq!(v, DEFAULT_CLIENT_VERSION);
+        let (v, _) = resolve_client_version("1.15.1.4_20261001", 1_792_637_519_008, "qq");
         assert_eq!(v, DEFAULT_CLIENT_VERSION);
         // 比默认新 → 沿用
         let (v, t) = resolve_client_version(

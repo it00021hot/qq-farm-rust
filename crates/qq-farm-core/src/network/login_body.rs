@@ -471,6 +471,7 @@ mod tests {
         assert!(uses_player_scene_login("1.15.0.2_20261001"));
         assert!(uses_player_scene_login("1.15.0.1_20261001"));
         assert!(uses_player_scene_login("1.16.0"));
+        assert!(uses_player_scene_login("1.17.0.4_20261117"));
         assert!(uses_player_scene_login("2.0.0_20270101"));
         assert!(!uses_player_scene_login("1.14.2.15_20260922"));
         assert!(!uses_player_scene_login("1.4.9"));

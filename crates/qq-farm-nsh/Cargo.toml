@@ -1,0 +1,38 @@
+[package]
+name = "qq-farm-nsh"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+description = "QQ 农场 NSH 桌面宿主"
+
+[lints]
+workspace = true
+
+[dependencies]
+base64 = { workspace = true }
+qq-farm-app = { workspace = true }
+qq-farm-core = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+dirs = { workspace = true }
+dotenvy = { workspace = true }
+env_logger = "0.11"
+log = "0.4"
+nsh-core = "=0.5.1"
+nsh-base = "=0.5.1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nsh-platform-linux = "=0.5.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+nsh-platform-macos = "=0.5.1"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+nsh-platform-windows = "=0.5.1"

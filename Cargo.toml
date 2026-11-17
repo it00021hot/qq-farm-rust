@@ -5,6 +5,7 @@ members = [
     "crates/qq-farm-app",
     "crates/qq-farm-desktop",
     "crates/qq-farm-gpui",
+    "crates/qq-farm-nsh",
 ]
 
 [workspace.package]

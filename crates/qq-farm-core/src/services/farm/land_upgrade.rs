@@ -4,8 +4,8 @@
 //!
 //! 数据来源优先级与 bot 一致：
 //! - 当前等级加成：服务器随 `LandInfo.buff` 下发的实时加成，缺省回落官方 `LandLevel.json`；
-//! - 升级条件：服务器随 `LandInfo.upgrade_condition` 下发（condition_type=1 为等级 +
-//!   required_items），缺省回落官方 `LandLevelNeed.json`（land_id + level 定位）。
+//! - 升级条件：服务器随 `LandInfo.upgrade_condition` 下发等级、材料，以及
+//!   当前等级及以上的地块数量；缺省回落官方 `LandLevelNeed.json`。
 
 use std::sync::OnceLock;
 
@@ -136,7 +136,7 @@ fn cost_entries(entries: impl IntoIterator<Item = (i64, i64)>) -> Vec<serde_json
         .collect()
 }
 
-/// proto `required_items` → (id, count)
+/// proto `items_need` → (id, count)
 fn proto_items(items: &[Item]) -> Vec<(i64, i64)> {
     items.iter().map(|item| (item.id, item.count)).collect()
 }
@@ -209,24 +209,51 @@ pub fn build_land_upgrade_detail(land: &LandInfo, lands_map: &LandMap) -> serde_
         .and_then(|entry| entry.items_need.as_deref())
         .map(parse_items_need)
         .unwrap_or_default();
-    let condition_type = condition.map_or(0, |c| c.condition_type);
-    let need_level = match condition {
-        Some(c) => {
-            if condition_type == 1 {
-                Some(c.condition_value)
+    let preceding_count = match condition {
+        Some(entry) => {
+            let count = entry.preceeding_lands_count_need;
+            if count > 0 {
+                count
             } else {
-                None
+                1
             }
         }
+        None => 0,
+    };
+    let preceding_owned = if lands_map.is_empty() {
+        None
+    } else {
+        Some(lands_map.values().filter(|entry| entry.unlocked && entry.level >= level).count()
+            as i64)
+    };
+    let need_level = match condition {
+        Some(entry) => Some(entry.level_need),
         None => config.and_then(|entry| entry.level_need),
     };
     let costs = match condition {
-        Some(c) => cost_entries(proto_items(&c.required_items)),
+        Some(entry) => cost_entries(proto_items(&entry.items_need)),
         None => cost_entries(config_items),
+    };
+    let current_name = current
+        .as_ref()
+        .and_then(|info| info.get("name"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("等级{level}土地"));
+    let preceding = if preceding_count > 0 {
+        serde_json::json!({
+            "name": current_name,
+            "required": preceding_count,
+            "owned": preceding_owned,
+            "met": preceding_owned.map(|owned| owned >= preceding_count),
+        })
+    } else {
+        serde_json::Value::Null
     };
     let unknown = next.is_none()
         || match condition {
-            Some(_) => condition_type != 1,
+            Some(entry) => entry.level_need == 0 || preceding_owned.is_none(),
             None => config.is_none(),
         };
     serde_json::json!({
@@ -236,6 +263,7 @@ pub fn build_land_upgrade_detail(land: &LandInfo, lands_map: &LandMap) -> serde_
         "serverAllowed": land.could_upgrade,
         "needLevel": need_level,
         "prerequisite": null,
+        "precedingLands": preceding,
         "costs": costs,
         "unknown": unknown,
     })
@@ -266,16 +294,20 @@ mod tests {
             plant_exp_bonus: 2_000,
         });
         l.upgrade_condition = Some(LandUpgradeCondition {
-            condition_type: 1,
-            condition_value: 150,
-            required_items: vec![
+            preceeding_lands_count_need: 1,
+            level_need: 150,
+            items_need: vec![
                 Item { id: 1_001, count: 450_000_000, ..Default::default() },
                 Item { id: 1_005, count: 18_670, ..Default::default() },
             ],
         });
-        let info = build_land_upgrade_detail(&l, &HashMap::new());
+        let mut map = HashMap::new();
+        map.insert(l.id, l.clone());
+        let info = build_land_upgrade_detail(&l, &map);
         assert_eq!(info["mode"], "upgrade");
         assert_eq!(info["needLevel"], 150);
+        assert_eq!(info["precedingLands"]["required"], 1);
+        assert_eq!(info["precedingLands"]["met"], true);
         let costs = info["costs"].as_array().unwrap();
         assert_eq!(costs.len(), 2);
         assert_eq!(costs[0]["id"], "1001");
@@ -324,21 +356,22 @@ mod tests {
         assert_eq!(info["prerequisite"]["met"], false);
     }
 
-    /// bot 用例 4：未知条件类型保持 unknown；官方配置回退不暗示可升级
+    /// 没有地块清单时无法确认前置数量；官方配置回退不暗示可升级
     #[test]
-    fn unknown_condition_type_stays_unknown_and_fallback_uses_config() {
+    fn missing_land_list_stays_unknown_and_fallback_uses_config() {
         let mut l = land(21);
         l.unlocked = true;
         l.level = 4;
         l.max_level = 5;
         l.upgrade_condition = Some(LandUpgradeCondition {
-            condition_type: 99,
-            condition_value: 150,
-            required_items: Vec::new(),
+            preceeding_lands_count_need: 1,
+            level_need: 150,
+            items_need: Vec::new(),
         });
         let info = build_land_upgrade_detail(&l, &HashMap::new());
         assert_eq!(info["unknown"], true);
-        assert!(info["needLevel"].is_null());
+        assert_eq!(info["needLevel"], 150);
+        assert!(info["precedingLands"]["owned"].is_null());
 
         let mut fallback = land(21);
         fallback.unlocked = true;
@@ -348,5 +381,12 @@ mod tests {
         assert_eq!(info["needLevel"], 150);
         assert_eq!(info["serverAllowed"], false);
         assert_eq!(info["costs"][1]["count"], "18670");
+
+        let mut blue = land(21);
+        blue.unlocked = true;
+        blue.level = 5;
+        blue.max_level = 6;
+        let info = build_land_upgrade_detail(&blue, &HashMap::new());
+        assert_eq!(info["next"]["name"], "蓝晶土地");
     }
 }

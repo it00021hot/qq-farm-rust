@@ -171,6 +171,20 @@ const EVENT_FERTILIZER_BUY_MIN_INTERVAL_MS: i64 = 60 * 1000;
 /// AtomicBool/AtomicU64
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 
+fn farm_patrol_deadline(worker: &WorkerLoop) -> i64 {
+    let now = now_ms();
+    let next = worker.next_runs.lock();
+    let farm = if next.farm_at > 0 { next.farm_at } else { i64::MAX };
+    let friend = if worker.friend_tick_running.load(Ordering::Acquire) {
+        now
+    } else if next.friend_at > 0 {
+        next.friend_at
+    } else {
+        i64::MAX
+    };
+    farm.min(friend)
+}
+
 /// 下次执行时间
 #[derive(Debug, Clone, Default)]
 struct NextRuns {
@@ -277,6 +291,20 @@ pub struct NextChecks {
     pub farm_remain_sec: i64,
     pub help_remain_sec: i64,
     pub steal_remain_sec: i64,
+}
+
+async fn ranch_friend_rows(
+    worker: Arc<WorkerLoop>,
+) -> Vec<crate::services::ranch_friend::RanchFriend> {
+    match worker.friend().get_friends_list(false).await {
+        Ok(rows) => {
+            rows.iter().filter_map(crate::services::ranch_friend::friend_from_list_row).collect()
+        }
+        Err(error) => {
+            tracing::warn!(error = %error, "牧场巡查未能读取好友列表");
+            Vec::new()
+        }
+    }
 }
 
 impl WorkerLoop {
@@ -685,6 +713,7 @@ impl WorkerLoop {
         scheduler.clear("fertilizer_buy_check");
         self.check_fertilizer_buy_once().await;
         self.start_mystery_shop_timer(scheduler);
+        self.start_ranch_share_timer(scheduler);
         {
             let this = Arc::clone(self);
             scheduler.set_timeout_task(
@@ -1224,6 +1253,59 @@ impl WorkerLoop {
         .await;
     }
 
+    /// 牧场每日分享：登录后 5 秒首查，之后每分钟看一次是否到了领取或重试时间。
+    pub fn start_ranch_share_timer(self: &Arc<Self>, scheduler: &Scheduler) {
+        let this = Arc::clone(self);
+        scheduler.set_timeout_task(
+            "ranch_share_initial",
+            crate::services::ranch_share::SHARE_INITIAL_DELAY,
+            Arc::new(move || {
+                let this = Arc::clone(&this);
+                Box::pin(async move {
+                    this.claim_ranch_share_once().await;
+                })
+            }),
+        );
+        let this = Arc::clone(self);
+        scheduler.set_interval_task(
+            "ranch_share_timer",
+            crate::services::ranch_share::SHARE_CHECK_INTERVAL,
+            Arc::new(move || {
+                let this = Arc::clone(&this);
+                Box::pin(async move {
+                    this.claim_ranch_share_once().await;
+                })
+            }),
+        );
+    }
+
+    async fn claim_ranch_share_once(self: &Arc<Self>) {
+        if !self.login_ready() {
+            return;
+        }
+        let _ = crate::services::ranch_share::claim_share_if_due(self.gateway(), &self.account.id)
+            .await;
+        let _ =
+            crate::services::ranch_task::claim_tasks_if_due(self.gateway(), &self.account.id).await;
+        let _ =
+            crate::services::ranch_benefit::claim_benefit_if_due(self.gateway(), &self.account.id)
+                .await;
+        let this = Arc::clone(self);
+        let self_gid = self.own_gid();
+        let deadline = farm_patrol_deadline(self);
+        let _ = crate::services::ranch::patrol_if_due(
+            self.gateway(),
+            &self.account.id,
+            self_gid,
+            deadline,
+            move || {
+                let this = Arc::clone(&this);
+                async move { ranch_friend_rows(this).await }
+            },
+        )
+        .await;
+    }
+
     /// 神秘商人监控定时器：登录后 10s 首查，之后每 10min tick（对齐 node `startMysteryShopTimer`）
     pub fn start_mystery_shop_timer(self: &Arc<Self>, scheduler: &Scheduler) {
         let this = Arc::clone(self);
@@ -1298,20 +1380,36 @@ impl WorkerLoop {
             // 对齐 bot：farm tick 整体在互斥任务里执行（runExclusiveAutomationTask）
             let this = Arc::clone(self);
             let account_id = self.account.id.clone();
+            let mut plant_rounds = 0u32;
+            loop {
+                let farm_quiet = crate::services::friend::visit_strategy::in_farm_quiet_hours_for(
+                    Some(&this.account.id),
+                    None,
+                );
+                if !(this.auto_on("farm") && !farm_quiet && this.login_ready()) {
+                    break;
+                }
+                let this_round = Arc::clone(&this);
+                let account_round = account_id.clone();
+                crate::infra::automation_lock::run_exclusive_automation_task(
+                    &account_round,
+                    "farm_tick",
+                    async move { this_round.farm.check_farm().await },
+                )
+                .await;
+                let wait = this.farm.take_plant_resume_ms().await;
+                plant_rounds += 1;
+                if wait <= 0 || plant_rounds >= 240 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(wait as u64)).await;
+            }
             crate::infra::automation_lock::run_exclusive_automation_task(
                 &account_id,
                 "farm_tick",
                 async move {
                     // 静默时段默认只停帮助/偷菜；好友静默开启 continueFarm=false 时本田巡查也停
                     // （对齐 bot checkFarm → inFarmQuietHours）
-                    let farm_quiet =
-                        crate::services::friend::visit_strategy::in_farm_quiet_hours_for(
-                            Some(&this.account.id),
-                            None,
-                        );
-                    if this.auto_on("farm") && !farm_quiet {
-                        let _ = this.farm.check_farm().await;
-                    }
                     if this.auto_on("task") {
                         let _ = this.task.check_and_claim_tasks().await;
                     }
@@ -1359,22 +1457,23 @@ impl WorkerLoop {
         ) {
             return;
         }
-        // 对齐 bot：friend tick 整体在互斥任务里执行（runExclusiveAutomationTask）
+        // 拜访之间的等待不占自动化锁。列表、每次进好友农场和出售各自进锁。
         let this = Arc::clone(self);
-        let account_id = self.account.id.clone();
-        crate::infra::automation_lock::run_exclusive_automation_task(
-            &account_id,
-            "friend_tick",
-            async move {
-                let stolen = this.friend.check_friends_unified(&this.account.id).await.unwrap_or(0);
-                if stolen > 0 {
-                    tokio::time::sleep(Duration::from_millis(800)).await;
-                    let _ = this.warehouse.sell_all_fruits().await;
-                }
-                this.sync_status();
-            },
-        )
-        .await;
+        let stolen = this.friend.check_friends_unified(&this.account.id).await.unwrap_or(0);
+        if stolen > 0 {
+            tokio::time::sleep(Duration::from_millis(800)).await;
+            let account_id = this.account.id.clone();
+            let seller = Arc::clone(&this);
+            crate::infra::automation_lock::run_exclusive_automation_task(
+                &account_id,
+                "friend_sell",
+                async move {
+                    let _ = seller.warehouse.sell_all_fruits().await;
+                },
+            )
+            .await;
+        }
+        this.sync_status();
     }
 
     /// 跑每日任务（对齐 bot：整个日更在互斥任务里执行，嵌套调用直接内联）
@@ -1676,7 +1775,7 @@ mod tests {
         let gateway = make_gateway();
         let farm = Arc::new(FarmService::new(gateway.clone()));
         let friend = Arc::new(FriendService::new(gateway.clone(), 5));
-        let email = Arc::new(EmailService::new(gateway.clone()));
+        let email = Arc::new(EmailService::new(gateway.clone(), account.id.clone()));
         let share = Arc::new(ShareService::new(gateway.clone()));
         let monthcard = Arc::new(MonthCardService::new(gateway.clone()));
         let mall = Arc::new(MallService::new(gateway.clone()));

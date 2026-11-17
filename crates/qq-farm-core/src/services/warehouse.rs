@@ -322,7 +322,7 @@ impl WarehouseService {
     }
 
     /// 自动出售所有果实。对齐 TS `sellAllFruits`：
-    /// 果实 + `getEffectiveSellInfo.sellable`，批量失败逐个重试，成功记入今日统计「出售」。
+    /// 可售果实批量出售，锁定堆叠和牧草留下，批量失败逐个重试，成功记入今日统计「出售」。
     pub async fn sell_all_fruits(&self) -> i64 {
         let account_id = self.account_id.lock().clone();
         if !crate::services::automation::is_automation_on_for(&account_id, "sell") {
@@ -349,13 +349,7 @@ impl WarehouseService {
         let mut to_sell: Vec<(i64, i64, i64)> = Vec::new();
         let mut names: Vec<String> = Vec::new();
         for it in &items {
-            if it.count <= 0 {
-                continue;
-            }
-            if !is_fruit_item_id(it.id) {
-                continue;
-            }
-            if !gc.get_effective_sell_info_by_id_at(it.id, it.expire_time).sellable {
+            if !included_in_auto_sell(it) {
                 continue;
             }
             let fruit_name = gc.get_fruit_name(it.id);
@@ -875,6 +869,18 @@ fn core_item(id: i64, count: i64, uid: i64) -> CoreItem {
     }
 }
 
+const RANCH_GRASS_ITEM: i64 = 7001;
+
+fn included_in_auto_sell(item: &BagItemLite) -> bool {
+    item.id != RANCH_GRASS_ITEM
+        && item.count > 0
+        && !item.locked
+        && is_fruit_item_id(item.id)
+        && crate::config::game_config::global()
+            .get_effective_sell_info_by_id_at(item.id, item.expire_time)
+            .sellable
+}
+
 /// 判断是否是果实
 pub fn is_fruit_item_id(id: i64) -> bool {
     use crate::config::game_config::global as global_game_config;
@@ -1183,6 +1189,20 @@ mod tests {
         assert_eq!(stack.count, 2);
         assert_eq!(stack.mutant_types, vec![1]);
         assert_eq!(detail.original_items[0].group_key, "uid:100");
+    }
+
+    #[test]
+    fn auto_sell_keeps_ranch_grass_and_locked_fruit() {
+        let gc = crate::config::game_config::global();
+        let fruit_id =
+            gc.get_plant_by_seed_id(29999).and_then(|plant| plant.fruit).expect("白萝卜果实").id;
+        assert!(is_fruit_item_id(RANCH_GRASS_ITEM));
+        assert!(!included_in_auto_sell(&BagItemLite::new(RANCH_GRASS_ITEM, 20, 1)));
+        assert!(included_in_auto_sell(&BagItemLite::new(fruit_id, 1, 2)));
+        let mut locked = BagItemLite::new(fruit_id, 1, 3);
+        locked.locked = true;
+        assert!(!included_in_auto_sell(&locked));
+        assert!(!included_in_auto_sell(&BagItemLite::new(fruit_id, 0, 4)));
     }
 
     #[test]

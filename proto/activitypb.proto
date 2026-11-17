@@ -193,7 +193,7 @@ message ActivityWindow {
     int64 end_time = 4;
 }
 
-message ActivityListRequest {}
+message ActivityListRequest { int32 game_scene_id = 1; }
 
 message ActivityListReply {
     repeated ActivityData activities = 1;

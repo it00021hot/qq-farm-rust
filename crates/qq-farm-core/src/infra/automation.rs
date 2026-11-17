@@ -52,6 +52,7 @@ pub fn is_automation_on_for(account_id: &str, category: &str) -> bool {
     match category {
         "farm" => a.farm,
         "farm_push" => a.farm_push,
+        "farm_harvest_tiangong" => a.farm_harvest_tiangong,
         "land_upgrade" => a.land_upgrade,
         "friend" => a.friend,
         "friend_help" => a.friend_help,

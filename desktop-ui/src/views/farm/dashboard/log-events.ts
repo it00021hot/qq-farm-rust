@@ -50,7 +50,35 @@ const EVENT_LABELS: Record<string, string> = {
   // 对齐后端 PanelEvent 全量 key（panel_events.rs），新增事件必须同步补这里
   pet_op: '宠物操作',
   dog_skill_gift: '同气连枝礼包',
-  mystery_shop_watch: '神秘商人'
+  mystery_shop_watch: '神秘商人',
+  ranch_automation: '牧场巡查',
+  ranch_buy: '购买牧场商品',
+  ranch_place: '放养幼崽',
+  ranch_addGrass: '补充牧草',
+  ranch_useCan: '填充罐头',
+  ranch_feed: '喂养动物',
+  ranch_produce: '牧场生产',
+  ranch_harvest: '牧场收获',
+  ranch_sell: '出售牧场产物',
+  ranch_clean: '清理牧场',
+  ranch_upgrade: '升级牧场建筑',
+  ranch_completeUpgrade: '完成建筑升级',
+  ranch_claimTasks: '领取牧场任务',
+  ranch_reportEntry: '牧场成长任务',
+  ranch_exchange: '牧场集市兑换',
+  ranch_claimIllustrated: '牧场图鉴奖励',
+  ranch_claimDailyShare: '牧场每日分享',
+  ranch_buyCan: '购买牧场罐头',
+  ranch_steal: '偷取好友牧场',
+  ranch_stroke: '抚摸好友动物',
+  ranch_release: '放生动物',
+  ranch_putMosquito: '放蚊子',
+  ranch_cleanFriend: '清理好友牧场',
+  ranch_friend: '拜访好友牧场',
+  ranch_friend_leave: '离开好友牧场',
+  ranch_scene_restore: '恢复场景',
+  ranch_task_claim: '牧场任务',
+  ranch_daily_share: '牧场分享礼包'
 };
 
 const PHASE_LABELS: Record<string, string> = {

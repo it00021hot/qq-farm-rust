@@ -18,8 +18,8 @@ use crate::network::gateway::Gateway;
 use crate::runtime::scheduler::Scheduler;
 use crate::services::farm::api::{Api, NORMAL_FERTILIZER_ID, ORGANIC_FERTILIZER_ID};
 use crate::services::farm::land_analysis::{
-    analyze_lands, build_land_map, classify_harvested_lands_by_map, collect_dead,
-    collect_harvestable, summarize_lands, LandAnalysis, LandSummary,
+    analyze_lands, auto_harvest_land_ids, build_land_map, classify_harvested_lands_by_map,
+    collect_dead, collect_harvestable, summarize_lands, LandAnalysis, LandSummary,
 };
 use crate::services::farm::planting::{PlantingConfig, PlantingEngine};
 
@@ -232,6 +232,11 @@ impl FarmService {
             Ok(()) => Ok(LandSummary::default()),
             Err(e) => Err(e),
         }
+    }
+
+    /// 自动种植如果还没种完，返回下一次进入农场前要等的毫秒数。
+    pub async fn take_plant_resume_ms(&self) -> i64 {
+        self.planting.lock().await.take_plant_resume_ms()
     }
 
     /// 获取土地详情（lands + summary）
@@ -602,10 +607,14 @@ impl FarmService {
 
         let mut harvested_land_ids: Vec<i64> = Vec::new();
         let mut harvest_lands: Vec<crate::proto::generated::gamepb::plantpb::LandInfo> = Vec::new();
-        if !status.harvestable.is_empty() {
-            match api.harvest(status.harvestable.clone(), host_gid, true).await {
+        let harvest_ids = auto_harvest_land_ids(
+            &status,
+            crate::services::automation::is_automation_on_for(account_id, "farm_harvest_tiangong"),
+        );
+        if !harvest_ids.is_empty() {
+            match api.harvest(harvest_ids.clone(), host_gid, true).await {
                 Ok(hr) => {
-                    harvested_land_ids = status.harvestable.clone();
+                    harvested_land_ids = harvest_ids;
                     harvest_lands = hr.land;
                     crate::services::stats::record_operation_for(
                         account_id,
@@ -699,7 +708,7 @@ impl FarmService {
             match planting
                 .lock()
                 .await
-                .auto_plant_empty_lands(&all_dead, &all_empty, host_gid, account_id)
+                .auto_plant_empty_lands_paced(&all_dead, &all_empty, host_gid, account_id, true)
                 .await
             {
                 Ok(r) => {

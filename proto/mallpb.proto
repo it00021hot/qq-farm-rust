@@ -15,6 +15,7 @@ service MallService {
 message GetMallListBySlotTypeRequest {
   int32 slot_type = 1;
   bool is_manual_open = 2;
+  int32 global_scene_id = 3;
 }
 
 // Purchase limits are returned both with a product and after a purchase.

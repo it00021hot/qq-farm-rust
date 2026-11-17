@@ -12726,5 +12726,22 @@
     "exp_alter": 991,
     "fruit_root": 0,
     "fruit_alter": 0
+  },
+  {
+    "id": 1020040,
+    "name": "牧草",
+    "fruit": {
+      "id": 7001,
+      "count": 20
+    },
+    "seed_id": 20040,
+    "land_level_need": 1,
+    "seasons": 1,
+    "grow_phases": "种子:300;大叶子:300;成熟:0;",
+    "exp": 10,
+    "exp_root": 0,
+    "exp_alter": 0,
+    "fruit_root": 0,
+    "fruit_alter": 0
   }
 ]

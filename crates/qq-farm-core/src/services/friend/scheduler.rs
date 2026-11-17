@@ -37,6 +37,10 @@ use crate::services::friend::visit_strategy::{
     RecentHelpCache, HELP_RESULT_TTL_MS,
 };
 
+fn steal_gap_ms(delay_seconds: i64) -> i64 {
+    delay_seconds.clamp(0, 300).saturating_mul(1000)
+}
+
 /// 巡访类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VisitKind {
@@ -720,9 +724,16 @@ impl FriendService {
             return Ok(0);
         }
 
-        let friends = match self.api.get_all_game_friends().await {
-            Ok(f) => f,
-            Err(e) => {
+        let list_account = account_id.to_owned();
+        let friends = match crate::infra::automation_lock::run_exclusive_automation_task(
+            &list_account,
+            "friend_list",
+            self.api.get_all_game_friends(),
+        )
+        .await
+        {
+            Some(Ok(f)) => f,
+            Some(Err(e)) => {
                 let raw = e.to_string();
                 let msg = raw.strip_prefix("network error: ").unwrap_or(&raw);
                 crate::services::panel_log::log_warn(
@@ -737,6 +748,7 @@ impl FriendService {
                 );
                 return Err(e);
             }
+            None => return Ok(0),
         };
         self.gid_manager.update(friends.iter().map(|f| f.gid).collect());
         if friends.is_empty() {
@@ -867,6 +879,7 @@ impl FriendService {
         let mut total = crate::services::friend::visit_strategy::TotalActions::default();
         // 经验在本轮中途满掉之后被跳过的好友数（bot scheduler.ts:363,398-402）
         let mut mid_round_exp_skipped = 0usize;
+        let mut attempted_steal = false;
 
         for target in &plan.visits {
             if target.want_bad {
@@ -907,6 +920,25 @@ impl FriendService {
             if target.want_steal && !self.can_operate_steal() {
                 continue;
             }
+            if attempted_steal && target.want_steal && steal_enabled {
+                let gap = steal_gap_ms(
+                    crate::models::store::account_config::get_steal_delay_seconds(Some(account_id)),
+                );
+                if gap > 0 {
+                    tokio::time::sleep(std::time::Duration::from_millis(gap as u64)).await;
+                }
+                if !crate::services::automation::is_automation_on_for(account_id, "friend")
+                    || crate::services::friend::visit_strategy::in_friend_quiet_hours_for(
+                        Some(account_id),
+                        None,
+                    )
+                {
+                    break;
+                }
+            }
+            if target.want_steal && steal_enabled {
+                attempted_steal = true;
+            }
             let summary = crate::services::friend::visit_strategy::FriendSummary {
                 pet_state: String::new(),
                 pet: None,
@@ -922,21 +954,27 @@ impl FriendService {
                 crate::constants::OP_HELP_BUG,
                 crate::constants::OP_HELP_WATER,
             ]);
-            let result = crate::services::friend::visit_strategy::visit_friend_combined(
-                &self.api,
-                recent,
-                &summary,
-                &mut total,
-                my_gid,
-                account_id,
-                target.want_steal,
-                target.want_help,
-                target.want_bad,
-                false,
-                &self.help_auto_disabled,
-                can_exp,
+            let visit_account = account_id.to_owned();
+            let result = crate::infra::automation_lock::run_exclusive_automation_task(
+                &visit_account,
+                "friend_visit",
+                crate::services::friend::visit_strategy::visit_friend_combined(
+                    &self.api,
+                    recent,
+                    &summary,
+                    &mut total,
+                    my_gid,
+                    account_id,
+                    target.want_steal,
+                    target.want_help,
+                    target.want_bad,
+                    false,
+                    &self.help_auto_disabled,
+                    can_exp,
+                ),
             )
-            .await;
+            .await
+            .unwrap_or_default();
             // 偷菜空访标记（rust 增强）：进场无可偷但列表仍报有可偷时，
             // 记 (gid, steal_plant_num)，指标变化后自动解除
             if target.want_steal {
@@ -948,11 +986,11 @@ impl FriendService {
                     self.steal_noop_markers.lock().insert(target.gid, target.live_steal_num);
                 }
             }
-            // 捣乱访问之间放慢一些，其余保持原节奏（bot scheduler.ts:393-395）
+            // 捣乱访问之间放慢一些。普通访问只留很短的让位，偷菜间隔在进下一位之前等待。
             if target.want_bad {
                 crate::utils::random::random_delay(2000, 3500).await;
             } else {
-                crate::utils::random::random_delay(500, 800).await;
+                crate::utils::random::random_delay(200, 350).await;
             }
         }
 
@@ -2276,5 +2314,13 @@ mod tests {
         assert!(friend_push_debounce_ok(&mut last, 8, 1_000, 500));
         assert!(!friend_push_debounce_ok(&mut last, 8, 1_400, 500));
         assert!(friend_push_debounce_ok(&mut last, 7, 1_600, 500));
+    }
+
+    #[test]
+    fn steal_gap_uses_the_configured_seconds() {
+        assert_eq!(super::steal_gap_ms(0), 0);
+        assert_eq!(super::steal_gap_ms(1), 1_000);
+        assert_eq!(super::steal_gap_ms(300), 300_000);
+        assert_eq!(super::steal_gap_ms(301), 300_000);
     }
 }

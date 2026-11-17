@@ -1,0 +1,12 @@
+{
+  "name": "QQ Farm",
+  "id": "com.qqfarm.rust",
+  "version": "0.3.0",
+  "build": 1,
+  "rust": ".",
+  "root": "App",
+  "theme": "theme.json",
+  "appearance": "system",
+  "windows": { "displayName": "QQ Farm" },
+  "window": { "defaultSize": { "width": 1280, "height": 840 } }
+}

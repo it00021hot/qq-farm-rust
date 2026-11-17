@@ -52,6 +52,16 @@ pub enum PlantingStrategy {
 /// 背包种子兜底策略（不能是 `BagPriority`）
 pub type BagSeedFallbackStrategy = PlantingStrategy;
 
+/// 牧场补栏策略（bot `ranch_strategy` / `ranch_bag_fallback`）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RanchStrategy {
+    #[default]
+    Level,
+    Preferred,
+    BagPriority,
+}
+
 /// 施肥模式
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -85,6 +95,9 @@ pub enum FertilizerLandType {
     Red,
     /// 普通
     Normal,
+    /// 蓝晶（土地等级 6）
+    #[serde(rename = "blue-crystal")]
+    BlueCrystal,
 }
 
 impl FertilizerLandType {
@@ -97,6 +110,7 @@ impl FertilizerLandType {
             Self::Black => "black",
             Self::Red => "red",
             Self::PurpleGold => "purple-gold",
+            Self::BlueCrystal => "blue-crystal",
         }
     }
 
@@ -109,6 +123,7 @@ impl FertilizerLandType {
             "black" => Some(Self::Black),
             "red" => Some(Self::Red),
             "purple-gold" => Some(Self::PurpleGold),
+            "blue-crystal" => Some(Self::BlueCrystal),
             _ => None,
         }
     }
@@ -135,6 +150,9 @@ pub enum LandType {
     /// 紫金
     #[serde(rename = "purple-gold")]
     PurpleGold,
+    /// 蓝晶（土地等级 6）
+    #[serde(rename = "blue-crystal")]
+    BlueCrystal,
 }
 
 impl LandType {
@@ -147,6 +165,7 @@ impl LandType {
             Self::Black => "black",
             Self::Red => "red",
             Self::PurpleGold => "purple-gold",
+            Self::BlueCrystal => "blue-crystal",
         }
     }
 
@@ -159,6 +178,7 @@ impl LandType {
             "black" => Some(Self::Black),
             "red" => Some(Self::Red),
             "purple-gold" => Some(Self::PurpleGold),
+            "blue-crystal" => Some(Self::BlueCrystal),
             _ => None,
         }
     }
@@ -291,6 +311,9 @@ pub struct LimitEntry {
 pub struct AutomationConfig {
     pub farm: bool,
     pub farm_push: bool,
+    /// 巡田是否收获种子稀有度为天工的作物。关掉后这些地留给手动收获。
+    #[serde(default = "default_true")]
+    pub farm_harvest_tiangong: bool,
     pub land_upgrade: bool,
     pub friend: bool,
     pub friend_help_exp_limit: bool,
@@ -331,6 +354,81 @@ pub struct AutomationConfig {
     pub mystery_shop_allow_gold_bean: bool,
     #[serde(default)]
     pub mystery_shop_allow_diamond: bool,
+    /// 自动领取牧场每日分享（bot `ranch_share`，默认开）
+    #[serde(default = "default_true")]
+    pub ranch_share: bool,
+    /// 自动领取已完成的牧场任务（bot `ranch_task`，默认开）
+    #[serde(default = "default_true")]
+    pub ranch_task: bool,
+    /// 牧场任务没有可领时的复查间隔，单位分钟（bot `ranch_check_minutes`，1–60，默认 5）
+    #[serde(default = "default_ranch_check_minutes")]
+    pub ranch_check_minutes: i64,
+    /// 自动领取牧场每日福利（bot `ranch_daily_benefit`，默认开）
+    #[serde(default = "default_true")]
+    pub ranch_daily_benefit: bool,
+    /// 牧场巡查：收获、生产、清理、出售、补充罐头、普通喂养、有机喂养（bot 同名开关，默认开）
+    #[serde(default = "default_true")]
+    pub ranch_harvest: bool,
+    #[serde(default = "default_true")]
+    pub ranch_produce: bool,
+    #[serde(default = "default_true")]
+    pub ranch_clean: bool,
+    #[serde(default = "default_true")]
+    pub ranch_sell: bool,
+    #[serde(default = "default_true")]
+    pub ranch_fill_cans: bool,
+    #[serde(default = "default_true")]
+    pub ranch_feed_normal: bool,
+    #[serde(default = "default_true")]
+    pub ranch_feed_organic: bool,
+    /// 好友牧场：偷取、抚摸、清理、放蚊子（bot 同名开关，默认开）
+    #[serde(default = "default_true")]
+    pub ranch_friend_steal: bool,
+    #[serde(default = "default_true")]
+    pub ranch_stroke: bool,
+    #[serde(default = "default_true")]
+    pub ranch_friend_clean: bool,
+    #[serde(default = "default_true")]
+    pub ranch_friend_mosquito: bool,
+    /// 自动升级已就绪的牧场设施（bot `ranch_upgrade`，默认开）
+    #[serde(default = "default_true")]
+    pub ranch_upgrade: bool,
+    /// 空栏时购买幼崽并放养（bot `ranch_buy`，默认开）
+    #[serde(default = "default_true")]
+    pub ranch_buy: bool,
+    /// 购买哪一种幼崽。背包优先时，买不到再按 `ranch_bag_fallback`（bot `ranch_strategy`，默认按等级）
+    #[serde(default)]
+    pub ranch_strategy: RanchStrategy,
+    /// `ranch_strategy` 为背包优先时，用来决定买哪一种（bot `ranch_bag_fallback`，默认按等级）
+    #[serde(default)]
+    pub ranch_bag_fallback: RanchStrategy,
+    /// 指定窝里的动物。0 表示不指定（bot `ranch_coop_animal`）
+    #[serde(default)]
+    pub ranch_coop_animal: i64,
+    /// 指定棚里的动物。0 表示不指定（bot `ranch_shed_animal`）
+    #[serde(default)]
+    pub ranch_shed_animal: i64,
+    /// 牧草低于阈值时，用背包里的牧草补充（bot `ranch_grass`，默认开）
+    #[serde(default = "default_true")]
+    pub ranch_grass: bool,
+    /// 背包牧草不够时，用金券购买后再补充（bot `ranch_grass_buy`，默认开，且依赖 `ranch_grass`）
+    #[serde(default = "default_true")]
+    pub ranch_grass_buy: bool,
+    /// 牧草存量达到容量的这个百分比后不再补充（bot `ranch_grass_threshold_percent`，1–100，默认 20）
+    #[serde(default = "default_grass_threshold")]
+    pub ranch_grass_threshold_percent: i64,
+}
+
+fn default_grass_threshold() -> i64 {
+    20
+}
+
+fn default_email_claim_hour() -> i64 {
+    10
+}
+
+fn default_ranch_check_minutes() -> i64 {
+    5
 }
 
 impl Default for AutomationConfig {
@@ -395,6 +493,9 @@ pub struct AccountConfig {
     pub steal_delay_seconds: i64,
     pub plant_order_random: bool,
     pub plant_delay_seconds: i64,
+    /// 每天检查邮箱的钟点，0–23，默认 10 点。
+    #[serde(default = "default_email_claim_hour")]
+    pub email_claim_hour: i64,
     pub fertilizer_buy_organic_count: i64,
     pub fertilizer_buy_organic_threshold_hours: i64,
     pub fertilizer_buy_normal_count: i64,
@@ -496,9 +597,14 @@ mod tests {
 
     #[test]
     fn land_type_string_roundtrip() {
-        for lt in
-            [LandType::Normal, LandType::Gold, LandType::Black, LandType::Red, LandType::PurpleGold]
-        {
+        for lt in [
+            LandType::Normal,
+            LandType::Gold,
+            LandType::Black,
+            LandType::Red,
+            LandType::PurpleGold,
+            LandType::BlueCrystal,
+        ] {
             assert_eq!(LandType::from_str_opt(lt.as_str()), Some(lt));
         }
         assert_eq!(LandType::from_str_opt("unknown"), None);
