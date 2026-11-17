@@ -25,6 +25,7 @@ mod ranch;
 mod section_page;
 mod settings;
 mod system_runtime;
+mod weather;
 
 use nsh_core::prelude::*;
 

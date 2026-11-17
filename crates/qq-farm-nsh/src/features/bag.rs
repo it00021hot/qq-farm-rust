@@ -1,3 +1,5 @@
+use chrono::{Local, TimeZone};
+use nsh_base::alert_dialog;
 use nsh_core::prelude::*;
 use qq_farm_core::constants::{
     COLLECTION_NORMAL_ID, COLLECTION_RARE_ID, COUPON_ITEM_ID, NORMAL_CONTAINER_ID,
@@ -18,7 +20,16 @@ const EXP_ITEM_ID: i64 = 1101;
 const ITEM_SEED: i64 = 5;
 const ITEM_FRUIT: i64 = 6;
 const ITEM_TOOL: i64 = 11;
+const ITEM_PACK: i64 = 33;
 const ITEM_MUTANT_FRUIT: i64 = 17;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PickMode {
+    Off,
+    Sell,
+    Lock,
+    Unlock,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BagFilter {
@@ -83,6 +94,29 @@ struct BagLine {
     sellable: bool,
     lockable: bool,
     locked: bool,
+    usable: bool,
+    price_id: i64,
+    price: i64,
+    gift: Option<GiftNote>,
+    sell_wait: Option<SellWait>,
+    level: i64,
+    mutants: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SellWait {
+    ActivityEnded,
+    ActivityOpen,
+    OutsideActivity,
+    AfterExpire,
+    Other,
+}
+
+#[derive(Clone, PartialEq, Eq, Default)]
+struct GiftNote {
+    sender: String,
+    sent_at: i64,
+    message_id: i64,
 }
 
 pub(crate) fn section(
@@ -94,6 +128,8 @@ pub(crate) fn section(
     let failure = signal(None::<String>);
     let summary = signal(None::<String>);
     let use_counts = signal(Vec::<(String, i64)>::new());
+    let choosing = signal(PickMode::Off);
+    let picked = signal(Vec::<String>::new());
     let bag = resource(
         move || running_account(account_id, rows),
         |id, _| async move {
@@ -119,7 +155,12 @@ pub(crate) fn section(
         ))
         .child(when(
             move || running(account_id, rows) && bag.get().is_some(),
-            move || bag_body(account_id, filter, pending, failure, summary, bag, use_counts),
+            move || {
+                bag_body(
+                    account_id, filter, pending, failure, summary, bag, use_counts, choosing,
+                    picked,
+                )
+            },
         ))
 }
 
@@ -152,14 +193,35 @@ fn bag_body(
     summary: Signal<Option<String>>,
     bag: Resource<BagDetail, String>,
     use_counts: Signal<Vec<(String, i64)>>,
+    choosing: Signal<PickMode>,
+    picked: Signal<Vec<String>>,
 ) -> impl IntoElement {
     view()
         .gap_3()
         .child(filters(filter))
         .child(
-            button(move || text_key("farm.refresh"), ButtonVariant::Secondary)
-                .disabled(move || pending.get().is_some())
-                .on_press(move || bag.refetch()),
+            view()
+                .flex_row()
+                .flex_wrap()
+                .items_center()
+                .gap_2()
+                .child(
+                    button(move || text_key("farm.refresh"), ButtonVariant::Secondary)
+                        .disabled(move || pending.get().is_some())
+                        .on_press(move || bag.refetch()),
+                )
+                .child(pick_modes(bag, filter, choosing, picked, pending))
+                .child(when(
+                    move || {
+                        !mode_picks(&visible_lines(bag, filter), &picked.get(), choosing.get())
+                            .is_empty()
+                    },
+                    move || {
+                        apply_picked(
+                            account_id, filter, pending, failure, summary, bag, picked, choosing,
+                        )
+                    },
+                )),
         )
         .child(when(
             move || visible_lines(bag, filter).is_empty(),
@@ -177,6 +239,8 @@ fn bag_body(
                     summary,
                     bag,
                     use_counts,
+                    choosing,
+                    picked,
                 )
             },
         ))
@@ -207,18 +271,88 @@ fn bag_line(
     summary: Signal<Option<String>>,
     bag: Resource<BagDetail, String>,
     use_counts: Signal<Vec<(String, i64)>>,
+    choosing: Signal<PickMode>,
+    picked: Signal<Vec<String>>,
 ) -> View {
     let name = SharedString::from(line.name.clone());
     let count = SharedString::from(line.count.to_string());
     let kind = line.kind;
     let stack = line.count;
+    let gift = line.gift.clone();
+    let sell_wait = line.sell_wait;
+    let level = line.level;
+    let mutants = SharedString::from(line.mutants.clone());
     view()
         .flex_row()
         .items_center()
         .gap_3()
         .py_2()
-        .child(text(name).text_sm().font_weight(FontWeight::MEDIUM).flex_1())
+        .child(
+            view()
+                .flex_col()
+                .gap_1()
+                .flex_1()
+                .child(text(name).text_sm().font_weight(FontWeight::MEDIUM))
+                .child(when(
+                    {
+                        let shown = gift.clone();
+                        move || shown.is_some()
+                    },
+                    {
+                        let shown = gift;
+                        move || gift_lines(shown.clone().unwrap_or_default())
+                    },
+                ))
+                .child(when(
+                    move || sell_wait.is_some(),
+                    move || {
+                        text(move || text_key(sell_wait_key(sell_wait)))
+                            .text_sm()
+                            .text_color(move || nsh_base::theme().muted_foreground)
+                    },
+                ))
+                .child(when(
+                    {
+                        let shown = mutants.clone();
+                        move || !shown.is_empty()
+                    },
+                    {
+                        let shown = mutants;
+                        move || {
+                            let shown = shown.clone();
+                            text(move || {
+                                SharedString::from(format!("{} · {shown}", text_key("bag.mutant")))
+                            })
+                            .text_sm()
+                            .text_color(move || nsh_base::theme().muted_foreground)
+                        }
+                    },
+                )),
+        )
         .child(text(count).text_sm())
+        .child(when(
+            move || level > 0,
+            move || {
+                text(SharedString::from(format!("Lv{level}")))
+                    .text_sm()
+                    .text_color(move || nsh_base::theme().muted_foreground)
+            },
+        ))
+        .child(when(
+            {
+                let shown_price = line.price;
+                move || shown_price > 0
+            },
+            {
+                let price_id = line.price_id;
+                let price = line.price;
+                move || {
+                    text(move || SharedString::from(price_text(price_id, price)))
+                        .text_sm()
+                        .text_color(move || nsh_base::theme().muted_foreground)
+                }
+            },
+        ))
         .child(badge(move || text_key(kind.label_key()), BadgeTone::Neutral))
         .child(when(
             {
@@ -227,31 +361,43 @@ fn bag_line(
             },
             || badge(|| text_key("bag.locked"), BadgeTone::Neutral),
         ))
-        .child(when(move || kind == BagKind::Tool && stack > 1, {
-            let step_line = line.clone();
-            move || use_stepper(step_line.clone(), use_counts, pending)
-        }))
-        .child(when(move || kind == BagKind::Tool, {
-            let use_line = line.clone();
-            move || {
-                command_button(
-                    "bag.use",
-                    "use",
-                    ButtonVariant::Primary,
-                    use_line.clone(),
-                    account_id,
-                    pending,
-                    failure,
-                    summary,
-                    bag,
-                    use_counts,
-                )
-            }
-        }))
+        .child(when(
+            {
+                let usable = line.usable;
+                move || usable && stack > 1
+            },
+            {
+                let step_line = line.clone();
+                move || use_stepper(step_line.clone(), use_counts, pending)
+            },
+        ))
+        .child(when(
+            {
+                let usable = line.usable;
+                move || usable
+            },
+            {
+                let use_line = line.clone();
+                move || {
+                    command_button(
+                        "bag.use",
+                        "use",
+                        ButtonVariant::Primary,
+                        use_line.clone(),
+                        account_id,
+                        pending,
+                        failure,
+                        summary,
+                        bag,
+                        use_counts,
+                    )
+                }
+            },
+        ))
         .child(when(
             {
                 let lockable = line.lockable;
-                move || lockable
+                move || choosing.get() == PickMode::Off && lockable
             },
             {
                 let lock_line = line.clone();
@@ -275,7 +421,19 @@ fn bag_line(
         .child(when(
             {
                 let sellable = line.sellable;
-                move || sellable
+                let lockable = line.lockable;
+                let locked = line.locked;
+                move || eligible(choosing.get(), sellable, lockable, locked)
+            },
+            {
+                let key = line.key.clone();
+                move || pick_button(key.clone(), picked, pending)
+            },
+        ))
+        .child(when(
+            {
+                let sellable = line.sellable;
+                move || choosing.get() == PickMode::Off && sellable
             },
             {
                 let sell_line = line;
@@ -401,6 +559,243 @@ fn use_stepper(
         })
 }
 
+fn pick_modes(
+    bag: Resource<BagDetail, String>,
+    filter: Signal<BagFilter>,
+    choosing: Signal<PickMode>,
+    picked: Signal<Vec<String>>,
+    pending: Signal<Option<String>>,
+) -> View {
+    view()
+        .flex_row()
+        .flex_wrap()
+        .gap_2()
+        .child(when(
+            move || visible_lines(bag, filter).iter().any(|line| line.sellable),
+            move || mode_button("bag.chooseSell", PickMode::Sell, choosing, picked, pending),
+        ))
+        .child(when(
+            move || visible_lines(bag, filter).iter().any(|line| line.lockable && !line.locked),
+            move || mode_button("bag.chooseLock", PickMode::Lock, choosing, picked, pending),
+        ))
+        .child(when(
+            move || visible_lines(bag, filter).iter().any(|line| line.lockable && line.locked),
+            move || mode_button("bag.chooseUnlock", PickMode::Unlock, choosing, picked, pending),
+        ))
+}
+
+fn mode_button(
+    label_key: &'static str,
+    next: PickMode,
+    choosing: Signal<PickMode>,
+    picked: Signal<Vec<String>>,
+    pending: Signal<Option<String>>,
+) -> nsh_base::ButtonElement {
+    button(move || text_key(label_key), ButtonVariant::Secondary)
+        .selected(move || choosing.get() == next)
+        .disabled(move || pending.get().is_some())
+        .on_press(move || {
+            if choosing.get_untracked() == next {
+                choosing.set(PickMode::Off);
+            } else {
+                choosing.set(next);
+            }
+            picked.set(Vec::new());
+        })
+}
+
+fn eligible(mode: PickMode, sellable: bool, lockable: bool, locked: bool) -> bool {
+    match mode {
+        PickMode::Sell => sellable,
+        PickMode::Lock => lockable && !locked,
+        PickMode::Unlock => lockable && locked,
+        PickMode::Off => false,
+    }
+}
+
+fn pick_button(
+    key: String,
+    picked: Signal<Vec<String>>,
+    pending: Signal<Option<String>>,
+) -> nsh_base::ButtonElement {
+    let selected_key = key.clone();
+    let label_key = key.clone();
+    button(
+        move || {
+            text_key(if picked.get().iter().any(|item| item == &label_key) {
+                "bag.picked"
+            } else {
+                "bag.pick"
+            })
+        },
+        ButtonVariant::Secondary,
+    )
+    .selected(move || picked.get().iter().any(|item| item == &selected_key))
+    .disabled(move || pending.get().is_some())
+    .on_press(move || picked.set(toggle_key(&picked.get_untracked(), &key)))
+}
+
+fn apply_picked(
+    account_id: Signal<Option<String>>,
+    filter: Signal<BagFilter>,
+    pending: Signal<Option<String>>,
+    failure: Signal<Option<String>>,
+    summary: Signal<Option<String>>,
+    bag: Resource<BagDetail, String>,
+    picked: Signal<Vec<String>>,
+    choosing: Signal<PickMode>,
+) -> nsh_base::ButtonElement {
+    button(
+        move || {
+            let mode = choosing.get();
+            let count = mode_picks(&visible_lines(bag, filter), &picked.get(), mode).len();
+            let label = match mode {
+                PickMode::Lock => "bag.lockSelected",
+                PickMode::Unlock => "bag.unlockSelected",
+                _ => "bag.sellSelected",
+            };
+            SharedString::from(text_key(label).to_string().replace("{count}", &count.to_string()))
+        },
+        ButtonVariant::Danger,
+    )
+    .disabled(move || pending.get().is_some())
+    .on_press(move || {
+        confirm_picked(account_id, filter, pending, failure, summary, bag, picked, choosing)
+    })
+}
+
+fn confirm_picked(
+    account_id: Signal<Option<String>>,
+    filter: Signal<BagFilter>,
+    pending: Signal<Option<String>>,
+    failure: Signal<Option<String>>,
+    summary: Signal<Option<String>>,
+    bag: Resource<BagDetail, String>,
+    picked: Signal<Vec<String>>,
+    choosing: Signal<PickMode>,
+) {
+    if pending.get_untracked().is_some() {
+        return;
+    }
+    let Some(id) = account_id.get_untracked() else {
+        return;
+    };
+    let mode = choosing.get_untracked();
+    let picks = mode_picks(&visible_lines(bag, filter), &picked.get_untracked(), mode);
+    if picks.is_empty() {
+        return;
+    }
+    let count = picks.len();
+    let (title, body_key, action, label) = match mode {
+        PickMode::Lock => {
+            ("bag.confirmBatchLock.title", "bag.confirmBatchLock.body", "lock", "bag.lock")
+        }
+        PickMode::Unlock => {
+            ("bag.confirmBatchUnlock.title", "bag.confirmBatchUnlock.body", "unlock", "bag.unlock")
+        }
+        _ => ("bag.confirmBatch.title", "bag.confirmBatch.body", "sell", "bag.sell"),
+    };
+    pending.set(Some(format!("batch-{action}")));
+    failure.set(None);
+    summary.set(None);
+    let body = SharedString::from(text_key(body_key).replace("{count}", &count.to_string()));
+    let answer = alert_dialog()
+        .title(text_key(title))
+        .description(body)
+        .cancel("cancel", text_key("accounts.cancel"))
+        .destructive(action, text_key(label))
+        .close_on_escape(true)
+        .show();
+    spawn(async move {
+        let accepted = answer.await.is_ok_and(|result| result.action.as_deref() == Some(action));
+        if !accepted {
+            pending.set(None);
+            return;
+        }
+        finish_picked(picks, mode, id, pending, failure, summary, bag, picked, choosing).await;
+    });
+}
+
+async fn finish_picked(
+    picks: Vec<BagLine>,
+    mode: PickMode,
+    account_id: String,
+    pending: Signal<Option<String>>,
+    failure: Signal<Option<String>>,
+    summary: Signal<Option<String>>,
+    bag: Resource<BagDetail, String>,
+    picked: Signal<Vec<String>>,
+    choosing: Signal<PickMode>,
+) {
+    let context = session::session().context.clone();
+    let result = session::call(async move {
+        match mode {
+            PickMode::Lock | PickMode::Unlock => {
+                let uids: Vec<i64> =
+                    picks.iter().map(|line| line.uid).filter(|uid| *uid > 0).collect();
+                qq_farm_app::farm::bag_set_locked(
+                    &context,
+                    &account_id,
+                    &uids,
+                    mode == PickMode::Lock,
+                )
+                .await
+            }
+            _ => {
+                let items: Vec<(i64, i64, i64)> =
+                    picks.iter().map(|line| (line.id, line.count, line.uid)).collect();
+                qq_farm_app::farm::bag_sell(&context, &account_id, &items).await
+            }
+        }
+    })
+    .await;
+    match result {
+        Ok(value) => {
+            let text = value.get("summary").and_then(|item| item.as_str()).unwrap_or("");
+            summary.set(Some(if text.is_empty() {
+                text_key("bag.done").to_string()
+            } else {
+                text.to_owned()
+            }));
+            picked.set(Vec::new());
+            choosing.set(PickMode::Off);
+        }
+        Err(message) => failure.set(Some(message)),
+    }
+    pending.set(None);
+    bag.refetch();
+}
+
+fn mode_picks(lines: &[BagLine], picked: &[String], mode: PickMode) -> Vec<BagLine> {
+    lines
+        .iter()
+        .filter(|line| {
+            picked.iter().any(|key| key == &line.key)
+                && eligible(mode, line.sellable, line.lockable, line.locked)
+        })
+        .cloned()
+        .collect()
+}
+
+#[cfg(test)]
+fn sell_picks(lines: &[BagLine], picked: &[String]) -> Vec<(i64, i64, i64)> {
+    lines
+        .iter()
+        .filter(|line| line.sellable && picked.iter().any(|key| key == &line.key))
+        .map(|line| (line.id, line.count, line.uid))
+        .collect()
+}
+
+fn toggle_key(picked: &[String], key: &str) -> Vec<String> {
+    if picked.iter().any(|item| item == key) {
+        picked.iter().filter(|item| item.as_str() != key).cloned().collect()
+    } else {
+        let mut next = picked.to_vec();
+        next.push(key.to_owned());
+        next
+    }
+}
+
 fn action_key(line: &BagLine, action: &str) -> String {
     format!("{}:{}:{action}", line.id, line.uid)
 }
@@ -514,8 +909,122 @@ fn bag_line_from(item: &BagItemView) -> BagLine {
         lockable: item.uid > 0
             && matches!(item.item_type, ITEM_SEED | ITEM_FRUIT | ITEM_MUTANT_FRUIT),
         locked: item.locked,
+        usable: can_use(item),
+        price_id: item.price_id,
+        price: item.price,
+        gift: gift_note(item),
+        sell_wait: sell_wait(item),
+        level: item.level,
+        mutants: mutant_label(item),
         kind,
     }
+}
+
+fn mutant_label(item: &BagItemView) -> String {
+    let names = item
+        .mutant_effects
+        .iter()
+        .map(|name| name.trim())
+        .filter(|name| !name.is_empty())
+        .collect::<Vec<_>>();
+    if !names.is_empty() {
+        return names.join(" + ");
+    }
+    item.mutant_types
+        .iter()
+        .copied()
+        .filter(|id| *id > 0)
+        .map(|id| format!("#{id}"))
+        .collect::<Vec<_>>()
+        .join(" + ")
+}
+
+fn sell_wait(item: &BagItemView) -> Option<SellWait> {
+    if item.sell_status != "conditional" {
+        return None;
+    }
+    let condition = item.sell_condition.as_deref().unwrap_or("");
+    let kind = condition.split(';').next().unwrap_or("").split(':').next().unwrap_or("").trim();
+    Some(match kind {
+        "活动结束后" => SellWait::ActivityEnded,
+        "活动结束前" => SellWait::ActivityOpen,
+        "活动区间外" => SellWait::OutsideActivity,
+        "道具过期后" => SellWait::AfterExpire,
+        _ => SellWait::Other,
+    })
+}
+
+fn sell_wait_key(wait: Option<SellWait>) -> &'static str {
+    match wait {
+        Some(SellWait::ActivityEnded) => "bag.waitActivity",
+        Some(SellWait::ActivityOpen) => "bag.waitOpen",
+        Some(SellWait::OutsideActivity) => "bag.waitOutside",
+        Some(SellWait::AfterExpire) => "bag.waitExpire",
+        _ => "bag.waitCondition",
+    }
+}
+
+fn gift_note(item: &BagItemView) -> Option<GiftNote> {
+    if !item.viewable {
+        return None;
+    }
+    let source = item.source.as_ref()?;
+    Some(GiftNote {
+        sender: source.sender_name.clone(),
+        sent_at: source.sent_at,
+        message_id: source.message_text_id,
+    })
+}
+
+fn price_text(price_id: i64, price: i64) -> String {
+    let unit = match price_id {
+        1002 => "dashboard.coupon",
+        1005 => "dashboard.bean",
+        _ => "dashboard.gold",
+    };
+    format!("{price} {}", text_key(unit))
+}
+
+fn recorded_sent(sent_at: i64) -> Option<String> {
+    if sent_at <= 0 {
+        return None;
+    }
+    Local.timestamp_opt(sent_at, 0).single().map(|time| time.format("%Y-%m-%d %H:%M").to_string())
+}
+
+fn gift_lines(note: GiftNote) -> View {
+    let sender = if note.sender.is_empty() {
+        text_key("bag.senderUnknown").to_string()
+    } else {
+        note.sender
+    };
+    let sent =
+        recorded_sent(note.sent_at).unwrap_or_else(|| text_key("bag.timeMissing").to_string());
+    let message = if note.message_id > 0 {
+        text_key("bag.messageId").replace("{id}", &note.message_id.to_string())
+    } else {
+        text_key("bag.messageMissing").to_string()
+    };
+    view()
+        .gap_1()
+        .child(muted_fact("bag.sender", sender))
+        .child(muted_fact("bag.sent", sent))
+        .child(muted_fact("bag.message", message))
+}
+
+fn muted_fact(label_key: &'static str, value: String) -> impl IntoElement {
+    text(move || SharedString::from(format!("{} {}", text_key(label_key), value.clone())))
+        .text_sm()
+        .text_color(move || nsh_base::theme().muted_foreground)
+}
+
+fn can_use(item: &BagItemView) -> bool {
+    if item.locked || item.count <= 0 {
+        return false;
+    }
+    item.item_type == ITEM_TOOL
+        || item.item_type == ITEM_PACK
+        || qq_farm_core::services::warehouse::is_fertilizer_related_item_id(item.id)
 }
 
 fn kind_of(item_type: i64) -> BagKind {
@@ -558,10 +1067,11 @@ fn is_balance_item(id: i64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        bag_lines, chosen_count, is_balance_item, is_dog_food, BagFilter, BagKind, ITEM_FRUIT,
-        ITEM_SEED,
+        bag_line_from, bag_lines, can_use, chosen_count, gift_note, is_balance_item, is_dog_food,
+        mode_picks, recorded_sent, sell_picks, sell_wait, toggle_key, BagFilter, BagKind, PickMode,
+        SellWait, ITEM_FRUIT, ITEM_PACK, ITEM_SEED,
     };
-    use qq_farm_core::services::warehouse::BagItemView;
+    use qq_farm_core::services::warehouse::{BagItemView, ItemSource};
 
     fn item(id: i64, item_type: i64, sellable: bool) -> BagItemView {
         BagItemView {
@@ -629,5 +1139,94 @@ mod tests {
         assert!(!lines[0].sellable);
         assert!(!lines[1].locked);
         assert!(lines[1].lockable);
+    }
+
+    #[test]
+    fn gift_rows_keep_the_sender_and_skip_unmarked_items() {
+        let mut gifted = item(1026, 19, true);
+        gifted.viewable = true;
+        gifted.source =
+            Some(ItemSource { sender_name: "甲".to_owned(), sent_at: 0, message_text_id: 7 });
+        let note = gift_note(&gifted).expect("gift");
+        assert_eq!(note.sender, "甲");
+        assert_eq!(note.message_id, 7);
+        assert!(recorded_sent(0).is_none());
+        assert_eq!(recorded_sent(1_700_000_000).expect("clock").len(), 16);
+        gifted.viewable = false;
+        assert!(gift_note(&gifted).is_none());
+    }
+
+    #[test]
+    fn fertilizer_and_packs_can_be_used_until_they_are_locked() {
+        let mut fertilizer = item(80_001, 0, false);
+        assert!(can_use(&fertilizer));
+        fertilizer.locked = true;
+        assert!(!can_use(&fertilizer));
+        assert!(can_use(&item(1, ITEM_PACK, false)));
+        assert!(!can_use(&item(6, ITEM_FRUIT, true)));
+        assert!(!can_use(&item(1011, 0, false)));
+    }
+
+    #[test]
+    fn batch_sell_keeps_only_the_selected_sellable_rows() {
+        let mut fruit = item(6, ITEM_FRUIT, true);
+        fruit.uid = 1;
+        fruit.count = 4;
+        let mut locked = item(7, ITEM_FRUIT, true);
+        locked.uid = 2;
+        locked.locked = true;
+        let lines = bag_lines(&[fruit, locked], BagFilter::All);
+        assert_eq!(sell_picks(&lines, &["6".to_owned(), "7".to_owned()]), vec![(6, 4, 1)]);
+        assert!(sell_picks(&lines, &[]).is_empty());
+        assert_eq!(toggle_key(&["6".to_owned()], "6"), Vec::<String>::new());
+        assert_eq!(toggle_key(&[], "6"), vec!["6".to_owned()]);
+        let mut seed = item(3, ITEM_SEED, false);
+        seed.uid = 4;
+        let locked_fruit = lines.into_iter().find(|line| line.uid == 2).expect("locked");
+        let open_seed = bag_lines(&[seed], BagFilter::All).into_iter().next().expect("seed");
+        let rows = vec![open_seed, locked_fruit];
+        let lock = mode_picks(&rows, &["3".to_owned(), "7".to_owned()], PickMode::Lock);
+        assert_eq!(lock.iter().map(|line| line.uid).collect::<Vec<_>>(), vec![4]);
+        let unlock = mode_picks(&rows, &["3".to_owned(), "7".to_owned()], PickMode::Unlock);
+        assert_eq!(unlock.iter().map(|line| line.uid).collect::<Vec<_>>(), vec![2]);
+    }
+
+    #[test]
+    fn conditional_items_wait_for_the_activity_or_expiry() {
+        let mut waiting = item(1026, 19, false);
+        waiting.sell_status = "conditional".to_owned();
+        waiting.sell_condition = Some("活动结束后:2026081800".to_owned());
+        assert_eq!(sell_wait(&waiting), Some(SellWait::ActivityEnded));
+        waiting.sell_condition = Some("道具过期后".to_owned());
+        assert_eq!(sell_wait(&waiting), Some(SellWait::AfterExpire));
+        waiting.sell_status = "available".to_owned();
+        assert!(sell_wait(&waiting).is_none());
+    }
+
+    #[test]
+    fn fruit_row_keeps_level_and_mutant_names() {
+        let mut fruit = item(6, ITEM_FRUIT, true);
+        fruit.level = 3;
+        fruit.mutant_effects = vec!["冰冻".to_owned(), " ".to_owned(), "黄金".to_owned()];
+        let named = bag_line_from(&fruit);
+        assert_eq!(named.level, 3);
+        assert_eq!(named.mutants, "冰冻 + 黄金");
+        fruit.mutant_effects.clear();
+        fruit.mutant_types = vec![0, 5];
+        fruit.level = 0;
+        let numbered = bag_line_from(&fruit);
+        assert_eq!(numbered.level, 0);
+        assert_eq!(numbered.mutants, "#5");
+        fruit.mutant_types.clear();
+        assert!(bag_line_from(&fruit).mutants.is_empty());
+    }
+
+    #[test]
+    fn fruit_row_keeps_the_server_price() {
+        let mut fruit = item(200, ITEM_FRUIT, true);
+        fruit.price_id = 1005;
+        fruit.price = 15;
+        let lines = bag_lines(&[fruit], BagFilter::Fruit);
+        assert_eq!((lines[0].price_id, lines[0].price), (1005, 15));
     }
 }

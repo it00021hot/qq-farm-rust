@@ -22,10 +22,12 @@ enum Shelf {
     Tea,
     Muge,
     Ranch,
+    Weather,
 }
 
 impl Shelf {
-    const ALL: [Self; 5] = [Self::Solar, Self::Share, Self::Tea, Self::Muge, Self::Ranch];
+    const ALL: [Self; 6] =
+        [Self::Solar, Self::Share, Self::Tea, Self::Muge, Self::Ranch, Self::Weather];
 
     const fn id(self) -> &'static str {
         match self {
@@ -34,6 +36,7 @@ impl Shelf {
             Self::Tea => "tea",
             Self::Muge => "muge",
             Self::Ranch => "ranch",
+            Self::Weather => "weather",
         }
     }
 
@@ -44,6 +47,7 @@ impl Shelf {
             Self::Tea => "activities.tea",
             Self::Muge => "activities.muge",
             Self::Ranch => "activities.ranch",
+            Self::Weather => "activities.weather",
         }
     }
 }
@@ -167,6 +171,39 @@ pub(crate) fn page(page: ActivityPage) -> impl IntoElement {
             Ok(super::muge::board_from(&value))
         },
     );
+    let weather = resource(
+        move || (shelf.get() == Shelf::Weather).then(|| running_account(page)).flatten(),
+        |id, _| async move {
+            let context = session::session().context.clone();
+            session::call(async move { qq_farm_app::weather::snapshot(&context, &id).await }).await
+        },
+    );
+    let weather_gid = signal(0_i64);
+    let weather_friends = resource(
+        move || (shelf.get() == Shelf::Weather).then(|| running_account(page)).flatten(),
+        |id, _| async move {
+            let context = session::session().context.clone();
+            let rows = session::call(async move {
+                qq_farm_app::friend::list_friends(&context, &id, false).await
+            })
+            .await?;
+            Ok(super::weather::weather_friends(rows))
+        },
+    );
+    let weather_visit = resource(
+        move || {
+            let gid = weather_gid.get();
+            if shelf.get() != Shelf::Weather || gid <= 0 {
+                return None;
+            }
+            running_account(page).map(|id| (id, gid))
+        },
+        |(id, gid), _| async move {
+            let context = session::session().context.clone();
+            session::call(async move { qq_farm_app::weather::inspect(&context, &id, gid).await })
+                .await
+        },
+    );
     scroll()
         .flex_1()
         .p(px(24.0))
@@ -196,6 +233,20 @@ pub(crate) fn page(page: ActivityPage) -> impl IntoElement {
         .child(when(
             move || shelf.get() == Shelf::Ranch && running(page),
             move || ranch_loaded(ranch_directory),
+        ))
+        .child(when(
+            move || shelf.get() == Shelf::Weather && running(page),
+            move || {
+                super::weather::loaded(
+                    weather,
+                    pending,
+                    failure,
+                    page,
+                    weather_friends,
+                    weather_visit,
+                    weather_gid,
+                )
+            },
         ))
 }
 

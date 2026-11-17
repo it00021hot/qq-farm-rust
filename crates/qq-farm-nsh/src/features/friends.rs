@@ -866,6 +866,13 @@ fn render_plot(
     let status = plot.status_key;
     let marks = plot.marks;
     let title = SharedString::from(plot.title);
+    let soil = plot.soil;
+    let season = SharedString::from(plot.season);
+    let joint = SharedString::from(plot.joint);
+    let mutants = SharedString::from(plot.mutants);
+    let effects = SharedString::from(plot.effects);
+    let fert_left = plot.fert_left;
+    let resonance = SharedString::from(plot.resonance);
     let button_title = title.clone();
     let target = plot.target.clone();
     let button_target = target.clone();
@@ -877,9 +884,34 @@ fn render_plot(
         .flex_wrap()
         .items_center()
         .gap_2()
+        .child(
+            text(move || text_key(soil))
+                .text_sm()
+                .text_color(move || nsh_base::theme().muted_foreground),
+        )
         .child(when(
             move || !super::interaction_items::choosing(pick),
             move || text(title.clone()).text_sm(),
+        ))
+        .child(fact_line("friends.mutant", mutants))
+        .child(fact_line("friends.season", season))
+        .child(fact_line("friends.joint", joint))
+        .child(fact_line("friends.effect", effects))
+        .child(fact_line(
+            "friends.fertLeft",
+            if fert_left > 0 {
+                SharedString::from(fert_left.to_string())
+            } else {
+                SharedString::from("")
+            },
+        ))
+        .child(fact_line(
+            "friends.resonance",
+            if resonance.is_empty() {
+                SharedString::from("")
+            } else {
+                SharedString::from(format!("+{resonance}%"))
+            },
         ))
         .child(when(
             move || super::interaction_items::choosing(pick),
@@ -937,6 +969,13 @@ fn render_plot(
 struct FriendPlot {
     id: i64,
     title: String,
+    soil: &'static str,
+    mutants: String,
+    season: String,
+    joint: String,
+    effects: String,
+    fert_left: i64,
+    resonance: String,
     status_key: Option<&'static str>,
     marks: Vec<&'static str>,
     target: super::interaction_items::LandTarget,
@@ -996,10 +1035,163 @@ fn friend_plot(value: &Value) -> Option<FriendPlot> {
     Some(FriendPlot {
         id,
         title,
+        soil: soil_key(value.get("level").and_then(Value::as_i64).unwrap_or(0)),
+        mutants: plot_mutants(value),
+        season: plot_season(value),
+        joint: plot_joint(value),
+        effects: plot_effects(value),
+        fert_left: plot_fert_left(value),
+        resonance: plot_resonance(value),
         status_key: status_key(value.get("status").and_then(Value::as_str).unwrap_or("")),
         marks,
         target: super::interaction_items::land_target(value),
     })
+}
+
+fn fact_line(label_key: &'static str, detail: SharedString) -> impl IntoElement {
+    let gate = detail.clone();
+    when(
+        move || !gate.is_empty(),
+        move || {
+            let shown = detail.clone();
+            text(move || SharedString::from(format!("{} · {shown}", text_key(label_key))))
+                .text_sm()
+                .text_color(move || nsh_base::theme().muted_foreground)
+        },
+    )
+}
+
+fn plot_planted(value: &Value) -> bool {
+    let status = value.get("status").and_then(Value::as_str).unwrap_or("");
+    let planted = !value.get("plantName").and_then(Value::as_str).unwrap_or("").trim().is_empty();
+    planted && !matches!(status, "empty" | "locked")
+}
+
+fn soil_key(level: i64) -> &'static str {
+    match level {
+        2 => "settings.landRed",
+        3 => "settings.landBlack",
+        4 => "settings.landGold",
+        5 => "settings.landPurple",
+        6 => "settings.landBlue",
+        _ => "settings.landNormal",
+    }
+}
+
+fn plot_season(value: &Value) -> String {
+    if !plot_planted(value) {
+        return String::new();
+    }
+    let Some(total) = value.get("totalSeason").and_then(Value::as_i64).filter(|total| *total > 1)
+    else {
+        return String::new();
+    };
+    let current = value.get("currentSeason").and_then(Value::as_i64).unwrap_or(1).clamp(1, total);
+    format!("{current}/{total}")
+}
+
+fn plot_joint(value: &Value) -> String {
+    if !plot_planted(value) {
+        return String::new();
+    }
+    let size = value.get("plantSize").and_then(Value::as_i64).unwrap_or(1).max(1);
+    if size > 1 {
+        format!("{size}×{size}")
+    } else {
+        String::new()
+    }
+}
+
+fn plot_mutants(value: &Value) -> String {
+    if !plot_planted(value) {
+        return String::new();
+    }
+    let effects = value.get("mutantEffects").and_then(Value::as_array);
+    if let Some(effects) = effects.filter(|rows| !rows.is_empty()) {
+        return effects
+            .iter()
+            .filter_map(|effect| effect.get("name").and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .collect::<Vec<_>>()
+            .join(" + ");
+    }
+    value
+        .get("mutantConfigIds")
+        .and_then(Value::as_array)
+        .map(|ids| {
+            ids.iter()
+                .filter_map(Value::as_i64)
+                .filter(|id| *id > 0)
+                .map(|id| format!("#{id}"))
+                .collect::<Vec<_>>()
+                .join(" + ")
+        })
+        .unwrap_or_default()
+}
+
+fn plot_effects(value: &Value) -> String {
+    if !plot_planted(value) {
+        return String::new();
+    }
+    let Some(effects) = value.get("interactionEffects").and_then(Value::as_array) else {
+        return String::new();
+    };
+    let mut seen = Vec::new();
+    let mut names = Vec::new();
+    for effect in effects {
+        if !effect.get("confirmed").and_then(Value::as_bool).unwrap_or(false) {
+            continue;
+        }
+        let id = effect
+            .get("itemId")
+            .and_then(Value::as_i64)
+            .filter(|id| *id > 0)
+            .map(|id| id.to_string())
+            .or_else(|| {
+                effect
+                    .get("itemId")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty() && *text != "0")
+                    .map(ToOwned::to_owned)
+            })
+            .unwrap_or_default();
+        if id.is_empty() || seen.contains(&id) {
+            continue;
+        }
+        seen.push(id.clone());
+        let name = effect.get("itemName").and_then(Value::as_str).unwrap_or("").trim();
+        names.push(if name.is_empty() { format!("#{id}") } else { name.to_owned() });
+    }
+    names.join(" · ")
+}
+
+fn plot_fert_left(value: &Value) -> i64 {
+    if plot_planted(value) && value.get("status").and_then(Value::as_str) == Some("growing") {
+        value.get("leftInorcFertTimes").and_then(Value::as_i64).unwrap_or(0).max(0)
+    } else {
+        0
+    }
+}
+
+fn plot_resonance(value: &Value) -> String {
+    if !plot_planted(value) {
+        return String::new();
+    }
+    let bonus = value.get("purpleCrystalResonanceExpBonus").and_then(Value::as_i64).unwrap_or(0);
+    if bonus <= 0 {
+        return String::new();
+    }
+    let whole = bonus / 100;
+    let fraction = bonus % 100;
+    if fraction == 0 {
+        whole.to_string()
+    } else if fraction % 10 == 0 {
+        format!("{whole}.{}", fraction / 10)
+    } else {
+        format!("{whole}.{fraction:02}")
+    }
 }
 
 fn status_key(status: &str) -> Option<&'static str> {
@@ -1464,6 +1656,47 @@ mod tests {
         assert_eq!(friend_gold(12_340, true), "12.3K");
         assert_eq!(friend_gold(0, false), "0");
         assert!(friend_farm(&json!({})).plots.is_empty());
+        let mutated = friend_farm(&json!({
+            "lands": [
+                {
+                    "id": 4,
+                    "plantName": "萝卜",
+                    "status": "growing",
+                    "level": 2,
+                    "currentSeason": 2,
+                    "totalSeason": 3,
+                    "plantSize": 2,
+                    "mutantEffects": [{"name": "冰冻"}, {"name": ""}, {"name": "黄金"}],
+                    "interactionEffects": [
+                        {"itemId": 11, "itemName": "青蛙瓶", "confirmed": true},
+                        {"itemId": 11, "itemName": "青蛙瓶", "confirmed": true}
+                    ],
+                    "leftInorcFertTimes": 2,
+                    "purpleCrystalResonanceExpBonus": 250
+                },
+                {
+                    "id": 5,
+                    "plantName": "白菜",
+                    "status": "growing",
+                    "mutantConfigIds": [7]
+                },
+                {
+                    "id": 6,
+                    "status": "empty",
+                    "mutantEffects": [{"name": "冰冻"}]
+                }
+            ]
+        }));
+        assert_eq!(mutated.plots[0].mutants, "冰冻 + 黄金");
+        assert_eq!(mutated.plots[0].soil, "settings.landRed");
+        assert_eq!(mutated.plots[0].season, "2/3");
+        assert_eq!(mutated.plots[0].joint, "2×2");
+        assert_eq!(mutated.plots[0].effects, "青蛙瓶");
+        assert_eq!(mutated.plots[0].fert_left, 2);
+        assert_eq!(mutated.plots[0].resonance, "2.5");
+        assert_eq!(mutated.plots[1].fert_left, 0);
+        assert_eq!(mutated.plots[1].mutants, "#7");
+        assert!(mutated.plots[2].mutants.is_empty());
         assert_eq!(super::remain_label(90), "1m 30s");
         assert!(super::remain_label(0).is_empty());
     }

@@ -214,6 +214,9 @@ pub struct LandRow {
     pub land_info: Option<Value>,
     #[serde(default)]
     pub interaction_effects: Vec<Value>,
+    /// 本季普通肥剩余次数。协议省略时为 0。
+    #[serde(default)]
+    pub left_inorc_fert_times: i64,
     #[serde(default)]
     pub need_interaction_cleanup: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]

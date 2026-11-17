@@ -556,6 +556,13 @@ struct LandLine {
     id: i64,
     title: String,
     subtitle: String,
+    soil: &'static str,
+    season: String,
+    joint: String,
+    mutants: String,
+    effects: String,
+    fert_left: i64,
+    resonance: String,
     marks: Vec<LandMark>,
     target: super::interaction_items::LandTarget,
     fert_root: i64,
@@ -584,6 +591,13 @@ fn land_line(land: &LandRow, rows: &[LandRow], social: &[i64]) -> LandLine {
         id: land.id,
         title: land_title(land),
         subtitle: land_subtitle(land),
+        soil: soil_key(land.level),
+        season: season_label(land),
+        joint: joint_label(land),
+        mutants: land_mutants(land),
+        effects: confirmed_effects(land),
+        fert_left: fert_left(land),
+        resonance: resonance_percent(land),
         marks: land_marks(land),
         target: super::interaction_items::target_from_row(land),
         fert_root,
@@ -735,6 +749,13 @@ fn render_land(
     let fert_ok = land.fert_ok;
     let care_ok = land.care_ok;
     let subtitle = SharedString::from(land.subtitle);
+    let soil = land.soil;
+    let season = SharedString::from(land.season);
+    let joint = SharedString::from(land.joint);
+    let mutants = SharedString::from(land.mutants);
+    let effects = SharedString::from(land.effects);
+    let fert_left = land.fert_left;
+    let resonance = SharedString::from(land.resonance);
     let marks = land.marks;
     let button_target = land.target.clone();
     let press_target = land.target.clone();
@@ -751,6 +772,11 @@ fn render_land(
                 .flex_row()
                 .items_center()
                 .gap_3()
+                .child(
+                    text(move || text_key(soil))
+                        .text_sm()
+                        .text_color(move || nsh_base::theme().muted_foreground),
+                )
                 .child(when(
                     move || {
                         can_inspect
@@ -852,6 +878,26 @@ fn render_land(
                 .child(
                     text(subtitle).text_sm().text_color(move || nsh_base::theme().muted_foreground),
                 )
+                .child(fact_line("farm.season", season))
+                .child(fact_line("farm.joint", joint))
+                .child(fact_line("farm.mutant", mutants))
+                .child(fact_line("farm.effect", effects))
+                .child(fact_line(
+                    "farm.fertLeft",
+                    if fert_left > 0 {
+                        SharedString::from(fert_left.to_string())
+                    } else {
+                        SharedString::from("")
+                    },
+                ))
+                .child(fact_line(
+                    "farm.resonance",
+                    if resonance.is_empty() {
+                        SharedString::from("")
+                    } else {
+                        SharedString::from(format!("+{resonance}%"))
+                    },
+                ))
                 .child(each(
                     move || marks.clone(),
                     |mark: &LandMark| mark.key.to_owned(),
@@ -1360,6 +1406,149 @@ fn land_subtitle(land: &LandRow) -> String {
     parts.join(" · ")
 }
 
+fn soil_key(level: i64) -> &'static str {
+    match level {
+        2 => "settings.landRed",
+        3 => "settings.landBlack",
+        4 => "settings.landGold",
+        5 => "settings.landPurple",
+        6 => "settings.landBlue",
+        _ => "settings.landNormal",
+    }
+}
+
+fn season_label(land: &LandRow) -> String {
+    if !planted(land) {
+        return String::new();
+    }
+    let Some(total) = land.total_season.filter(|total| *total > 1) else {
+        return String::new();
+    };
+    let current = land.current_season.unwrap_or(1).clamp(1, total);
+    format!("{current}/{total}")
+}
+
+fn joint_label(land: &LandRow) -> String {
+    if !land.unlocked {
+        return String::new();
+    }
+    if land.occupied_by_master && land.master_land_id > 0 && land.master_land_id != land.id {
+        return format!("#{}", land.master_land_id);
+    }
+    let size = land.plant_size.unwrap_or(1).max(1);
+    if size > 1 && land.plant_name.as_deref().is_some_and(|name| !name.is_empty()) {
+        format!("{size}×{size}")
+    } else {
+        String::new()
+    }
+}
+
+fn fact_line(label_key: &'static str, detail: SharedString) -> impl IntoElement {
+    let gate = detail.clone();
+    when(
+        move || !gate.is_empty(),
+        move || {
+            let shown = detail.clone();
+            text(move || SharedString::from(format!("{} · {shown}", text_key(label_key))))
+                .text_sm()
+                .text_color(move || nsh_base::theme().muted_foreground)
+        },
+    )
+}
+
+fn planted(land: &LandRow) -> bool {
+    land.unlocked
+        && !land.occupied_by_master
+        && land.plant_name.as_deref().is_some_and(|name| !name.is_empty())
+}
+
+fn land_mutants(land: &LandRow) -> String {
+    if !planted(land) {
+        return String::new();
+    }
+    let names = mutant_names(&land.mutant_effects);
+    if !names.is_empty() {
+        return names.join(" + ");
+    }
+    land.mutant_config_ids
+        .iter()
+        .copied()
+        .filter(|id| *id > 0)
+        .map(|id| format!("#{id}"))
+        .collect::<Vec<_>>()
+        .join(" + ")
+}
+
+fn confirmed_effects(land: &LandRow) -> String {
+    if !planted(land) {
+        return String::new();
+    }
+    let mut seen = Vec::new();
+    let mut names = Vec::new();
+    for effect in &land.interaction_effects {
+        if !effect.get("confirmed").and_then(Value::as_bool).unwrap_or(false) {
+            continue;
+        }
+        let id = effect_id(effect);
+        if id.is_empty() || seen.contains(&id) {
+            continue;
+        }
+        seen.push(id.clone());
+        let name = effect.get("itemName").and_then(Value::as_str).unwrap_or("").trim();
+        names.push(if name.is_empty() { format!("#{id}") } else { name.to_owned() });
+    }
+    names.join(" · ")
+}
+
+fn effect_id(effect: &Value) -> String {
+    if let Some(text) = effect.get("itemId").and_then(Value::as_str) {
+        let text = text.trim();
+        if !text.is_empty() && text != "0" {
+            return text.to_owned();
+        }
+    }
+    effect
+        .get("itemId")
+        .and_then(json_i64)
+        .filter(|id| *id > 0)
+        .map(|id| id.to_string())
+        .unwrap_or_default()
+}
+
+fn fert_left(land: &LandRow) -> i64 {
+    if planted(land) && land.status == "growing" {
+        land.left_inorc_fert_times.max(0)
+    } else {
+        0
+    }
+}
+
+fn resonance_percent(land: &LandRow) -> String {
+    if !planted(land) || land.purple_crystal_resonance_exp_bonus <= 0 {
+        return String::new();
+    }
+    let bonus = land.purple_crystal_resonance_exp_bonus;
+    let whole = bonus / 100;
+    let fraction = bonus % 100;
+    if fraction == 0 {
+        whole.to_string()
+    } else if fraction % 10 == 0 {
+        format!("{whole}.{}", fraction / 10)
+    } else {
+        format!("{whole}.{fraction:02}")
+    }
+}
+
+fn mutant_names(effects: &[Value]) -> Vec<String> {
+    effects
+        .iter()
+        .filter_map(|effect| effect.get("name").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
 fn land_marks(land: &LandRow) -> Vec<LandMark> {
     if !land.unlocked {
         return vec![LandMark { key: "farm.locked", tone: BadgeTone::Neutral }];
@@ -1402,10 +1591,11 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        can_farm, can_fertilize, care_selectable, career_count, duration_label, fertilize_root,
-        land_marks, land_subtitle, land_title, manual_fertilizer, shown_ops, steal_ratio,
-        toggle_care, toggle_fertilizer, upgrade_fact, upgrade_notes, BonusKind, BonusLine,
-        UpgradeNote, Wallet,
+        can_farm, can_fertilize, care_selectable, career_count, confirmed_effects, duration_label,
+        fert_left, fertilize_root, joint_label, land_marks, land_mutants, land_subtitle,
+        land_title, manual_fertilizer, resonance_percent, season_label, shown_ops, soil_key,
+        steal_ratio, toggle_care, toggle_fertilizer, upgrade_fact, upgrade_notes, BonusKind,
+        BonusLine, UpgradeNote, Wallet,
     };
 
     #[test]
@@ -1439,6 +1629,107 @@ mod tests {
             ..LandRow::default()
         };
         assert_eq!(land_subtitle(&land), "成熟 · 1m 30s");
+        assert_eq!(soil_key(2), "settings.landRed");
+        assert_eq!(soil_key(0), "settings.landNormal");
+        assert_eq!(soil_key(9), "settings.landNormal");
+        let multi = LandRow {
+            unlocked: true,
+            plant_name: Some("萝卜".to_owned()),
+            current_season: Some(2),
+            total_season: Some(3),
+            ..LandRow::default()
+        };
+        assert_eq!(season_label(&multi), "2/3");
+        assert!(season_label(&LandRow { total_season: Some(1), ..multi.clone() }).is_empty());
+        assert_eq!(season_label(&LandRow { current_season: Some(0), ..multi.clone() }), "1/3");
+        assert_eq!(season_label(&LandRow { current_season: Some(8), ..multi.clone() }), "3/3");
+        assert_eq!(
+            joint_label(&LandRow {
+                id: 5,
+                unlocked: true,
+                occupied_by_master: true,
+                master_land_id: 4,
+                ..LandRow::default()
+            }),
+            "#4"
+        );
+        assert_eq!(
+            joint_label(&LandRow {
+                unlocked: true,
+                plant_name: Some("萝卜".to_owned()),
+                plant_size: Some(2),
+                ..LandRow::default()
+            }),
+            "2×2"
+        );
+        assert!(joint_label(&LandRow {
+            unlocked: true,
+            plant_name: Some("萝卜".to_owned()),
+            plant_size: Some(1),
+            ..LandRow::default()
+        })
+        .is_empty());
+        assert_eq!(
+            land_mutants(&LandRow {
+                unlocked: true,
+                plant_name: Some("萝卜".to_owned()),
+                mutant_effects: vec![
+                    json!({"name": "冰冻"}),
+                    json!({"name": " "}),
+                    json!({"name": "黄金"})
+                ],
+                ..LandRow::default()
+            }),
+            "冰冻 + 黄金"
+        );
+        assert_eq!(
+            land_mutants(&LandRow {
+                unlocked: true,
+                plant_name: Some("萝卜".to_owned()),
+                mutant_config_ids: vec![0, 5],
+                ..LandRow::default()
+            }),
+            "#5"
+        );
+        assert!(land_mutants(&LandRow {
+            unlocked: true,
+            mutant_config_ids: vec![5],
+            ..LandRow::default()
+        })
+        .is_empty());
+        assert!(land_mutants(&LandRow {
+            unlocked: false,
+            plant_name: Some("萝卜".to_owned()),
+            mutant_effects: vec![json!({"name": "冰冻"})],
+            ..LandRow::default()
+        })
+        .is_empty());
+        assert!(land_mutants(&LandRow {
+            unlocked: true,
+            occupied_by_master: true,
+            plant_name: Some("萝卜".to_owned()),
+            mutant_effects: vec![json!({"name": "冰冻"})],
+            ..LandRow::default()
+        })
+        .is_empty());
+        let growing = LandRow {
+            unlocked: true,
+            status: "growing".to_owned(),
+            plant_name: Some("萝卜".to_owned()),
+            interaction_effects: vec![
+                json!({"itemId": 11, "itemName": "青蛙瓶", "confirmed": true}),
+                json!({"itemId": 11, "itemName": "青蛙瓶", "confirmed": true}),
+                json!({"itemId": "12", "itemName": "", "confirmed": true}),
+                json!({"itemId": 13, "itemName": "未生效", "confirmed": false}),
+            ],
+            left_inorc_fert_times: 2,
+            purple_crystal_resonance_exp_bonus: 250,
+            ..LandRow::default()
+        };
+        assert_eq!(confirmed_effects(&growing), "青蛙瓶 · #12");
+        assert_eq!(fert_left(&growing), 2);
+        assert_eq!(resonance_percent(&growing), "2.5");
+        assert_eq!(fert_left(&LandRow { status: "harvestable".to_owned(), ..growing }), 0);
         assert_eq!(duration_label(60), "1m");
         assert_eq!(duration_label(12), "12s");
     }

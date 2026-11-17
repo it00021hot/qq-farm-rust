@@ -118,6 +118,8 @@ pub struct Item {
     pub trait_id: Option<i64>,
     #[serde(default)]
     pub activity_id: Option<i64>,
+    #[serde(default)]
+    pub to_see: Option<i64>,
 }
 
 // ===== Land =====

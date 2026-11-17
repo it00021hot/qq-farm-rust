@@ -27,7 +27,7 @@ use crate::constants::{
 };
 use crate::error::Result;
 use crate::network::gateway::Gateway;
-use crate::proto::generated::corepb::Item as CoreItem;
+use crate::proto::generated::corepb::{Item as CoreItem, ItemSourceInfo};
 use crate::proto::generated::gamepb::itempb::{
     BagReply, BagRequest, BatchUseReply, BatchUseRequest, LockItemsReply, LockItemsRequest,
     SellReply, SellRequest, UnlockItemsReply, UnlockItemsRequest, UseReply, UseRequest,
@@ -627,6 +627,12 @@ pub struct BagItemView {
     pub sellable: bool,
     #[serde(default)]
     pub locked: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<ItemSource>,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub viewable: bool,
     pub sell_status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sell_condition: Option<String>,
@@ -636,6 +642,14 @@ pub struct BagItemView {
     pub level: i64,
     pub interaction_type: String,
     pub hours_text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemSource {
+    pub sender_name: String,
+    pub sent_at: i64,
+    pub message_text_id: i64,
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -652,6 +666,28 @@ pub struct BagSeedInfo {
 // =====================================================================
 // 辅助
 // =====================================================================
+
+fn protocol_price(item: &CoreItem) -> Option<(i64, i64)> {
+    let price = item.show.as_ref().and_then(|show| show.sell_price.as_ref())?;
+    (price.id > 0 && price.count > 0).then_some((price.id, price.count))
+}
+
+fn shown_price(protocol: Option<(i64, i64)>, config: (i64, i64)) -> (i64, i64) {
+    protocol.filter(|(currency, amount)| *currency > 0 && *amount > 0).unwrap_or(config)
+}
+
+fn item_source(source: Option<&ItemSourceInfo>) -> Option<ItemSource> {
+    let source = source?;
+    let sender_name = source.sender_name.trim().to_owned();
+    if sender_name.is_empty() && source.sent_at <= 0 && source.source_type <= 0 {
+        return None;
+    }
+    Some(ItemSource { sender_name, sent_at: source.sent_at, message_text_id: source.source_type })
+}
+
+fn gift_viewable(to_see: i64, source: Option<&ItemSource>) -> bool {
+    to_see > 0 && source.is_some()
+}
 
 fn prepare_lock_uids(
     stacks: &[(i64, i64, bool)],
@@ -705,6 +741,8 @@ pub fn get_bag_items(bag: &BagReply) -> Vec<BagItemLite> {
                 mutant_types: get_mutant_types_from_slice(&i.mutant_types),
                 expire_time: i.expire_time,
                 locked: i.locked,
+                source: item_source(i.source_info.as_ref()),
+                protocol_price: protocol_price(i),
             })
             .collect()
     } else {
@@ -820,8 +858,8 @@ pub fn build_bag_detail_from_items(raw_items: &[BagItemLite]) -> BagDetail {
                 )
             })
             .unwrap_or_default();
-        let (price_id, price) =
-            if let Some(&(c, p)) = sell_info.sells.first() { (c, p) } else { (0, 0) };
+        let config_price = sell_info.sells.first().copied().unwrap_or((0, 0));
+        let (price_id, price) = shown_price(it.protocol_price, config_price);
         let price_unit = match price_id {
             1005 => "金豆豆",
             1002 => "点券",
@@ -841,6 +879,12 @@ pub fn build_bag_detail_from_items(raw_items: &[BagItemLite]) -> BagDetail {
             item_type: item_info.as_ref().map(|i| i.item_type).unwrap_or(0),
             sellable: sell_info.sellable,
             locked: it.locked,
+            source: it.source.clone(),
+            description: item_info.as_ref().and_then(|info| info.desc.clone()).unwrap_or_default(),
+            viewable: gift_viewable(
+                item_info.as_ref().and_then(|info| info.to_see).unwrap_or(0),
+                it.source.as_ref(),
+            ),
             sell_status: sell_info.status.to_string(),
             sell_condition: sell_info.condition.clone(),
             price_id,
@@ -874,6 +918,9 @@ pub fn build_bag_detail_from_items(raw_items: &[BagItemLite]) -> BagDetail {
             item_type: item_info.as_ref().map(|i| i.item_type).unwrap_or(0),
             sellable: false,
             locked: false,
+            source: None,
+            description: String::new(),
+            viewable: false,
             sell_status: String::new(),
             sell_condition: None,
             price_id: 0,
@@ -919,12 +966,23 @@ pub struct BagItemLite {
     pub expire_time: i64,
     /// 是否锁定（对齐 node isItemLocked：锁定堆叠不可自动使用/出售）
     pub locked: bool,
+    pub source: Option<ItemSource>,
+    pub protocol_price: Option<(i64, i64)>,
 }
 
 impl BagItemLite {
     #[must_use]
     pub fn new(id: i64, count: i64, uid: i64) -> Self {
-        Self { id, count, uid, mutant_types: vec![], expire_time: 0, locked: false }
+        Self {
+            id,
+            count,
+            uid,
+            mutant_types: vec![],
+            expire_time: 0,
+            locked: false,
+            source: None,
+            protocol_price: None,
+        }
     }
 }
 
@@ -1239,6 +1297,8 @@ mod tests {
                 mutant_types: vec![1],
                 expire_time: 0,
                 locked: false,
+                source: None,
+                protocol_price: None,
             },
             BagItemLite {
                 id: 41221,
@@ -1247,6 +1307,8 @@ mod tests {
                 mutant_types: vec![],
                 expire_time: 0,
                 locked: false,
+                source: None,
+                protocol_price: None,
             },
             BagItemLite::new(1011, 3600, 0),
         ]);
@@ -1276,6 +1338,49 @@ mod tests {
         locked.locked = true;
         assert!(!included_in_auto_sell(&locked));
         assert!(!included_in_auto_sell(&BagItemLite::new(fruit_id, 0, 4)));
+    }
+
+    #[test]
+    fn server_sell_price_overrides_the_config_price() {
+        assert_eq!(super::shown_price(Some((1002, 8)), (1001, 9)), (1002, 8));
+        assert_eq!(super::shown_price(Some((0, 8)), (1001, 9)), (1001, 9));
+        assert_eq!(super::shown_price(None, (1001, 9)), (1001, 9));
+        let gc = crate::config::game_config::global();
+        let fruit_id =
+            gc.get_plant_by_seed_id(29999).and_then(|plant| plant.fruit).expect("白萝卜果实").id;
+        let mut stack = BagItemLite::new(fruit_id, 1, 4);
+        stack.protocol_price = Some((1005, 15));
+        let row = build_bag_detail_from_items(&[stack]).items.into_iter().next().expect("row");
+        assert_eq!((row.price_id, row.price, row.price_unit.as_str()), (1005, 15, "金豆豆"));
+    }
+
+    #[test]
+    fn gift_source_keeps_the_sender_and_only_marked_items_are_viewable() {
+        use crate::proto::generated::corepb::ItemSourceInfo;
+
+        let present = super::item_source(Some(&ItemSourceInfo {
+            sender_name: " 甲 ".to_owned(),
+            sent_at: 20,
+            source_type: 7,
+        }))
+        .expect("source");
+        assert_eq!(present.sender_name, "甲");
+        assert_eq!(present.message_text_id, 7);
+        assert!(super::item_source(Some(&ItemSourceInfo::default())).is_none());
+        assert!(super::item_source(None).is_none());
+        assert!(super::gift_viewable(1, Some(&present)));
+        assert!(!super::gift_viewable(0, Some(&present)));
+        assert!(!super::gift_viewable(1, None));
+
+        let mut stack = BagItemLite::new(1026, 1, 9);
+        stack.source = Some(present);
+        let detail = build_bag_detail_from_items(&[stack, BagItemLite::new(1026, 1, 8)]);
+        let gifted = detail.items.iter().find(|row| row.uid == 9).expect("gift");
+        let plain = detail.items.iter().find(|row| row.uid == 8).expect("plain");
+        assert!(gifted.viewable);
+        assert!(gifted.description.contains("{0}"));
+        assert_eq!(gifted.source.clone().expect("kept").sent_at, 20);
+        assert!(!plain.viewable);
     }
 
     #[test]

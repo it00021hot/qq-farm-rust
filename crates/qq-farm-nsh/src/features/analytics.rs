@@ -1,4 +1,5 @@
 use nsh_core::prelude::*;
+use qq_farm_app::dto::PanelStatus;
 use serde_json::Value;
 
 use crate::i18n::text_key;
@@ -18,6 +19,11 @@ struct RankRow {
     exp_per_hour: String,
     gold_per_hour: String,
     grow: String,
+    level: Option<i64>,
+    exp: i64,
+    fert_exp: i64,
+    profit: i64,
+    fert_profit: i64,
 }
 
 pub(crate) fn page(page: AnalyticsPage) -> impl IntoElement {
@@ -42,6 +48,28 @@ pub(crate) fn page(page: AnalyticsPage) -> impl IntoElement {
         move || selected_account(page.account_id),
         |account, _| async move { load_blacklist(account).await },
     );
+    let settings = resource(
+        move || page.account_id.get().filter(|id| !id.is_empty()),
+        |id, _| async move {
+            session::session()
+                .runtime
+                .spawn_blocking(move || qq_farm_app::settings::settings_panel(&id, ""))
+                .await
+                .map_err(|error| error.to_string())
+        },
+    );
+    let status = resource(
+        move || page.account_id.get().filter(|id| !id.is_empty()),
+        |id, _| async move {
+            session::session()
+                .runtime
+                .spawn_blocking(move || {
+                    qq_farm_app::farm::panel_status_with_progress(&session::session().context, &id)
+                })
+                .await
+                .map_err(|error| error.to_string())
+        },
+    );
     scroll()
         .flex_1()
         .p(px(24.0))
@@ -49,6 +77,7 @@ pub(crate) fn page(page: AnalyticsPage) -> impl IntoElement {
         .child(
             text(move || text_key("analytics.title")).text_lg().font_weight(FontWeight::SEMIBOLD),
         )
+        .child(advice_line(rankings, settings, status))
         .child(blacklist_section(
             page,
             query,
@@ -394,6 +423,180 @@ fn rank_row(value: &Value) -> Option<RankRow> {
         exp_per_hour: one_decimal(value.get("expPerHour").and_then(Value::as_f64).unwrap_or(0.0)),
         gold_per_hour: one_decimal(value.get("goldPerHour").and_then(Value::as_f64).unwrap_or(0.0)),
         grow: value.get("growTimeStr").and_then(Value::as_str).unwrap_or("").to_owned(),
+        level: value.get("level").and_then(Value::as_i64),
+        exp: hundredths(value, "expPerHour"),
+        fert_exp: hundredths(value, "normalFertilizerExpPerHour"),
+        profit: hundredths(value, "profitPerHour"),
+        fert_profit: hundredths(value, "normalFertilizerProfitPerHour"),
+    })
+}
+
+fn hundredths(value: &Value, key: &str) -> i64 {
+    let number = value
+        .get(key)
+        .and_then(|item| item.as_f64().or_else(|| item.as_i64().map(|number| number as f64)))
+        .unwrap_or(0.0);
+    (number * 100.0).round() as i64
+}
+
+struct Advice {
+    strategy_key: &'static str,
+    name: String,
+}
+
+fn advice_line(
+    rankings: Resource<Vec<RankRow>, String>,
+    settings: Resource<Value, String>,
+    status: Resource<PanelStatus, String>,
+) -> impl IntoElement {
+    view()
+        .gap_1()
+        .child(when(
+            move || current_advice(rankings, settings, status).is_some(),
+            move || {
+                text(move || {
+                    current_advice(rankings, settings, status)
+                        .map(|advice| {
+                            SharedString::from(format!(
+                                "{} · {} · {}",
+                                text_key("analytics.recommend"),
+                                text_key(advice.strategy_key),
+                                advice.name
+                            ))
+                        })
+                        .unwrap_or_default()
+                })
+                .text_sm()
+            },
+        ))
+        .child(when(
+            move || !compared(rankings, settings, status).is_empty(),
+            move || {
+                text(move || text_key("analytics.compare"))
+                    .text_sm()
+                    .text_color(move || nsh_base::theme().muted_foreground)
+            },
+        ))
+        .child(each(
+            move || compared(rankings, settings, status),
+            |line: &Compared| line.strategy_key.to_owned(),
+            |line, _| comparison_text(line.get_untracked()),
+        ))
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct Compared {
+    strategy_key: &'static str,
+    name: String,
+}
+
+fn comparison_text(line: Compared) -> impl IntoElement {
+    let key = line.strategy_key;
+    let name = SharedString::from(line.name);
+    text(move || {
+        let name = name.clone();
+        SharedString::from(format!("{} · {name}", text_key(key)))
+    })
+    .text_sm()
+    .text_color(move || nsh_base::theme().muted_foreground)
+}
+
+fn compared(
+    rankings: Resource<Vec<RankRow>, String>,
+    settings: Resource<Value, String>,
+    status: Resource<PanelStatus, String>,
+) -> Vec<Compared> {
+    if settings.get().is_none() && settings.loading() {
+        return Vec::new();
+    }
+    let Some(rows) = rankings.get() else {
+        return Vec::new();
+    };
+    let current =
+        settings.get().as_ref().map(strategy_name).unwrap_or_else(|| "max_exp".to_owned());
+    let level_cap = status.get().and_then(|panel| (panel.level > 0).then_some(panel.level));
+    compare_strategies(&rows, &current, level_cap)
+}
+
+fn compare_strategies(rows: &[RankRow], current: &str, level_cap: Option<i64>) -> Vec<Compared> {
+    ["max_exp", "max_profit", "max_fert_exp", "max_fert_profit", "level"]
+        .into_iter()
+        .filter(|strategy| *strategy != current)
+        .filter_map(|strategy| {
+            let plant = best_plant(rows, strategy, level_cap, 0)?;
+            Some(Compared { strategy_key: strategy_key(strategy)?, name: plant.name.clone() })
+        })
+        .collect()
+}
+
+fn current_advice(
+    rankings: Resource<Vec<RankRow>, String>,
+    settings: Resource<Value, String>,
+    status: Resource<PanelStatus, String>,
+) -> Option<Advice> {
+    if settings.get().is_none() && settings.loading() {
+        return None;
+    }
+    let level_cap = status.get().and_then(|panel| (panel.level > 0).then_some(panel.level));
+    advise(rankings.get().as_deref().unwrap_or(&[]), settings.get().as_ref(), level_cap)
+}
+
+fn advise(rows: &[RankRow], settings: Option<&Value>, level_cap: Option<i64>) -> Option<Advice> {
+    let strategy = settings.map(strategy_name).unwrap_or_else(|| "max_exp".to_owned());
+    let strategy_key = strategy_key(&strategy)?;
+    let preferred = settings
+        .and_then(|value| value.get("preferredSeedId"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let plant = best_plant(rows, &strategy, level_cap, preferred)?;
+    Some(Advice { strategy_key, name: plant.name.clone() })
+}
+
+fn strategy_name(value: &Value) -> String {
+    value
+        .get("plantingStrategy")
+        .and_then(Value::as_str)
+        .filter(|strategy| !strategy.is_empty())
+        .unwrap_or("max_exp")
+        .to_owned()
+}
+
+fn strategy_key(strategy: &str) -> Option<&'static str> {
+    Some(match strategy {
+        "max_exp" => "analytics.maxExp",
+        "max_fert_exp" => "analytics.maxFertExp",
+        "max_profit" => "analytics.maxProfit",
+        "max_fert_profit" => "analytics.maxFertProfit",
+        "level" => "analytics.highestLevel",
+        "preferred" => "analytics.preferred",
+        _ => return None,
+    })
+}
+
+fn best_plant<'a>(
+    rows: &'a [RankRow],
+    strategy: &str,
+    level_cap: Option<i64>,
+    preferred: i64,
+) -> Option<&'a RankRow> {
+    let mut allowed = rows.iter().filter(|row| match (row.level, level_cap) {
+        (Some(level), Some(cap)) => level <= cap,
+        _ => true,
+    });
+    if strategy == "preferred" {
+        return allowed.find(|row| preferred > 0 && row.seed_id == preferred);
+    }
+    if strategy == "level" {
+        return allowed.max_by_key(|row| row.level.unwrap_or(-1));
+    }
+    if !matches!(strategy, "max_exp" | "max_fert_exp" | "max_profit" | "max_fert_profit") {
+        return None;
+    }
+    allowed.max_by_key(|row| match strategy {
+        "max_profit" => row.profit,
+        "max_fert_exp" => row.fert_exp,
+        "max_fert_profit" => row.fert_profit,
+        _ => row.exp,
     })
 }
 
@@ -524,6 +727,11 @@ mod tests {
                 exp_per_hour: String::new(),
                 gold_per_hour: String::new(),
                 grow: String::new(),
+                level: None,
+                exp: 0,
+                fert_exp: 0,
+                profit: 0,
+                fert_profit: 0,
             },
             RankRow {
                 id: 2,
@@ -532,6 +740,11 @@ mod tests {
                 exp_per_hour: String::new(),
                 gold_per_hour: String::new(),
                 grow: String::new(),
+                level: None,
+                exp: 0,
+                fert_exp: 0,
+                profit: 0,
+                fert_profit: 0,
             },
         ];
         assert_eq!(add_ranking_seeds(&[10], &rankings), vec![10, 20]);
@@ -540,5 +753,59 @@ mod tests {
         assert!(crop_matches(&rankings, "10", &[10]).is_empty());
         assert_eq!(crop_name(&rankings, 99), "#99");
         assert_eq!(crop_name(&rankings, 10), "萝卜");
+    }
+
+    #[test]
+    fn advice_follows_the_strategy_and_the_level_cap() {
+        let rows = vec![
+            sample(1, "萝卜", Some(5), 100, 10, 20, 30),
+            sample(2, "白菜", Some(20), 50, 400, 10, 5),
+            sample(3, "南瓜", None, 80, 80, 80, 80),
+        ];
+        assert_eq!(super::advise(&rows, None, Some(5)).unwrap().name, "萝卜");
+        let profit = json!({ "plantingStrategy": "max_profit" });
+        assert_eq!(super::advise(&rows, Some(&profit), Some(5)).unwrap().name, "南瓜");
+        let preferred = json!({ "plantingStrategy": "preferred", "preferredSeedId": 2 });
+        assert!(super::advise(&rows, Some(&preferred), Some(5)).is_none());
+        assert_eq!(super::advise(&rows, Some(&preferred), None).unwrap().name, "白菜");
+        let bag = json!({ "plantingStrategy": "bag_priority" });
+        assert!(super::advise(&rows, Some(&bag), None).is_none());
+        let level = json!({ "plantingStrategy": "level" });
+        assert_eq!(super::advise(&rows, Some(&level), None).unwrap().name, "白菜");
+        let compared = super::compare_strategies(&rows, "max_profit", Some(5));
+        assert_eq!(
+            compared.iter().map(|line| line.strategy_key).collect::<Vec<_>>(),
+            vec![
+                "analytics.maxExp",
+                "analytics.maxFertExp",
+                "analytics.maxFertProfit",
+                "analytics.highestLevel",
+            ]
+        );
+        assert_eq!(compared[0].name, "萝卜");
+    }
+
+    fn sample(
+        seed_id: i64,
+        name: &str,
+        level: Option<i64>,
+        exp: i64,
+        fert_exp: i64,
+        profit: i64,
+        fert_profit: i64,
+    ) -> super::RankRow {
+        super::RankRow {
+            id: seed_id,
+            seed_id,
+            name: name.to_owned(),
+            exp_per_hour: String::new(),
+            gold_per_hour: String::new(),
+            grow: String::new(),
+            level,
+            exp,
+            fert_exp,
+            profit,
+            fert_profit,
+        }
     }
 }

@@ -81,6 +81,7 @@ pub mod solar_calendar;
 pub mod task;
 pub mod tasks;
 pub mod warehouse;
+pub mod weather;
 pub mod wx_login;
 
 // --- infra 向后兼容 re-export（已迁至 [`crate::infra`]) ---

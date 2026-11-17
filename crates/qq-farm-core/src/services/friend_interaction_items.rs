@@ -692,6 +692,8 @@ mod tests {
                 expire_time: 0,
                 mutant_types: vec![],
                 locked: false,
+                source: None,
+                protocol_price: None,
             },
             BagItemLite {
                 id: 301103,
@@ -700,6 +702,8 @@ mod tests {
                 expire_time: 100,
                 mutant_types: vec![],
                 locked: false,
+                source: None,
+                protocol_price: None,
             },
             BagItemLite {
                 id: 301103,
@@ -708,6 +712,8 @@ mod tests {
                 expire_time: 50,
                 mutant_types: vec![],
                 locked: false,
+                source: None,
+                protocol_price: None,
             },
         ];
         let stacks = eligible_stacks(&bag, 301103, &info);

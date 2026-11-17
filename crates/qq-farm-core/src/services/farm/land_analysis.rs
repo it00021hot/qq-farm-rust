@@ -1518,6 +1518,7 @@ pub fn build_lands_panel_dto(lands: &[LandInfo], kind: LandDetailKind) -> Vec<se
             },
             "interactionEffects": interaction_effects,
             "needInteractionCleanup": need_interaction_cleanup,
+            "leftInorcFertTimes": plant.left_inorc_fert_times.max(0),
             "protocolField40": if protocol_field_40.is_empty() {
                 serde_json::Value::Null
             } else {
@@ -1588,6 +1589,15 @@ mod tests {
             ..Default::default()
         });
         LandInfo { id, unlocked, plant, ..Default::default() }
+    }
+
+    #[test]
+    fn panel_keeps_the_remaining_normal_fertilizer_count() {
+        let mut land = make_land(1, true, Some(PlantPhase::Growing));
+        land.plant.as_mut().unwrap().left_inorc_fert_times = 2;
+        let dto = build_lands_panel_dto(std::slice::from_ref(&land), LandDetailKind::Own);
+        assert_eq!(dto[0]["status"], "growing");
+        assert_eq!(dto[0]["leftInorcFertTimes"], serde_json::json!(2));
     }
 
     #[test]
