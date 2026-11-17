@@ -81,6 +81,8 @@ struct BagLine {
     count: i64,
     kind: BagKind,
     sellable: bool,
+    lockable: bool,
+    locked: bool,
 }
 
 pub(crate) fn section(
@@ -218,6 +220,13 @@ fn bag_line(
         .child(text(name).text_sm().font_weight(FontWeight::MEDIUM).flex_1())
         .child(text(count).text_sm())
         .child(badge(move || text_key(kind.label_key()), BadgeTone::Neutral))
+        .child(when(
+            {
+                let locked = line.locked;
+                move || locked
+            },
+            || badge(|| text_key("bag.locked"), BadgeTone::Neutral),
+        ))
         .child(when(move || kind == BagKind::Tool && stack > 1, {
             let step_line = line.clone();
             move || use_stepper(step_line.clone(), use_counts, pending)
@@ -239,6 +248,30 @@ fn bag_line(
                 )
             }
         }))
+        .child(when(
+            {
+                let lockable = line.lockable;
+                move || lockable
+            },
+            {
+                let lock_line = line.clone();
+                move || {
+                    let locked = lock_line.locked;
+                    command_button(
+                        if locked { "bag.unlock" } else { "bag.lock" },
+                        if locked { "unlock" } else { "lock" },
+                        ButtonVariant::Secondary,
+                        lock_line.clone(),
+                        account_id,
+                        pending,
+                        failure,
+                        summary,
+                        bag,
+                        use_counts,
+                    )
+                }
+            },
+        ))
         .child(when(
             {
                 let sellable = line.sellable;
@@ -391,22 +424,21 @@ fn press_bag(
     pending.set(Some(action_key(&line, action)));
     failure.set(None);
     summary.set(None);
-    if action == "sell" {
-        confirm::confirm(
-            "bag.confirmSell.title",
-            "bag.confirmSell.body",
-            "sell",
-            "bag.sell",
-            move |accepted| {
-                if !accepted {
-                    pending.set(None);
-                    return;
-                }
-                spawn(async move {
-                    finish_bag(action, line, count, id, pending, failure, summary, bag).await
-                });
-            },
-        );
+    if matches!(action, "sell" | "lock" | "unlock") {
+        let (title, body, confirm_key) = match action {
+            "lock" => ("bag.confirmLock.title", "bag.confirmLock.body", "bag.lock"),
+            "unlock" => ("bag.confirmUnlock.title", "bag.confirmUnlock.body", "bag.unlock"),
+            _ => ("bag.confirmSell.title", "bag.confirmSell.body", "bag.sell"),
+        };
+        confirm::confirm(title, body, action, confirm_key, move |accepted| {
+            if !accepted {
+                pending.set(None);
+                return;
+            }
+            spawn(async move {
+                finish_bag(action, line, count, id, pending, failure, summary, bag).await
+            });
+        });
         return;
     }
     spawn(async move { finish_bag(action, line, count, id, pending, failure, summary, bag).await });
@@ -426,6 +458,9 @@ async fn finish_bag(
     let result = session::call(async move {
         if action == "sell" {
             qq_farm_app::farm::bag_sell(&context, &account_id, &[(line.id, line.count, line.uid)])
+                .await
+        } else if action == "lock" || action == "unlock" {
+            qq_farm_app::farm::bag_set_locked(&context, &account_id, &[line.uid], action == "lock")
                 .await
         } else {
             if is_dog_food(line.id) {
@@ -475,7 +510,10 @@ fn bag_line_from(item: &BagItemView) -> BagLine {
         uid: item.uid,
         name,
         count: item.count,
-        sellable: kind == BagKind::Fruit && item.sellable,
+        sellable: kind == BagKind::Fruit && item.sellable && !item.locked,
+        lockable: item.uid > 0
+            && matches!(item.item_type, ITEM_SEED | ITEM_FRUIT | ITEM_MUTANT_FRUIT),
+        locked: item.locked,
         kind,
     }
 }
@@ -521,6 +559,7 @@ fn is_balance_item(id: i64) -> bool {
 mod tests {
     use super::{
         bag_lines, chosen_count, is_balance_item, is_dog_food, BagFilter, BagKind, ITEM_FRUIT,
+        ITEM_SEED,
     };
     use qq_farm_core::services::warehouse::BagItemView;
 
@@ -575,5 +614,20 @@ mod tests {
         let lines = bag_lines(&[item(6, 17, false)], BagFilter::Fruit);
         assert_eq!(lines[0].kind, BagKind::Fruit);
         assert!(!lines[0].sellable);
+    }
+
+    #[test]
+    fn locked_fruit_cannot_be_sold_and_seeds_can_be_locked() {
+        let mut fruit = item(200, ITEM_FRUIT, true);
+        fruit.uid = 9;
+        fruit.locked = true;
+        let mut seed = item(3, ITEM_SEED, false);
+        seed.uid = 4;
+        let lines = bag_lines(&[fruit, seed], BagFilter::All);
+        assert!(lines[0].locked);
+        assert!(lines[0].lockable);
+        assert!(!lines[0].sellable);
+        assert!(!lines[1].locked);
+        assert!(lines[1].lockable);
     }
 }

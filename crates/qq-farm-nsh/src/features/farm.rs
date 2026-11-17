@@ -1,5 +1,5 @@
 use nsh_core::prelude::*;
-use qq_farm_app::dto::{LandRow, LandsPayload};
+use qq_farm_app::dto::{LandRow, LandsPayload, PanelStatus};
 use serde_json::Value;
 
 use super::account_gate::{account_gate, gate_notice, AccountGate};
@@ -160,6 +160,23 @@ pub(crate) fn page(page: FarmPage) -> impl IntoElement {
     pick.reset_for_account(page.account_id);
     pick.reset_when_scope_changes(signal(None::<i64>));
     let fert = FertPick { mode: signal(FertMode::Off), lands: signal(Vec::new()) };
+    let inspected = signal(None::<i64>);
+    effect(move || {
+        let _ = page.account_id.get();
+        inspected.set(None);
+    });
+    let status = resource(
+        move || inspected.get().and_then(|_| ready_account(page)),
+        |id, _| async move {
+            session::session()
+                .runtime
+                .spawn_blocking(move || {
+                    qq_farm_app::farm::panel_status_with_progress(&session::session().context, &id)
+                })
+                .await
+                .map_err(|error| error.to_string())
+        },
+    );
     effect(move || {
         if super::interaction_items::choosing(pick) && fert.mode.get_untracked() != FertMode::Off {
             fert.mode.set(FertMode::Off);
@@ -181,7 +198,20 @@ pub(crate) fn page(page: FarmPage) -> impl IntoElement {
         .child(panel_switch(panel))
         .child(when(
             move || panel.get() == FarmPanel::Lands,
-            move || lands_column(page, pending, failure, outcome, lands, preferences, pick, fert),
+            move || {
+                lands_column(
+                    page,
+                    pending,
+                    failure,
+                    outcome,
+                    lands,
+                    preferences,
+                    pick,
+                    fert,
+                    inspected,
+                    status,
+                )
+            },
         ))
         .child(when(
             move || panel.get() == FarmPanel::Bag,
@@ -223,6 +253,8 @@ fn lands_column(
     preferences: Resource<Value, String>,
     pick: super::interaction_items::InteractionPick,
     fert: FertPick,
+    inspected: Signal<Option<i64>>,
+    status: Resource<PanelStatus, String>,
 ) -> impl IntoElement {
     view()
         .gap_3()
@@ -239,7 +271,20 @@ fn lands_column(
         .child(when(move || ready(page) && lands.error().is_some(), move || load_error(lands)))
         .child(when(
             move || ready(page) && lands.get().is_some(),
-            move || farm_body(page, pending, failure, outcome, lands, preferences, pick, fert),
+            move || {
+                farm_body(
+                    page,
+                    pending,
+                    failure,
+                    outcome,
+                    lands,
+                    preferences,
+                    pick,
+                    fert,
+                    inspected,
+                    status,
+                )
+            },
         ))
 }
 
@@ -272,10 +317,16 @@ fn farm_body(
     preferences: Resource<Value, String>,
     pick: super::interaction_items::InteractionPick,
     fert: FertPick,
+    inspected: Signal<Option<i64>>,
+    status: Resource<PanelStatus, String>,
 ) -> impl IntoElement {
     view()
         .gap_3()
         .child(summary(lands))
+        .child(when(
+            move || lands.get().is_some_and(|payload| payload.career.is_some()),
+            move || career_row(lands),
+        ))
         .child(actions(page, pending, failure, outcome, lands, preferences))
         .child(fertilizer_bar(page, pending, failure, lands, pick, fert))
         .child(super::interaction_items::farm_tools(page.account_id, pending, failure, lands, pick))
@@ -286,7 +337,9 @@ fn farm_body(
         .child(each(
             move || land_lines(lands),
             |land: &LandLine| land.id.to_string(),
-            move |land, _| render_land(land.get_untracked(), pick, pending, failure, fert),
+            move |land, _| {
+                render_land(land.get_untracked(), pick, pending, failure, fert, inspected, status)
+            },
         ))
 }
 
@@ -306,6 +359,68 @@ fn summary(lands: Resource<LandsPayload, String>) -> View {
         }))
         .child(chip("farm.summaryWeed", move || count(lands, |payload| payload.summary.need_weed)))
         .child(chip("farm.summaryBug", move || count(lands, |payload| payload.summary.need_bug)))
+}
+
+fn career_row(lands: Resource<LandsPayload, String>) -> View {
+    view()
+        .flex_row()
+        .flex_wrap()
+        .gap_4()
+        .child(chip("farm.careerHarvest", move || career_amount(lands, true)))
+        .child(chip("farm.careerSteal", move || career_amount(lands, false)))
+        .child(chip("farm.careerRatio", move || career_ratio(lands)))
+}
+
+fn career_amount(lands: Resource<LandsPayload, String>, harvest: bool) -> SharedString {
+    let count = lands
+        .get()
+        .and_then(|payload| payload.career)
+        .map(|career| if harvest { career.harvest } else { career.steal })
+        .unwrap_or(0);
+    SharedString::from(career_count(count, locale().as_str() == "en-US"))
+}
+
+fn career_ratio(lands: Resource<LandsPayload, String>) -> SharedString {
+    let (harvest, steal) = lands
+        .get()
+        .and_then(|payload| payload.career)
+        .map(|career| (career.harvest, career.steal))
+        .unwrap_or((0, 0));
+    SharedString::from(steal_ratio(harvest, steal))
+}
+
+pub(crate) fn career_count(count: i64, english: bool) -> String {
+    let count = count.max(0);
+    if count < 10_000 {
+        return count.to_string();
+    }
+    if english {
+        let (value, suffix) = if count >= 1_000_000 {
+            (count as f64 / 1_000_000.0, "M")
+        } else {
+            (count as f64 / 1_000.0, "K")
+        };
+        return format!("{}{suffix}", trim_number(&format!("{value:.1}")));
+    }
+    trim_number(&format!("{:.2}", count as f64 / 10_000.0)) + "万"
+}
+
+pub(crate) fn steal_ratio(harvest: i64, steal: i64) -> String {
+    let harvest = harvest.max(0);
+    let steal = steal.max(0);
+    if harvest <= 0 {
+        return if steal > 0 { "--".to_owned() } else { "0%".to_owned() };
+    }
+    format!("{}%", trim_number(&format!("{:.1}", steal as f64 / harvest as f64 * 100.0)))
+}
+
+fn trim_number(value: &str) -> String {
+    let trimmed = value.trim_end_matches('0').trim_end_matches('.');
+    if trimmed.is_empty() {
+        "0".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
 }
 
 fn count(
@@ -446,6 +561,7 @@ struct LandLine {
     fert_root: i64,
     fert_ok: bool,
     care_ok: bool,
+    upgrade: Option<UpgradeFact>,
 }
 
 fn land_lines(lands: Resource<LandsPayload, String>) -> Vec<LandLine> {
@@ -473,6 +589,7 @@ fn land_line(land: &LandRow, rows: &[LandRow], social: &[i64]) -> LandLine {
         fert_root,
         fert_ok: can_fertilize(root),
         care_ok: care_selectable(root, rows, social),
+        upgrade: land.land_info.as_ref().and_then(upgrade_fact),
     }
 }
 
@@ -607,9 +724,12 @@ fn render_land(
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
     fert: FertPick,
+    inspected: Signal<Option<i64>>,
+    status: Resource<PanelStatus, String>,
 ) -> View {
     let title = SharedString::from(land.title);
     let button_title = title.clone();
+    let inspect_title = title.clone();
     let fert_title = button_title.clone();
     let fert_root = land.fert_root;
     let fert_ok = land.fert_ok;
@@ -620,77 +740,136 @@ fn render_land(
     let press_target = land.target.clone();
     let label_target = land.target;
     let id = land.id;
+    let upgrade = land.upgrade;
+    let can_inspect = upgrade.is_some();
     view()
-        .flex_row()
-        .items_center()
-        .gap_3()
+        .flex_col()
+        .gap_1()
         .py_2()
-        .child(when(
-            move || !super::interaction_items::choosing(pick) && fert.mode.get() == FertMode::Off,
-            move || text(title.clone()).text_sm().font_weight(FontWeight::MEDIUM),
-        ))
-        .child(when(
-            move || !super::interaction_items::choosing(pick) && fert.mode.get() != FertMode::Off,
-            move || {
-                let fert_title = fert_title.clone();
-                button(move || fert_title.clone(), ButtonVariant::Quiet)
-                    .selected(move || fert.lands.get().contains(&fert_root))
-                    .disabled(move || {
-                        pending.get().is_some() || !land_allowed(fert.mode.get(), fert_ok, care_ok)
-                    })
-                    .on_press(move || {
-                        let allowed = land_allowed(fert.mode.get_untracked(), fert_ok, care_ok);
-                        if fert.mode.get_untracked() == FertMode::Care {
-                            press_care(fert, fert_root, allowed, failure);
-                        } else {
-                            press_fertilizer(fert, fert_root, allowed, failure);
-                        }
-                    })
-            },
-        ))
-        .child(when(
-            move || super::interaction_items::choosing(pick),
-            move || {
-                let button_target = button_target.clone();
-                let press_target = press_target.clone();
-                let button_title = button_title.clone();
-                button(move || button_title.clone(), ButtonVariant::Quiet)
-                    .selected(move || super::interaction_items::land_selected(pick, id))
-                    .disabled(move || {
-                        pending.get().is_some()
-                            || super::interaction_items::selection_label(pick, &button_target, id)
-                                .is_some()
-                    })
-                    .on_press(move || {
-                        super::interaction_items::press_land(pick, &press_target, id, failure)
-                    })
-            },
-        ))
-        .child(when(
-            {
-                let label_target = label_target.clone();
-                move || super::interaction_items::selection_label(pick, &label_target, id).is_some()
-            },
-            move || {
-                let label_target = label_target.clone();
-                badge(
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap_3()
+                .child(when(
                     move || {
-                        text_key(
+                        can_inspect
+                            && !super::interaction_items::choosing(pick)
+                            && fert.mode.get() == FertMode::Off
+                    },
+                    move || {
+                        let inspect_title = inspect_title.clone();
+                        button(move || inspect_title.clone(), ButtonVariant::Quiet)
+                            .selected(move || inspected.get() == Some(id))
+                            .disabled(move || pending.get().is_some())
+                            .on_press(move || toggle_inspected(inspected, id))
+                    },
+                ))
+                .child(when(
+                    move || {
+                        !can_inspect
+                            && !super::interaction_items::choosing(pick)
+                            && fert.mode.get() == FertMode::Off
+                    },
+                    move || text(title.clone()).text_sm().font_weight(FontWeight::MEDIUM),
+                ))
+                .child(when(
+                    move || {
+                        !super::interaction_items::choosing(pick)
+                            && fert.mode.get() != FertMode::Off
+                    },
+                    move || {
+                        let fert_title = fert_title.clone();
+                        button(move || fert_title.clone(), ButtonVariant::Quiet)
+                            .selected(move || fert.lands.get().contains(&fert_root))
+                            .disabled(move || {
+                                pending.get().is_some()
+                                    || !land_allowed(fert.mode.get(), fert_ok, care_ok)
+                            })
+                            .on_press(move || {
+                                let allowed =
+                                    land_allowed(fert.mode.get_untracked(), fert_ok, care_ok);
+                                if fert.mode.get_untracked() == FertMode::Care {
+                                    press_care(fert, fert_root, allowed, failure);
+                                } else {
+                                    press_fertilizer(fert, fert_root, allowed, failure);
+                                }
+                            })
+                    },
+                ))
+                .child(when(
+                    move || super::interaction_items::choosing(pick),
+                    move || {
+                        let button_target = button_target.clone();
+                        let press_target = press_target.clone();
+                        let button_title = button_title.clone();
+                        button(move || button_title.clone(), ButtonVariant::Quiet)
+                            .selected(move || super::interaction_items::land_selected(pick, id))
+                            .disabled(move || {
+                                pending.get().is_some()
+                                    || super::interaction_items::selection_label(
+                                        pick,
+                                        &button_target,
+                                        id,
+                                    )
+                                    .is_some()
+                            })
+                            .on_press(move || {
+                                super::interaction_items::press_land(
+                                    pick,
+                                    &press_target,
+                                    id,
+                                    failure,
+                                )
+                            })
+                    },
+                ))
+                .child(when(
+                    {
+                        let label_target = label_target.clone();
+                        move || {
                             super::interaction_items::selection_label(pick, &label_target, id)
-                                .unwrap_or("interaction.unavailable"),
+                                .is_some()
+                        }
+                    },
+                    move || {
+                        let label_target = label_target.clone();
+                        badge(
+                            move || {
+                                text_key(
+                                    super::interaction_items::selection_label(
+                                        pick,
+                                        &label_target,
+                                        id,
+                                    )
+                                    .unwrap_or("interaction.unavailable"),
+                                )
+                            },
+                            BadgeTone::Neutral,
                         )
                     },
-                    BadgeTone::Neutral,
+                ))
+                .child(
+                    text(subtitle).text_sm().text_color(move || nsh_base::theme().muted_foreground),
                 )
+                .child(each(
+                    move || marks.clone(),
+                    |mark: &LandMark| mark.key.to_owned(),
+                    |mark, _| {
+                        let mark = mark.get_untracked();
+                        badge(move || text_key(mark.key), mark.tone)
+                    },
+                )),
+        )
+        .child(when(
+            move || {
+                can_inspect
+                    && inspected.get() == Some(id)
+                    && !super::interaction_items::choosing(pick)
+                    && fert.mode.get() == FertMode::Off
             },
-        ))
-        .child(text(subtitle).text_sm().text_color(move || nsh_base::theme().muted_foreground))
-        .child(each(
-            move || marks.clone(),
-            |mark: &LandMark| mark.key.to_owned(),
-            |mark, _| {
-                let mark = mark.get_untracked();
-                badge(move || text_key(mark.key), mark.tone)
+            move || {
+                upgrade.clone().map(|fact| upgrade_panel(fact, status)).unwrap_or_else(|| view())
             },
         ))
 }
@@ -833,6 +1012,336 @@ fn toggle_fertilizer(selected: &[i64], root: i64, blocked: bool) -> Option<Vec<i
     Some(next)
 }
 
+fn toggle_inspected(inspected: Signal<Option<i64>>, id: i64) {
+    inspected.set(if inspected.get_untracked() == Some(id) { None } else { Some(id) });
+}
+
+fn upgrade_panel(fact: UpgradeFact, status: Resource<PanelStatus, String>) -> View {
+    let heading = SharedString::from(upgrade_heading(&fact));
+    let notes_fact = fact.clone();
+    view().gap_1().child(text(heading).text_sm().font_weight(FontWeight::SEMIBOLD)).child(each(
+        move || {
+            let wallet = status.get().as_ref().map(wallet_from);
+            upgrade_notes(&notes_fact, wallet.as_ref())
+        },
+        note_key,
+        |note, _| {
+            let line = SharedString::from(note_text(&note.get_untracked()));
+            text(line).text_sm().text_color(move || nsh_base::theme().muted_foreground)
+        },
+    ))
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct UpgradeFact {
+    mode: &'static str,
+    current_name: String,
+    next_name: String,
+    need_level: Option<i64>,
+    prerequisite_land: Option<i64>,
+    prerequisite_met: bool,
+    preceding_name: String,
+    preceding_required: i64,
+    preceding_owned: Option<i64>,
+    costs: Vec<UpgradeCost>,
+    bonuses: Vec<BonusLine>,
+    unknown: bool,
+    allowed: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct UpgradeCost {
+    id: i64,
+    name: String,
+    count: String,
+}
+
+#[derive(Clone, Copy)]
+struct Wallet {
+    level: i64,
+    gold: i64,
+    coupon: Option<i64>,
+    bean: Option<i64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BonusKind {
+    Yield,
+    Growth,
+    Exp,
+    Mutant,
+    Resonance,
+}
+
+impl BonusKind {
+    const ALL: [Self; 5] = [Self::Yield, Self::Growth, Self::Exp, Self::Mutant, Self::Resonance];
+
+    const fn label_key(self) -> &'static str {
+        match self {
+            Self::Yield => "farm.landYield",
+            Self::Growth => "farm.landGrowth",
+            Self::Exp => "farm.landExp",
+            Self::Mutant => "farm.landMutant",
+            Self::Resonance => "farm.landResonance",
+        }
+    }
+
+    const fn unit_key(self) -> &'static str {
+        match self {
+            Self::Mutant => "farm.landTimes",
+            _ => "farm.landPercent",
+        }
+    }
+
+    const fn json_key(self) -> &'static str {
+        match self {
+            Self::Yield => "yieldBonus",
+            Self::Growth => "growthReduction",
+            Self::Exp => "expBonus",
+            Self::Mutant => "mutantMultiplier",
+            Self::Resonance => "resonanceBonus",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BonusLine {
+    kind: BonusKind,
+    current: Option<String>,
+    next: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum UpgradeNote {
+    Bonus(BonusLine),
+    Level { need: i64, have: Option<i64> },
+    Prerequisite { land_id: i64, met: bool },
+    Preceding { name: String, required: i64, owned: Option<i64> },
+    Cost { name: String, count: String, short: Option<i64> },
+    Unknown,
+    Ready(&'static str),
+}
+
+fn wallet_from(status: &PanelStatus) -> Wallet {
+    let nested = status.status.as_ref();
+    Wallet {
+        level: status.level,
+        gold: status.gold,
+        coupon: nested.and_then(|value| value.get("coupon")).and_then(Value::as_i64),
+        bean: nested.and_then(|value| value.get("goldBean")).and_then(Value::as_i64),
+    }
+}
+
+fn upgrade_fact(info: &Value) -> Option<UpgradeFact> {
+    let mode = match info.get("mode").and_then(Value::as_str)? {
+        "unlock" => "unlock",
+        "upgrade" => "upgrade",
+        "max" => "max",
+        _ => return None,
+    };
+    let current_name = json_text(info.pointer("/current/name"));
+    let next_name = json_text(info.pointer("/next/name"));
+    let need_level = info.get("needLevel").and_then(json_i64);
+    let prerequisite_land = info.pointer("/prerequisite/landId").and_then(json_i64);
+    let prerequisite_met =
+        info.pointer("/prerequisite/met").and_then(Value::as_bool).unwrap_or(false);
+    let preceding_name = json_text(info.pointer("/precedingLands/name"));
+    let preceding_required =
+        info.pointer("/precedingLands/required").and_then(json_i64).unwrap_or(0);
+    let preceding_owned = info.pointer("/precedingLands/owned").and_then(json_i64);
+    let costs = info
+        .get("costs")
+        .and_then(Value::as_array)
+        .map(|costs| costs.iter().filter_map(upgrade_cost).collect())
+        .unwrap_or_default();
+    Some(UpgradeFact {
+        mode,
+        current_name,
+        next_name,
+        need_level,
+        prerequisite_land,
+        prerequisite_met,
+        preceding_name,
+        preceding_required,
+        preceding_owned,
+        costs,
+        bonuses: bonus_lines(info),
+        unknown: info.get("unknown").and_then(Value::as_bool).unwrap_or(false),
+        allowed: info.get("serverAllowed").and_then(Value::as_bool).unwrap_or(false),
+    })
+}
+
+fn upgrade_cost(value: &Value) -> Option<UpgradeCost> {
+    let id = value.get("id").and_then(json_i64).filter(|id| *id > 0)?;
+    let count = value.get("count").and_then(Value::as_str).filter(|count| !count.is_empty())?;
+    let name = json_text(value.get("name"));
+    let name = if name.is_empty() { format!("物品 {id}") } else { name };
+    Some(UpgradeCost { id, name, count: count.to_owned() })
+}
+
+fn bonus_lines(info: &Value) -> Vec<BonusLine> {
+    BonusKind::ALL
+        .into_iter()
+        .filter_map(|kind| {
+            let current = level_number(info, "current", kind.json_key());
+            let next = level_number(info, "next", kind.json_key());
+            (current.is_some() || next.is_some()).then_some(BonusLine { kind, current, next })
+        })
+        .collect()
+}
+
+fn level_number(info: &Value, side: &str, key: &str) -> Option<String> {
+    match info.get(side)?.get(key)? {
+        Value::Number(number) => Some(number.to_string()),
+        Value::String(text) if !text.trim().is_empty() => Some(text.trim().to_owned()),
+        _ => None,
+    }
+}
+
+fn upgrade_notes(fact: &UpgradeFact, wallet: Option<&Wallet>) -> Vec<UpgradeNote> {
+    let mut notes = fact.bonuses.iter().cloned().map(UpgradeNote::Bonus).collect::<Vec<_>>();
+    if fact.mode == "max" {
+        return notes;
+    }
+    if let Some(need) = fact.need_level {
+        notes.push(UpgradeNote::Level { need, have: wallet.map(|wallet| wallet.level) });
+    }
+    if let Some(land_id) = fact.prerequisite_land {
+        notes.push(UpgradeNote::Prerequisite { land_id, met: fact.prerequisite_met });
+    }
+    if fact.preceding_required > 0 {
+        notes.push(UpgradeNote::Preceding {
+            name: fact.preceding_name.clone(),
+            required: fact.preceding_required,
+            owned: fact.preceding_owned,
+        });
+    }
+    for cost in &fact.costs {
+        notes.push(UpgradeNote::Cost {
+            name: cost.name.clone(),
+            count: cost.count.clone(),
+            short: wallet.and_then(|wallet| cost_short(cost, wallet)),
+        });
+    }
+    if fact.unknown {
+        notes.push(UpgradeNote::Unknown);
+    }
+    if fact.allowed {
+        notes.push(UpgradeNote::Ready(if fact.mode == "unlock" {
+            "farm.landCanUnlock"
+        } else {
+            "farm.landCanUpgrade"
+        }));
+    }
+    notes
+}
+
+fn cost_short(cost: &UpgradeCost, wallet: &Wallet) -> Option<i64> {
+    let balance = match cost.id {
+        1001 => Some(wallet.gold),
+        1002 => wallet.coupon,
+        1005 => wallet.bean,
+        _ => None,
+    }?;
+    let required = cost.count.parse::<i64>().ok()?;
+    Some((required - balance).max(0))
+}
+
+fn upgrade_heading(fact: &UpgradeFact) -> String {
+    match fact.mode {
+        "max" => text_key("farm.landMax").to_string(),
+        "unlock" if !fact.next_name.is_empty() => {
+            text_key("farm.landUnlockTo").replace("{name}", &fact.next_name)
+        }
+        "upgrade" if !fact.current_name.is_empty() && !fact.next_name.is_empty() => {
+            text_key("farm.landUpgradeTo")
+                .replace("{current}", &fact.current_name)
+                .replace("{next}", &fact.next_name)
+        }
+        "unlock" => text_key("farm.unlock").to_string(),
+        _ => text_key("farm.upgrade").to_string(),
+    }
+}
+
+fn note_text(note: &UpgradeNote) -> String {
+    match note {
+        UpgradeNote::Bonus(line) => bonus_text(line),
+        UpgradeNote::Level { need, have: Some(have) } => text_key("farm.landLevelNow")
+            .replace("{have}", &have.to_string())
+            .replace("{need}", &need.to_string()),
+        UpgradeNote::Level { need, have: None } => {
+            text_key("farm.landLevel").replace("{need}", &need.to_string())
+        }
+        UpgradeNote::Prerequisite { land_id, met: true } => {
+            text_key("farm.landBeforeMet").replace("{id}", &land_id.to_string())
+        }
+        UpgradeNote::Prerequisite { land_id, met: false } => {
+            text_key("farm.landBefore").replace("{id}", &land_id.to_string())
+        }
+        UpgradeNote::Preceding { name, required, owned: Some(owned) } => text_key("farm.landCount")
+            .replace("{name}", name)
+            .replace("{owned}", &owned.to_string())
+            .replace("{required}", &required.to_string()),
+        UpgradeNote::Preceding { name, required, owned: None } => text_key("farm.landCountUnknown")
+            .replace("{name}", name)
+            .replace("{required}", &required.to_string()),
+        UpgradeNote::Cost { name, count, short: Some(0) } => {
+            text_key("farm.landEnough").replace("{name}", name).replace("{count}", count)
+        }
+        UpgradeNote::Cost { name, count, short: Some(short) } => text_key("farm.landShort")
+            .replace("{name}", name)
+            .replace("{count}", count)
+            .replace("{short}", &short.to_string()),
+        UpgradeNote::Cost { name, count, short: None } => {
+            text_key("farm.landCost").replace("{name}", name).replace("{count}", count)
+        }
+        UpgradeNote::Unknown => text_key("farm.landUnknown").to_string(),
+        UpgradeNote::Ready(key) => text_key(key).to_string(),
+    }
+}
+
+fn bonus_text(line: &BonusLine) -> String {
+    let label = text_key(line.kind.label_key());
+    let left = bonus_side(line.kind, line.current.as_deref());
+    let right = bonus_side(line.kind, line.next.as_deref());
+    match (line.current.is_some(), line.next.is_some()) {
+        (true, true) => format!("{label} {left} → {right}"),
+        (true, false) => format!("{label} {left}"),
+        (false, true) => format!("{label} {right}"),
+        (false, false) => label.to_string(),
+    }
+}
+
+fn bonus_side(kind: BonusKind, value: Option<&str>) -> String {
+    let Some(value) = value else {
+        return text_key("farm.landDash").to_string();
+    };
+    if kind == BonusKind::Mutant && value.parse::<f64>().ok().is_some_and(|number| number == 0.0) {
+        return text_key("farm.landNone").to_string();
+    }
+    format!("{value}{}", text_key(kind.unit_key()))
+}
+
+fn note_key(note: &UpgradeNote) -> String {
+    match note {
+        UpgradeNote::Bonus(line) => format!("bonus-{}", line.kind.json_key()),
+        UpgradeNote::Level { need, .. } => format!("level-{need}"),
+        UpgradeNote::Prerequisite { land_id, .. } => format!("before-{land_id}"),
+        UpgradeNote::Preceding { required, .. } => format!("count-{required}"),
+        UpgradeNote::Cost { name, count, .. } => format!("cost-{name}-{count}"),
+        UpgradeNote::Unknown => "unknown".to_owned(),
+        UpgradeNote::Ready(key) => (*key).to_owned(),
+    }
+}
+
+fn json_text(value: Option<&Value>) -> String {
+    value.and_then(Value::as_str).unwrap_or("").trim().to_owned()
+}
+
+fn json_i64(value: &Value) -> Option<i64> {
+    value.as_i64().or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+}
+
 fn land_title(land: &LandRow) -> String {
     land.plant_name
         .clone()
@@ -890,11 +1399,25 @@ fn duration_label(seconds: i64) -> String {
 #[cfg(test)]
 mod tests {
     use qq_farm_app::dto::LandRow;
+    use serde_json::json;
 
     use super::{
-        can_farm, can_fertilize, care_selectable, duration_label, fertilize_root, land_marks,
-        land_subtitle, land_title, manual_fertilizer, shown_ops, toggle_care, toggle_fertilizer,
+        can_farm, can_fertilize, care_selectable, career_count, duration_label, fertilize_root,
+        land_marks, land_subtitle, land_title, manual_fertilizer, shown_ops, steal_ratio,
+        toggle_care, toggle_fertilizer, upgrade_fact, upgrade_notes, BonusKind, BonusLine,
+        UpgradeNote, Wallet,
     };
+
+    #[test]
+    fn career_counts_use_wan_or_english_units_and_ratio_hides_zero_harvest() {
+        assert_eq!(career_count(9_999, false), "9999");
+        assert_eq!(career_count(12_340, false), "1.23万");
+        assert_eq!(career_count(1_200_000, true), "1.2M");
+        assert_eq!(career_count(12_340, true), "12.3K");
+        assert_eq!(steal_ratio(10, 2), "20%");
+        assert_eq!(steal_ratio(0, 4), "--");
+        assert_eq!(steal_ratio(0, 0), "0%");
+    }
 
     #[test]
     fn title_uses_the_plant_name() {
@@ -1004,5 +1527,78 @@ mod tests {
         assert_eq!(toggle_care(&[4], 8, false), vec![4, 8]);
         assert_eq!(toggle_care(&[4, 8], 8, false), vec![4]);
         assert_eq!(toggle_care(&[4], 8, true), vec![4]);
+    }
+
+    #[test]
+    fn land_upgrade_notes_compare_level_and_currency() {
+        let fact = upgrade_fact(&json!({
+            "mode": "upgrade",
+            "current": { "name": "红土地", "expBonus": 20, "mutantMultiplier": 0 },
+            "next": { "name": "黑土地", "expBonus": 25, "mutantMultiplier": 1.2 },
+            "needLevel": 150,
+            "precedingLands": { "name": "红土地", "required": 1, "owned": 1, "met": true },
+            "costs": [
+                { "id": "1001", "name": "金币", "count": "450000000" },
+                { "id": "1005", "name": "金豆豆", "count": "18670" }
+            ],
+            "serverAllowed": false,
+            "unknown": false
+        }))
+        .expect("upgrade");
+        let wallet = Wallet { level: 12, gold: 100, coupon: None, bean: Some(18670) };
+        assert_eq!(
+            upgrade_notes(&fact, Some(&wallet)),
+            vec![
+                UpgradeNote::Bonus(BonusLine {
+                    kind: BonusKind::Exp,
+                    current: Some("20".to_owned()),
+                    next: Some("25".to_owned()),
+                }),
+                UpgradeNote::Bonus(BonusLine {
+                    kind: BonusKind::Mutant,
+                    current: Some("0".to_owned()),
+                    next: Some("1.2".to_owned()),
+                }),
+                UpgradeNote::Level { need: 150, have: Some(12) },
+                UpgradeNote::Preceding {
+                    name: "红土地".to_owned(), required: 1, owned: Some(1)
+                },
+                UpgradeNote::Cost {
+                    name: "金币".to_owned(),
+                    count: "450000000".to_owned(),
+                    short: Some(449_999_900),
+                },
+                UpgradeNote::Cost {
+                    name: "金豆豆".to_owned(),
+                    count: "18670".to_owned(),
+                    short: Some(0),
+                },
+            ]
+        );
+        let locked = upgrade_fact(&json!({
+            "mode": "unlock",
+            "next": { "name": "普通土地" },
+            "needLevel": 10,
+            "prerequisite": { "landId": 7, "met": false },
+            "costs": [{ "id": "1001", "name": "金币", "count": "100000" }],
+            "serverAllowed": true
+        }))
+        .expect("unlock");
+        assert!(upgrade_notes(&locked, None)
+            .iter()
+            .any(|note| matches!(note, UpgradeNote::Prerequisite { land_id: 7, met: false })));
+        let maxed = upgrade_fact(&json!({
+            "mode": "max",
+            "current": { "name": "蓝晶土地", "expBonus": 50 }
+        }))
+        .expect("max");
+        assert_eq!(
+            upgrade_notes(&maxed, None),
+            vec![UpgradeNote::Bonus(BonusLine {
+                kind: BonusKind::Exp,
+                current: Some("50".to_owned()),
+                next: None,
+            })]
+        );
     }
 }

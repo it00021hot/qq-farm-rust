@@ -197,7 +197,25 @@ pub async fn bag_use(
     }
 }
 
-/// 出售背包物品。
+/// 锁定或解锁背包里的种子和果实。
+pub async fn bag_set_locked(
+    ctx: &AppContext,
+    account_id: &str,
+    uids: &[i64],
+    locked: bool,
+) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    let changed =
+        loop_.warehouse().set_items_locked(uids, locked).await.map_err(AppError::from_core)?;
+    let verb = if locked { "锁定" } else { "解锁" };
+    Ok(json!({
+        "locked": locked,
+        "changed": changed.len(),
+        "itemUids": changed,
+        "summary": format!("已{verb} {} 堆", changed.len()),
+    }))
+}
+
 /// 出售背包物品。返回卖出 / 所得明细（`SellReply`）。
 pub async fn bag_sell(
     ctx: &AppContext,
@@ -442,6 +460,18 @@ pub async fn daily_gift_overview(ctx: &AppContext, account_id: &str) -> AppResul
         |v: &Value, k: &str| v.get(k).and_then(serde_json::Value::as_bool).unwrap_or(false);
     let extract_i64 =
         |v: &Value, k: &str| v.get(k).and_then(serde_json::Value::as_i64).unwrap_or(0);
+    let extract_text =
+        |v: &Value, k: &str| v.get(k).and_then(serde_json::Value::as_str).unwrap_or("").to_owned();
+    let task_enabled =
+        qq_farm_core::models::store::account_config::get_automation(Some(account_id)).task;
+    let share_claim = extract_i64(&share_state, "lastClaimAt");
+    let share_last =
+        if share_claim > 0 { share_claim } else { extract_i64(&share_state, "lastCheckAt") };
+    let month_last = if month_state.last_claim_at > 0 {
+        month_state.last_claim_at
+    } else {
+        month_state.last_check_at
+    };
 
     Ok(json!({
         "date": chrono::Local::now().format("%Y-%m-%d").to_string(),
@@ -457,6 +487,7 @@ pub async fn daily_gift_overview(ctx: &AppContext, account_id: &str) -> AppResul
             {
                 "key": "task_claim",
                 "label": "每日任务",
+                "enabled": task_enabled,
                 "doneToday": task_full.done_today,
                 "lastAt": task_full.last_claim_at,
                 "completedCount": task_full.completed_count,
@@ -465,20 +496,31 @@ pub async fn daily_gift_overview(ctx: &AppContext, account_id: &str) -> AppResul
             {
                 "key": "email_rewards",
                 "label": "邮箱奖励",
+                "enabled": true,
                 "doneToday": extract_bool(&email_state, "doneToday"),
                 "lastAt": extract_i64(&email_state, "lastCheckAt"),
+                "nextAt": extract_i64(&email_state, "nextCheckAt"),
+                "scheduledHour": email_state.get("scheduledHour").cloned().unwrap_or(Value::Null),
+                "result": extract_text(&email_state, "result"),
+                "lastError": extract_text(&email_state, "lastError"),
             },
             {
                 "key": "mall_free_gifts",
                 "label": "商城免费礼包",
+                "enabled": true,
                 "doneToday": free_state.done_today,
                 "lastAt": free_state.last_claim_at,
             },
             {
                 "key": "daily_share",
                 "label": "分享礼包",
+                "enabled": true,
+                "mode": extract_text(&share_state, "mode"),
                 "doneToday": extract_bool(&share_state, "doneToday"),
-                "lastAt": extract_i64(&share_state, "lastClaimAt"),
+                "checkedToday": extract_bool(&share_state, "checkedToday"),
+                "checkStatus": extract_text(&share_state, "checkStatus"),
+                "canShare": share_state.get("canShare").cloned().unwrap_or(Value::Null),
+                "lastAt": share_last,
             },
             {
                 "key": "vip_daily_gift",
@@ -495,8 +537,12 @@ pub async fn daily_gift_overview(ctx: &AppContext, account_id: &str) -> AppResul
             {
                 "key": "month_card_gift",
                 "label": "月卡礼包",
+                "enabled": true,
                 "doneToday": month_state.done_today,
-                "lastAt": month_state.last_claim_at,
+                "lastAt": month_last,
+                "hasCard": month_state.has_card,
+                "hasClaimable": month_state.has_claimable,
+                "result": month_state.result,
             },
         ],
     }))

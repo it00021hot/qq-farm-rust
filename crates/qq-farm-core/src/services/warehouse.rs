@@ -7,6 +7,7 @@
 //! - `gamepb.itempb.ItemService.Bag` — 拉取背包
 //! - `gamepb.itempb.ItemService.Sell` — 出售（单/批）
 //! - `gamepb.itempb.ItemService.Use` — 使用道具（单/批）
+//! - `gamepb.itempb.ItemService.LockItems` / `UnlockItems` — 锁定或解锁种子和果实
 //!
 //! ## 业务
 //!
@@ -28,8 +29,8 @@ use crate::error::Result;
 use crate::network::gateway::Gateway;
 use crate::proto::generated::corepb::Item as CoreItem;
 use crate::proto::generated::gamepb::itempb::{
-    BagReply, BagRequest, BatchUseReply, BatchUseRequest, SellReply, SellRequest, UseReply,
-    UseRequest,
+    BagReply, BagRequest, BatchUseReply, BatchUseRequest, LockItemsReply, LockItemsRequest,
+    SellReply, SellRequest, UnlockItemsReply, UnlockItemsRequest, UseReply, UseRequest,
 };
 
 const FERTILIZER_RELATED_IDS: &[i64] =
@@ -184,6 +185,42 @@ impl WarehouseService {
         let body =
             self.gateway.request("gamepb.itempb.ItemService", "Sell", &req.encode_to_vec()).await?;
         SellReply::decode(&body)
+    }
+
+    /// 锁定或解锁种子、果实和变异果实。对齐 bot `setItemsLocked`。
+    pub async fn set_items_locked(&self, uids: &[i64], locked: bool) -> Result<Vec<i64>> {
+        let bag = self.get_bag().await?;
+        let gc = crate::config::game_config::global();
+        let stacks: Vec<(i64, i64, bool)> = get_bag_items(&bag)
+            .into_iter()
+            .map(|item| {
+                let item_type = gc.get_item_by_id(item.id).map(|info| info.item_type).unwrap_or(0);
+                (item.uid, item_type, item.locked)
+            })
+            .collect();
+        let actionable =
+            prepare_lock_uids(&stacks, uids, locked).map_err(crate::error::Error::Business)?;
+        if actionable.is_empty() {
+            return Ok(Vec::new());
+        }
+        let body = if locked {
+            let request = LockItemsRequest { item_uids: actionable.clone() };
+            self.gateway
+                .request("gamepb.itempb.ItemService", "LockItems", &request.encode_to_vec())
+                .await?
+        } else {
+            let request = UnlockItemsRequest { item_uids: actionable.clone() };
+            self.gateway
+                .request("gamepb.itempb.ItemService", "UnlockItems", &request.encode_to_vec())
+                .await?
+        };
+        let confirmed = if locked {
+            LockItemsReply::decode(&body[..])?.item_uids
+        } else {
+            UnlockItemsReply::decode(&body[..])?.item_uids
+        };
+        let confirmed: Vec<i64> = confirmed.into_iter().filter(|uid| *uid > 0).collect();
+        Ok(if confirmed.is_empty() { actionable } else { confirmed })
     }
 
     /// 使用背包物品。对齐原 `warehouse.useItem`：`UseRequest { item: { id, count, uid } }`。
@@ -588,6 +625,8 @@ pub struct BagItemView {
     pub category: String,
     pub item_type: i64,
     pub sellable: bool,
+    #[serde(default)]
+    pub locked: bool,
     pub sell_status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sell_condition: Option<String>,
@@ -613,6 +652,38 @@ pub struct BagSeedInfo {
 // =====================================================================
 // 辅助
 // =====================================================================
+
+fn prepare_lock_uids(
+    stacks: &[(i64, i64, bool)],
+    requested: &[i64],
+    lock: bool,
+) -> std::result::Result<Vec<i64>, String> {
+    let mut seen = Vec::new();
+    for uid in requested {
+        if *uid <= 0 || seen.contains(uid) {
+            continue;
+        }
+        seen.push(*uid);
+    }
+    if seen.is_empty() {
+        return Err("缺少物品 UID".to_owned());
+    }
+    let mut actionable = Vec::new();
+    for uid in seen {
+        let Some((_, item_type, locked)) =
+            stacks.iter().find(|(stack_uid, _, _)| *stack_uid == uid)
+        else {
+            return Err(format!("背包中未找到 UID {uid}"));
+        };
+        if !matches!(item_type, 5 | 6 | 17) {
+            return Err("物品不支持锁定".to_owned());
+        }
+        if *locked != lock {
+            actionable.push(uid);
+        }
+    }
+    Ok(actionable)
+}
 
 fn get_date_key() -> String {
     use chrono::Datelike;
@@ -769,6 +840,7 @@ pub fn build_bag_detail_from_items(raw_items: &[BagItemLite]) -> BagDetail {
             category: category.clone(),
             item_type: item_info.as_ref().map(|i| i.item_type).unwrap_or(0),
             sellable: sell_info.sellable,
+            locked: it.locked,
             sell_status: sell_info.status.to_string(),
             sell_condition: sell_info.condition.clone(),
             price_id,
@@ -801,6 +873,7 @@ pub fn build_bag_detail_from_items(raw_items: &[BagItemLite]) -> BagDetail {
             category: "item".to_string(),
             item_type: item_info.as_ref().map(|i| i.item_type).unwrap_or(0),
             sellable: false,
+            locked: false,
             sell_status: String::new(),
             sell_condition: None,
             price_id: 0,
@@ -1203,6 +1276,16 @@ mod tests {
         locked.locked = true;
         assert!(!included_in_auto_sell(&locked));
         assert!(!included_in_auto_sell(&BagItemLite::new(fruit_id, 0, 4)));
+    }
+
+    #[test]
+    fn lock_keeps_seeds_and_fruit_and_skips_the_current_state() {
+        let stacks = [(4, 5, false), (9, 6, true), (3, 11, false)];
+        assert_eq!(super::prepare_lock_uids(&stacks, &[4, 4, 9], true).expect("lock"), vec![4]);
+        assert_eq!(super::prepare_lock_uids(&stacks, &[9], false).expect("unlock"), vec![9]);
+        assert!(super::prepare_lock_uids(&stacks, &[3], true).is_err());
+        assert!(super::prepare_lock_uids(&stacks, &[0], true).is_err());
+        assert!(super::prepare_lock_uids(&stacks, &[8], true).unwrap_err().contains("UID 8"));
     }
 
     #[test]

@@ -1,10 +1,12 @@
-use nsh_base::theme;
+use nsh_base::{theme, MenuEvent};
 use nsh_core::prelude::*;
 
-use crate::features::{self, load_accounts, AccountRow, Workspace};
+use crate::features::{
+    self, account_label, load_accounts, platform_label, selected_account, AccountRow, Workspace,
+};
 use crate::i18n::text_key;
 use crate::navigation::{Section, SECTIONS};
-use crate::ui::choice;
+use crate::ui::{button, choice, ButtonVariant};
 
 const SECTION_KEY: &str = "qq-farm.section";
 const ACCOUNT_KEY: &str = "qq-farm.account";
@@ -23,7 +25,7 @@ pub(crate) fn workspace() -> impl IntoElement {
 }
 
 fn sidebar(workspace: Workspace) -> impl IntoElement {
-    nsh_base::radio_group()
+    view()
         .w(px(SIDEBAR_WIDTH))
         .gap_1()
         .px_3()
@@ -36,6 +38,7 @@ fn sidebar(workspace: Workspace) -> impl IntoElement {
                 .px_3()
                 .py_2(),
         )
+        .child(account_menu(workspace))
         .child(
             text(move || text_key("nav.group"))
                 .text_sm()
@@ -43,7 +46,7 @@ fn sidebar(workspace: Workspace) -> impl IntoElement {
                 .px_3()
                 .pt_4(),
         )
-        .child(each(
+        .child(nsh_base::radio_group().gap_1().child(each(
             move || SECTIONS.to_vec(),
             |section: &Section| section.id().to_owned(),
             move |section, _| {
@@ -54,7 +57,121 @@ fn sidebar(workspace: Workspace) -> impl IntoElement {
                 )
                 .on_change(move |_: &bool| workspace.section.set(section))
             },
+        )))
+}
+
+fn account_menu(workspace: Workspace) -> impl IntoElement {
+    let open = signal(false);
+    let reference = element_ref();
+    nsh_base::menu()
+        .open(move || Some(open.get()))
+        .placement(Placement::Bottom)
+        .align(Align::Start)
+        .offset(px(4.0))
+        .trigger(
+            view().child(
+                button(move || switcher_label(workspace), ButtonVariant::Secondary)
+                    .w(px(200.0))
+                    .justify_start()
+                    .element_ref(&reference)
+                    .on_press(move || open.update(|value| *value = !*value)),
+            ),
+        )
+        .on_open_change(move |opened: &MenuEvent| {
+            if let MenuEvent::OpenChange(value, _) = opened {
+                open.set(*value);
+            }
+        })
+        .on_close(move || reference.focus())
+        .popup_style(|style| {
+            style
+                .min_w(px(200.0))
+                .p_1()
+                .rounded(move || theme().radius)
+                .border_1()
+                .border_color(move || theme().border)
+                .bg(move || theme().popover)
+                .text_color(move || theme().popover_foreground)
+                .shadow_md()
+        })
+        .popup_starting_style(|style| style.opacity(0.0))
+        .popup_ending_style(|style| style.opacity(0.0))
+        .child(dynamic(move || account_items(workspace, open)))
+}
+
+fn switcher_label(workspace: Workspace) -> SharedString {
+    let Some(id) = workspace.account_id.get() else {
+        return text_key("shell.noAccount");
+    };
+    workspace
+        .rows
+        .get()
+        .as_ref()
+        .and_then(|rows| selected_account(rows, Some(&id)))
+        .map(|row| SharedString::from(account_label(&row)))
+        .unwrap_or_else(|| text_key("shell.noAccount"))
+}
+
+fn account_items(workspace: Workspace, open: Signal<bool>) -> View {
+    let rows = workspace.rows.get().unwrap_or_default();
+    view()
+        .gap_1()
+        .children(rows.into_iter().map(move |row| account_item(workspace, open, row)))
+        .child(manage_item(workspace, open))
+}
+
+fn account_item(workspace: Workspace, open: Signal<bool>, row: AccountRow) -> impl IntoElement {
+    let id = row.id.clone();
+    let checked_id = id.clone();
+    let title = SharedString::from(account_label(&row));
+    let label = title.clone();
+    let platform = row.platform.clone();
+    nsh_base::menu_item()
+        .accessibility_label(move || Some(label.clone()))
+        .role(Some(nsh_core::AccessibilityRole::MenuItemRadio))
+        .checked(move || Some(workspace.account_id.get().as_deref() == Some(checked_id.as_str())))
+        .min_h(px(32.0))
+        .px_2()
+        .py_1()
+        .rounded(px(4.0))
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .child(text(title).text_sm().flex_1().truncate())
+        .child(when(
+            {
+                let platform = platform.clone();
+                move || !platform.is_empty()
+            },
+            {
+                let platform = platform.clone();
+                move || {
+                    text(platform_label(&platform))
+                        .text_sm()
+                        .text_color(move || theme().muted_foreground)
+                }
+            },
         ))
+        .on_select(move || {
+            workspace.account_id.set(Some(id.clone()));
+            open.set(false);
+        })
+}
+
+fn manage_item(workspace: Workspace, open: Signal<bool>) -> impl IntoElement {
+    nsh_base::menu_item()
+        .accessibility_label(move || Some(text_key("shell.manage")))
+        .min_h(px(32.0))
+        .px_2()
+        .py_1()
+        .rounded(px(4.0))
+        .flex_row()
+        .items_center()
+        .child(text(move || text_key("shell.manage")).text_sm())
+        .on_select(move || {
+            workspace.section.set(Section::Accounts);
+            open.set(false);
+        })
 }
 
 fn remember(section: Signal<Section>, account_id: Signal<Option<String>>) {

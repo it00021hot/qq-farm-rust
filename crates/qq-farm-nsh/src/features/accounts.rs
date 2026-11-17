@@ -1,3 +1,4 @@
+use nsh_base::alert_dialog;
 use nsh_core::prelude::*;
 use serde_json::Value;
 
@@ -13,6 +14,7 @@ use crate::ui::{badge, button, field, notice, BadgeTone, ButtonVariant};
 pub(crate) struct AccountRow {
     pub id: String,
     pub title: String,
+    pub note: String,
     pub platform: String,
     pub running: bool,
 }
@@ -27,16 +29,31 @@ pub(crate) fn account_rows(value: &Value) -> Vec<AccountRow> {
 
 fn account_row(value: &Value) -> Option<AccountRow> {
     let id = value.get("id").and_then(Value::as_str).filter(|id| !id.is_empty())?;
-    let title = ["nick", "name", "remark"]
-        .into_iter()
-        .find_map(|field| nonempty(value, field))
-        .unwrap_or_else(|| id.to_owned());
+    let nick = nonempty(value, "nick");
+    let name = nonempty(value, "name").or_else(|| nonempty(value, "remark"));
+    let title = nick.clone().or(name.clone()).unwrap_or_else(|| id.to_owned());
+    let note =
+        name.filter(|name| nick.as_ref().is_some_and(|nick| nick != name)).unwrap_or_default();
     Some(AccountRow {
         id: id.to_owned(),
         title,
+        note,
         platform: nonempty(value, "platform").unwrap_or_default(),
         running: value.get("running").and_then(Value::as_bool).unwrap_or(false),
     })
+}
+
+pub(crate) fn account_label(row: &AccountRow) -> String {
+    if row.note.is_empty() {
+        row.title.clone()
+    } else {
+        format!("{} ({})", row.title, row.note)
+    }
+}
+
+pub(crate) fn selected_account(rows: &[AccountRow], id: Option<&str>) -> Option<AccountRow> {
+    let id = id?;
+    rows.iter().find(|row| row.id == id).cloned()
 }
 
 pub(crate) fn account_is_running(rows: &[AccountRow], id: &str) -> bool {
@@ -80,6 +97,7 @@ pub(crate) struct AccountPage {
 
 pub(crate) fn page(page: AccountPage) -> impl IntoElement {
     let AccountPage { rows, selected, pending, failure } = page;
+    let cleared = signal(None::<i64>);
     let code = signal(String::new());
     let label = signal(String::new());
     let platform = signal("qq".to_owned());
@@ -120,6 +138,19 @@ pub(crate) fn page(page: AccountPage) -> impl IntoElement {
             move || rows.get().is_some_and(|rows| rows.is_empty()),
             move || notice(move || text_key("accounts.empty")),
         ))
+        .child(when(
+            move || cleared.get().is_some(),
+            move || {
+                notice(move || {
+                    text_key("accounts.cleared")
+                        .replace("{count}", &cleared.get().unwrap_or(0).to_string())
+                })
+            },
+        ))
+        .child(when(
+            move || !stopped_ids(&rows.get().unwrap_or_default()).is_empty(),
+            move || clear_stopped_button(rows, selected, pending, failure, cleared),
+        ))
         .child(each(
             move || rows.get().unwrap_or_default(),
             |row: &AccountRow| row.id.clone(),
@@ -139,7 +170,7 @@ fn account_line(
     rows: Resource<Vec<AccountRow>, String>,
 ) -> impl IntoElement {
     let select_id = row.id.clone();
-    let title = SharedString::from(row.title.clone());
+    let title = SharedString::from(account_label(&row));
     let platform = platform_label(&row.platform);
     let running = row.running;
     view()
@@ -513,6 +544,108 @@ fn wx_status_key(status: &str) -> &'static str {
     }
 }
 
+fn stopped_ids(rows: &[AccountRow]) -> Vec<String> {
+    rows.iter().filter(|row| !row.running).map(|row| row.id.clone()).collect()
+}
+
+fn clear_stopped_button(
+    rows: Resource<Vec<AccountRow>, String>,
+    selected: Signal<Option<String>>,
+    pending: Signal<Option<String>>,
+    failure: Signal<Option<String>>,
+    cleared: Signal<Option<i64>>,
+) -> nsh_base::ButtonElement {
+    button(
+        move || {
+            if pending.get().as_deref() == Some("clear-stopped") {
+                text_key("accounts.working")
+            } else {
+                let count = stopped_ids(&rows.get().unwrap_or_default()).len();
+                SharedString::from(
+                    text_key("accounts.clearStopped").replace("{count}", &count.to_string()),
+                )
+            }
+        },
+        ButtonVariant::Danger,
+    )
+    .disabled(move || pending.get().is_some())
+    .on_press(move || clear_stopped(rows, selected, pending, failure, cleared))
+}
+
+fn clear_stopped(
+    rows: Resource<Vec<AccountRow>, String>,
+    selected: Signal<Option<String>>,
+    pending: Signal<Option<String>>,
+    failure: Signal<Option<String>>,
+    cleared: Signal<Option<i64>>,
+) {
+    if pending.get_untracked().is_some() {
+        return;
+    }
+    let ids = stopped_ids(&rows.get().unwrap_or_default());
+    if ids.is_empty() {
+        return;
+    }
+    let count = ids.len();
+    pending.set(Some("clear-stopped".to_owned()));
+    failure.set(None);
+    cleared.set(None);
+    let body = SharedString::from(
+        text_key("accounts.confirmClear.body").replace("{count}", &count.to_string()),
+    );
+    let answer = alert_dialog()
+        .title(text_key("accounts.confirmClear.title"))
+        .description(body)
+        .cancel("cancel", text_key("accounts.cancel"))
+        .destructive("clear", text_key("accounts.clearStoppedAction"))
+        .close_on_escape(true)
+        .show();
+    spawn(async move {
+        let accepted = answer.await.is_ok_and(|result| result.action.as_deref() == Some("clear"));
+        if !accepted {
+            pending.set(None);
+            return;
+        }
+        let context = session::session().context.clone();
+        let result = session::session()
+            .runtime
+            .spawn_blocking(move || delete_stopped(&context, &ids))
+            .await
+            .map_err(|error| error.to_string());
+        match result {
+            Ok((deleted, error)) => {
+                if deleted.iter().any(|id| selected.get().as_deref() == Some(id.as_str())) {
+                    selected.set(None);
+                }
+                if !deleted.is_empty() {
+                    cleared.set(Some(deleted.len() as i64));
+                }
+                if let Some(message) = error {
+                    failure.set(Some(message));
+                }
+            }
+            Err(message) => failure.set(Some(message)),
+        }
+        pending.set(None);
+        rows.refetch();
+    });
+}
+
+fn delete_stopped(
+    context: &qq_farm_app::AppContext,
+    ids: &[String],
+) -> (Vec<String>, Option<String>) {
+    let mut deleted = Vec::new();
+    let mut error = None;
+    for id in ids {
+        match qq_farm_app::accounts::delete_account(context, &AclPolicy::LocalOwner, id) {
+            Ok(()) => deleted.push(id.clone()),
+            Err(message) => error = Some(message.to_string()),
+        }
+    }
+    (deleted, error)
+}
+
 fn delete_button(
     row: AccountRow,
     selected: Signal<Option<String>>,
@@ -587,7 +720,7 @@ fn delete_account(
     );
 }
 
-fn platform_label(platform: &str) -> SharedString {
+pub(crate) fn platform_label(platform: &str) -> SharedString {
     match platform {
         "wx" => text_key("platform.wx"),
         "qq" => text_key("platform.qq"),
@@ -603,7 +736,10 @@ pub(crate) fn failure_line(message: Signal<Option<String>>) -> impl IntoElement 
 mod tests {
     use serde_json::json;
 
-    use super::{account_is_running, account_rows, jpeg_data_url, wx_status_key, AccountRow};
+    use super::{
+        account_is_running, account_label, account_rows, jpeg_data_url, selected_account,
+        stopped_ids, wx_status_key, AccountRow,
+    };
 
     #[test]
     fn wechat_status_and_qr_use_stable_keys() {
@@ -643,7 +779,18 @@ mod tests {
         }));
         assert_eq!(rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(), ["a", "b"]);
         assert_eq!(rows[0].title, "first");
+        assert!(rows[0].note.is_empty());
         assert!(!rows[1].running);
+        let named = account_rows(&json!({
+            "accounts": [
+                { "id": "c", "nick": "游戏名", "name": "备注", "platform": "wx" },
+                { "id": "d", "nick": "同名", "name": "同名" }
+            ]
+        }));
+        assert_eq!(account_label(&named[0]), "游戏名 (备注)");
+        assert_eq!(selected_account(&named, Some("c")).expect("selected").platform, "wx");
+        assert_eq!(account_label(&named[1]), "同名");
+        assert!(selected_account(&named, Some("missing")).is_none());
     }
 
     #[test]
@@ -652,12 +799,14 @@ mod tests {
             AccountRow {
                 id: "a".to_owned(),
                 title: "a".to_owned(),
+                note: String::new(),
                 platform: "qq".to_owned(),
                 running: false,
             },
             AccountRow {
                 id: "b".to_owned(),
                 title: "b".to_owned(),
+                note: String::new(),
                 platform: "qq".to_owned(),
                 running: true,
             },
@@ -665,5 +814,6 @@ mod tests {
         assert!(!account_is_running(&rows, "a"));
         assert!(account_is_running(&rows, "b"));
         assert!(!account_is_running(&rows, "c"));
+        assert_eq!(stopped_ids(&rows), vec!["a".to_owned()]);
     }
 }

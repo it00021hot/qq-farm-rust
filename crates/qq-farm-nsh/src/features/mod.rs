@@ -29,7 +29,9 @@ mod system_runtime;
 use nsh_core::prelude::*;
 
 use accounts::AccountPage;
-pub(crate) use accounts::{load_accounts, AccountRow};
+pub(crate) use accounts::{
+    account_label, load_accounts, platform_label, selected_account, AccountRow,
+};
 use dashboard::DashboardPage;
 
 use crate::navigation::Section;

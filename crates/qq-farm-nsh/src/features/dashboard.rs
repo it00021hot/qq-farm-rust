@@ -3,9 +3,10 @@ use nsh_core::prelude::*;
 use qq_farm_app::dto::PanelStatus;
 use qq_farm_core::constants::{event_label, module_label};
 use qq_farm_core::runtime::runtime_state::{LogEntry, LogFilters, GLOBAL_LOG_CAP};
+use serde_json::Value;
 
 use super::account_toggle::{toggle_account, AccountToggle};
-use super::accounts::{failure_line, AccountRow};
+use super::accounts::{failure_line, platform_label, selected_account, AccountRow};
 use super::confirm::confirm;
 use crate::i18n::text_key;
 use crate::navigation::Section;
@@ -63,6 +64,23 @@ pub(crate) struct DashboardPage {
 }
 
 pub(crate) fn page(page: DashboardPage) -> impl IntoElement {
+    let inventory = resource(
+        move || running_id(page),
+        |id, _| async move {
+            let context = session::session().context.clone();
+            let bag =
+                session::call(async move { qq_farm_app::farm::bag(&context, &id).await }).await?;
+            Ok(inventory_from(&bag))
+        },
+    );
+    let diamond = resource(
+        move || running_id(page),
+        |id, _| async move {
+            let context = session::session().context.clone();
+            session::call(async move { qq_farm_app::farm::diamond_balance(&context, &id).await })
+                .await
+        },
+    );
     let status = resource(
         move || page.account_id.get(),
         |id, _| async move {
@@ -145,7 +163,10 @@ pub(crate) fn page(page: DashboardPage) -> impl IntoElement {
                 )
             },
         ))
-        .child(when(move || status.get().is_some(), move || status_block(page, status)))
+        .child(when(
+            move || status.get().is_some(),
+            move || status_block(page, status, diamond, inventory),
+        ))
         .child(when(
             move || page.account_id.get().is_some(),
             move || log_block(LogBoard { logs, module, event, level, keyword, expanded, page }),
@@ -187,6 +208,8 @@ struct LogLine {
     message: String,
     time: String,
     warn: bool,
+    count: usize,
+    started: String,
 }
 
 struct LogWindow {
@@ -348,6 +371,8 @@ fn log_row(line: LogLine) -> View {
     let time = line.time.clone();
     let time_label = time.clone();
     let warn = line.warn;
+    let count = line.count;
+    let started = line.started.clone();
     view()
         .gap_1()
         .child(view().flex_row().items_center().gap_2().child(text(line.module).text_sm()).child(
@@ -371,14 +396,129 @@ fn log_row(line: LogLine) -> View {
                 theme().foreground
             }
         }))
+        .child(when(
+            move || count > 1,
+            move || {
+                let started = started.clone();
+                text(move || {
+                    text_key("dashboard.repeat")
+                        .replace("{count}", &count.to_string())
+                        .replace("{time}", &started)
+                })
+                .text_sm()
+                .text_color(move || theme().muted_foreground)
+            },
+        ))
 }
 
 #[cfg(test)]
 mod tests {
+    use qq_farm_app::dto::PanelStatus;
+    use qq_farm_core::services::warehouse::{BagDetail, BagItemView, SystemBagItem};
     use serde_json::json;
 
-    use super::{filters_active, filters_of, log_line, visible_logs, LogLine, LogQuery};
+    use super::{
+        clock_text, exp_per_hour, filters_active, filters_of, forecast_notes, group_logs,
+        inventory_from, log_line, patrol_text, progress_copy, shown_operations, shown_uptime,
+        visible_logs, ForecastNote, LogLine, LogQuery, PatrolText,
+    };
     use qq_farm_core::runtime::runtime_state::LogEntry;
+
+    #[test]
+    fn overview_keeps_next_checks_and_todays_counts() {
+        let panel = PanelStatus::from_engine_value(
+            &json!({
+                "connection": { "connected": true },
+                "uptime": 3661,
+                "status": { "name": "农场主", "coupon": 12, "goldBean": 3 },
+                "nextChecks": { "farmRemainSec": 3661, "helpRemainSec": 90, "friendQuiet": true },
+                "operations": { "harvest": 2, "plant": 0, "upgrade": 9, "levelUp": 1, "extra": 4 }
+            }),
+            "account",
+            true,
+        );
+        assert_eq!(
+            patrol_text(true, &panel),
+            PatrolText::Clock { days: 0, clock: "01:01:01".to_owned() }
+        );
+        assert_eq!(patrol_text(false, &panel), PatrolText::Quiet);
+        assert_eq!(panel.nick, "农场主");
+        assert_eq!(shown_uptime(&panel), Some(3661));
+        let offline = PanelStatus::from_engine_value(&json!({ "uptime": 3661 }), "account", false);
+        assert_eq!(shown_uptime(&offline), None);
+        assert_eq!(clock_text(0), (0, "00:00:00".to_owned()));
+        assert_eq!(clock_text(90_061), (1, "01:01:01".to_owned()));
+        assert_eq!(
+            shown_operations(&panel.operations)
+                .into_iter()
+                .map(|row| (row.key, row.count))
+                .collect::<Vec<_>>(),
+            vec![("harvest".to_owned(), 2), ("extra".to_owned(), 4)]
+        );
+        let offline = PanelStatus::from_engine_value(
+            &json!({ "nextChecks": { "farmRemainSec": 10, "farmQuiet": true } }),
+            "account",
+            false,
+        );
+        assert_eq!(patrol_text(true, &offline), PatrolText::Offline);
+    }
+
+    #[test]
+    fn inventory_uses_hours_text_then_seconds_and_keeps_the_first_item() {
+        let stock = inventory_from(&BagDetail {
+            items: vec![
+                BagItemView {
+                    id: 1011,
+                    count: 10,
+                    hours_text: "1.5小时".to_owned(),
+                    ..BagItemView::default()
+                },
+                BagItemView { id: 3001, count: 4, ..BagItemView::default() },
+            ],
+            system_items: vec![
+                SystemBagItem { id: 1012, count: 7200, ..SystemBagItem::default() },
+                SystemBagItem { id: 3001, count: 99, ..SystemBagItem::default() },
+                SystemBagItem { id: 3002, count: 6, ..SystemBagItem::default() },
+            ],
+            ..BagDetail::default()
+        });
+        assert_eq!(stock.normal_fertilizer, "1.5h");
+        assert_eq!(stock.organic_fertilizer, "2.0h");
+        assert_eq!(stock.normal_collection, 4);
+        assert_eq!(stock.rare_collection, 6);
+    }
+
+    #[test]
+    fn progress_rate_and_forecast_follow_the_bot_overview() {
+        assert_eq!(progress_copy(30, 120), "30 / 120 · 25%");
+        assert_eq!(exp_per_hour(3600, 1800.0), 7200);
+        assert_eq!(exp_per_hour(10, 0.0), 0);
+        let generated = 1_800_000_000_000_i64;
+        let planted = forecast_notes(Some(&json!({
+            "generatedAt": generated,
+            "scheduledExp": 20_544,
+            "plotCount": 24,
+            "estimatedAt": generated + 21_614_000_i64,
+            "source": "planted",
+            "automatic": true
+        })));
+        assert_eq!(
+            planted,
+            vec![
+                ForecastNote::Later {
+                    minutes: 361,
+                    planted: true,
+                    basis: Some("dashboard.byCrops"),
+                },
+                ForecastNote::Plots { count: 24, exp: 20_544 },
+            ]
+        );
+        assert_eq!(forecast_notes(None), Vec::<ForecastNote>::new());
+        assert_eq!(
+            forecast_notes(Some(&json!({ "plotCount": 0, "source": "unavailable" }))),
+            vec![ForecastNote::Waiting]
+        );
+    }
 
     #[test]
     fn ranch_log_uses_the_ranch_module_and_chinese_event() {
@@ -423,11 +563,13 @@ mod tests {
         let lines = (0..81)
             .map(|index| LogLine {
                 id: index.to_string(),
-                module: String::new(),
+                module: format!("module-{index}"),
                 event: String::new(),
                 message: String::new(),
                 time: String::new(),
                 warn: false,
+                count: 1,
+                started: String::new(),
             })
             .collect::<Vec<_>>();
         let first = visible_logs(&lines, false);
@@ -438,6 +580,32 @@ mod tests {
         assert_eq!(opened.lines.len(), 81);
         assert_eq!(opened.earlier, 0);
         assert_eq!(visible_logs(&lines[..1], false).earlier, 0);
+    }
+
+    #[test]
+    fn repeated_logs_collapse_when_only_the_numbers_change() {
+        let line = |message: &str, time: &str| LogLine {
+            id: time.to_owned(),
+            module: "农场".to_owned(),
+            event: "农场巡查".to_owned(),
+            message: message.to_owned(),
+            time: time.to_owned(),
+            warn: false,
+            count: 1,
+            started: time.to_owned(),
+        };
+        let groups = group_logs(&[
+            line("收获 3 块", "10:03"),
+            line("收获 2 块", "10:02"),
+            line("收获 1 块", "10:01"),
+            line("出售完成", "10:00"),
+        ]);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].message, "收获 3 块");
+        assert_eq!(groups[0].count, 3);
+        assert_eq!(groups[0].time, "10:03");
+        assert_eq!(groups[0].started, "10:01");
+        assert_eq!(groups[1].count, 1);
     }
 
     fn query(module: &str, event: &str, level: &str, keyword: &str) -> LogQuery {
@@ -472,9 +640,37 @@ fn log_line(entry: LogEntry) -> LogLine {
         module: module_label(module, event, &entry.tag),
         event: event_label(event),
         message: entry.msg,
-        time: entry.time,
+        time: entry.time.clone(),
         warn: entry.is_warn,
+        count: 1,
+        started: entry.time,
     }
+}
+
+fn group_logs(lines: &[LogLine]) -> Vec<LogLine> {
+    let mut groups = Vec::new();
+    for line in lines {
+        let same = groups.last().is_some_and(|last| log_signature(last) == log_signature(line));
+        if same {
+            let last = groups.last_mut().expect("matched group");
+            last.count += line.count.max(1);
+            last.started = line.time.clone();
+            continue;
+        }
+        let mut grouped = line.clone();
+        grouped.count = line.count.max(1);
+        grouped.started = line.time.clone();
+        groups.push(grouped);
+    }
+    groups
+}
+
+fn log_signature(line: &LogLine) -> String {
+    format!("{}|{}|{}", line.module, line.event, mask_digits(&line.message))
+}
+
+fn mask_digits(text: &str) -> String {
+    text.chars().map(|ch| if ch.is_ascii_digit() { '#' } else { ch }).collect()
 }
 
 fn filters_of(query: &LogQuery) -> LogFilters {
@@ -521,10 +717,12 @@ fn choice_label(choices: &'static [(&'static str, &'static str)], selected: &str
 }
 
 fn visible_logs(lines: &[LogLine], expanded: bool) -> LogWindow {
-    if expanded || lines.len() <= LOG_WINDOW {
-        return LogWindow { lines: lines.to_vec(), earlier: 0 };
+    let groups = group_logs(lines);
+    if expanded || groups.len() <= LOG_WINDOW {
+        return LogWindow { lines: groups, earlier: 0 };
     }
-    LogWindow { lines: lines[..LOG_WINDOW].to_vec(), earlier: lines.len() - LOG_WINDOW }
+    let earlier = groups.len() - LOG_WINDOW;
+    LogWindow { lines: groups[..LOG_WINDOW].to_vec(), earlier }
 }
 
 fn clear_account_logs(board: LogBoard) {
@@ -564,13 +762,34 @@ fn load_error(status: Resource<PanelStatus, String>) -> impl IntoElement {
     crate::ui::failure(move || status.error().map(SharedString::from).unwrap_or_default())
 }
 
-fn status_block(page: DashboardPage, status: Resource<PanelStatus, String>) -> impl IntoElement {
+fn status_block(
+    page: DashboardPage,
+    status: Resource<PanelStatus, String>,
+    diamond: Resource<i64, String>,
+    inventory: Resource<Inventory, String>,
+) -> impl IntoElement {
     view()
         .gap_2()
+        .child(metric("dashboard.name", move || nick_text(status)))
+        .child(metric("dashboard.platform", move || account_platform(page)))
         .child(metric("dashboard.online", move || online_label(status)))
+        .child(metric("dashboard.uptime", move || uptime_text(status)))
         .child(metric("dashboard.level", move || number(status, |panel| panel.level)))
         .child(metric("dashboard.gold", move || number(status, |panel| panel.gold)))
+        .child(metric("dashboard.coupon", move || nested_number(status, "coupon")))
+        .child(metric("dashboard.bean", move || nested_number(status, "goldBean")))
+        .child(metric("dashboard.diamond", move || diamond_text(diamond)))
+        .child(metric("dashboard.fertNormal", move || inventory_hours(inventory, true)))
+        .child(metric("dashboard.fertOrganic", move || inventory_hours(inventory, false)))
+        .child(metric("dashboard.collectNormal", move || inventory_count(inventory, true)))
+        .child(metric("dashboard.collectRare", move || inventory_count(inventory, false)))
         .child(metric("dashboard.exp", move || number(status, |panel| panel.exp)))
+        .child(metric("dashboard.progress", move || progress_text(status)))
+        .child(metric("dashboard.expRate", move || rate_text(status)))
+        .child(forecast_block(status))
+        .child(metric("dashboard.nextFarm", move || patrol_label(status, true)))
+        .child(metric("dashboard.nextFriend", move || patrol_label(status, false)))
+        .child(operations_block(status))
         .child(metric("dashboard.sessionExp", move || {
             optional_number(status, |panel| panel.session_exp_gained)
         }))
@@ -585,6 +804,228 @@ fn status_block(page: DashboardPage, status: Resource<PanelStatus, String>) -> i
                 .unwrap_or_default()
         }))
         .child(toggle(page, status))
+}
+
+fn progress_text(status: Resource<PanelStatus, String>) -> SharedString {
+    let Some(progress) = status.get().and_then(|panel| panel.level_progress.clone()) else {
+        return text_key("dashboard.dash");
+    };
+    SharedString::from(progress_copy(progress.current, progress.needed))
+}
+
+fn progress_copy(current: i64, needed: i64) -> String {
+    if needed <= 0 {
+        return current.to_string();
+    }
+    let percent = current.max(0).saturating_mul(100) / needed;
+    format!("{current} / {needed} · {percent}%")
+}
+
+fn rate_text(status: Resource<PanelStatus, String>) -> SharedString {
+    let Some(panel) = status.get() else {
+        return text_key("dashboard.dash");
+    };
+    let seconds = panel
+        .session_elapsed_seconds
+        .filter(|seconds| *seconds > 0.0)
+        .unwrap_or_else(|| panel.uptime.unwrap_or(0) as f64);
+    let rate = exp_per_hour(panel.session_exp_gained.unwrap_or(0), seconds);
+    SharedString::from(text_key("dashboard.perHour").replace("{rate}", &rate.to_string()))
+}
+
+fn exp_per_hour(gain: i64, seconds: f64) -> i64 {
+    if seconds <= 0.0 {
+        return 0;
+    }
+    let hours = seconds / 3600.0;
+    if hours <= 0.0 {
+        return 0;
+    }
+    (gain as f64 / hours).floor() as i64
+}
+
+fn forecast_block(status: Resource<PanelStatus, String>) -> View {
+    view()
+        .gap_1()
+        .child(when(
+            move || !forecast_of(status).is_empty(),
+            move || {
+                text(move || text_key("dashboard.forecast"))
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+            },
+        ))
+        .child(each(
+            move || forecast_of(status),
+            forecast_key,
+            |note, _| {
+                let line = SharedString::from(forecast_copy(&note.get_untracked()));
+                text(line).text_sm().text_color(move || nsh_base::theme().muted_foreground)
+            },
+        ))
+}
+
+fn forecast_of(status: Resource<PanelStatus, String>) -> Vec<ForecastNote> {
+    status.get().map(|panel| forecast_notes(panel.level_forecast.as_ref())).unwrap_or_default()
+}
+
+fn nested_number(status: Resource<PanelStatus, String>, key: &'static str) -> SharedString {
+    let amount = status.get().map_or(0, |panel| {
+        panel.status.as_ref().and_then(|value| value.get(key)).and_then(Value::as_i64).unwrap_or(0)
+    });
+    SharedString::from(amount.to_string())
+}
+
+fn inventory_hours(inventory: Resource<Inventory, String>, normal: bool) -> SharedString {
+    inventory
+        .get()
+        .map(|stock| {
+            SharedString::from(if normal {
+                stock.normal_fertilizer
+            } else {
+                stock.organic_fertilizer
+            })
+        })
+        .unwrap_or_else(|| text_key("dashboard.dash"))
+}
+
+fn inventory_count(inventory: Resource<Inventory, String>, normal: bool) -> SharedString {
+    inventory
+        .get()
+        .map(|stock| {
+            SharedString::from(
+                (if normal { stock.normal_collection } else { stock.rare_collection }).to_string(),
+            )
+        })
+        .unwrap_or_else(|| text_key("dashboard.dash"))
+}
+
+fn diamond_text(diamond: Resource<i64, String>) -> SharedString {
+    diamond
+        .get()
+        .map(|value| SharedString::from(value.to_string()))
+        .unwrap_or_else(|| text_key("dashboard.dash"))
+}
+
+fn patrol_label(status: Resource<PanelStatus, String>, farm: bool) -> SharedString {
+    let Some(panel) = status.get() else {
+        return text_key("dashboard.dash");
+    };
+    SharedString::from(patrol_copy(&patrol_text(farm, &panel)))
+}
+
+fn patrol_copy(text: &PatrolText) -> String {
+    match text {
+        PatrolText::Offline => text_key("dashboard.notLoggedIn").to_string(),
+        PatrolText::Quiet => text_key("dashboard.quiet").to_string(),
+        PatrolText::Checking => text_key("dashboard.checking").to_string(),
+        PatrolText::Clock { days: 0, clock } => clock.clone(),
+        PatrolText::Clock { days, clock } => text_key("dashboard.days")
+            .replace("{days}", &days.to_string())
+            .replace("{clock}", clock),
+    }
+}
+
+fn operations_block(status: Resource<PanelStatus, String>) -> View {
+    view()
+        .gap_2()
+        .child(
+            text(move || text_key("dashboard.today")).text_sm().font_weight(FontWeight::SEMIBOLD),
+        )
+        .child(when(
+            move || {
+                status.get().is_some_and(|panel| {
+                    panel.online && shown_operations(&panel.operations).is_empty()
+                })
+            },
+            move || {
+                text(move || text_key("dashboard.noOps"))
+                    .text_sm()
+                    .text_color(move || nsh_base::theme().muted_foreground)
+            },
+        ))
+        .child(when(
+            move || status.get().is_some_and(|panel| !panel.online),
+            move || {
+                text(move || text_key("dashboard.notLoggedIn"))
+                    .text_sm()
+                    .text_color(move || nsh_base::theme().muted_foreground)
+            },
+        ))
+        .child(each(
+            move || {
+                status
+                    .get()
+                    .filter(|panel| panel.online)
+                    .map(|panel| shown_operations(&panel.operations))
+                    .unwrap_or_default()
+            },
+            |row: &OpRow| row.key.clone(),
+            |row, _| {
+                let row = row.get_untracked();
+                metric_text(
+                    SharedString::from(
+                        row.label.map(text_key).unwrap_or_else(|| SharedString::from(row.key)),
+                    ),
+                    SharedString::from(row.count.to_string()),
+                )
+            },
+        ))
+}
+
+fn account_platform(page: DashboardPage) -> SharedString {
+    let Some(id) = page.account_id.get() else {
+        return text_key("dashboard.dash");
+    };
+    page.rows
+        .get()
+        .as_ref()
+        .and_then(|rows| selected_account(rows, Some(&id)))
+        .filter(|row| !row.platform.is_empty())
+        .map(|row| platform_label(&row.platform))
+        .unwrap_or_else(|| text_key("dashboard.dash"))
+}
+
+fn nick_text(status: Resource<PanelStatus, String>) -> SharedString {
+    status
+        .get()
+        .and_then(|panel| {
+            let nick = panel.nick.trim();
+            (!nick.is_empty()).then(|| SharedString::from(nick.to_owned()))
+        })
+        .unwrap_or_else(|| text_key("dashboard.dash"))
+}
+
+fn uptime_text(status: Resource<PanelStatus, String>) -> SharedString {
+    status
+        .get()
+        .as_ref()
+        .and_then(shown_uptime)
+        .map(|seconds| SharedString::from(uptime_copy(seconds)))
+        .unwrap_or_else(|| text_key("dashboard.dash"))
+}
+
+fn shown_uptime(panel: &PanelStatus) -> Option<i64> {
+    panel.online.then_some(i64::try_from(panel.uptime.unwrap_or(0)).unwrap_or(i64::MAX))
+}
+
+fn uptime_copy(seconds: i64) -> String {
+    let (days, clock) = clock_text(seconds);
+    if days > 0 {
+        text_key("dashboard.days").replace("{days}", &days.to_string()).replace("{clock}", &clock)
+    } else {
+        clock
+    }
+}
+
+fn clock_text(seconds: i64) -> (i64, String) {
+    let seconds = seconds.max(0);
+    let days = seconds / 86_400;
+    let rest = seconds % 86_400;
+    let hours = rest / 3600;
+    let minutes = rest % 3600 / 60;
+    let secs = rest % 60;
+    (days, format!("{hours:02}:{minutes:02}:{secs:02}"))
 }
 
 fn online_label(status: Resource<PanelStatus, String>) -> SharedString {
@@ -613,12 +1054,19 @@ fn optional_number(
 }
 
 fn metric(label: &'static str, value: impl IntoReactive<SharedString> + 'static) -> View {
+    metric_text(text_key(label), value)
+}
+
+fn metric_text(
+    label: impl IntoReactive<SharedString> + 'static,
+    value: impl IntoReactive<SharedString> + 'static,
+) -> View {
     view()
         .flex_row()
         .items_center()
         .justify_between()
         .gap_4()
-        .child(text(move || text_key(label)).text_sm())
+        .child(text(label).text_sm())
         .child(text(value).text_sm().font_weight(FontWeight::MEDIUM))
 }
 
@@ -628,6 +1076,236 @@ fn toggle(page: DashboardPage, status: Resource<PanelStatus, String>) -> impl In
         |active: &bool| active.to_string(),
         move |active, _| command_button(page, status, active.get_untracked()),
     )
+}
+
+const NORMAL_FERTILIZER: i64 = 1011;
+const ORGANIC_FERTILIZER: i64 = 1012;
+const NORMAL_COLLECTION: i64 = 3001;
+const RARE_COLLECTION: i64 = 3002;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Inventory {
+    normal_fertilizer: String,
+    organic_fertilizer: String,
+    normal_collection: i64,
+    rare_collection: i64,
+}
+
+struct BagRow {
+    id: i64,
+    count: i64,
+    hours_text: String,
+}
+
+fn inventory_from(bag: &qq_farm_core::services::warehouse::BagDetail) -> Inventory {
+    let rows = bag
+        .items
+        .iter()
+        .map(|item| BagRow { id: item.id, count: item.count, hours_text: item.hours_text.clone() })
+        .chain(bag.system_items.iter().map(|item| BagRow {
+            id: item.id,
+            count: item.count,
+            hours_text: item.hours_text.clone(),
+        }))
+        .collect::<Vec<_>>();
+    Inventory {
+        normal_fertilizer: bucket_time(&rows, NORMAL_FERTILIZER),
+        organic_fertilizer: bucket_time(&rows, ORGANIC_FERTILIZER),
+        normal_collection: item_count(&rows, NORMAL_COLLECTION),
+        rare_collection: item_count(&rows, RARE_COLLECTION),
+    }
+}
+
+fn bucket_time(rows: &[BagRow], id: i64) -> String {
+    let Some(item) = rows.iter().find(|row| row.id == id) else {
+        return "0.0h".to_owned();
+    };
+    if !item.hours_text.is_empty() {
+        return item.hours_text.replace("小时", "h");
+    }
+    format!("{:.1}h", item.count as f64 / 3600.0)
+}
+
+fn item_count(rows: &[BagRow], id: i64) -> i64 {
+    rows.iter().find(|row| row.id == id).map(|row| row.count).unwrap_or(0)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ForecastNote {
+    Waiting,
+    Short,
+    Ready { basis: Option<&'static str> },
+    Later { minutes: i64, planted: bool, basis: Option<&'static str> },
+    Plots { count: i64, exp: i64 },
+    Manual,
+}
+
+fn forecast_notes(forecast: Option<&Value>) -> Vec<ForecastNote> {
+    let Some(forecast) = forecast else {
+        return Vec::new();
+    };
+    let plots = forecast.get("plotCount").and_then(Value::as_i64).unwrap_or(0);
+    let automatic = forecast.get("automatic").and_then(Value::as_bool).unwrap_or(false);
+    let scheduled = forecast.get("scheduledExp").and_then(Value::as_i64).unwrap_or(0);
+    let basis = match forecast.get("source").and_then(Value::as_str) {
+        Some("planted") => Some("dashboard.byCrops"),
+        Some("ready") => Some("dashboard.readyHarvest"),
+        Some("mixed") => Some("dashboard.mixedRate"),
+        Some("history") => Some("dashboard.historyRate"),
+        _ => None,
+    };
+    let mut notes = Vec::new();
+    match forecast.get("estimatedAt").and_then(Value::as_i64) {
+        None if plots > 0 => notes.push(ForecastNote::Short),
+        None => notes.push(ForecastNote::Waiting),
+        Some(_) if forecast.get("source").and_then(Value::as_str) == Some("ready") => {
+            notes.push(ForecastNote::Ready { basis });
+        }
+        Some(estimated_at) => {
+            let generated = forecast.get("generatedAt").and_then(Value::as_i64).unwrap_or(0);
+            let minutes = (((estimated_at - generated).max(0) as f64) / 60_000.0).ceil().max(1.0);
+            notes.push(ForecastNote::Later {
+                minutes: minutes as i64,
+                planted: forecast.get("source").and_then(Value::as_str) == Some("planted"),
+                basis,
+            });
+        }
+    }
+    if plots > 0 {
+        notes.push(ForecastNote::Plots { count: plots, exp: scheduled });
+        if !automatic {
+            notes.push(ForecastNote::Manual);
+        }
+    }
+    notes
+}
+
+fn forecast_copy(note: &ForecastNote) -> String {
+    match note {
+        ForecastNote::Waiting => text_key("dashboard.forecastWait").to_string(),
+        ForecastNote::Short => text_key("dashboard.forecastShort").to_string(),
+        ForecastNote::Ready { basis } => with_basis(text_key("dashboard.forecastReady"), *basis),
+        ForecastNote::Later { minutes, planted, basis } => {
+            let key =
+                if *planted { "dashboard.forecastHarvest" } else { "dashboard.forecastLater" };
+            with_basis(text_key(key).replace("{duration}", &duration_copy(*minutes)), *basis)
+        }
+        ForecastNote::Plots { count, exp } => text_key("dashboard.forecastPlots")
+            .replace("{plots}", &count.to_string())
+            .replace("{exp}", &exp.to_string()),
+        ForecastNote::Manual => text_key("dashboard.forecastManual").to_string(),
+    }
+}
+
+fn with_basis(text: impl AsRef<str>, basis: Option<&'static str>) -> String {
+    match basis {
+        Some(key) => format!("{} · {}", text.as_ref(), text_key(key)),
+        None => text.as_ref().to_owned(),
+    }
+}
+
+fn duration_copy(minutes: i64) -> String {
+    if minutes < 60 {
+        text_key("dashboard.minutes").replace("{count}", &minutes.to_string())
+    } else {
+        text_key("dashboard.hours").replace("{count}", &format!("{:.1}", minutes as f64 / 60.0))
+    }
+}
+
+fn forecast_key(note: &ForecastNote) -> String {
+    match note {
+        ForecastNote::Waiting => "wait".to_owned(),
+        ForecastNote::Short => "short".to_owned(),
+        ForecastNote::Ready { .. } => "ready".to_owned(),
+        ForecastNote::Later { minutes, .. } => format!("later-{minutes}"),
+        ForecastNote::Plots { count, .. } => format!("plots-{count}"),
+        ForecastNote::Manual => "manual".to_owned(),
+    }
+}
+
+fn running_id(page: DashboardPage) -> Option<String> {
+    let id = page.account_id.get()?;
+    page.rows.get()?.into_iter().find(|row| row.id == id && row.running).map(|row| row.id)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OpRow {
+    key: String,
+    label: Option<&'static str>,
+    count: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PatrolText {
+    Offline,
+    Quiet,
+    Checking,
+    Clock { days: i64, clock: String },
+}
+
+const OPERATIONS: &[(&str, &str)] = &[
+    ("harvest", "dashboard.opHarvest"),
+    ("farming", "dashboard.opFarming"),
+    ("fertilize", "dashboard.opFertilize"),
+    ("plant", "dashboard.opPlant"),
+    ("steal", "dashboard.opSteal"),
+    ("helpFarming", "dashboard.opHelp"),
+    ("taskClaim", "dashboard.opTask"),
+    ("sell", "dashboard.opSell"),
+];
+
+fn patrol_text(farm: bool, panel: &PanelStatus) -> PatrolText {
+    let checks = panel.next_checks.as_ref();
+    let (quiet, remain) = if farm {
+        (check_flag(checks, &["farmQuiet"]), check_remain(checks, &["farmRemainSec"]))
+    } else {
+        (
+            check_flag(checks, &["friendQuiet", "helpQuiet", "stealQuiet"]),
+            check_remain(checks, &["friendRemainSec", "helpRemainSec", "stealRemainSec"]),
+        )
+    };
+    if !panel.online {
+        PatrolText::Offline
+    } else if quiet {
+        PatrolText::Quiet
+    } else if remain <= 0 {
+        PatrolText::Checking
+    } else {
+        let (days, clock) = clock_text(remain);
+        PatrolText::Clock { days, clock }
+    }
+}
+
+fn check_flag(checks: Option<&Value>, keys: &[&str]) -> bool {
+    keys.iter().find_map(|key| checks?.get(*key).and_then(Value::as_bool)).unwrap_or(false)
+}
+
+fn check_remain(checks: Option<&Value>, keys: &[&str]) -> i64 {
+    keys.iter().find_map(|key| checks?.get(*key).and_then(Value::as_i64)).unwrap_or(0)
+}
+
+fn shown_operations(operations: &std::collections::HashMap<String, i64>) -> Vec<OpRow> {
+    let mut rows = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for (key, label) in OPERATIONS {
+        seen.insert(*key);
+        if let Some(count) = operations.get(*key).copied().filter(|count| *count > 0) {
+            rows.push(OpRow { key: (*key).to_owned(), label: Some(label), count });
+        }
+    }
+    let mut extra = operations
+        .iter()
+        .filter(|(key, count)| {
+            **count > 0
+                && !seen.contains(key.as_str())
+                && key.as_str() != "upgrade"
+                && key.as_str() != "levelUp"
+        })
+        .map(|(key, count)| OpRow { key: key.clone(), label: None, count: *count })
+        .collect::<Vec<_>>();
+    extra.sort_by(|left, right| left.key.cmp(&right.key));
+    rows.extend(extra);
+    rows
 }
 
 fn current_running(page: DashboardPage) -> Option<bool> {

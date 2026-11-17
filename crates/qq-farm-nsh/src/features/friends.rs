@@ -316,6 +316,7 @@ struct FriendLine {
     gid: i64,
     name: String,
     level: i64,
+    gold: i64,
     pet_state: String,
     pet_name: String,
     marks: Vec<PlantMark>,
@@ -330,6 +331,7 @@ fn friend_line(friend: &FriendSummary) -> FriendLine {
         gid: friend.gid,
         name: friend_name(friend),
         level: friend.level,
+        gold: friend.gold.max(0),
         pet_state: friend.pet_state.clone(),
         pet_name: friend.pet.as_ref().map(|pet| pet.name.trim().to_owned()).unwrap_or_default(),
         marks: plant_marks(friend.plant.as_ref()),
@@ -436,6 +438,7 @@ fn render_friend(
     let gid = friend.gid;
     let name = friend.name;
     let level = friend.level;
+    let gold = friend.gold;
     let pet_state = friend.pet_state;
     let pet_name = friend.pet_name;
     let marks = friend.marks;
@@ -459,6 +462,20 @@ fn render_friend(
                     .text_sm()
                     .text_color(move || nsh_base::theme().muted_foreground),
                 )
+                .child(when(
+                    move || gold > 0,
+                    move || {
+                        text(move || {
+                            SharedString::from(format!(
+                                "{} {}",
+                                text_key("friends.gold"),
+                                friend_gold(gold, locale().as_str() == "en-US"),
+                            ))
+                        })
+                        .text_sm()
+                        .text_color(move || nsh_base::theme().muted_foreground)
+                    },
+                ))
                 .child(when(
                     {
                         let pet_state = pet_state.clone();
@@ -815,12 +832,16 @@ fn friend_land_panel(
                         .get()
                         .and_then(|value| friend_farm(&value).career)
                         .map(|career| {
-                            SharedString::from(format!(
-                                "{} {} · {} {}",
-                                text_key("friends.careerHarvest"),
+                            let (harvest, steal, ratio) = career_numbers(
                                 career.harvest,
+                                career.steal,
+                                locale().as_str() == "en-US",
+                            );
+                            SharedString::from(format!(
+                                "{} {harvest} · {} {steal} · {} {ratio}",
+                                text_key("friends.careerHarvest"),
                                 text_key("friends.careerSteal"),
-                                career.steal
+                                text_key("friends.careerRatio"),
                             ))
                         })
                         .unwrap_or_default()
@@ -1006,6 +1027,59 @@ fn remain_label(seconds: i64) -> String {
     } else {
         format!("{minutes}m {rest}s")
     }
+}
+
+fn friend_gold(gold: i64, english: bool) -> String {
+    let gold = gold.max(0);
+    if english {
+        if gold >= 1_000_000_000 {
+            return compact(gold as f64 / 1_000_000_000.0, 2, "B");
+        }
+        if gold >= 1_000_000 {
+            return compact(gold as f64 / 1_000_000.0, 2, "M");
+        }
+        if gold >= 1_000 {
+            return compact(gold as f64 / 1_000.0, 1, "K");
+        }
+    } else if gold >= 100_000_000 {
+        return compact(gold as f64 / 100_000_000.0, 2, "亿");
+    } else if gold >= 10_000 {
+        return compact(gold as f64 / 10_000.0, 1, "万");
+    }
+    group_digits(gold)
+}
+
+fn compact(value: f64, digits: usize, suffix: &str) -> String {
+    format!("{}{suffix}", trim_zeros(&format!("{value:.digits$}")))
+}
+
+fn trim_zeros(value: &str) -> String {
+    let trimmed = value.trim_end_matches('0').trim_end_matches('.');
+    if trimmed.is_empty() {
+        "0".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+fn group_digits(value: i64) -> String {
+    let text = value.to_string();
+    let mut grouped = String::new();
+    for (index, ch) in text.chars().rev().enumerate() {
+        if index > 0 && index % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(ch);
+    }
+    grouped.chars().rev().collect()
+}
+
+fn career_numbers(harvest: i64, steal: i64, english: bool) -> (String, String, String) {
+    (
+        super::farm::career_count(harvest, english),
+        super::farm::career_count(steal, english),
+        super::farm::steal_ratio(harvest, steal),
+    )
 }
 
 fn career_line(value: Option<&Value>) -> Option<CareerLine> {
@@ -1345,8 +1419,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        blocked_ids, friend_farm, friend_name, is_blocked, next_blacklist, plant_marks,
-        shown_visits, visit_when, VisitFilter, VisitWhen,
+        blocked_ids, career_numbers, friend_farm, friend_gold, friend_name, is_blocked,
+        next_blacklist, plant_marks, shown_visits, visit_when, VisitFilter, VisitWhen,
     };
 
     #[test]
@@ -1380,6 +1454,15 @@ mod tests {
         assert_eq!(farm.plots[1].title, "#3");
         assert_eq!(farm.plots[1].status_key, Some("friends.landEmpty"));
         assert_eq!(farm.career, Some(super::CareerLine { harvest: 10, steal: 2 }));
+        assert_eq!(
+            career_numbers(12_340, 2_000, false),
+            ("1.23万".to_owned(), "2000".to_owned(), "16.2%".to_owned())
+        );
+        assert_eq!(friend_gold(12_340, false), "1.2万");
+        assert_eq!(friend_gold(123_456_789, false), "1.23亿");
+        assert_eq!(friend_gold(9_999, false), "9,999");
+        assert_eq!(friend_gold(12_340, true), "12.3K");
+        assert_eq!(friend_gold(0, false), "0");
         assert!(friend_farm(&json!({})).plots.is_empty());
         assert_eq!(super::remain_label(90), "1m 30s");
         assert!(super::remain_label(0).is_empty());
@@ -1392,6 +1475,7 @@ mod tests {
                 gid,
                 name: if gid == 3 { "萝卜".to_owned() } else { format!("好友{gid}") },
                 level: gid,
+                gold: 0,
                 pet_state: String::new(),
                 pet_name: String::new(),
                 marks: Vec::new(),
