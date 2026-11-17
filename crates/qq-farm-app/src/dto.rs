@@ -180,6 +180,8 @@ pub struct LandRow {
     #[serde(default)]
     pub plant_size: Option<i64>,
     #[serde(default)]
+    pub rarity: i64,
+    #[serde(default)]
     pub harvestable: bool,
     #[serde(default)]
     pub stealable: Option<bool>,
@@ -224,6 +226,9 @@ pub struct LandRow {
 pub struct LandsPayload {
     pub lands: Vec<LandRow>,
     pub summary: LandDetailSummary,
+    /// 农场主可清理的农场级事件，目前只有青蛙使坏瓶。
+    #[serde(default, rename = "socialEventIds")]
+    pub social_event_ids: Vec<i64>,
     /// 农场主生涯统计（查询失败时缺省）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub career: Option<qq_farm_core::services::career::CareerInfo>,
@@ -233,7 +238,7 @@ impl LandsPayload {
     #[must_use]
     pub fn from_values(lands: Vec<Value>, summary: LandDetailSummary) -> Self {
         let rows = lands.into_iter().filter_map(|v| serde_json::from_value(v).ok()).collect();
-        Self { lands: rows, summary, career: None }
+        Self { lands: rows, summary, social_event_ids: Vec::new(), career: None }
     }
 }
 

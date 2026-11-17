@@ -96,8 +96,10 @@ pub fn set_automation(
 /// 地块详情（含农场主生涯统计，对齐 bot `getLandsDetail` 的 career 字段）。
 pub async fn lands(ctx: &AppContext, account_id: &str) -> AppResult<LandsPayload> {
     let loop_ = require_worker_loop(ctx, account_id)?;
-    let (lands, summary) = loop_.farm().get_lands_detail().await.map_err(AppError::from_core)?;
+    let (lands, summary, social) =
+        loop_.farm().get_lands_detail().await.map_err(AppError::from_core)?;
     let mut payload = LandsPayload::from_values(lands, summary);
+    payload.social_event_ids = social;
     let own_gid = loop_.own_gid();
     if own_gid > 0 {
         payload.career =
@@ -390,7 +392,32 @@ pub async fn fertilize_all(
     fertilizer_type: &str,
 ) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
-    loop_.farm().fertilize_all_own_lands(fertilizer_type).await.map_err(AppError::from_core)
+    loop_.farm().fertilize_all_own_lands(fertilizer_type, None).await.map_err(AppError::from_core)
+}
+
+/// 给选中的地块务农。副地改为主地。当前不需要浇水、除草、除虫或清理互动道具的地块不发请求。
+pub async fn farm_selected(
+    ctx: &AppContext,
+    account_id: &str,
+    land_ids: &[i64],
+) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    loop_.farm().farm_selected_lands(land_ids).await.map_err(AppError::from_core)
+}
+
+/// 给选中的地块施肥。未选中、超过 64 块时返回错误；选中副地时改施其主地。
+pub async fn fertilize_selected(
+    ctx: &AppContext,
+    account_id: &str,
+    fertilizer_type: &str,
+    land_ids: &[i64],
+) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    loop_
+        .farm()
+        .fertilize_all_own_lands(fertilizer_type, Some(land_ids))
+        .await
+        .map_err(AppError::from_core)
 }
 
 /// 每日礼包概览（从 farm 路由提取的聚合逻辑）。

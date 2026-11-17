@@ -242,11 +242,16 @@ impl FarmService {
     /// 获取土地详情（lands + summary）
     pub async fn get_lands_detail(
         &self,
-    ) -> Result<(Vec<serde_json::Value>, crate::services::farm::land_analysis::LandDetailSummary)>
-    {
+    ) -> Result<(
+        Vec<serde_json::Value>,
+        crate::services::farm::land_analysis::LandDetailSummary,
+        Vec<i64>,
+    )> {
         let host_gid = *self.host_gid.lock();
         let reply = self.api.get_all_lands(host_gid).await?;
-        Ok(crate::services::farm::land_analysis::own_lands_detail(&reply.lands))
+        let social = cleanable_social_event_ids(&reply.social_events);
+        let (lands, summary) = crate::services::farm::land_analysis::own_lands_detail(&reply.lands);
+        Ok((lands, summary, social))
     }
 
     /// 完整一轮农场操作：收获 → 铲除 → 种植 → 施肥
@@ -326,7 +331,7 @@ impl FarmService {
         let gid = *self.host_gid.lock();
         let reply = self.api.get_all_lands(gid).await?;
         let status = analyze_lands(&reply.lands, gid);
-        let mut ids: Vec<i64> = status
+        let ids: Vec<i64> = status
             .need_weed
             .iter()
             .chain(status.need_bug.iter())
@@ -334,13 +339,60 @@ impl FarmService {
             .chain(status.need_interaction_cleanup.iter())
             .copied()
             .collect();
-        ids.sort_unstable();
-        ids.dedup();
+        let social = cleanable_social_event_ids(&reply.social_events);
+        let fallback = farming_fallback(&status);
+        let ids = farming_request_ids(ids, &fallback, &social);
         let n = ids.len();
         if !ids.is_empty() {
-            self.api.farming(ids, gid).await?;
+            self.api.farming_own(ids, gid, &social).await?;
         }
         Ok(n)
+    }
+
+    /// 只给选中的地务农。副地改为主地。不缺水、没草、没虫、也不需要清理互动道具的地块不发请求。
+    pub async fn farm_selected_lands(&self, land_ids: &[i64]) -> Result<serde_json::Value> {
+        let requested = land_ids.iter().copied().filter(|id| *id > 0).collect::<HashSet<_>>().len();
+        if requested == 0 {
+            return Err(crate::error::Error::Business("请先选择要务农的土地".into()));
+        }
+        let gid = *self.host_gid.lock();
+        let reply = self.api.get_all_lands(gid).await?;
+        let (details, _) = crate::services::farm::land_analysis::own_lands_detail(&reply.lands);
+        let roots: Vec<i64> = land_ids
+            .iter()
+            .copied()
+            .filter(|id| *id > 0)
+            .map(|id| fertilize_root(&details, id))
+            .filter(|id| *id > 0)
+            .collect();
+        let status = analyze_lands(&reply.lands, gid);
+        let valid: HashSet<i64> = status
+            .growing
+            .iter()
+            .chain(status.harvestable.iter())
+            .chain(status.dead.iter())
+            .copied()
+            .collect();
+        let needy: HashSet<i64> = status
+            .need_weed
+            .iter()
+            .chain(status.need_bug.iter())
+            .chain(status.need_water.iter())
+            .chain(status.need_interaction_cleanup.iter())
+            .copied()
+            .collect();
+        let social = cleanable_social_event_ids(&reply.social_events);
+        let (farm, idle, rejected) =
+            split_selected_farming(&roots, &valid, &needy, !social.is_empty());
+        if !farm.is_empty() {
+            self.api.farming_own(farm.clone(), gid, &social).await?;
+        }
+        Ok(serde_json::json!({
+            "requested": requested,
+            "farmed": farm.len(),
+            "idle": idle,
+            "rejected": rejected,
+        }))
     }
 
     /// 施肥（`op=fertilize`）—— 按配置对当前所有 plant 施肥
@@ -373,25 +425,33 @@ impl FarmService {
     pub async fn fertilize_all_own_lands(
         &self,
         fertilizer_type: &str,
+        selected: Option<&[i64]>,
     ) -> Result<serde_json::Value> {
         if fertilizer_type != "normal" && fertilizer_type != "organic" {
             return Err(crate::error::Error::Business("化肥类型必须是 normal 或 organic".into()));
         }
+        if let Some(message) = fertilize_selection_error(selected) {
+            return Err(crate::error::Error::Business(message.into()));
+        }
         if self.fertilize_all_pending.swap(true, Ordering::AcqRel) {
             return Err(crate::error::Error::Business("一键施肥正在进行，请稍后再试".into()));
         }
-        let result = self.fertilize_all_inner(fertilizer_type).await;
+        let result = self.fertilize_all_inner(fertilizer_type, selected).await;
         self.fertilize_all_pending.store(false, Ordering::Release);
         result
     }
 
-    async fn fertilize_all_inner(&self, fertilizer_type: &str) -> Result<serde_json::Value> {
+    async fn fertilize_all_inner(
+        &self,
+        fertilizer_type: &str,
+        selected: Option<&[i64]>,
+    ) -> Result<serde_json::Value> {
         // 执行时重新读取，不能使用面板里可能已成熟或被重新种植的快照
         let snapshot =
             self.api.get_all_lands(0).await.map_err(|_| {
                 crate::error::Error::Business("无法读取最新土地，请刷新后重试".into())
             })?;
-        let targets = select_fertilize_all_targets(&snapshot.lands);
+        let targets = select_fertilize_all_targets(&snapshot.lands, selected);
         let mut result = serde_json::json!({
             "fertilizerType": fertilizer_type,
             "requestedCount": targets.len(),
@@ -550,6 +610,7 @@ impl FarmService {
         event_tx: &broadcast::Sender<FarmEvent>,
     ) -> Result<()> {
         let reply = api.get_all_lands(host_gid).await?;
+        let social = cleanable_social_event_ids(&reply.social_events);
         let lands = reply.lands;
         if lands.is_empty() {
             crate::services::panel_log::log(
@@ -568,7 +629,7 @@ impl FarmService {
 
         let skip_own =
             crate::services::automation::is_automation_on_for(account_id, "skip_own_weed_bug");
-        let mut farming_ids: Vec<i64> = status
+        let farming_ids: Vec<i64> = status
             .need_weed
             .iter()
             .chain(status.need_bug.iter())
@@ -576,10 +637,10 @@ impl FarmService {
             .chain(status.need_interaction_cleanup.iter())
             .copied()
             .collect();
-        farming_ids.sort_unstable();
-        farming_ids.dedup();
+        let fallback = farming_fallback(&status);
+        let farming_ids = farming_request_ids(farming_ids, &fallback, &social);
         if !skip_own && !farming_ids.is_empty() {
-            match api.farming(farming_ids.clone(), host_gid).await {
+            match api.farming_own(farming_ids.clone(), host_gid, &social).await {
                 Err(e) => {
                     tracing::warn!(error = %e, "farming failed");
                     crate::services::panel_log::log_warn(
@@ -1036,25 +1097,136 @@ pub struct FertilizeOpResult {
 /// 一键施肥目标筛选（对齐 bot `fertilizeAllOwnLands` 的过滤）：
 /// 已解锁、非副地块、`status == "growing"`、`matureInSec > 0`、id 有效；
 /// 去重且保持快照顺序。
+const FERTILIZE_SELECTION_LIMIT: usize = 64;
+
+const FROG_MISCHIEF_ITEM: i64 = 5005;
+
+fn cleanable_social_event_ids(
+    events: &[crate::proto::generated::gamepb::plantpb::FarmSocialEvent],
+) -> Vec<i64> {
+    let mut ids: Vec<i64> =
+        events.iter().map(|event| event.item_id).filter(|id| *id == FROG_MISCHIEF_ITEM).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+fn farming_fallback(status: &LandAnalysis) -> Vec<i64> {
+    status
+        .growing
+        .iter()
+        .chain(status.harvestable.iter())
+        .chain(status.dead.iter())
+        .copied()
+        .find(|id| *id > 0)
+        .map(|id| vec![id])
+        .unwrap_or_default()
+}
+
+fn farming_request_ids(mut needy: Vec<i64>, fallback: &[i64], social: &[i64]) -> Vec<i64> {
+    needy.sort_unstable();
+    needy.dedup();
+    if !needy.is_empty() || social.is_empty() {
+        return needy;
+    }
+    fallback.first().copied().filter(|id| *id > 0).map(|id| vec![id]).unwrap_or_default()
+}
+
+fn split_selected_farming(
+    requested: &[i64],
+    valid: &HashSet<i64>,
+    needy: &HashSet<i64>,
+    has_social: bool,
+) -> (Vec<i64>, usize, usize) {
+    let mut seen = HashSet::new();
+    let mut farm = Vec::new();
+    let mut idle = 0;
+    let mut rejected = 0;
+    for id in requested {
+        if *id <= 0 || !seen.insert(*id) {
+            continue;
+        }
+        if !valid.contains(id) {
+            rejected += 1;
+        } else if needy.contains(id) || has_social {
+            farm.push(*id);
+        } else {
+            idle += 1;
+        }
+    }
+    farm.sort_unstable();
+    (farm, idle, rejected)
+}
+
+fn fertilize_selection_error(selected: Option<&[i64]>) -> Option<&'static str> {
+    let Some(ids) = selected else {
+        return None;
+    };
+    let count = ids.iter().copied().filter(|id| *id > 0).collect::<HashSet<_>>().len();
+    if count == 0 {
+        Some("请先选择要施肥的土地")
+    } else if count > FERTILIZE_SELECTION_LIMIT {
+        Some("一次最多选择 64 块土地")
+    } else {
+        None
+    }
+}
+
 fn select_fertilize_all_targets(
     lands: &[crate::proto::generated::gamepb::plantpb::LandInfo],
+    selected: Option<&[i64]>,
 ) -> Vec<i64> {
     let (details, _) = crate::services::farm::land_analysis::own_lands_detail(lands);
+    let roots = selected.map(|ids| {
+        ids.iter()
+            .copied()
+            .filter(|id| *id > 0)
+            .map(|id| fertilize_root(&details, id))
+            .filter(|id| *id > 0)
+            .collect::<HashSet<_>>()
+    });
     let mut seen = HashSet::new();
     details
         .iter()
+        .filter(|detail| fertilize_detail_candidate(detail))
         .filter(|detail| {
-            detail.get("unlocked").and_then(serde_json::Value::as_bool).unwrap_or(false)
-                && !detail
-                    .get("occupiedByMaster")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false)
-                && detail.get("status").and_then(serde_json::Value::as_str) == Some("growing")
-                && detail.get("matureInSec").and_then(serde_json::Value::as_i64).unwrap_or(0) > 0
+            roots.as_ref().is_none_or(|roots| {
+                detail
+                    .get("id")
+                    .and_then(serde_json::Value::as_i64)
+                    .is_some_and(|id| roots.contains(&id))
+            })
         })
         .filter_map(|detail| detail.get("id").and_then(serde_json::Value::as_i64))
         .filter(|id| *id > 0 && seen.insert(*id))
         .collect()
+}
+
+fn fertilize_detail_candidate(detail: &serde_json::Value) -> bool {
+    detail.get("unlocked").and_then(serde_json::Value::as_bool).unwrap_or(false)
+        && !detail.get("occupiedByMaster").and_then(serde_json::Value::as_bool).unwrap_or(false)
+        && detail.get("status").and_then(serde_json::Value::as_str) == Some("growing")
+        && detail.get("matureInSec").and_then(serde_json::Value::as_i64).unwrap_or(0) > 0
+}
+
+fn fertilize_root(details: &[serde_json::Value], id: i64) -> i64 {
+    details
+        .iter()
+        .find(|detail| detail.get("id").and_then(serde_json::Value::as_i64) == Some(id))
+        .map(|detail| {
+            let master =
+                detail.get("masterLandId").and_then(serde_json::Value::as_i64).unwrap_or(0);
+            let occupied = detail
+                .get("occupiedByMaster")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            if occupied && master > 0 {
+                master
+            } else {
+                id
+            }
+        })
+        .unwrap_or(id)
 }
 
 /// bot `isSkippableFertilizeLandError`：服务端拒绝（该阶段已使用该化肥 / 当前不可施肥）
@@ -1144,6 +1316,24 @@ mod tests {
     }
 
     #[test]
+    fn selected_farming_keeps_needy_lands_and_counts_idle_and_rejected() {
+        let valid = HashSet::from([1, 2, 3]);
+        let needy = HashSet::from([1, 3]);
+        let (farm, idle, rejected) =
+            split_selected_farming(&[1, 2, 2, 3, 9, 0], &valid, &needy, false);
+        assert_eq!(farm, vec![1, 3]);
+        assert_eq!(idle, 1);
+        assert_eq!(rejected, 1);
+        let (farm, idle, rejected) = split_selected_farming(&[2], &valid, &needy, true);
+        assert_eq!(farm, vec![2]);
+        assert_eq!(idle, 0);
+        assert_eq!(rejected, 0);
+        assert_eq!(farming_request_ids(vec![1, 1], &[7], &[5005]), vec![1]);
+        assert_eq!(farming_request_ids(vec![], &[7], &[5005]), vec![7]);
+        assert!(farming_request_ids(vec![], &[7], &[]).is_empty());
+    }
+
+    #[test]
     fn fertilize_all_targets_match_bot_filters() {
         use crate::proto::generated::gamepb::plantpb::{LandInfo, PlantInfo, PlantPhaseInfo};
 
@@ -1179,7 +1369,13 @@ mod tests {
             slave,
         ];
         // 锁定 / 已成熟 / 空地 / 副地块排除；主地块保留；顺序与快照一致
-        assert_eq!(select_fertilize_all_targets(&lands), vec![2, 10]);
+        assert_eq!(select_fertilize_all_targets(&lands, None), vec![2, 10]);
+        assert_eq!(select_fertilize_all_targets(&lands, Some(&[11, 3])), vec![10]);
+        assert!(select_fertilize_all_targets(&lands, Some(&[4])).is_empty());
+        assert_eq!(fertilize_selection_error(Some(&[])), Some("请先选择要施肥的土地"));
+        let too_many: Vec<i64> = (1..=65).collect();
+        assert_eq!(fertilize_selection_error(Some(&too_many)), Some("一次最多选择 64 块土地"));
+        assert_eq!(fertilize_selection_error(None), None);
     }
 
     // ===== 阶段 2E：op 分派测试（不依赖网络） =====

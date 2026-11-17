@@ -150,7 +150,23 @@ impl Api {
     ///
     /// 对齐 TS `farming()`：只带 `land_ids` + `host_gid`，不传 field_3/field_4/field_5。
     pub async fn farming(&self, land_ids: Vec<i64>, host_gid: i64) -> Result<FarmingReply> {
-        let body = FarmingRequest { land_ids, host_gid, ..Default::default() }.encode_to_vec();
+        self.farming_own(land_ids, host_gid, &[]).await
+    }
+
+    /// 自家务农。青蛙使坏瓶写在 `social_event_item_ids`，不绑定某一块地。
+    pub async fn farming_own(
+        &self,
+        land_ids: Vec<i64>,
+        host_gid: i64,
+        social_event_item_ids: &[i64],
+    ) -> Result<FarmingReply> {
+        let mut social_event_item_ids: Vec<i64> =
+            social_event_item_ids.iter().copied().filter(|id| *id > 0).collect();
+        social_event_item_ids.sort_unstable();
+        social_event_item_ids.dedup();
+        let body =
+            FarmingRequest { land_ids, host_gid, social_event_item_ids, ..Default::default() }
+                .encode_to_vec();
         let resp = self.gateway.request("gamepb.plantpb.PlantService", "Farming", &body).await?;
         FarmingReply::decode(&*resp).map_err(Error::from)
     }

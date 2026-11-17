@@ -1,12 +1,13 @@
 use nsh_core::prelude::*;
 use serde_json::Value;
 
-use super::account_gate::gate_notice;
-use super::accounts::{account_is_running, failure_line, AccountRow};
+use qq_farm_app::dto::{LandRow, LandsPayload};
+
+use super::accounts::{account_is_running, AccountRow};
 use super::confirm;
 use crate::i18n::text_key;
 use crate::session;
-use crate::ui::{button, field, notice, ButtonVariant};
+use crate::ui::{button, notice, ButtonVariant};
 
 const LIGHTNING_BOTTLE: i64 = 5003;
 const THUNDER_BOTTLE: i64 = 5004;
@@ -56,43 +57,6 @@ enum LandToggle {
     Shortage,
 }
 
-pub(crate) fn section(
-    account_id: Signal<Option<String>>,
-    rows: Resource<Vec<AccountRow>, String>,
-) -> impl IntoElement {
-    let pending = signal(None::<String>);
-    let failure = signal(None::<String>);
-    let selected = signal(None::<i64>);
-    let lands = signal(String::new());
-    let items = resource(
-        move || running_account(account_id, rows),
-        |id, _| async move {
-            let context = session::session().context.clone();
-            let value = session::call(async move {
-                qq_farm_app::friend::farm_interaction_items(&context, &id).await
-            })
-            .await?;
-            Ok(item_lines(&value))
-        },
-    );
-    view()
-        .gap_3()
-        .child(failure_line(failure))
-        .child(gate_notice(account_id, rows, "farm.needRunning"))
-        .child(when(
-            move || running(account_id, rows) && items.loading() && items.get().is_none(),
-            move || notice(move || text_key("common.loading")),
-        ))
-        .child(when(
-            move || running(account_id, rows) && items.error().is_some(),
-            move || load_error(items),
-        ))
-        .child(when(
-            move || running(account_id, rows) && items.get().is_some(),
-            move || item_body(account_id, pending, failure, selected, lands, items),
-        ))
-}
-
 fn running(account_id: Signal<Option<String>>, rows: Resource<Vec<AccountRow>, String>) -> bool {
     account_id.get().zip(rows.get()).is_some_and(|(id, rows)| account_is_running(&rows, &id))
 }
@@ -102,164 +66,6 @@ fn running_account(
     rows: Resource<Vec<AccountRow>, String>,
 ) -> Option<String> {
     running(account_id, rows).then(|| account_id.get()).flatten()
-}
-
-fn load_error(items: Resource<Vec<ItemLine>, String>) -> impl IntoElement {
-    view()
-        .gap_2()
-        .child(crate::ui::failure(move || {
-            items.error().map(SharedString::from).unwrap_or_default()
-        }))
-        .child(
-            button(move || text_key("common.retry"), ButtonVariant::Secondary)
-                .on_press(move || items.refetch()),
-        )
-}
-
-fn item_body(
-    account_id: Signal<Option<String>>,
-    pending: Signal<Option<String>>,
-    failure: Signal<Option<String>>,
-    selected: Signal<Option<i64>>,
-    lands: Signal<String>,
-    items: Resource<Vec<ItemLine>, String>,
-) -> impl IntoElement {
-    view()
-        .gap_3()
-        .child(
-            button(move || text_key("farm.refresh"), ButtonVariant::Secondary)
-                .disabled(move || pending.get().is_some())
-                .on_press(move || items.refetch()),
-        )
-        .child(when(
-            move || items.get().is_some_and(|rows| rows.is_empty()),
-            move || notice(move || text_key("interaction.empty")),
-        ))
-        .child(each(
-            move || items.get().unwrap_or_default(),
-            |item: &ItemLine| item.id.to_string(),
-            move |item, _| item_row(item.get_untracked(), selected, items),
-        ))
-        .child(when(
-            move || items.get().is_some_and(|rows| !rows.is_empty()),
-            move || {
-                view()
-                    .gap_2()
-                    .child(field(
-                        move || lands.get(),
-                        move || text_key("interaction.lands").to_string(),
-                        move |text: &str| lands.set(text.to_owned()),
-                    ))
-                    .child(
-                        button(move || text_key("interaction.use"), ButtonVariant::Primary)
-                            .disabled(move || {
-                                pending.get().is_some() || active_id(items, selected).is_none()
-                            })
-                            .on_press(move || {
-                                use_item(account_id, pending, failure, selected, lands, items)
-                            }),
-                    )
-            },
-        ))
-}
-
-fn item_row(
-    item: ItemLine,
-    selected: Signal<Option<i64>>,
-    items: Resource<Vec<ItemLine>, String>,
-) -> View {
-    let id = item.id;
-    let name = SharedString::from(item.name);
-    let count = item.count;
-    let sellable = item.sellable;
-    let description = SharedString::from(item.description);
-    view()
-        .flex_row()
-        .items_center()
-        .gap_3()
-        .py_2()
-        .child(
-            button(move || name.clone(), ButtonVariant::Quiet)
-                .selected(move || active_id(items, selected) == Some(id))
-                .on_press(move || selected.set(Some(id))),
-        )
-        .child(text(SharedString::from(format!("x{count}"))).text_sm())
-        .child(when(
-            {
-                let description = description.clone();
-                move || !description.is_empty()
-            },
-            {
-                let description = description.clone();
-                move || text(description.clone()).text_sm().flex_1()
-            },
-        ))
-        .child(when(
-            move || sellable > 0,
-            move || {
-                text(move || {
-                    SharedString::from(format!("{} {sellable}", text_key("interaction.sellable")))
-                })
-                .text_sm()
-            },
-        ))
-}
-
-fn active_id(items: Resource<Vec<ItemLine>, String>, selected: Signal<Option<i64>>) -> Option<i64> {
-    let rows = items.get().unwrap_or_default();
-    selected
-        .get()
-        .filter(|id| rows.iter().any(|item| item.id == *id))
-        .or_else(|| rows.first().map(|item| item.id))
-}
-
-fn use_item(
-    account_id: Signal<Option<String>>,
-    pending: Signal<Option<String>>,
-    failure: Signal<Option<String>>,
-    selected: Signal<Option<i64>>,
-    lands: Signal<String>,
-    items: Resource<Vec<ItemLine>, String>,
-) {
-    if pending.get_untracked().is_some() {
-        return;
-    }
-    let Some(id) = account_id.get_untracked() else { return };
-    let Some(item_id) = active_id(items, selected) else { return };
-    let land_ids = parse_land_ids(&lands.get_untracked());
-    if land_ids.is_empty() {
-        failure.set(Some(text_key("interaction.needLands").to_string()));
-        return;
-    }
-    pending.set(Some(format!("use:{item_id}")));
-    failure.set(None);
-    confirm::confirm(
-        "interaction.confirm.title",
-        "interaction.confirm.body",
-        "use",
-        "interaction.use",
-        move |accepted| {
-            if !accepted {
-                pending.set(None);
-                return;
-            }
-            spawn(async move {
-                let context = session::session().context.clone();
-                let result = session::call(async move {
-                    qq_farm_app::friend::farm_interaction_items_use(
-                        &context, &id, item_id, land_ids,
-                    )
-                    .await
-                })
-                .await;
-                if let Err(message) = result {
-                    failure.set(Some(message));
-                }
-                pending.set(None);
-                items.refetch();
-            });
-        },
-    );
 }
 
 pub(crate) fn interaction_pick(
@@ -282,6 +88,101 @@ pub(crate) fn interaction_pick(
             },
         ),
     }
+}
+
+pub(crate) fn farm_pick(
+    account_id: Signal<Option<String>>,
+    rows: Resource<Vec<AccountRow>, String>,
+) -> InteractionPick {
+    InteractionPick {
+        selected_item: signal(None),
+        selected_lands: signal(Vec::new()),
+        used_lands: signal(Vec::new()),
+        items: resource(
+            move || running_account(account_id, rows),
+            |id, _| async move {
+                let context = session::session().context.clone();
+                let value = session::call(async move {
+                    qq_farm_app::friend::farm_interaction_items(&context, &id).await
+                })
+                .await?;
+                Ok(item_lines(&value))
+            },
+        ),
+    }
+}
+
+pub(crate) fn farm_tools(
+    account_id: Signal<Option<String>>,
+    pending: Signal<Option<String>>,
+    failure: Signal<Option<String>>,
+    lands: Resource<LandsPayload, String>,
+    pick: InteractionPick,
+) -> impl IntoElement {
+    view()
+        .gap_2()
+        .child(
+            text(move || text_key("farm.interaction")).text_sm().font_weight(FontWeight::SEMIBOLD),
+        )
+        .child(when(
+            move || pick.items.get().is_some_and(|rows| rows.is_empty()),
+            move || notice(move || text_key("interaction.empty")),
+        ))
+        .child(each(
+            move || pick.items.get().unwrap_or_default(),
+            |item: &ItemLine| item.id.to_string(),
+            move |item, _| friend_item_row(item.get_untracked(), pick),
+        ))
+        .child(when(
+            move || chosen_item(pick).is_some(),
+            move || {
+                view()
+                    .flex_row()
+                    .flex_wrap()
+                    .gap_2()
+                    .child(
+                        button(move || text_key("interaction.selectAll"), ButtonVariant::Secondary)
+                            .disabled(move || pending.get().is_some())
+                            .on_press(move || {
+                                let Some(item) = chosen_item(pick) else { return };
+                                let choices = lands
+                                    .get()
+                                    .map(|payload| choices_from_rows(&payload.lands))
+                                    .unwrap_or_default();
+                                pick.selected_lands.set(select_available(
+                                    &choices,
+                                    item.id,
+                                    item.count,
+                                    &pick.used_lands.get_untracked(),
+                                ));
+                            }),
+                    )
+                    .child(
+                        button(move || text_key("interaction.clear"), ButtonVariant::Secondary)
+                            .disabled(move || {
+                                pending.get().is_some() || pick.selected_lands.get().is_empty()
+                            })
+                            .on_press(move || pick.selected_lands.set(Vec::new())),
+                    )
+                    .child(
+                        button(
+                            move || {
+                                let count = pick.selected_lands.get().len();
+                                SharedString::from(
+                                    text_key("interaction.useSelected")
+                                        .to_string()
+                                        .replace("{count}", &count.to_string()),
+                                )
+                            },
+                            ButtonVariant::Primary,
+                        )
+                        .disabled(move || {
+                            pending.get().is_some() || pick.selected_lands.get().is_empty()
+                        })
+                        .on_press(move || use_on_farm(account_id, pending, failure, lands, pick)),
+                    )
+            },
+        ))
 }
 
 pub(crate) fn expanded_tools(
@@ -363,6 +264,23 @@ pub(crate) fn expanded_tools(
 }
 
 impl InteractionPick {
+    pub(crate) fn clear_item(self) {
+        self.selected_item.set(None);
+    }
+
+    pub(crate) fn reset_for_account(self, account_id: Signal<Option<String>>) {
+        let seen = signal(String::new());
+        effect(move || {
+            let current = account_id.get().unwrap_or_default();
+            if seen.get_untracked() != current {
+                seen.set(current);
+                self.selected_item.set(None);
+                self.selected_lands.set(Vec::new());
+                self.used_lands.set(Vec::new());
+            }
+        });
+    }
+
     pub(crate) fn reset_when_scope_changes(self, open_lands: Signal<Option<i64>>) {
         let seen = signal((None::<i64>, None::<i64>));
         effect(move || {
@@ -424,6 +342,7 @@ fn friend_item_row(item: ItemLine, pick: InteractionPick) -> View {
     let name = SharedString::from(item.name);
     let count = item.count;
     let sellable = item.sellable;
+    let description = SharedString::from(item.description);
     view()
         .flex_row()
         .items_center()
@@ -441,6 +360,16 @@ fn friend_item_row(item: ItemLine, pick: InteractionPick) -> View {
                 }),
         )
         .child(text(SharedString::from(format!("x{count}"))).text_sm())
+        .child(when(
+            {
+                let description = description.clone();
+                move || !description.is_empty()
+            },
+            {
+                let description = description.clone();
+                move || text(description.clone()).text_sm().flex_1()
+            },
+        ))
         .child(when(
             move || sellable > 0,
             move || {
@@ -509,6 +438,57 @@ fn use_on_friend(
     );
 }
 
+fn use_on_farm(
+    account_id: Signal<Option<String>>,
+    pending: Signal<Option<String>>,
+    failure: Signal<Option<String>>,
+    lands: Resource<LandsPayload, String>,
+    pick: InteractionPick,
+) {
+    if pending.get_untracked().is_some() {
+        return;
+    }
+    let Some(id) = account_id.get_untracked() else { return };
+    let Some(item) = chosen_item(pick) else { return };
+    let land_ids = pick.selected_lands.get_untracked();
+    if land_ids.is_empty() {
+        failure.set(Some(text_key("interaction.needPick").to_string()));
+        return;
+    }
+    let item_id = item.id;
+    pending.set(Some(format!("use:{item_id}")));
+    failure.set(None);
+    confirm::confirm(
+        "interaction.confirm.title",
+        "interaction.confirm.body",
+        "use",
+        "interaction.use",
+        move |accepted| {
+            if !accepted {
+                pending.set(None);
+                return;
+            }
+            spawn(async move {
+                let context = session::session().context.clone();
+                let result = session::call(async move {
+                    qq_farm_app::friend::farm_interaction_items_use(
+                        &context, &id, item_id, land_ids,
+                    )
+                    .await
+                })
+                .await;
+                match result {
+                    Ok(value) => remember_use(&value, pick, failure),
+                    Err(message) => failure.set(Some(message)),
+                }
+                pending.set(None);
+                pick.items.refetch();
+                lands.refetch();
+            });
+        },
+    );
+}
+
 fn remember_use(value: &Value, pick: InteractionPick, failure: Signal<Option<String>>) {
     let used = used_land_ids(value);
     let mut remembered = pick.used_lands.get_untracked();
@@ -556,6 +536,28 @@ fn item_line(value: &Value) -> Option<ItemLine> {
         sellable: value.get("saleConditionSatisfiedCount").and_then(Value::as_i64).unwrap_or(0),
         description: value.get("description").and_then(Value::as_str).unwrap_or("").to_owned(),
     })
+}
+
+pub(crate) fn target_from_row(land: &LandRow) -> LandTarget {
+    LandTarget {
+        unlocked: land.unlocked,
+        occupied: land.occupied_by_master,
+        plant_name: land.plant_name.clone().unwrap_or_default(),
+        status: land.status.clone(),
+        phase_name: land.phase_name.clone().unwrap_or_default(),
+        rarity: land.rarity,
+        plant_size: land.plant_size.unwrap_or(1).max(1),
+        mutants: land.mutant_config_ids.clone(),
+        effects: effect_ids(Some(&Value::Array(land.interaction_effects.clone()))),
+    }
+}
+
+fn choices_from_rows(lands: &[LandRow]) -> Vec<LandChoice> {
+    lands
+        .iter()
+        .filter(|land| land.id > 0 && !land.occupied_by_master)
+        .map(|land| LandChoice { id: land.id, target: target_from_row(land) })
+        .collect()
 }
 
 pub(crate) fn land_target(value: &Value) -> LandTarget {
@@ -705,6 +707,7 @@ fn used_land_ids(value: &Value) -> Vec<i64> {
         .unwrap_or_default()
 }
 
+#[cfg(test)]
 fn parse_land_ids(value: &str) -> Vec<i64> {
     value
         .split(|ch: char| ch == ',' || ch == '，' || ch.is_whitespace())

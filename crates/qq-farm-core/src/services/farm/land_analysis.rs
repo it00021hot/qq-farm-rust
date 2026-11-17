@@ -1503,6 +1503,7 @@ pub fn build_lands_panel_dto(lands: &[LandInfo], kind: LandDetailKind) -> Vec<se
             "masterLandId": master_land_id,
             "occupiedLandIds": occupied_land_ids,
             "plantSize": plant_size,
+            "rarity": seed_rarity(plant_id).unwrap_or(0),
             "harvestable": land_status == "harvestable",
             "plantId": plant_id,
             "displayPlantId": display_plant_id,
