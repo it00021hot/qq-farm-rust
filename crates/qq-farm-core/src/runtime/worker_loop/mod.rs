@@ -1817,6 +1817,13 @@ mod tests {
     }
 
     #[test]
+    fn weather_services_are_not_shared_across_accounts() {
+        let (left, _) = make_loop();
+        let (right, _) = make_loop();
+        assert!(!std::ptr::eq(Arc::as_ptr(&left.weather()), Arc::as_ptr(&right.weather())));
+    }
+
+    #[test]
     fn normalize_interval_range_sec_basic() {
         assert_eq!(normalize_interval_range_sec(10, 20, 5), (10, 20));
     }

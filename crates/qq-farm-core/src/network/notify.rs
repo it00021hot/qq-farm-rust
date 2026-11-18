@@ -54,6 +54,17 @@ pub enum NotifyEvent {
     ActivitiesChanged,
     /// 任务信息推送
     TaskInfoNotify { task_info: Option<crate::proto::generated::gamepb::taskpb::TaskInfo> },
+    /// 某农场的特殊天气变化。`host_gid == 0` 表示通知没有指出是哪一座农场。
+    WeatherChanged { host_gid: i64 },
+}
+
+/// 天气推送要失效的农场。其他推送返回 `None`，不能顺手清掉好友天气缓存。
+#[must_use]
+pub fn weather_cache_host(event: &NotifyEvent) -> Option<i64> {
+    match event {
+        NotifyEvent::WeatherChanged { host_gid } => Some(*host_gid),
+        _ => None,
+    }
 }
 
 /// ItemNotify 里一条物品变化（对齐 network.ts handleNotify）
@@ -188,6 +199,11 @@ pub fn parse_event(event: &EventMessage) -> NotifyEvent {
         match crate::proto::generated::gamepb::taskpb::TaskInfoNotify::decode(body) {
             Ok(notify) => NotifyEvent::TaskInfoNotify { task_info: notify.task_info },
             Err(_) => NotifyEvent::TaskInfoNotify { task_info: None },
+        }
+    } else if event_type.contains("WeatherChangeNotify") {
+        match crate::proto::generated::gamepb::weatherpb::WeatherChangeNotify::decode(body) {
+            Ok(notify) => NotifyEvent::WeatherChanged { host_gid: notify.host_gid },
+            Err(_) => NotifyEvent::Unknown { event_type },
         }
     } else {
         NotifyEvent::Unknown { event_type }
@@ -400,6 +416,41 @@ mod tests {
             }
             other => panic!("expected BasicChanged, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn weather_change_names_its_farm_and_other_notifies_do_not_clear_it() {
+        let notify = crate::proto::generated::gamepb::weatherpb::WeatherChangeNotify {
+            host_gid: 8,
+            ..Default::default()
+        };
+        let ev = EventMessage {
+            message_type: "WeatherChangeNotify".to_string(),
+            body: notify.encode_to_vec().into(),
+        };
+        let parsed = parse_event(&ev);
+        assert_eq!(weather_cache_host(&parsed), Some(8));
+        let unnamed = EventMessage {
+            message_type: "gamepb.weatherpb.WeatherChangeNotify".to_string(),
+            body: Vec::new().into(),
+        };
+        assert_eq!(weather_cache_host(&parse_event(&unnamed)), Some(0));
+        let broken = EventMessage {
+            message_type: "WeatherChangeNotify".to_string(),
+            body: vec![0xff].into(),
+        };
+        assert_eq!(weather_cache_host(&parse_event(&broken)), None);
+        let lands =
+            EventMessage { message_type: "LandsNotify".to_string(), body: Vec::new().into() };
+        let activities = EventMessage {
+            message_type: "ActiviesChangeNotify".to_string(),
+            body: Vec::new().into(),
+        };
+        let tasks =
+            EventMessage { message_type: "TaskInfoNotify".to_string(), body: vec![0xff].into() };
+        assert_eq!(weather_cache_host(&parse_event(&lands)), None);
+        assert_eq!(weather_cache_host(&parse_event(&activities)), None);
+        assert_eq!(weather_cache_host(&parse_event(&tasks)), None);
     }
 
     #[test]

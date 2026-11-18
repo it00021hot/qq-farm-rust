@@ -3828,3 +3828,14 @@ bot 本轮 13 个提交**玩法层零变化**（活动/商城/日常自动化均
 - NSH：好友列表失败、没有好友、扫描结果、单人失败和延后人数都显示在雨落成诗页。正在扫描时再点不会重发。账号切换后丢弃这次结果，并清空已选好友和扫描结果。
 - 还没做：天气任务领取。天气变更推送仍未接入，缓存不会在通知到达时清空，只随该账号的 worker 结束释放。窗口和真实 Enter/Leave 未验。
 - 验证：`cargo +1.99.1 test -p qq-farm-core --lib services::weather:: -- --test-threads=1` 10 项通过；`cargo +1.99.1 test -p qq-farm-core --lib weather_service_is_reused_for_the_account -- --test-threads=1` 通过；`cargo +1.99.1 test -p qq-farm-nsh --lib weather -- --test-threads=1` 3 项通过。`nsh check crates/qq-farm-nsh` 在 `RUSTUP_TOOLCHAIN=1.99.1` 下通过。仓库 `rust-toolchain.toml` 指定的 1.98.1 当前镜像返回 404，这次没有改工具链文件。`cargo +1.99.1 clippy -p qq-farm-core --lib -- -D warnings` 仍被既有告警拦住，不能据此称全库检查通过。
+
+### 2026-11-18 — 天气变更通知使对应农场的扫描缓存失效
+
+本条只补通知失效。不把能力矩阵改成「齐」，也不把对照基准从 bot `28a9614` 往前推。窗口没有打开，没有真实网关回包。天气任务领取没有实现。
+
+- 基线：rust `1ac0a14`。对照 bot `6765449`：`network.ts` 把 `WeatherChangeNotify` 解成 `hostGid` 后发出 `weatherChanged`；`weather-activity.ts` 的监听不看 GID，清掉进程内整份好友天气缓存和活动快照。`activitiesChanged` 只清活动快照，不清好友天气缓存。断开连接才两者都清。
+- 本客户端按账号分开缓存。通知只作用于收到它的那个账号。`host_gid > 0` 时只丢掉这座农场的扫描缓存，其他好友保留；`host_gid == 0` 时这座账号的扫描缓存全部丢掉。解包失败不当成天气通知，不清缓存。土地、活动列表和任务推送也不清天气缓存。扫描若正持有变更锁，失效会等它写回后再删，避免旧结果盖回去。
+- 和 bot 的差别：bot 任意一座农场的天气通知都会清掉该进程的全部好友缓存。这里只清被点名的农场；点名缺失才清该账号全部。另一账号的服务是另一份缓存。
+- 天气任务领取未做。bot 路由没有领取接口，天气页只展示任务进度，没有领取按钮。`WeatherTaskOperateRequest` 在 proto 里注明是采集请求 field 107 的兼容别名，服务没有发送它，文档也没有领取用的 `operate_type`。研究节点奖励仍走已有的 `operate_type = 40`。不另造领取请求。
+- 还没验：真实 `WeatherChangeNotify` 到达后的下一次扫描，以及窗口上一次扫描结果是否还留在页面上。页面结果要等用户再次查看才更新。
+- 验证：`cargo +1.99.1 test -p qq-farm-core --lib services::weather:: -- --test-threads=1` 11 项通过；`weather_service_is_reused_for_the_account`、`weather_services_are_not_shared_across_accounts`、`weather_change_names_its_farm_and_other_notifies_do_not_clear_it`、`activies_change_notify_matches_real_proto_name` 各 1 项通过；`cargo +1.99.1 test -p qq-farm-nsh --lib weather -- --test-threads=1` 3 项通过。`RUSTUP_TOOLCHAIN=1.99.1 nsh check crates/qq-farm-nsh` 通过。`rust-toolchain.toml` 仍是 1.98.1；这些命令用已安装的 1.99.1，不能代替 1.98.1 或实机验收。

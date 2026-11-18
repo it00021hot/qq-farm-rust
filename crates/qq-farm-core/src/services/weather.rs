@@ -456,6 +456,12 @@ impl WeatherService {
     fn forget_visit(&self, gid: i64) {
         self.visits.lock().expect("weather visit cache").remove(&gid);
     }
+
+    pub async fn invalidate_visits(&self, host_gid: i64) {
+        let _guard = self.mutation_lock.lock().await;
+        let mut cache = self.visits.lock().expect("weather visit cache");
+        invalidate_cached_visits(&mut cache, host_gid);
+    }
 }
 
 struct WeatherBoard {
@@ -730,6 +736,14 @@ fn visit_error_text(error: &Error) -> String {
     } else {
         trimmed.to_owned()
     }
+}
+
+fn invalidate_cached_visits(cache: &mut HashMap<i64, CachedVisit>, host_gid: i64) {
+    if host_gid > 0 {
+        cache.remove(&host_gid);
+        return;
+    }
+    cache.clear();
 }
 
 fn fresh_visit(cache: &HashMap<i64, CachedVisit>, gid: i64, now: i64) -> Option<&CachedVisit> {
@@ -1270,5 +1284,32 @@ mod tests {
         assert!(blocked.reads.is_empty());
         assert!(waiting.get("friends").and_then(Value::as_array).expect("none").is_empty());
         assert_eq!(waiting.get("deferredGids").and_then(Value::as_array).expect("rest").len(), 2);
+    }
+
+    fn fresh_cached(gid: i64) -> (i64, CachedVisit) {
+        (
+            gid,
+            CachedVisit {
+                inspected_at: crate::utils::time::get_server_time_secs(),
+                visit: Some(ready_visit()),
+                error: None,
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn weather_notify_drops_only_that_farm_and_scan_rereads_it() {
+        let mut account_a = HashMap::from([fresh_cached(8), fresh_cached(9)]);
+        let account_b = account_a.clone();
+        invalidate_cached_visits(&mut account_a, 8);
+        assert!(!account_a.contains_key(&8));
+        assert!(account_a.contains_key(&9));
+        assert!(account_b.contains_key(&8));
+        let mut script = Script { fail: 0, reads: Vec::new() };
+        scan_friends(&[8, 9], &mut account_a, immediate(), || false, &mut script).await;
+        assert_eq!(script.reads, vec![8]);
+        invalidate_cached_visits(&mut account_a, 0);
+        assert!(account_a.is_empty());
+        assert_eq!(account_b.len(), 2);
     }
 }

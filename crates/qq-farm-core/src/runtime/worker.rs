@@ -517,6 +517,11 @@ impl Worker {
                                     crate::network::notify::NotifyEvent::ActivitiesChanged => {
                                         crate::config::activity_windows::invalidate_activity_windows();
                                     }
+                                    crate::network::notify::NotifyEvent::WeatherChanged {
+                                        host_gid,
+                                    } => {
+                                        wl.weather().invalidate_visits(host_gid).await;
+                                    }
                                     crate::network::notify::NotifyEvent::TaskInfoNotify {
                                         task_info,
                                     } => {
