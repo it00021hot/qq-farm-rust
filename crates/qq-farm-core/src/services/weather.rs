@@ -1,7 +1,9 @@
-//! 雨落成诗：自己农场的天气、采集瓶兑换、雷雨召唤和气象研究。
+//! 雨落成诗：自己农场的天气、采集瓶兑换、雷雨召唤、气象研究和好友天气扫描。
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
 use prost::Message as _;
 use serde_json::{json, Value};
@@ -52,9 +54,11 @@ const COLLECT_OPERATE_TYPE: i64 = 9;
 const COLLECTED_MARKER: i64 = 4;
 const ALREADY_COLLECTED: i64 = 1_034_040;
 const SCAN_BATCH_LIMIT: usize = 5;
-const SCAN_GAP: std::time::Duration = std::time::Duration::from_millis(300);
-const SCAN_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
-const SCAN_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+const SCAN_CACHE_TTL_SEC: i64 = 600;
+const SCAN_GAP: Duration = Duration::from_millis(300);
+const SCAN_WAIT: Duration = Duration::from_secs(10);
+const SCAN_POLL: Duration = Duration::from_millis(250);
+const SCAN_VISIT_FAILED: &str = "现场天气检查失败";
 const THUNDERSTORM_TYPE: i64 = 1;
 const STATUS_AVAILABLE: i64 = 2;
 const STATUS_COMPLETED: i64 = 4;
@@ -105,12 +109,17 @@ pub struct WeatherTaskView {
 pub struct WeatherService {
     gateway: Arc<Gateway>,
     mutation_lock: tokio::sync::Mutex<()>,
+    visits: std::sync::Mutex<HashMap<i64, CachedVisit>>,
 }
 
 impl WeatherService {
     #[must_use]
     pub fn new(gateway: Arc<Gateway>) -> Self {
-        Self { gateway, mutation_lock: tokio::sync::Mutex::new(()) }
+        Self {
+            gateway,
+            mutation_lock: tokio::sync::Mutex::new(()),
+            visits: std::sync::Mutex::new(HashMap::new()),
+        }
     }
 
     pub async fn snapshot(&self) -> Result<Value> {
@@ -213,8 +222,16 @@ impl WeatherService {
     ) -> Result<Value> {
         ensure_other_farm(host_gid, self_gid)?;
         let _guard = self.mutation_lock.lock().await;
-        let weather = read_friend_visit(friends, host_gid).await?;
-        Ok(visit_value(host_gid, &weather))
+        match read_friend_visit(friends, host_gid).await {
+            Ok(visit) => {
+                self.save_visit(host_gid, &visit);
+                Ok(visit_value(host_gid, &visit))
+            }
+            Err(error) => {
+                self.save_new_failure(host_gid, &visit_error_text(&error));
+                Err(error)
+            }
+        }
     }
 
     pub async fn collect(
@@ -229,22 +246,28 @@ impl WeatherService {
         if !has_item(&get_bag_items(&bag), COLLECTOR_BOTTLE_ID) {
             return Err(Error::Business("背包中没有可用的天气采集瓶".into()));
         }
+        self.forget_visit(host_gid);
         let entered = friends.enter_farm(host_gid).await?;
         let operated = self.collect_ready(host_gid, entered.weather.as_ref()).await;
         let _ = friends.leave_farm(host_gid).await;
         operated?;
-        Ok(visit_value(host_gid, &read_friend_visit(friends, host_gid).await?))
+        let visit = read_friend_visit(friends, host_gid).await?;
+        self.save_visit(host_gid, &visit);
+        Ok(visit_value(host_gid, &visit))
     }
 
     pub async fn frog(&self, friends: &FriendApi, host_gid: i64, self_gid: i64) -> Result<Value> {
         ensure_other_farm(host_gid, self_gid)?;
         let _guard = self.mutation_lock.lock().await;
         let uid = bottle_uid(&self.gateway, FROG_BOTTLE_ID, "背包中没有可用的青蛙使坏瓶").await?;
+        self.forget_visit(host_gid);
         let _entered = friends.enter_farm(host_gid).await?;
         let sent = self.use_bottle(FROG_BOTTLE_ID, uid, host_gid, Vec::new()).await;
         let _ = friends.leave_farm(host_gid).await;
         sent?;
-        Ok(visit_value(host_gid, &read_friend_visit(friends, host_gid).await?))
+        let visit = read_friend_visit(friends, host_gid).await?;
+        self.save_visit(host_gid, &visit);
+        Ok(visit_value(host_gid, &visit))
     }
 
     pub async fn cloud(
@@ -257,6 +280,7 @@ impl WeatherService {
         ensure_other_farm(host_gid, self_gid)?;
         let _guard = self.mutation_lock.lock().await;
         let uid = bottle_uid(&self.gateway, CLOUD_BOTTLE_ID, "背包中没有可用的乌云使坏瓶").await?;
+        self.forget_visit(host_gid);
         let reply = friends.enter_farm(host_gid).await?;
         let sent = match choose_cloud_land(&cloud_land_ids(&reply.lands), land_id) {
             Ok(land_id) => self.use_bottle(CLOUD_BOTTLE_ID, uid, host_gid, vec![land_id]).await,
@@ -264,7 +288,9 @@ impl WeatherService {
         };
         let _ = friends.leave_farm(host_gid).await;
         sent?;
-        Ok(visit_value(host_gid, &read_friend_visit(friends, host_gid).await?))
+        let visit = read_friend_visit(friends, host_gid).await?;
+        self.save_visit(host_gid, &visit);
+        Ok(visit_value(host_gid, &visit))
     }
 
     pub async fn scan(
@@ -276,22 +302,18 @@ impl WeatherService {
     ) -> Result<Value> {
         let chosen = prepare_scan(gids, self_gid)?;
         let _guard = self.mutation_lock.lock().await;
-        let mut visits = Vec::new();
-        let mut deferred = Vec::new();
-        let mut entered = 0_usize;
-        for (index, gid) in chosen.iter().copied().enumerate() {
-            if !wait_for_friend_idle(account_id).await {
-                deferred.extend(chosen[index..].iter().copied());
-                break;
-            }
-            if entered > 0 {
-                tokio::time::sleep(SCAN_GAP).await;
-            }
-            let visit = read_friend_visit(friends, gid).await?;
-            visits.push(visit_value(gid, &visit));
-            entered += 1;
-        }
-        Ok(json!({ "friends": visits, "deferredGids": deferred }))
+        let mut cache = self.visit_cache();
+        let mut reader = LowPriorityVisit { friends };
+        let value = scan_friends(
+            &chosen,
+            &mut cache,
+            SCAN_PACE,
+            || crate::infra::friend_task_flag::is_friend_checking(account_id),
+            &mut reader,
+        )
+        .await;
+        self.replace_visits(cache);
+        Ok(value)
     }
 
     async fn collect_ready(&self, host_gid: i64, weather: Option<&WeatherStatus>) -> Result<()> {
@@ -401,6 +423,38 @@ impl WeatherService {
             sense_count,
             sense_percent,
         })
+    }
+
+    fn visit_cache(&self) -> HashMap<i64, CachedVisit> {
+        self.visits.lock().expect("weather visit cache").clone()
+    }
+
+    fn replace_visits(&self, cache: HashMap<i64, CachedVisit>) {
+        *self.visits.lock().expect("weather visit cache") = cache;
+    }
+
+    fn save_visit(&self, gid: i64, visit: &FriendVisit) {
+        let now = crate::utils::time::get_server_time_secs();
+        self.visits.lock().expect("weather visit cache").insert(
+            gid,
+            CachedVisit { inspected_at: now, visit: Some(visit.clone()), error: None },
+        );
+    }
+
+    fn save_new_failure(&self, gid: i64, message: &str) {
+        let mut cache = self.visits.lock().expect("weather visit cache");
+        if cache.contains_key(&gid) {
+            return;
+        }
+        let now = crate::utils::time::get_server_time_secs();
+        cache.insert(
+            gid,
+            CachedVisit { inspected_at: now, visit: None, error: Some(message.to_owned()) },
+        );
+    }
+
+    fn forget_visit(&self, gid: i64) {
+        self.visits.lock().expect("weather visit cache").remove(&gid);
     }
 }
 
@@ -595,18 +649,20 @@ pub fn prepare_scan(gids: &[i64], self_gid: i64) -> Result<Vec<i64>> {
     Ok(chosen)
 }
 
-async fn wait_for_friend_idle(account_id: &str) -> bool {
-    if !crate::infra::friend_task_flag::is_friend_checking(account_id) {
+async fn wait_until_idle(busy: &mut impl FnMut() -> bool, wait: Duration, poll: Duration) -> bool {
+    if !busy() {
         return true;
     }
-    let deadline = std::time::Instant::now() + SCAN_WAIT;
-    while crate::infra::friend_task_flag::is_friend_checking(account_id) {
-        if std::time::Instant::now() >= deadline {
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        if !busy() {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline || poll.is_zero() {
             return false;
         }
-        tokio::time::sleep(SCAN_POLL).await;
+        tokio::time::sleep(poll).await;
     }
-    true
 }
 
 fn has_item(items: &[BagItemLite], item_id: i64) -> bool {
@@ -620,9 +676,143 @@ async fn read_friend_visit(friends: &FriendApi, host_gid: i64) -> Result<FriendV
     Ok(visit)
 }
 
+async fn read_friend_visit_low(friends: &FriendApi, host_gid: i64) -> Result<FriendVisit> {
+    crate::network::gateway::background_scope(read_friend_visit(friends, host_gid)).await
+}
+
+#[derive(Clone)]
 struct FriendVisit {
     weather: Option<WeatherStatus>,
     cloud_lands: Vec<i64>,
+}
+
+#[derive(Clone)]
+struct CachedVisit {
+    inspected_at: i64,
+    visit: Option<FriendVisit>,
+    error: Option<String>,
+}
+
+struct ScanPace {
+    wait: Duration,
+    poll: Duration,
+    gap: Duration,
+}
+
+const SCAN_PACE: ScanPace = ScanPace { wait: SCAN_WAIT, poll: SCAN_POLL, gap: SCAN_GAP };
+
+trait VisitReader {
+    fn read(
+        &mut self,
+        gid: i64,
+    ) -> impl Future<Output = std::result::Result<FriendVisit, String>> + Send + '_;
+}
+
+struct LowPriorityVisit<'a> {
+    friends: &'a FriendApi,
+}
+
+impl VisitReader for LowPriorityVisit<'_> {
+    async fn read(&mut self, gid: i64) -> std::result::Result<FriendVisit, String> {
+        read_friend_visit_low(self.friends, gid).await.map_err(|error| visit_error_text(&error))
+    }
+}
+
+fn visit_error_text(error: &Error) -> String {
+    let message = match error {
+        Error::Business(message) => message.clone(),
+        Error::Network(NetworkError::Gateway { error_message, .. }) => error_message.clone(),
+        other => other.to_string(),
+    };
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        SCAN_VISIT_FAILED.to_owned()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+fn fresh_visit(cache: &HashMap<i64, CachedVisit>, gid: i64, now: i64) -> Option<&CachedVisit> {
+    cache.get(&gid).filter(|item| now.saturating_sub(item.inspected_at) <= SCAN_CACHE_TTL_SEC)
+}
+
+fn scan_row(gid: i64, cached: &CachedVisit, now: i64, error_override: Option<&str>) -> Value {
+    let error = error_override.or(cached.error.as_deref()).unwrap_or("");
+    let (state, lands) = match &cached.visit {
+        Some(visit) => (visit_state(visit.weather.as_ref(), now), visit.cloud_lands.clone()),
+        None => ("unknown", Vec::new()),
+    };
+    json!({ "gid": gid, "state": state, "cloudLands": lands, "error": error })
+}
+
+fn remember_visit(
+    cache: &mut HashMap<i64, CachedVisit>,
+    gid: i64,
+    now: i64,
+    visit: FriendVisit,
+) -> Value {
+    let cached = CachedVisit { inspected_at: now, visit: Some(visit), error: None };
+    let row = scan_row(gid, &cached, now, None);
+    cache.insert(gid, cached);
+    row
+}
+
+fn remember_failure(
+    cache: &mut HashMap<i64, CachedVisit>,
+    gid: i64,
+    now: i64,
+    message: &str,
+) -> Value {
+    if let Some(previous) = cache.get(&gid) {
+        return scan_row(gid, previous, now, Some(message));
+    }
+    let cached = CachedVisit { inspected_at: now, visit: None, error: Some(message.to_owned()) };
+    let row = scan_row(gid, &cached, now, None);
+    cache.insert(gid, cached);
+    row
+}
+
+async fn scan_friends<R: VisitReader>(
+    chosen: &[i64],
+    cache: &mut HashMap<i64, CachedVisit>,
+    pace: ScanPace,
+    mut busy: impl FnMut() -> bool,
+    reader: &mut R,
+) -> Value {
+    let mut rows = Vec::new();
+    let mut deferred = Vec::new();
+    let mut entered = 0_usize;
+    for (index, gid) in chosen.iter().copied().enumerate() {
+        let now = crate::utils::time::get_server_time_secs();
+        if let Some(hit) = fresh_visit(cache, gid, now) {
+            rows.push(scan_row(gid, hit, now, None));
+            continue;
+        }
+        if !wait_until_idle(&mut busy, pace.wait, pace.poll).await {
+            deferred.extend(chosen[index..].iter().copied());
+            break;
+        }
+        if entered > 0 {
+            tokio::time::sleep(pace.gap).await;
+        }
+        let now = crate::utils::time::get_server_time_secs();
+        let result = reader.read(gid).await;
+        rows.push(apply_read(cache, gid, now, result));
+        entered += 1;
+    }
+    json!({ "friends": rows, "deferredGids": deferred })
+}
+
+fn apply_read(
+    cache: &mut HashMap<i64, CachedVisit>,
+    gid: i64,
+    now: i64,
+    result: std::result::Result<FriendVisit, String>,
+) -> Value {
+    match result {
+        Ok(visit) => remember_visit(cache, gid, now, visit),
+        Err(message) => remember_failure(cache, gid, now, &message),
+    }
 }
 
 fn visit_value(host_gid: i64, visit: &FriendVisit) -> Value {
@@ -970,8 +1160,115 @@ mod tests {
     #[test]
     fn scan_keeps_five_distinct_friends_and_rejects_a_larger_batch() {
         assert_eq!(prepare_scan(&[0, 7, 7, 8, 9], 7).expect("chosen"), vec![8, 9]);
-        assert!(prepare_scan(&[7], 7).is_err());
-        assert!(prepare_scan(&[1, 2, 3, 4, 5, 6], 0).is_err());
+        let empty = prepare_scan(&[7], 7).expect_err("self").to_string();
+        assert!(empty.contains("请先选择需要检查现场天气的好友"));
+        let oversized = prepare_scan(&[1, 2, 3, 4, 5, 6], 0).expect_err("limit").to_string();
+        assert!(oversized.contains("单次最多检查 5 位好友"));
         assert_eq!(prepare_scan(&[1, 2, 3, 4, 5], 0).expect("five").len(), 5);
+    }
+
+    fn ready_visit() -> FriendVisit {
+        FriendVisit {
+            weather: Some(WeatherStatus {
+                weather_type: THUNDERSTORM_TYPE,
+                status: 1,
+                end_time: crate::utils::time::get_server_time_secs() + 3_600,
+                ..WeatherStatus::default()
+            }),
+            cloud_lands: vec![4],
+        }
+    }
+
+    struct Script {
+        fail: i64,
+        reads: Vec<i64>,
+    }
+
+    impl VisitReader for Script {
+        async fn read(&mut self, gid: i64) -> std::result::Result<FriendVisit, String> {
+            self.reads.push(gid);
+            if gid == self.fail {
+                Err("进入失败".to_owned())
+            } else {
+                Ok(ready_visit())
+            }
+        }
+    }
+
+    fn immediate() -> ScanPace {
+        ScanPace { wait: Duration::ZERO, poll: Duration::ZERO, gap: Duration::ZERO }
+    }
+
+    #[tokio::test]
+    async fn scan_continues_after_one_friend_fails_and_skips_a_fresh_cache() {
+        let mut cache = HashMap::new();
+        let mut script = Script { fail: 9, reads: Vec::new() };
+        let first = scan_friends(&[8, 9, 10], &mut cache, immediate(), || false, &mut script).await;
+        assert_eq!(script.reads, vec![8, 9, 10]);
+        let rows = first.get("friends").and_then(Value::as_array).expect("rows");
+        assert_eq!(rows[0].get("state").and_then(Value::as_str), Some("ready"));
+        assert_eq!(rows[0].get("error").and_then(Value::as_str), Some(""));
+        assert_eq!(rows[1].get("error").and_then(Value::as_str), Some("进入失败"));
+        assert_eq!(rows[1].get("state").and_then(Value::as_str), Some("unknown"));
+        assert_eq!(rows[2].get("cloudLands").and_then(Value::as_array).map(Vec::len), Some(1));
+        script.reads.clear();
+        let second =
+            scan_friends(&[8, 9, 10], &mut cache, immediate(), || false, &mut script).await;
+        assert!(script.reads.is_empty());
+        assert_eq!(first, second);
+    }
+
+    #[tokio::test]
+    async fn stale_failure_keeps_the_previous_visit_and_a_busy_patrol_defers_the_rest() {
+        let now = crate::utils::time::get_server_time_secs();
+        let mut cache = HashMap::from([(
+            8,
+            CachedVisit {
+                inspected_at: now - SCAN_CACHE_TTL_SEC - 1,
+                visit: Some(ready_visit()),
+                error: None,
+            },
+        )]);
+        let mut script = Script { fail: 8, reads: Vec::new() };
+        let failed = scan_friends(&[8], &mut cache, immediate(), || false, &mut script).await;
+        let row = &failed.get("friends").and_then(Value::as_array).expect("rows")[0];
+        assert_eq!(row.get("error").and_then(Value::as_str), Some("进入失败"));
+        assert_eq!(row.get("state").and_then(Value::as_str), Some("ready"));
+        assert_eq!(cache.get(&8).expect("kept").inspected_at, now - SCAN_CACHE_TTL_SEC - 1);
+        assert!(cache.get(&8).expect("kept").error.is_none());
+
+        let mut cache = HashMap::new();
+        let mut script = Script { fail: 0, reads: Vec::new() };
+        let mut allow = 1_i64;
+        let deferred = scan_friends(
+            &[8, 9],
+            &mut cache,
+            immediate(),
+            || {
+                if allow > 0 {
+                    allow -= 1;
+                    false
+                } else {
+                    true
+                }
+            },
+            &mut script,
+        )
+        .await;
+        assert_eq!(script.reads, vec![8]);
+        let deferred_ids =
+            deferred.get("deferredGids").and_then(Value::as_array).expect("deferred");
+        assert_eq!(deferred_ids.len(), 1);
+        assert_eq!(deferred_ids[0].as_i64(), Some(9));
+        assert!(cache.contains_key(&8));
+        assert!(!cache.contains_key(&9));
+
+        let mut blocked_cache = HashMap::new();
+        let mut blocked = Script { fail: 0, reads: Vec::new() };
+        let waiting =
+            scan_friends(&[1, 2], &mut blocked_cache, immediate(), || true, &mut blocked).await;
+        assert!(blocked.reads.is_empty());
+        assert!(waiting.get("friends").and_then(Value::as_array).expect("none").is_empty());
+        assert_eq!(waiting.get("deferredGids").and_then(Value::as_array).expect("rest").len(), 2);
     }
 }

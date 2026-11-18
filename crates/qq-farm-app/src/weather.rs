@@ -8,41 +8,30 @@ use crate::session::AppContext;
 
 pub async fn snapshot(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
-    qq_farm_core::services::weather::WeatherService::new(loop_.gateway().clone())
-        .snapshot()
-        .await
-        .map_err(AppError::from_core)
+    loop_.weather().snapshot().await.map_err(AppError::from_core)
 }
 
 pub async fn advance(ctx: &AppContext, account_id: &str, node_id: i64) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
-    qq_farm_core::services::weather::WeatherService::new(loop_.gateway().clone())
-        .advance(node_id)
-        .await
-        .map_err(AppError::from_core)
+    loop_.weather().advance(node_id).await.map_err(AppError::from_core)
 }
 
 pub async fn exchange(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
-    qq_farm_core::services::weather::WeatherService::new(loop_.gateway().clone())
-        .exchange()
-        .await
-        .map_err(AppError::from_core)
+    loop_.weather().exchange().await.map_err(AppError::from_core)
 }
 
 pub async fn summon(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
     let host_gid = loop_.own_gid();
-    qq_farm_core::services::weather::WeatherService::new(loop_.gateway().clone())
-        .summon(host_gid)
-        .await
-        .map_err(AppError::from_core)
+    loop_.weather().summon(host_gid).await.map_err(AppError::from_core)
 }
 
 pub async fn inspect(ctx: &AppContext, account_id: &str, host_gid: i64) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
     let self_gid = loop_.own_gid();
-    qq_farm_core::services::weather::WeatherService::new(loop_.gateway().clone())
+    loop_
+        .weather()
         .inspect(loop_.friend().api(), host_gid, self_gid)
         .await
         .map_err(AppError::from_core)
@@ -51,7 +40,8 @@ pub async fn inspect(ctx: &AppContext, account_id: &str, host_gid: i64) -> AppRe
 pub async fn collect(ctx: &AppContext, account_id: &str, host_gid: i64) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
     let self_gid = loop_.own_gid();
-    qq_farm_core::services::weather::WeatherService::new(loop_.gateway().clone())
+    loop_
+        .weather()
         .collect(loop_.friend().api(), host_gid, self_gid)
         .await
         .map_err(AppError::from_core)
@@ -60,7 +50,8 @@ pub async fn collect(ctx: &AppContext, account_id: &str, host_gid: i64) -> AppRe
 pub async fn frog(ctx: &AppContext, account_id: &str, host_gid: i64) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
     let self_gid = loop_.own_gid();
-    qq_farm_core::services::weather::WeatherService::new(loop_.gateway().clone())
+    loop_
+        .weather()
         .frog(loop_.friend().api(), host_gid, self_gid)
         .await
         .map_err(AppError::from_core)
@@ -75,7 +66,8 @@ pub async fn cloud(
     let loop_ = require_worker_loop(ctx, account_id)?;
     let self_gid = loop_.own_gid();
     let land_id = (land_id > 0).then_some(land_id);
-    qq_farm_core::services::weather::WeatherService::new(loop_.gateway().clone())
+    loop_
+        .weather()
         .cloud(loop_.friend().api(), host_gid, self_gid, land_id)
         .await
         .map_err(AppError::from_core)
@@ -84,7 +76,8 @@ pub async fn cloud(
 pub async fn scan(ctx: &AppContext, account_id: &str, gids: &[i64]) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
     let self_gid = loop_.own_gid();
-    qq_farm_core::services::weather::WeatherService::new(loop_.gateway().clone())
+    loop_
+        .weather()
         .scan(loop_.friend().api(), account_id, gids, self_gid)
         .await
         .map_err(AppError::from_core)

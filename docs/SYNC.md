@@ -3816,3 +3816,15 @@ bot 本轮 13 个提交**玩法层零变化**（活动/商城/日常自动化均
 - 本次：选中好友后，背包有青蛙使坏瓶（5005）即可使用；有乌云使坏瓶（5006）时，只用在未锁定、非合种副地、仍在生长、且还没有乌云记录的第一块作物上。
 - 还没做：好友天气批量扫描、天气任务领取、窗口实机验收。
 - 验证：`cargo +1.99.1 test -p qq-farm-core --lib -- cloud_bottle_targets_only_growing_master_plots` 通过；`cargo +1.99.1 test -p qq-farm-nsh --lib -- collector_bottle_is_required_before_a_ready_friend_can_be_collected` 通过；`nsh check crates/qq-farm-nsh` 通过。
+
+### 2026-11-18 — 好友天气批量扫描
+
+本条只补扫描。不把能力矩阵改成「齐」，也不把对照基准从 bot `28a9614` 往前推。窗口没有打开，没有真实网关回包。
+
+- 基线：rust `ba3c6b4`（`dev`，当时工作区干净、未 push）。对照 bot 工作区 `6765449` 的 `core/src/services/weather-activity.ts` 与 `docs/weather-activity.md`。bot 面板现在每次只传 1 位；接口仍最多 5 位。本客户端保留一次选最多 5 位的入口。
+- 资格与过滤：去掉自己、非正 GID 和重复。空候选返回「请先选择需要检查现场天气的好友」。超过 5 位返回「单次最多检查 5 位好友，请分批发起」。
+- 执行：10 分钟内查过的好友直接用缓存，不再 Enter/Leave。过期缓存再进入失败时，保留旧现场并带上这次错误，不延长缓存。没有旧记录时，失败写入缓存。一位失败不中断其余好友。好友巡查忙时最多等 10 秒（每 250 毫秒看一次），等不到就把剩下的放进 `deferredGids`。真正进入的两位之间间隔 300 毫秒，Enter/Leave 走 background 班次。
+- 同一账号的天气服务共用一把变更锁。查看、采集、青蛙、乌云和扫描不会同时进出农场。采集、青蛙、乌云开始前丢掉该好友缓存，成功后再写入新现场。查看成功写入缓存；该好友还没有记录时，查看失败才写入失败缓存。单项查看和采集的返回字段仍是 `gid` / `state` / `cloudLands`。
+- NSH：好友列表失败、没有好友、扫描结果、单人失败和延后人数都显示在雨落成诗页。正在扫描时再点不会重发。账号切换后丢弃这次结果，并清空已选好友和扫描结果。
+- 还没做：天气任务领取。天气变更推送仍未接入，缓存不会在通知到达时清空，只随该账号的 worker 结束释放。窗口和真实 Enter/Leave 未验。
+- 验证：`cargo +1.99.1 test -p qq-farm-core --lib services::weather:: -- --test-threads=1` 10 项通过；`cargo +1.99.1 test -p qq-farm-core --lib weather_service_is_reused_for_the_account -- --test-threads=1` 通过；`cargo +1.99.1 test -p qq-farm-nsh --lib weather -- --test-threads=1` 3 项通过。`nsh check crates/qq-farm-nsh` 在 `RUSTUP_TOOLCHAIN=1.99.1` 下通过。仓库 `rust-toolchain.toml` 指定的 1.98.1 当前镜像返回 404，这次没有改工具链文件。`cargo +1.99.1 clippy -p qq-farm-core --lib -- -D warnings` 仍被既有告警拦住，不能据此称全库检查通过。

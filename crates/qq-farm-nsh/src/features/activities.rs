@@ -432,6 +432,13 @@ pub(crate) fn page(page: ActivityPage) -> impl IntoElement {
     let weather_gid = signal(0_i64);
     let weather_picks = signal(Vec::<i64>::new());
     let weather_scans = signal(None::<Value>);
+    let weather_account = page.account_id;
+    effect(move || {
+        let _current = weather_account.get();
+        weather_gid.set(0);
+        weather_picks.set(Vec::new());
+        weather_scans.set(None);
+    });
     let weather_friends = resource(
         move || (shelf.get() == Shelf::Weather).then(|| running_account(page)).flatten(),
         |id, _| async move {

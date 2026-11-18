@@ -105,6 +105,7 @@ pub struct WorkerLoop {
     task: Arc<TaskService>,
     warehouse: Arc<WarehouseService>,
     mystery_shop: Arc<MysteryShopService>,
+    weather: Arc<crate::services::weather::WeatherService>,
 
     // —— 内部状态 ——
     /// 登录完成
@@ -335,6 +336,7 @@ impl WorkerLoop {
             let friend = friend.clone();
             move |limits| friend.update_operation_limits(&limits)
         }));
+        let weather = Arc::new(crate::services::weather::WeatherService::new(Arc::clone(&gateway)));
         friend.api().set_bad_gate(
             Arc::new({
                 let friend = friend.clone();
@@ -366,6 +368,7 @@ impl WorkerLoop {
             task,
             warehouse,
             mystery_shop,
+            weather,
             login_ready: AtomicBool::new(false),
             shutdown_started: AtomicBool::new(false),
             is_running: AtomicBool::new(false),
@@ -1667,6 +1670,11 @@ impl WorkerLoop {
     pub fn gateway(&self) -> &Arc<Gateway> {
         &self.gateway
     }
+
+    #[must_use]
+    pub fn weather(&self) -> Arc<crate::services::weather::WeatherService> {
+        Arc::clone(&self.weather)
+    }
     /// 自己的角色 GID（登录成功后写入；未登录为 0）
     #[must_use]
     pub fn own_gid(&self) -> i64 {
@@ -1800,6 +1808,12 @@ mod tests {
             mystery_shop,
         ));
         (loop_, tx)
+    }
+
+    #[test]
+    fn weather_service_is_reused_for_the_account() {
+        let (loop_, _) = make_loop();
+        assert!(std::ptr::eq(Arc::as_ptr(&loop_.weather()), Arc::as_ptr(&loop_.weather())));
     }
 
     #[test]

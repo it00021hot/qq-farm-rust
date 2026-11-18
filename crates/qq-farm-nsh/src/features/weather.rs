@@ -165,15 +165,38 @@ fn research_body(
                 .font_weight(FontWeight::MEDIUM),
         )
         .child(when(
+            move || friends.error().is_some(),
+            move || {
+                crate::ui::failure(move || {
+                    friends.error().map(SharedString::from).unwrap_or_default()
+                })
+            },
+        ))
+        .child(when(
+            move || {
+                friends.error().is_none() && friends.get().is_some_and(|rows| rows.is_empty())
+            },
+            move || notice(move || text_key("activities.weatherNoFriends")),
+        ))
+        .child(when(
             move || !picks.get().is_empty(),
             move || {
                 button(move || text_key("activities.weatherScan"), ButtonVariant::Secondary)
                     .disabled(move || pending.get().is_some())
                     .on_press(move || {
-                        let gids = picks.get();
-                        spawn(
-                            async move { finish_scan(page, gids, pending, failure, scans).await },
-                        );
+                        if !accept_scan(pending.get_untracked().as_deref(), picks.get_untracked().len())
+                        {
+                            return;
+                        }
+                        let Some(id) = page.account_id.get_untracked() else {
+                            return;
+                        };
+                        let gids = picks.get_untracked();
+                        pending.set(Some("scan".to_owned()));
+                        failure.set(None);
+                        spawn(async move {
+                            finish_scan(page, id, gids, pending, failure, scans).await
+                        });
                     })
             },
         ))
@@ -229,21 +252,34 @@ fn toggle_pick(picks: Signal<Vec<i64>>, gid: i64) {
     picks.set(current);
 }
 
+fn accept_scan(pending: Option<&str>, count: usize) -> bool {
+    pending.is_none() && count > 0
+}
+
+fn scan_still_current(started: &str, current: Option<&str>) -> bool {
+    current == Some(started)
+}
+
 async fn finish_scan(
     page: ActivityPage,
+    id: String,
     gids: Vec<i64>,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
     scans: Signal<Option<Value>>,
 ) {
-    let Some(id) = page.account_id.get_untracked() else {
-        return;
-    };
-    pending.set(Some("scan".to_owned()));
-    failure.set(None);
     let context = session::session().context.clone();
+    let account_id = id.clone();
     let result =
-        session::call(async move { qq_farm_app::weather::scan(&context, &id, &gids).await }).await;
+        session::call(
+            async move { qq_farm_app::weather::scan(&context, &account_id, &gids).await },
+        )
+        .await;
+    if !scan_still_current(&id, page.account_id.get_untracked().as_deref()) {
+        scans.set(None);
+        pending.set(None);
+        return;
+    }
     match result {
         Ok(value) => scans.set(Some(value)),
         Err(message) => failure.set(Some(message)),
@@ -260,17 +296,7 @@ fn scan_result(
         .child(each(
             move || scans.get().map(|value| scan_lines(&value)).unwrap_or_default(),
             |line: &ScanLine| line.gid.to_string(),
-            move |line, _| {
-                let line = line.get_untracked();
-                let gid = line.gid;
-                let state = line.state;
-                text(move || {
-                    let name = friend_name(friends.get().as_deref(), gid);
-                    SharedString::from(format!("{name} {}", text_key(state)))
-                })
-                .text_sm()
-                .text_color(move || nsh_base::theme().muted_foreground)
-            },
+            move |line, _| scan_line_view(line.get_untracked(), friends),
         ))
         .child(when(
             move || scans.get().is_some_and(|value| deferred_count(&value) > 0),
@@ -293,10 +319,44 @@ fn friend_name(friends: Option<&[WeatherFriend]>, gid: i64) -> String {
         .unwrap_or_else(|| format!("GID:{gid}"))
 }
 
+fn scan_line_view(line: ScanLine, friends: Resource<Vec<WeatherFriend>, String>) -> View {
+    let gid = line.gid;
+    let state = line.state;
+    let error = line.error;
+    let failed = !error.is_empty();
+    view()
+        .child(when(
+            move || !failed,
+            move || {
+                text(move || {
+                    let name = friend_name(friends.get().as_deref(), gid);
+                    SharedString::from(format!("{name} {}", text_key(state)))
+                })
+                .text_sm()
+                .text_color(move || nsh_base::theme().muted_foreground)
+            },
+        ))
+        .child(when(
+            move || failed,
+            move || {
+                let detail = error.clone();
+                crate::ui::failure(move || {
+                    let name = friend_name(friends.get().as_deref(), gid);
+                    let detail = detail.clone();
+                    SharedString::from(format!(
+                        "{name} {} {detail}",
+                        text_key("activities.weatherScanFailed")
+                    ))
+                })
+            },
+        ))
+}
+
 #[derive(Clone, PartialEq, Eq)]
 struct ScanLine {
     gid: i64,
     state: &'static str,
+    error: String,
 }
 
 fn scan_lines(value: &Value) -> Vec<ScanLine> {
@@ -309,8 +369,13 @@ fn scan_lines(value: &Value) -> Vec<ScanLine> {
 
 fn scan_line(value: &Value) -> Option<ScanLine> {
     let gid = value.get("gid").and_then(Value::as_i64).filter(|gid| *gid > 0)?;
-    let state = value.get("state").and_then(Value::as_str).unwrap_or("");
-    Some(ScanLine { gid, state: visit_state_key(state) })
+    let error = value.get("error").and_then(Value::as_str).unwrap_or("").to_owned();
+    let state = if error.is_empty() {
+        visit_state_key(value.get("state").and_then(Value::as_str).unwrap_or(""))
+    } else {
+        "activities.weatherScanFailed"
+    };
+    Some(ScanLine { gid, state, error })
 }
 
 fn visit_state_key(state: &str) -> &'static str {
@@ -968,6 +1033,17 @@ mod tests {
             "deferredGids": [9]
         });
         assert_eq!(super::scan_lines(&scanned)[0].state, "activities.weatherCanCollect");
+        assert!(super::scan_lines(&scanned)[0].error.is_empty());
         assert_eq!(super::deferred_count(&scanned), 1);
+        let failed = json!({ "friends": [{ "gid": 3, "state": "ready", "error": "进入失败" }] });
+        let line = &super::scan_lines(&failed)[0];
+        assert_eq!(line.state, "activities.weatherScanFailed");
+        assert_eq!(line.error, "进入失败");
+        assert!(!super::accept_scan(Some("scan"), 1));
+        assert!(!super::accept_scan(None, 0));
+        assert!(super::accept_scan(None, 2));
+        assert!(super::scan_still_current("a", Some("a")));
+        assert!(!super::scan_still_current("a", Some("b")));
+        assert!(!super::scan_still_current("a", None));
     }
 }
