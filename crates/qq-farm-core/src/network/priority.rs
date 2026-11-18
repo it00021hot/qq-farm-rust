@@ -389,6 +389,23 @@ pub fn next_business_backoff_ms(previous_backoff_ms: u64) -> u64 {
     (previous_backoff_ms * 2).min(BUSINESS_BACKOFF_MAX_MS)
 }
 
+/// 一次农场或好友定时检查的退避结果。`defer_ms == 0` 表示这轮可以执行。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BusinessTickStep {
+    pub stored_ms: u64,
+    pub defer_ms: u64,
+}
+
+/// 网关健康时清掉已有退避；不健康时首次等 30 秒，之后翻倍并封顶 60 秒。
+#[must_use]
+pub fn step_business_tick(previous_ms: u64, healthy: bool) -> BusinessTickStep {
+    if healthy {
+        return BusinessTickStep { stored_ms: 0, defer_ms: 0 };
+    }
+    let defer_ms = next_business_backoff_ms(previous_ms);
+    BusinessTickStep { stored_ms: defer_ms, defer_ms }
+}
+
 // =====================================================================
 // 容量记账调度器（gateway 发送路径接入点）
 // =====================================================================
@@ -1005,6 +1022,23 @@ mod tests {
         assert_eq!(next_business_backoff_ms(0), BUSINESS_BACKOFF_MIN_MS);
         assert_eq!(next_business_backoff_ms(BUSINESS_BACKOFF_MIN_MS), BUSINESS_BACKOFF_MAX_MS);
         assert_eq!(next_business_backoff_ms(BUSINESS_BACKOFF_MAX_MS), BUSINESS_BACKOFF_MAX_MS);
+        assert_eq!(step_business_tick(0, true), BusinessTickStep { stored_ms: 0, defer_ms: 0 });
+        assert_eq!(
+            step_business_tick(0, false),
+            BusinessTickStep { stored_ms: 30_000, defer_ms: 30_000 }
+        );
+        assert_eq!(
+            step_business_tick(30_000, false),
+            BusinessTickStep { stored_ms: 60_000, defer_ms: 60_000 }
+        );
+        assert_eq!(
+            step_business_tick(60_000, false),
+            BusinessTickStep { stored_ms: 60_000, defer_ms: 60_000 }
+        );
+        assert_eq!(
+            step_business_tick(60_000, true),
+            BusinessTickStep { stored_ms: 0, defer_ms: 0 }
+        );
     }
 
     // ----- RpcScheduler 容量记账（tokio 异步集成） -----

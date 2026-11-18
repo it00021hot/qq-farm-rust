@@ -129,8 +129,12 @@ pub struct WorkerLoop {
     /// 心跳超时回调
     on_heartbeat_timeout: Arc<Mutex<Option<Box<HeartbeatTimeoutCallback>>>>,
     farm_tick_running: AtomicBool,
+    /// 网关不健康时农场巡查的当前退避。0 表示上一轮没有让路。
+    farm_backoff_ms: AtomicU64,
     /// 统一好友 tick（帮助 + 偷菜 + 捣乱）防重入
     friend_tick_running: AtomicBool,
+    /// 网关不健康时好友巡查的当前退避。0 表示上一轮没有让路。
+    friend_backoff_ms: AtomicU64,
     /// 对齐 TS `runUnifiedTick`：farm/help/steal 串行，避免并发打满网关
     unified_tick_running: AtomicBool,
     /// 对齐 TS `unifiedSchedulerRunning`
@@ -380,7 +384,9 @@ impl WorkerLoop {
             heartbeat_miss_count: Arc::new(Mutex::new(0)),
             on_heartbeat_timeout: Arc::new(Mutex::new(None)),
             farm_tick_running: AtomicBool::new(false),
+            farm_backoff_ms: AtomicU64::new(0),
             friend_tick_running: AtomicBool::new(false),
+            friend_backoff_ms: AtomicU64::new(0),
             unified_tick_running: AtomicBool::new(false),
             unified_scheduler_running: AtomicBool::new(false),
             last_lands_push_at: AtomicI64::new(0),
@@ -1107,7 +1113,9 @@ impl WorkerLoop {
     pub fn stop_farm_ticks(&self, scheduler: &Scheduler) {
         self.unified_scheduler_running.store(false, Ordering::Release);
         self.farm_tick_running.store(false, Ordering::Release);
+        self.farm_backoff_ms.store(0, Ordering::Release);
         self.friend_tick_running.store(false, Ordering::Release);
+        self.friend_backoff_ms.store(0, Ordering::Release);
         self.unified_tick_running.store(false, Ordering::Release);
         scheduler.clear("unified_next_tick");
     }
@@ -1371,6 +1379,10 @@ impl WorkerLoop {
         if self.farm_tick_running.swap(true, Ordering::AcqRel) {
             return;
         }
+        if self.login_ready() && self.defer_unhealthy_tick("farm") {
+            self.farm_tick_running.store(false, Ordering::Release);
+            return;
+        }
         let (min_ms, max_ms) = self.interval_range_ms("farm");
         let _guard = NextSlotGuard {
             flag: &self.farm_tick_running,
@@ -1446,6 +1458,10 @@ impl WorkerLoop {
         if self.friend_tick_running.swap(true, Ordering::AcqRel) {
             return;
         }
+        if self.defer_unhealthy_tick("friend") {
+            self.friend_tick_running.store(false, Ordering::Release);
+            return;
+        }
         let (min_ms, max_ms) = self.interval_range_ms("friend");
         let _guard = NextSlotGuard {
             flag: &self.friend_tick_running,
@@ -1477,6 +1493,62 @@ impl WorkerLoop {
             .await;
         }
         this.sync_status();
+    }
+
+    fn defer_unhealthy_tick(&self, kind: &str) -> bool {
+        let slot = match kind {
+            "farm" => &self.farm_backoff_ms,
+            "friend" => &self.friend_backoff_ms,
+            _ => return false,
+        };
+        let previous = slot.load(Ordering::Acquire);
+        let step = crate::network::priority::step_business_tick(
+            previous,
+            self.gateway.is_gateway_healthy_for_business(),
+        );
+        slot.store(step.stored_ms, Ordering::Release);
+        if step.defer_ms == 0 {
+            if previous > 0 {
+                crate::services::panel_log::log(
+                    &self.account.id,
+                    "系统",
+                    format!("网关已恢复，{kind}巡查回到正常间隔"),
+                    crate::constants::PanelEvent::GatewayBackoff,
+                    Some(serde_json::json!({
+                        "module": "system",
+                        "event": "网关退避",
+                        "result": "resume",
+                        "kind": kind,
+                    })),
+                );
+            }
+            return false;
+        }
+        {
+            let mut next = self.next_runs.lock();
+            let at = now_ms() + step.defer_ms as i64;
+            match kind {
+                "farm" => next.farm_at = at,
+                "friend" => next.friend_at = at,
+                _ => {}
+            }
+        }
+        if previous == 0 {
+            crate::services::panel_log::log(
+                &self.account.id,
+                "系统",
+                format!("网关无回包，{kind}巡查退避 {} 秒", step.defer_ms / 1000),
+                crate::constants::PanelEvent::GatewayBackoff,
+                Some(serde_json::json!({
+                    "module": "system",
+                    "event": "网关退避",
+                    "result": "defer",
+                    "kind": kind,
+                    "backoffMs": step.defer_ms,
+                })),
+            );
+        }
+        true
     }
 
     /// 跑每日任务（对齐 bot：整个日更在互斥任务里执行，嵌套调用直接内联）

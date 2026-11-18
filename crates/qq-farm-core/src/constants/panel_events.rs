@@ -48,6 +48,7 @@ pub enum PanelEvent {
     VisitorGidBackfill,
     BadActionLimit,
     HeartbeatTimeout,
+    GatewayBackoff,
     Login,
     PetOp,
     DogSkillGift,
@@ -127,6 +128,7 @@ impl PanelEvent {
             Self::VisitorGidBackfill => "visitor_gid_backfill",
             Self::BadActionLimit => "bad_action_limit",
             Self::HeartbeatTimeout => "heartbeat_timeout",
+            Self::GatewayBackoff => "gateway_backoff",
             Self::Login => "login",
             Self::PetOp => "pet_op",
             Self::DogSkillGift => "dog_skill_gift",
@@ -207,6 +209,7 @@ impl PanelEvent {
             Self::VisitorGidBackfill => "访客补充好友GID",
             Self::BadActionLimit => "放虫放草次数上限",
             Self::HeartbeatTimeout => "心跳超时",
+            Self::GatewayBackoff => "网关退避",
             Self::Login => "登录",
             Self::PetOp => "宠物操作",
             Self::DogSkillGift => "同气连枝礼包",
@@ -284,7 +287,7 @@ impl PanelEvent {
             | Self::AvatarProbe
             | Self::VisitorGidBackfill
             | Self::BadActionLimit => "friend",
-            Self::HeartbeatTimeout | Self::Login => "system",
+            Self::HeartbeatTimeout | Self::GatewayBackoff | Self::Login => "system",
             Self::PetOp | Self::DogSkillGift | Self::MysteryShopWatch => "warehouse",
             Self::RanchAutomation
             | Self::RanchBuy
@@ -362,6 +365,7 @@ impl PanelEvent {
             "visitor_gid_backfill" | "访客补充好友GID" => Some(Self::VisitorGidBackfill),
             "bad_action_limit" | "放虫放草次数上限" => Some(Self::BadActionLimit),
             "heartbeat_timeout" => Some(Self::HeartbeatTimeout),
+            "gateway_backoff" | "网关退避" => Some(Self::GatewayBackoff),
             "login" => Some(Self::Login),
             "pet_op" => Some(Self::PetOp),
             "dog_skill_gift" => Some(Self::DogSkillGift),
@@ -472,6 +476,7 @@ pub const ALL: &[PanelEvent] = &[
     PanelEvent::VisitorGidBackfill,
     PanelEvent::BadActionLimit,
     PanelEvent::HeartbeatTimeout,
+    PanelEvent::GatewayBackoff,
     PanelEvent::Login,
     PanelEvent::PetOp,
     PanelEvent::DogSkillGift,
