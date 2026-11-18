@@ -56,3 +56,21 @@ pub async fn collect(ctx: &AppContext, account_id: &str, host_gid: i64) -> AppRe
         .await
         .map_err(AppError::from_core)
 }
+
+pub async fn frog(ctx: &AppContext, account_id: &str, host_gid: i64) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    let self_gid = loop_.own_gid();
+    qq_farm_core::services::weather::WeatherService::new(loop_.gateway().clone())
+        .frog(loop_.friend().api(), host_gid, self_gid)
+        .await
+        .map_err(AppError::from_core)
+}
+
+pub async fn cloud(ctx: &AppContext, account_id: &str, host_gid: i64) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    let self_gid = loop_.own_gid();
+    qq_farm_core::services::weather::WeatherService::new(loop_.gateway().clone())
+        .cloud(loop_.friend().api(), host_gid, self_gid)
+        .await
+        .map_err(AppError::from_core)
+}

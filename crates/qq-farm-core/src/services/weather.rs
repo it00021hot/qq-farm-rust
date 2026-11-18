@@ -17,8 +17,12 @@ use crate::proto::generated::gamepb::activitypb::{
     WeatherResearchOperateParams,
 };
 use crate::proto::generated::gamepb::itempb::{UseRequest, UseTarget};
+use crate::proto::generated::gamepb::plantpb::LandInfo;
 use crate::proto::generated::gamepb::weatherpb::{
     GetWeatherStatusReply, GetWeatherStatusRequest, WeatherStatus,
+};
+use crate::services::farm::land_analysis::{
+    build_land_map, current_phase, is_occupied_slave_land_with_map, PlantPhase,
 };
 use crate::services::friend::api::FriendApi;
 use crate::services::warehouse::{get_bag_items, BagItemLite, WarehouseService};
@@ -36,6 +40,8 @@ const COLLECTOR_GOODS_ID: i64 = 200;
 const BADGE_ID: i64 = 1027;
 const SUMMON_BOTTLE_ID: i64 = 5002;
 const COLLECTOR_BOTTLE_ID: i64 = 5001;
+const FROG_BOTTLE_ID: i64 = 5005;
+const CLOUD_BOTTLE_ID: i64 = 5006;
 const BOTTLE_ACTIVITY_ID: i64 = 2_026_070_303;
 const COLLECT_OPERATE_TYPE: i64 = 9;
 const COLLECTED_MARKER: i64 = 4;
@@ -198,8 +204,8 @@ impl WeatherService {
     ) -> Result<Value> {
         ensure_other_farm(host_gid, self_gid)?;
         let _guard = self.mutation_lock.lock().await;
-        let weather = read_friend_weather(friends, host_gid).await?;
-        Ok(visit_json(host_gid, weather.as_ref()))
+        let weather = read_friend_visit(friends, host_gid).await?;
+        Ok(visit_value(host_gid, &weather))
     }
 
     pub async fn collect(
@@ -218,8 +224,33 @@ impl WeatherService {
         let operated = self.collect_ready(host_gid, entered.weather.as_ref()).await;
         let _ = friends.leave_farm(host_gid).await;
         operated?;
-        let weather = read_friend_weather(friends, host_gid).await?;
-        Ok(visit_json(host_gid, weather.as_ref()))
+        Ok(visit_value(host_gid, &read_friend_visit(friends, host_gid).await?))
+    }
+
+    pub async fn frog(&self, friends: &FriendApi, host_gid: i64, self_gid: i64) -> Result<Value> {
+        ensure_other_farm(host_gid, self_gid)?;
+        let _guard = self.mutation_lock.lock().await;
+        let uid = bottle_uid(&self.gateway, FROG_BOTTLE_ID, "背包中没有可用的青蛙使坏瓶").await?;
+        let _entered = friends.enter_farm(host_gid).await?;
+        let sent = self.use_bottle(FROG_BOTTLE_ID, uid, host_gid, Vec::new()).await;
+        let _ = friends.leave_farm(host_gid).await;
+        sent?;
+        Ok(visit_value(host_gid, &read_friend_visit(friends, host_gid).await?))
+    }
+
+    pub async fn cloud(&self, friends: &FriendApi, host_gid: i64, self_gid: i64) -> Result<Value> {
+        ensure_other_farm(host_gid, self_gid)?;
+        let _guard = self.mutation_lock.lock().await;
+        let uid = bottle_uid(&self.gateway, CLOUD_BOTTLE_ID, "背包中没有可用的乌云使坏瓶").await?;
+        let reply = friends.enter_farm(host_gid).await?;
+        let land_id = cloud_land_ids(&reply.lands).into_iter().next();
+        let sent = match land_id {
+            Some(land_id) => self.use_bottle(CLOUD_BOTTLE_ID, uid, host_gid, vec![land_id]).await,
+            None => Err(Error::Business("好友当前没有可使用乌云使坏瓶的作物".into())),
+        };
+        let _ = friends.leave_farm(host_gid).await;
+        sent?;
+        Ok(visit_value(host_gid, &read_friend_visit(friends, host_gid).await?))
     }
 
     async fn collect_ready(&self, host_gid: i64, weather: Option<&WeatherStatus>) -> Result<()> {
@@ -244,6 +275,21 @@ impl WeatherService {
             }
             Err(error) => Err(error.into()),
         }
+    }
+
+    async fn use_bottle(
+        &self,
+        item_id: i64,
+        uid: i64,
+        host_gid: i64,
+        land_ids: Vec<i64>,
+    ) -> Result<()> {
+        let request = UseRequest {
+            item: Some(CoreItem { id: item_id, count: 1, uid, ..Default::default() }),
+            target: Some(UseTarget { host_gid, land_ids, use_config_id: 0 }),
+        };
+        self.gateway.request(ITEM_SERVICE, "Use", &request.encode_to_vec()).await?;
+        Ok(())
     }
 
     async fn board(&self) -> Result<WeatherBoard> {
@@ -290,6 +336,8 @@ impl WeatherService {
             .unwrap_or(0);
         let summon_count = *balances.get(&SUMMON_BOTTLE_ID).unwrap_or(&0);
         let collector_count = *balances.get(&COLLECTOR_BOTTLE_ID).unwrap_or(&0);
+        let frog_count = *balances.get(&FROG_BOTTLE_ID).unwrap_or(&0);
+        let cloud_count = *balances.get(&CLOUD_BOTTLE_ID).unwrap_or(&0);
         Ok(WeatherBoard {
             active,
             stage,
@@ -301,6 +349,8 @@ impl WeatherService {
             summon_count,
             summon_available: can_summon(active, summon_count, weather.active),
             collector_count,
+            frog_count,
+            cloud_count,
         })
     }
 }
@@ -316,6 +366,8 @@ struct WeatherBoard {
     summon_count: i64,
     summon_available: bool,
     collector_count: i64,
+    frog_count: i64,
+    cloud_count: i64,
 }
 
 fn research_target(board: &WeatherBoard, node_id: i64) -> Result<&ResearchNode> {
@@ -468,19 +520,58 @@ fn has_item(items: &[BagItemLite], item_id: i64) -> bool {
     items.iter().any(|item| item.id == item_id && item.count > 0)
 }
 
-async fn read_friend_weather(friends: &FriendApi, host_gid: i64) -> Result<Option<WeatherStatus>> {
+async fn read_friend_visit(friends: &FriendApi, host_gid: i64) -> Result<FriendVisit> {
     let reply = friends.enter_farm(host_gid).await?;
-    let weather = reply.weather;
+    let visit = FriendVisit { weather: reply.weather, cloud_lands: cloud_land_ids(&reply.lands) };
     let _ = friends.leave_farm(host_gid).await;
-    Ok(weather)
+    Ok(visit)
 }
 
-fn visit_json(host_gid: i64, weather: Option<&WeatherStatus>) -> Value {
+struct FriendVisit {
+    weather: Option<WeatherStatus>,
+    cloud_lands: Vec<i64>,
+}
+
+fn visit_value(host_gid: i64, visit: &FriendVisit) -> Value {
     let now = crate::utils::time::get_server_time_secs();
     json!({
         "gid": host_gid,
-        "state": visit_state(weather, now),
+        "state": visit_state(visit.weather.as_ref(), now),
+        "cloudLands": visit.cloud_lands,
     })
+}
+
+pub fn cloud_land_ids(lands: &[LandInfo]) -> Vec<i64> {
+    let map = build_land_map(lands);
+    let mut ids = Vec::new();
+    for land in lands {
+        if !land.unlocked || land.id <= 0 || is_occupied_slave_land_with_map(land, &map) {
+            continue;
+        }
+        let Some(plant) = land.plant.as_ref() else { continue };
+        if plant.id <= 0 || plant.phases.is_empty() {
+            continue;
+        }
+        if !matches!(current_phase(land), PlantPhase::Sprout | PlantPhase::Growing) {
+            continue;
+        }
+        if plant.interaction_uses.iter().any(|use_info| use_info.item_id == CLOUD_BOTTLE_ID)
+            || plant.interaction_targets.iter().any(|target| target.item_id == CLOUD_BOTTLE_ID)
+        {
+            continue;
+        }
+        if !ids.contains(&land.id) {
+            ids.push(land.id);
+        }
+    }
+    ids
+}
+
+async fn bottle_uid(gateway: &Arc<Gateway>, item_id: i64, missing: &str) -> Result<i64> {
+    let bag = WarehouseService::get_bag_via(gateway).await?;
+    soonest_stack(&get_bag_items(&bag), item_id)
+        .map(|item| item.uid)
+        .ok_or_else(|| Error::Business(missing.to_owned()))
 }
 
 pub fn soonest_stack(items: &[BagItemLite], item_id: i64) -> Option<&BagItemLite> {
@@ -524,6 +615,8 @@ fn board_json(board: &WeatherBoard) -> Value {
         "summonCount": board.summon_count,
         "summonAvailable": board.summon_available,
         "collectorCount": board.collector_count,
+        "frogCount": board.frog_count,
+        "cloudCount": board.cloud_count,
     })
 }
 
@@ -724,5 +817,37 @@ mod tests {
         assert!(ensure_other_farm(0, 1).is_err());
         assert!(ensure_other_farm(7, 7).is_err());
         assert!(ensure_other_farm(8, 7).is_ok());
+    }
+
+    #[test]
+    fn cloud_bottle_targets_only_growing_master_plots() {
+        use crate::proto::generated::gamepb::plantpb::{
+            PlantInfo, PlantInteractionTargetInfo, PlantPhaseInfo,
+        };
+
+        fn land(id: i64, unlocked: bool, phase: i32, master: i64, cloud: bool) -> LandInfo {
+            let plant = (phase > 0).then(|| PlantInfo {
+                id: 1,
+                phases: vec![PlantPhaseInfo { phase, ..PlantPhaseInfo::default() }],
+                interaction_targets: cloud
+                    .then(|| PlantInteractionTargetInfo {
+                        item_id: CLOUD_BOTTLE_ID,
+                        ..Default::default()
+                    })
+                    .into_iter()
+                    .collect(),
+                ..PlantInfo::default()
+            });
+            LandInfo { id, unlocked, master_land_id: master, plant, ..LandInfo::default() }
+        }
+
+        let ids = cloud_land_ids(&[
+            land(1, true, 3, 0, false),
+            land(2, true, 3, 1, false),
+            land(3, true, 6, 0, false),
+            land(4, true, 3, 0, true),
+            land(5, false, 3, 0, false),
+        ]);
+        assert_eq!(ids, vec![1]);
     }
 }

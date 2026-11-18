@@ -250,6 +250,105 @@ fn visit_panel(
                     })
             },
         ))
+        .child(when(
+            move || board.get().is_some_and(|value| bottle_count(&value, "frogCount") > 0),
+            move || mischief_button(board, visit, selected, pending, failure, page, Mischief::Frog),
+        ))
+        .child(when(
+            move || {
+                board
+                    .get()
+                    .as_ref()
+                    .zip(visit.get().as_ref())
+                    .is_some_and(|(board, visit)| cloud_ready(board, visit))
+            },
+            move || {
+                mischief_button(board, visit, selected, pending, failure, page, Mischief::Cloud)
+            },
+        ))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mischief {
+    Frog,
+    Cloud,
+}
+
+impl Mischief {
+    const fn title(self) -> &'static str {
+        match self {
+            Self::Frog => "activities.confirmFrog.title",
+            Self::Cloud => "activities.confirmCloud.title",
+        }
+    }
+
+    const fn body(self) -> &'static str {
+        match self {
+            Self::Frog => "activities.confirmFrog.body",
+            Self::Cloud => "activities.confirmCloud.body",
+        }
+    }
+
+    const fn action(self) -> &'static str {
+        match self {
+            Self::Frog => "frog",
+            Self::Cloud => "cloud",
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Frog => "activities.weatherFrog",
+            Self::Cloud => "activities.weatherCloud",
+        }
+    }
+}
+
+fn mischief_button(
+    board: Resource<Value, String>,
+    visit: Resource<Value, String>,
+    selected: Signal<i64>,
+    pending: Signal<Option<String>>,
+    failure: Signal<Option<String>>,
+    page: ActivityPage,
+    kind: Mischief,
+) -> impl IntoElement {
+    button(move || text_key(kind.label()), ButtonVariant::Secondary)
+        .disabled(move || pending.get().is_some())
+        .on_press(move || {
+            confirm::confirm(
+                kind.title(),
+                kind.body(),
+                kind.action(),
+                kind.label(),
+                move |accepted| {
+                    if accepted {
+                        let gid = selected.get();
+                        let call = match kind {
+                            Mischief::Frog => WeatherCall::Frog(gid),
+                            Mischief::Cloud => WeatherCall::Cloud(gid),
+                        };
+                        spawn(async move {
+                            finish_action(page, kind.action(), failure, pending, board, call).await;
+                            visit.refetch();
+                        });
+                    }
+                },
+            );
+        })
+}
+
+fn bottle_count(board: &Value, key: &str) -> i64 {
+    board.get(key).and_then(Value::as_i64).unwrap_or(0)
+}
+
+fn cloud_lands(visit: &Value) -> Option<&Vec<Value>> {
+    visit.get("cloudLands").and_then(Value::as_array)
+}
+
+fn cloud_ready(board: &Value, visit: &Value) -> bool {
+    bottle_count(board, "cloudCount") > 0
+        && cloud_lands(visit).is_some_and(|lands| !lands.is_empty())
 }
 
 fn visit_label(visit: Option<&Value>) -> SharedString {
@@ -356,6 +455,8 @@ enum WeatherCall {
     Exchange,
     Summon,
     Collect(i64),
+    Frog(i64),
+    Cloud(i64),
 }
 
 async fn finish_action(
@@ -381,6 +482,12 @@ async fn finish_action(
             WeatherCall::Summon => qq_farm_app::weather::summon(&context, &id).await,
             WeatherCall::Collect(host_gid) => {
                 qq_farm_app::weather::collect(&context, &id, host_gid).await
+            }
+            WeatherCall::Frog(host_gid) => {
+                qq_farm_app::weather::frog(&context, &id, host_gid).await
+            }
+            WeatherCall::Cloud(host_gid) => {
+                qq_farm_app::weather::cloud(&context, &id, host_gid).await
             }
         }
     })
@@ -625,5 +732,8 @@ mod tests {
         assert!(super::collect_ready(&board, &ready));
         assert!(!super::collect_ready(&json!({ "collectorCount": 0 }), &ready));
         assert!(!super::collect_ready(&board, &collected));
+        assert!(super::bottle_count(&json!({ "frogCount": 1 }), "frogCount") > 0);
+        assert!(super::cloud_ready(&json!({ "cloudCount": 1 }), &json!({ "cloudLands": [4] })));
+        assert!(!super::cloud_ready(&json!({ "cloudCount": 1 }), &json!({ "cloudLands": [] })));
     }
 }
