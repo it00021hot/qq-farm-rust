@@ -74,8 +74,13 @@ pub async fn cloud(
 }
 
 pub fn visits_generation(ctx: &AppContext, account_id: &str) -> AppResult<u64> {
+    Ok(visit_epoch(ctx, account_id)?.1)
+}
+
+pub fn visit_epoch(ctx: &AppContext, account_id: &str) -> AppResult<(u64, u64)> {
     let loop_ = require_worker_loop(ctx, account_id)?;
-    Ok(loop_.weather().visits_generation())
+    let weather = loop_.weather();
+    Ok((weather.visit_session(), weather.visits_generation()))
 }
 
 pub async fn scan(ctx: &AppContext, account_id: &str, gids: &[i64]) -> AppResult<Value> {

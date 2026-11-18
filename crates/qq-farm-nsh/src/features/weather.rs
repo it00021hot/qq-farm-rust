@@ -31,6 +31,7 @@ pub(crate) fn loaded(
     selected: Signal<i64>,
     picks: Signal<Vec<i64>>,
     scans: Signal<Option<Value>>,
+    live_session: Signal<u64>,
     live_generation: Signal<u64>,
 ) -> impl IntoElement {
     view()
@@ -66,6 +67,7 @@ pub(crate) fn loaded(
                     selected,
                     picks,
                     scans,
+                    live_session,
                     live_generation,
                 )
             },
@@ -82,6 +84,7 @@ fn research_body(
     selected: Signal<i64>,
     picks: Signal<Vec<i64>>,
     scans: Signal<Option<Value>>,
+    live_session: Signal<u64>,
     live_generation: Signal<u64>,
 ) -> View {
     view()
@@ -208,15 +211,24 @@ fn research_body(
                         pending.set(Some("scan".to_owned()));
                         failure.set(None);
                         spawn(async move {
-                            finish_scan(page, id, gids, pending, failure, scans, live_generation)
-                                .await
+                            finish_scan(
+                                page,
+                                id,
+                                gids,
+                                pending,
+                                failure,
+                                scans,
+                                live_session,
+                                live_generation,
+                            )
+                            .await
                         });
                     })
             },
         ))
         .child(when(
-            move || visible_scans(scans.get(), live_generation.get()).is_some(),
-            move || scan_result(scans, live_generation, friends),
+            move || visible_scans(scans.get(), live_session.get(), live_generation.get()).is_some(),
+            move || scan_result(scans, live_session, live_generation, friends),
         ))
         .child(each(
             move || friends.get().unwrap_or_default(),
@@ -284,6 +296,7 @@ async fn finish_scan(
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
     scans: Signal<Option<Value>>,
+    live_session: Signal<u64>,
     live_generation: Signal<u64>,
 ) {
     let context = session::session().context.clone();
@@ -300,22 +313,46 @@ async fn finish_scan(
     }
     match result {
         Ok(value) => {
-            live_generation.set(value.get("visitGeneration").and_then(Value::as_u64).unwrap_or(0));
-            scans.set(Some(value));
+            let context = session::session().context.clone();
+            let account_id = id.clone();
+            let epoch =
+                session::call(
+                    async move { qq_farm_app::weather::visit_epoch(&context, &account_id) },
+                )
+                .await;
+            match epoch {
+                Ok((session, generation)) => {
+                    if let Some(shown) = visible_scans(Some(value), session, generation) {
+                        live_session.set(session);
+                        live_generation.set(generation);
+                        scans.set(Some(shown));
+                    } else {
+                        live_session.set(session);
+                        live_generation.set(generation);
+                        scans.set(None);
+                    }
+                }
+                Err(_) => {
+                    live_session.set(0);
+                    scans.set(None);
+                }
+            }
         }
         Err(message) => failure.set(Some(message)),
     }
     pending.set(None);
 }
 
-fn visible_scans(scans: Option<Value>, live_generation: u64) -> Option<Value> {
+fn visible_scans(scans: Option<Value>, live_session: u64, live_generation: u64) -> Option<Value> {
     let scans = scans?;
-    let captured = scans.get("visitGeneration").and_then(Value::as_u64).unwrap_or(0);
-    (captured == live_generation).then_some(scans)
+    let session = scans.get("visitSession").and_then(Value::as_u64).unwrap_or(0);
+    let generation = scans.get("visitGeneration").and_then(Value::as_u64).unwrap_or(0);
+    (session == live_session && generation == live_generation).then_some(scans)
 }
 
 fn scan_result(
     scans: Signal<Option<Value>>,
+    live_session: Signal<u64>,
     live_generation: Signal<u64>,
     friends: Resource<Vec<WeatherFriend>, String>,
 ) -> View {
@@ -323,7 +360,7 @@ fn scan_result(
         .gap_2()
         .child(each(
             move || {
-                visible_scans(scans.get(), live_generation.get())
+                visible_scans(scans.get(), live_session.get(), live_generation.get())
                     .map(|value| scan_lines(&value))
                     .unwrap_or_default()
             },
@@ -332,14 +369,15 @@ fn scan_result(
         ))
         .child(when(
             move || {
-                visible_scans(scans.get(), live_generation.get())
+                visible_scans(scans.get(), live_session.get(), live_generation.get())
                     .is_some_and(|value| deferred_count(&value) > 0)
             },
             move || {
                 notice(move || {
-                    let count = visible_scans(scans.get(), live_generation.get())
-                        .map(|value| deferred_count(&value))
-                        .unwrap_or(0);
+                    let count =
+                        visible_scans(scans.get(), live_session.get(), live_generation.get())
+                            .map(|value| deferred_count(&value))
+                            .unwrap_or(0);
                     SharedString::from(format!(
                         "{} {count}",
                         text_key("activities.weatherDeferred")
@@ -1089,12 +1127,14 @@ mod tests {
         let shown = json!({
             "friends": [{ "gid": 8, "state": "ready" }],
             "deferredGids": [],
+            "visitSession": 4,
             "visitGeneration": 2
         });
-        let visible = super::visible_scans(Some(shown.clone()), 2).expect("current");
+        let visible = super::visible_scans(Some(shown.clone()), 4, 2).expect("current");
         assert_eq!(super::scan_lines(&visible)[0].gid, 8);
-        assert!(super::visible_scans(Some(shown), 3).is_none());
+        assert!(super::visible_scans(Some(shown.clone()), 4, 3).is_none());
+        assert!(super::visible_scans(Some(shown), 9, 2).is_none());
         let unnamed = json!({ "friends": [{ "gid": 9, "state": "ready" }] });
-        assert!(super::visible_scans(Some(unnamed), 1).is_none());
+        assert!(super::visible_scans(Some(unnamed), 4, 0).is_none());
     }
 }

@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -111,8 +111,12 @@ pub struct WeatherService {
     gateway: Arc<Gateway>,
     mutation_lock: tokio::sync::Mutex<()>,
     visits: std::sync::Mutex<HashMap<i64, CachedVisit>>,
+    visits_open: AtomicBool,
+    visit_session: u64,
     visits_generation: AtomicU64,
 }
+
+static NEXT_VISIT_SESSION: AtomicU64 = AtomicU64::new(1);
 
 impl WeatherService {
     #[must_use]
@@ -121,8 +125,16 @@ impl WeatherService {
             gateway,
             mutation_lock: tokio::sync::Mutex::new(()),
             visits: std::sync::Mutex::new(HashMap::new()),
+            visits_open: AtomicBool::new(true),
+            visit_session: NEXT_VISIT_SESSION.fetch_add(1, Ordering::Relaxed),
             visits_generation: AtomicU64::new(0),
         }
+    }
+
+    /// 这份天气服务的会话号。新的 worker 不会复用旧号。
+    #[must_use]
+    pub fn visit_session(&self) -> u64 {
+        self.visit_session
     }
 
     /// 扫描缓存被天气通知清掉的次数。扫描写回不增加。
@@ -233,10 +245,12 @@ impl WeatherService {
         let _guard = self.mutation_lock.lock().await;
         match read_friend_visit(friends, host_gid).await {
             Ok(visit) => {
+                self.reject_closed_visit_session()?;
                 self.save_visit(host_gid, &visit);
                 Ok(visit_value(host_gid, &visit))
             }
             Err(error) => {
+                self.reject_closed_visit_session()?;
                 self.save_new_failure(host_gid, &visit_error_text(&error));
                 Err(error)
             }
@@ -261,6 +275,7 @@ impl WeatherService {
         let _ = friends.leave_farm(host_gid).await;
         operated?;
         let visit = read_friend_visit(friends, host_gid).await?;
+        self.reject_closed_visit_session()?;
         self.save_visit(host_gid, &visit);
         Ok(visit_value(host_gid, &visit))
     }
@@ -275,6 +290,7 @@ impl WeatherService {
         let _ = friends.leave_farm(host_gid).await;
         sent?;
         let visit = read_friend_visit(friends, host_gid).await?;
+        self.reject_closed_visit_session()?;
         self.save_visit(host_gid, &visit);
         Ok(visit_value(host_gid, &visit))
     }
@@ -298,6 +314,7 @@ impl WeatherService {
         let _ = friends.leave_farm(host_gid).await;
         sent?;
         let visit = read_friend_visit(friends, host_gid).await?;
+        self.reject_closed_visit_session()?;
         self.save_visit(host_gid, &visit);
         Ok(visit_value(host_gid, &visit))
     }
@@ -311,6 +328,7 @@ impl WeatherService {
     ) -> Result<Value> {
         let chosen = prepare_scan(gids, self_gid)?;
         let _guard = self.mutation_lock.lock().await;
+        self.reject_closed_visit_session()?;
         let mut cache = self.visit_cache();
         let mut reader = LowPriorityVisit { friends };
         let mut value = scan_friends(
@@ -321,8 +339,9 @@ impl WeatherService {
             &mut reader,
         )
         .await;
+        self.reject_closed_visit_session()?;
         self.replace_visits(cache);
-        stamp_visit_generation(&mut value, self.visits_generation());
+        stamp_visit_epoch(&mut value, self.visit_session(), self.visits_generation());
         Ok(value)
     }
 
@@ -470,6 +489,32 @@ impl WeatherService {
     /// `host_gid` 不筛选。任意一座农场的通知都清掉该账号全部好友扫描缓存。
     pub async fn invalidate_visits(&self, _host_gid: i64) {
         let _guard = self.mutation_lock.lock().await;
+        self.clear_visits_locked();
+    }
+
+    /// 会话结束。先关掉写入，再尽量清掉缓存。锁被在途扫描占用时，由那次扫描在写回前清掉。
+    pub(crate) fn close_visit_session(&self) {
+        self.visits_open.store(false, Ordering::Release);
+        self.visits_generation.fetch_add(1, Ordering::AcqRel);
+        if let Ok(_guard) = self.mutation_lock.try_lock() {
+            self.visits.lock().expect("weather visit cache").clear();
+        }
+    }
+
+    /// 同一条 worker 重新登录后允许新的扫描写入。
+    pub(crate) fn open_visit_session(&self) {
+        self.visits_open.store(true, Ordering::Release);
+    }
+
+    fn reject_closed_visit_session(&self) -> Result<()> {
+        if self.visits_open.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        self.visits.lock().expect("weather visit cache").clear();
+        Err(Error::Business("连接已断开，这次好友天气结果不再保留".into()))
+    }
+
+    fn clear_visits_locked(&self) {
         self.visits.lock().expect("weather visit cache").clear();
         self.visits_generation.fetch_add(1, Ordering::AcqRel);
     }
@@ -749,8 +794,9 @@ fn visit_error_text(error: &Error) -> String {
     }
 }
 
-fn stamp_visit_generation(value: &mut Value, generation: u64) {
+fn stamp_visit_epoch(value: &mut Value, session: u64, generation: u64) {
     if let Some(object) = value.as_object_mut() {
+        object.insert("visitSession".to_string(), json!(session));
         object.insert("visitGeneration".to_string(), json!(generation));
     }
 }
@@ -1359,5 +1405,51 @@ mod tests {
         assert_eq!(scanned.get("visitGeneration").and_then(Value::as_u64), Some(2));
         assert!(account.visit_cache().contains_key(&8));
         assert!(!other.visit_cache().is_empty());
+        assert!(scanned.get("visitSession").and_then(Value::as_u64).unwrap_or(0) > 0);
+    }
+
+    #[tokio::test]
+    async fn closed_session_discards_a_scan_that_was_waiting_to_write() {
+        let account = Arc::new(WeatherService::new(offline_gateway()));
+        let other = WeatherService::new(offline_gateway());
+        account.save_visit(8, &ready_visit());
+        account.save_visit(9, &ready_visit());
+        other.save_visit(8, &ready_visit());
+        let held = Arc::clone(&account);
+        let release = Arc::new(tokio::sync::Notify::new());
+        let holding = Arc::new(tokio::sync::Notify::new());
+        let release_for_holder = Arc::clone(&release);
+        let holding_for_holder = Arc::clone(&holding);
+        let holder = tokio::spawn(async move {
+            let _guard = held.mutation_lock.lock().await;
+            holding_for_holder.notify_one();
+            release_for_holder.notified().await;
+        });
+        holding.notified().await;
+        account.close_visit_session();
+        assert!(account.visit_cache().contains_key(&9));
+        let scanning = Arc::clone(&account);
+        let scan = tokio::spawn(async move {
+            let friends = FriendApi::new(Arc::clone(&scanning.gateway));
+            scanning.scan(&friends, "disconnect-scan", &[7], 1).await
+        });
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        release.notify_one();
+        holder.await.expect("holder");
+        let result = scan.await.expect("scan task");
+        assert!(result.is_err());
+        assert!(account.visit_cache().is_empty());
+        assert!(other.visit_cache().contains_key(&8));
+        assert_ne!(account.visit_session(), other.visit_session());
+        account.open_visit_session();
+        let friends = FriendApi::new(Arc::clone(&account.gateway));
+        let resumed =
+            account.scan(&friends, "disconnect-scan", &[7], 1).await.expect("resumed scan");
+        assert_eq!(
+            resumed.get("visitSession").and_then(Value::as_u64),
+            Some(account.visit_session())
+        );
+        assert!(account.visit_cache().contains_key(&7));
+        assert!(other.visit_cache().contains_key(&8));
     }
 }

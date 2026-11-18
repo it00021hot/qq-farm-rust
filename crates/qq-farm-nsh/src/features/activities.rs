@@ -435,6 +435,7 @@ pub(crate) fn page(page: ActivityPage) -> impl IntoElement {
     let weather_gid = signal(0_i64);
     let weather_picks = signal(Vec::<i64>::new());
     let weather_scans = signal(None::<Value>);
+    let weather_session = signal(0_u64);
     let weather_generation = signal(0_u64);
     let weather_watch = signal(false);
     let weather_account = page.account_id;
@@ -452,15 +453,19 @@ pub(crate) fn page(page: ActivityPage) -> impl IntoElement {
             return;
         };
         weather_watch.set(true);
+        let session = weather_session;
         let generation = weather_generation;
         let watch = weather_watch;
         spawn(async move {
             let context = session::session().context.clone();
-            if let Ok(next) =
-                session::call(async move { qq_farm_app::weather::visits_generation(&context, &id) })
-                    .await
+            match session::call(async move { qq_farm_app::weather::visit_epoch(&context, &id) })
+                .await
             {
-                generation.set(next);
+                Ok((next_session, next_generation)) => {
+                    session.set(next_session);
+                    generation.set(next_generation);
+                }
+                Err(_) => session.set(0),
             }
             watch.set(false);
         });
@@ -559,6 +564,7 @@ pub(crate) fn page(page: ActivityPage) -> impl IntoElement {
                     weather_gid,
                     weather_picks,
                     weather_scans,
+                    weather_session,
                     weather_generation,
                 )
             },

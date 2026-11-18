@@ -1609,6 +1609,8 @@ impl WorkerLoop {
         if let Some(ace) = self.ace.lock().take() {
             ace.stop(false);
         }
+        self.weather.close_visit_session();
+        crate::config::activity_windows::invalidate_activity_windows();
     }
 
     /// ACE 运行诊断（connection_summary 用；未挂 ACE / 已 quiesce 后为 None。
@@ -1632,6 +1634,7 @@ impl WorkerLoop {
         self.login_ready.store(true, Ordering::Release);
         self.farm.set_external_scheduler(true);
         self.friend.set_external_scheduler(true);
+        self.weather.open_visit_session();
         self.reset_unified_schedule();
     }
 
@@ -2233,6 +2236,58 @@ mod tests {
         loop_.mark_login_ready();
         loop_.on_disconnect("ws_close", 1006, "online");
         assert!(loop_.shutdown_started());
+    }
+
+    #[tokio::test]
+    async fn session_end_drops_that_accounts_weather_and_stales_activity_windows() {
+        let _windows = crate::config::activity_windows::activity_windows_test_guard();
+        struct ClearWindows;
+        impl Drop for ClearWindows {
+            fn drop(&mut self) {
+                crate::config::activity_windows::clear_activity_windows_for_test();
+            }
+        }
+        let _clear = ClearWindows;
+        crate::config::activity_windows::set_activity_windows(vec![
+            crate::config::activity_windows::ActivityWindow {
+                id: "disconnect-window".to_string(),
+                name: "窗口".to_string(),
+                begin_time: 1,
+                end_time: 9,
+            },
+        ]);
+        assert!(crate::config::activity_windows::activity_windows_fresh());
+        let (left, _) = make_loop();
+        let (right, _) = make_loop();
+        let left_friends = crate::services::friend::api::FriendApi::new(left.gateway().clone());
+        let right_friends = crate::services::friend::api::FriendApi::new(right.gateway().clone());
+        left.weather().scan(&left_friends, left.account_id(), &[8], 1).await.expect("left scan");
+        right
+            .weather()
+            .scan(&right_friends, right.account_id(), &[8], 1)
+            .await
+            .expect("right scan");
+        let right_generation = right.weather().visits_generation();
+        let right_session = right.weather().visit_session();
+        left.quiesce_bot("ws_close");
+        assert!(!crate::config::activity_windows::activity_windows_fresh());
+        assert!(!crate::config::activity_windows::activity_windows_loaded());
+        assert!(left.weather().scan(&left_friends, left.account_id(), &[8], 1).await.is_err());
+        assert!(right.weather().visits_generation() == right_generation);
+        let kept = right
+            .weather()
+            .scan(&right_friends, right.account_id(), &[9], 1)
+            .await
+            .expect("other account still scans");
+        assert_eq!(
+            kept.get("visitSession").and_then(serde_json::Value::as_u64),
+            Some(right_session)
+        );
+        left.resume_bot();
+        left.weather()
+            .scan(&left_friends, left.account_id(), &[8], 1)
+            .await
+            .expect("same worker can scan after resume");
     }
 
     #[test]
