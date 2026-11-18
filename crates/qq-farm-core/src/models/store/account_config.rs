@@ -729,6 +729,7 @@ fn apply_automation_bool(a: &mut AutomationConfig, key: &str, value: bool) {
         "ranch_produce" | "ranchProduce" => a.ranch_produce = value,
         "ranch_clean" | "ranchClean" => a.ranch_clean = value,
         "ranch_sell" | "ranchSell" => a.ranch_sell = value,
+        "ranch_market_organic" | "ranchMarketOrganic" => a.ranch_market_organic = value,
         "ranch_fill_cans" | "ranchFillCans" => a.ranch_fill_cans = value,
         "ranch_feed_normal" | "ranchFeedNormal" => a.ranch_feed_normal = value,
         "ranch_feed_organic" | "ranchFeedOrganic" => a.ranch_feed_organic = value,
@@ -755,6 +756,27 @@ mod tests {
 
     fn reset() {
         set_state(AccountConfigState::new());
+    }
+
+    #[test]
+    fn missing_market_switch_stays_on_and_the_save_path_can_change_it() {
+        let mut value = serde_json::to_value(AutomationConfig::default()).expect("config");
+        value.as_object_mut().expect("object").remove("ranch_market_organic");
+        let parsed: AutomationConfig = serde_json::from_value(value).expect("parse");
+        assert!(parsed.ranch_market_organic);
+        let account = "ranch-market-config";
+        apply_config_snapshot(
+            serde_json::json!({ "automation": { "ranch_market_organic": false } }),
+            Some(account),
+            false,
+        );
+        assert!(!get_automation(Some(account)).ranch_market_organic);
+        apply_config_snapshot(
+            serde_json::json!({ "automation": { "ranchMarketOrganic": true } }),
+            Some(account),
+            false,
+        );
+        assert!(get_automation(Some(account)).ranch_market_organic);
     }
 
     #[test]

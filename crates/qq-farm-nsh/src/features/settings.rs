@@ -39,6 +39,7 @@ const TOGGLES: &[(&str, &str)] = &[
     ("ranch_produce", "settings.ranchProduce"),
     ("ranch_clean", "settings.ranchClean"),
     ("ranch_sell", "settings.ranchSell"),
+    ("ranch_market_organic", "settings.ranchMarketOrganic"),
     ("ranch_buy", "settings.ranchBuy"),
     ("ranch_upgrade", "settings.ranchUpgrade"),
     ("ranch_grass", "settings.ranchGrass"),
@@ -1557,6 +1558,7 @@ mod tests {
             "intervals": { "farm": 30, "helpMin": 10, "helpMax": 20, "stealMin": 5, "stealMax": 15 }
         });
         assert!(automation_flag(&value, "farm"));
+        assert!(super::TOGGLES.iter().any(|(key, _)| *key == "ranch_market_organic"));
         assert!(super::TOGGLES.iter().any(|(key, _)| *key == "farm_harvest_tiangong"));
         assert!(super::TOGGLES.iter().any(|(key, _)| *key == "farm_push"));
         assert!(super::TOGGLES.iter().any(|(key, _)| *key == "mystery_shop_allow_diamond"));

@@ -252,6 +252,11 @@ fn test_root() -> Option<PathBuf> {
 }
 
 #[cfg(test)]
+pub(crate) fn set_operations_root_for_test(dir: Option<PathBuf>) {
+    TEST_ROOT.with(|root| *root.borrow_mut() = dir);
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

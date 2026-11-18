@@ -814,6 +814,9 @@ impl WorkerLoop {
                     }
                     *self.coupon.lock() = coupon;
                 }
+                7002 if chg.delta > 0 => {
+                    crate::services::ranch::wake_market_exchange(account_id);
+                }
                 1005 => {
                     let mut bean = *self.gold_bean.lock();
                     if chg.count > 0 {

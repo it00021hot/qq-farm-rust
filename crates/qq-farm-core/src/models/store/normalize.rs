@@ -236,6 +236,7 @@ pub fn default_account_config() -> AccountConfig {
             ranch_produce: true,
             ranch_clean: true,
             ranch_sell: true,
+            ranch_market_organic: true,
             ranch_fill_cans: true,
             ranch_feed_normal: true,
             ranch_feed_organic: true,
@@ -389,6 +390,7 @@ mod tests {
         assert_eq!(cfg.automation.ranch_check_minutes, 5);
         assert!(cfg.automation.ranch_daily_benefit);
         assert!(cfg.automation.ranch_harvest);
+        assert!(cfg.automation.ranch_market_organic);
         assert!(cfg.automation.ranch_feed_organic);
         assert!(cfg.automation.ranch_friend_steal);
         assert!(cfg.automation.ranch_stroke);

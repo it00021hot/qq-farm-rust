@@ -33,6 +33,8 @@ const GRASS_PRICE_ID: i64 = 1007;
 const PATROL_SLICE_MS: i64 = 5_000;
 const SCENE_REENTRY_MS: i64 = 20_000;
 const CHANGED_RECHECK_MS: i64 = 30_000;
+const POOP_EXCHANGE_FLOOR: i64 = 3;
+const MARKET_CHECK_MS: i64 = 6 * 60 * 60 * 1000;
 
 #[derive(Clone, Copy)]
 struct PatrolFlags {
@@ -40,6 +42,7 @@ struct PatrolFlags {
     produce: bool,
     clean: bool,
     sell: bool,
+    market_organic: bool,
     upgrade: bool,
     buy: bool,
     grass: bool,
@@ -56,6 +59,7 @@ impl PatrolFlags {
             || self.produce
             || self.clean
             || self.sell
+            || self.market_organic
             || self.upgrade
             || self.buy
             || self.grass
@@ -89,6 +93,7 @@ where
         produce: automation.ranch_produce,
         clean: automation.ranch_clean,
         sell: automation.ranch_sell,
+        market_organic: automation.ranch_market_organic,
         upgrade: automation.ranch_upgrade,
         buy: automation.ranch_buy,
         grass: automation.ranch_grass,
@@ -172,6 +177,7 @@ struct PhaseDone {
     produce: bool,
     clean: bool,
     sell: bool,
+    market_organic: bool,
     upgrade: bool,
     buy: bool,
     grass: bool,
@@ -210,6 +216,7 @@ fn initial_done(flags: PatrolFlags) -> PhaseDone {
         produce: !flags.produce,
         clean: !flags.clean,
         sell: !flags.sell,
+        market_organic: !flags.market_organic,
         upgrade: !flags.upgrade,
         buy: !flags.buy,
         grass: !flags.grass,
@@ -553,6 +560,20 @@ where
             note_acted(&account, changed);
             done = current_done(&account, done);
             done.sell = true;
+            mark_done(&account, done);
+        }
+        if !done.market_organic {
+            if hold(&account) {
+                return Ok(());
+            }
+            let changed = acted(market_phase(&owned, &account, flags.market_organic, &bag).await)?;
+            if changed {
+                (cells, bag) = reload(&owned).await?;
+                sync_board(&account, flags, &cells);
+            }
+            note_acted(&account, changed);
+            done = current_done(&account, done);
+            done.market_organic = true;
             mark_done(&account, done);
         }
         if !done.upgrade {
@@ -1490,6 +1511,65 @@ async fn feed_phase(
     Ok(true)
 }
 
+struct MarketClock {
+    next_check_at: i64,
+    last_poop: i64,
+}
+
+fn market_clocks() -> &'static Mutex<HashMap<String, MarketClock>> {
+    static CLOCKS: std::sync::OnceLock<Mutex<HashMap<String, MarketClock>>> =
+        std::sync::OnceLock::new();
+    CLOCKS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub fn wake_market_exchange(account_id: &str) {
+    if !crate::models::store::account_config::get_automation(Some(account_id)).ranch_market_organic
+    {
+        return;
+    }
+    market_clocks().lock().remove(account_id);
+    if let Some(cycle) = cycles().lock().get_mut(account_id) {
+        cycle.done.market_organic = false;
+    }
+    let now = crate::utils::time::now_ms();
+    let soon = now.saturating_add(SCENE_REENTRY_MS);
+    let current = next_checks().lock().get(account_id).copied().unwrap_or(0);
+    set_next(account_id, if current <= 0 { 0 } else { current.min(soon) });
+}
+
+fn market_should_run(account_id: &str, poop: i64, now: i64) -> bool {
+    let clocks = market_clocks().lock();
+    let Some(clock) = clocks.get(account_id) else {
+        return true;
+    };
+    now >= clock.next_check_at || (poop >= POOP_EXCHANGE_FLOOR && poop > clock.last_poop)
+}
+
+async fn market_phase(
+    gateway: &Arc<Gateway>,
+    account_id: &str,
+    enabled: bool,
+    bag: &GetBagReply,
+) -> Result<bool> {
+    if !enabled {
+        return Ok(false);
+    }
+    let now = crate::utils::time::now_ms();
+    if !market_should_run(account_id, super::unlocked_count(bag, super::POOP_ID), now) {
+        return Ok(false);
+    }
+    let mut bag = bag.clone();
+    let bought = super::exchange_poop_organic(gateway, account_id, &mut bag).await?;
+    market_clocks().lock().insert(
+        account_id.to_owned(),
+        MarketClock {
+            next_check_at: now.saturating_add(MARKET_CHECK_MS),
+            last_poop: super::unlocked_count(&bag, super::POOP_ID),
+        },
+    );
+    Ok(bought)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1515,6 +1595,7 @@ mod tests {
             produce: true,
             clean: false,
             sell: false,
+            market_organic: false,
             upgrade: false,
             buy: false,
             grass: false,
@@ -1570,6 +1651,7 @@ mod tests {
             produce: true,
             clean: false,
             sell: false,
+            market_organic: false,
             upgrade: false,
             buy: false,
             grass: false,
@@ -1629,6 +1711,7 @@ mod tests {
             produce: false,
             clean: false,
             sell: false,
+            market_organic: false,
             upgrade: false,
             buy: false,
             grass: false,
@@ -1662,5 +1745,320 @@ mod tests {
             }),
             ..FacilityInfo::default()
         }
+    }
+
+    struct OpsRoot {
+        dir: std::path::PathBuf,
+    }
+
+    impl OpsRoot {
+        fn new() -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "qq-farm-market-{}-{}",
+                std::process::id(),
+                uuid::Uuid::new_v4()
+            ));
+            std::fs::create_dir_all(&dir).expect("temp dir");
+            crate::services::ranch_ops::set_operations_root_for_test(Some(dir.clone()));
+            Self { dir }
+        }
+    }
+
+    impl Drop for OpsRoot {
+        fn drop(&mut self) {
+            crate::services::ranch_ops::set_operations_root_for_test(None);
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    struct MarketScript {
+        poop: i64,
+        calls: Vec<String>,
+        buys: Vec<(i64, i32)>,
+        fail_buy: bool,
+        opened: bool,
+    }
+
+    fn only_market(account: &str, enabled: bool) {
+        let mut config =
+            crate::models::store::account_config::get_account_config_snapshot(Some(account));
+        config.automation.ranch_harvest = false;
+        config.automation.ranch_produce = false;
+        config.automation.ranch_clean = false;
+        config.automation.ranch_sell = false;
+        config.automation.ranch_market_organic = enabled;
+        config.automation.ranch_upgrade = false;
+        config.automation.ranch_buy = false;
+        config.automation.ranch_grass = false;
+        config.automation.ranch_grass_buy = false;
+        config.automation.ranch_fill_cans = false;
+        config.automation.ranch_feed_normal = false;
+        config.automation.ranch_feed_organic = false;
+        config.automation.ranch_friend_steal = false;
+        config.automation.ranch_stroke = false;
+        config.automation.ranch_friend_clean = false;
+        config.automation.ranch_friend_mosquito = false;
+        crate::models::store::account_config::set_account_config_snapshot(
+            Some(account),
+            config,
+            false,
+        );
+    }
+
+    fn scripted_market(state: Arc<Mutex<MarketScript>>) -> Arc<crate::network::gateway::Gateway> {
+        use crate::network::encryptor::{Encryptor, NoopEncryptor};
+        use crate::network::gateway::{Gateway, GatewayConfig};
+        use crate::proto::generated::gamepb::globalscenepb::{
+            PlayerSceneLoginReply, PlayerSceneLoginRequest,
+        };
+        use crate::proto::generated::gamepb::homesteadpb::{AllCellsReply, AllCellsRequest};
+        use crate::proto::generated::gamepb::ranchpb::{
+            GetBagReply, Item as RanchItem, RotationBuyGoodsReply, RotationBuyGoodsRequest,
+            RotationGoodsCard, RotationShopInfoReply, SceneData,
+        };
+        use prost::Message;
+
+        let cfg = GatewayConfig {
+            server_url: "https://example.com".to_string(),
+            platform: "qq".to_string(),
+            os: "linux".to_string(),
+            client_version: "1.0".to_string(),
+            auth_code: "code-1".to_string(),
+            headers: std::collections::HashMap::new(),
+        };
+        let enc: Arc<dyn Encryptor> = Arc::new(NoopEncryptor);
+        let gateway = Arc::new(Gateway::new(cfg, enc));
+        gateway.mark_online();
+        gateway.set_unlocked_scenes(vec![2]);
+        gateway.install_reply_script(move |_service, method, body| {
+            let mut state = state.lock();
+            state.calls.push(method.to_owned());
+            match method {
+                "PlayerSceneLogin" => {
+                    let request = PlayerSceneLoginRequest::decode(body).map_err(|error| {
+                        crate::network::error::NetworkError::Phase(error.to_string())
+                    })?;
+                    let scene = SceneData {
+                        homestead_cells: Some(AllCellsReply::default()),
+                        ..SceneData::default()
+                    };
+                    let reply = if request.global_scene_id == 2 {
+                        PlayerSceneLoginReply {
+                            global_scene_id: 2,
+                            big_farm_scene_ext_data: scene.encode_to_vec().into(),
+                            ..PlayerSceneLoginReply::default()
+                        }
+                    } else {
+                        PlayerSceneLoginReply {
+                            global_scene_id: 1,
+                            farm_scene_ext_data: vec![1].into(),
+                            ..PlayerSceneLoginReply::default()
+                        }
+                    };
+                    Ok(reply.encode_to_vec())
+                }
+                "AllCells" => {
+                    let _ = AllCellsRequest::decode(body);
+                    Ok(AllCellsReply::default().encode_to_vec())
+                }
+                "GetBag" => {
+                    let reply = GetBagReply {
+                        global_scene_id: 2,
+                        physical_items: vec![RanchItem {
+                            id: 7002,
+                            count: state.poop,
+                            ..RanchItem::default()
+                        }],
+                        ..GetBagReply::default()
+                    };
+                    Ok(reply.encode_to_vec())
+                }
+                "RotationShopInfo" => {
+                    let four_hour = RotationGoodsCard {
+                        goods_id: 11,
+                        item_id: 80012,
+                        item_count: 1,
+                        cost_item_id: 7002,
+                        cost_count: 3,
+                        limit_count: 1,
+                        ..RotationGoodsCard::default()
+                    };
+                    let one_hour = RotationGoodsCard {
+                        goods_id: 12,
+                        item_id: 80011,
+                        item_count: 1,
+                        cost_item_id: 7002,
+                        cost_count: 1,
+                        ..RotationGoodsCard::default()
+                    };
+                    let other_currency = RotationGoodsCard {
+                        goods_id: 13,
+                        item_id: 80012,
+                        item_count: 1,
+                        cost_item_id: 1007,
+                        cost_count: 1,
+                        ..RotationGoodsCard::default()
+                    };
+                    let reply = RotationShopInfoReply {
+                        opened: state.opened,
+                        present: true,
+                        goods: vec![one_hour, other_currency, four_hour],
+                        ..RotationShopInfoReply::default()
+                    };
+                    Ok(reply.encode_to_vec())
+                }
+                "RotationBuyGoods" => {
+                    let request = RotationBuyGoodsRequest::decode(body).map_err(|error| {
+                        crate::network::error::NetworkError::Phase(error.to_string())
+                    })?;
+                    state.buys.push((request.goods_id, request.count));
+                    if state.fail_buy {
+                        state.fail_buy = false;
+                        return Err(crate::network::error::NetworkError::Phase(
+                            "集市兑换失败".to_owned(),
+                        ));
+                    }
+                    let price = if request.goods_id == 11 { 3 } else { 1 };
+                    state.poop -= i64::from(request.count) * price;
+                    let reward = if request.goods_id == 11 { 80012 } else { 80011 };
+                    let reply = RotationBuyGoodsReply {
+                        card: Some(RotationGoodsCard {
+                            goods_id: request.goods_id,
+                            ..RotationGoodsCard::default()
+                        }),
+                        awards: vec![RanchItem {
+                            id: reward,
+                            count: i64::from(request.count),
+                            ..RanchItem::default()
+                        }],
+                        ..RotationBuyGoodsReply::default()
+                    };
+                    Ok(reply.encode_to_vec())
+                }
+                _ => Err(crate::network::error::NetworkError::Phase(format!("未准备 {method}"))),
+            }
+        });
+        gateway
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn patrol_exchanges_four_hour_organic_before_one_hour_and_stops_cleanly() {
+        let _root = OpsRoot::new();
+        let account = "ranch-market-order";
+        only_market(account, true);
+        clear_cycle(account);
+        market_clocks().lock().remove(account);
+        set_next(account, 0);
+        let state = Arc::new(Mutex::new(MarketScript {
+            poop: 7,
+            calls: Vec::new(),
+            buys: Vec::new(),
+            fail_buy: false,
+            opened: true,
+        }));
+        let gateway = scripted_market(Arc::clone(&state));
+        patrol_if_due(&gateway, account, 1, i64::MAX, || async { Vec::new() })
+            .await
+            .expect("exchange");
+        assert_eq!(state.lock().buys, vec![(11, 1), (12, 4)]);
+        assert!(state.lock().buys.iter().all(|(goods_id, _)| *goods_id != 13));
+        let shop_reads =
+            state.lock().calls.iter().filter(|call| *call == "RotationShopInfo").count();
+        reset_patrol_schedule(account);
+        patrol_if_due(&gateway, account, 1, i64::MAX, || async { Vec::new() })
+            .await
+            .expect("quiet");
+        assert_eq!(state.lock().buys, vec![(11, 1), (12, 4)]);
+        assert_eq!(
+            state.lock().calls.iter().filter(|call| *call == "RotationShopInfo").count(),
+            shop_reads
+        );
+
+        wake_market_exchange(account);
+        reset_patrol_schedule(account);
+        patrol_if_due(&gateway, account, 1, i64::MAX, || async { Vec::new() })
+            .await
+            .expect("woken");
+        assert_eq!(state.lock().buys.len(), 2);
+        assert!(
+            state.lock().calls.iter().filter(|call| *call == "RotationShopInfo").count()
+                > shop_reads
+        );
+
+        let closed = "ranch-market-closed";
+        only_market(closed, false);
+        clear_cycle(closed);
+        set_next(closed, 0);
+        let idle = Arc::new(Mutex::new(MarketScript {
+            poop: 9,
+            calls: Vec::new(),
+            buys: Vec::new(),
+            fail_buy: false,
+            opened: true,
+        }));
+        let idle_gateway = scripted_market(Arc::clone(&idle));
+        patrol_if_due(&idle_gateway, closed, 1, i64::MAX, || async { Vec::new() })
+            .await
+            .expect("off");
+        assert!(idle.lock().calls.is_empty());
+
+        let short = "ranch-market-short";
+        only_market(short, true);
+        clear_cycle(short);
+        market_clocks().lock().remove(short);
+        set_next(short, 0);
+        let poor = Arc::new(Mutex::new(MarketScript {
+            poop: 2,
+            calls: Vec::new(),
+            buys: Vec::new(),
+            fail_buy: false,
+            opened: true,
+        }));
+        let poor_gateway = scripted_market(Arc::clone(&poor));
+        patrol_if_due(&poor_gateway, short, 1, i64::MAX, || async { Vec::new() })
+            .await
+            .expect("short");
+        assert_eq!(poor.lock().buys, vec![(12, 2)]);
+
+        let absent = "ranch-market-absent";
+        only_market(absent, true);
+        clear_cycle(absent);
+        market_clocks().lock().remove(absent);
+        set_next(absent, 0);
+        let closed_shop = Arc::new(Mutex::new(MarketScript {
+            poop: 9,
+            calls: Vec::new(),
+            buys: Vec::new(),
+            fail_buy: false,
+            opened: false,
+        }));
+        let closed_gateway = scripted_market(Arc::clone(&closed_shop));
+        patrol_if_due(&closed_gateway, absent, 1, i64::MAX, || async { Vec::new() })
+            .await
+            .expect("absent");
+        assert!(closed_shop.lock().buys.is_empty());
+        assert!(closed_shop.lock().calls.iter().any(|call| call == "RotationShopInfo"));
+
+        let broken = "ranch-market-fail";
+        only_market(broken, true);
+        clear_cycle(broken);
+        market_clocks().lock().remove(broken);
+        set_next(broken, 0);
+        let failing = Arc::new(Mutex::new(MarketScript {
+            poop: 6,
+            calls: Vec::new(),
+            buys: Vec::new(),
+            fail_buy: true,
+            opened: true,
+        }));
+        let failing_gateway = scripted_market(Arc::clone(&failing));
+        assert!(patrol_if_due(&failing_gateway, broken, 1, i64::MAX, || async { Vec::new() })
+            .await
+            .is_err());
+        assert_eq!(failing.lock().buys, vec![(11, 1)]);
+        patrol_if_due(&failing_gateway, broken, 1, i64::MAX, || async { Vec::new() })
+            .await
+            .expect("backoff");
+        assert_eq!(failing.lock().buys, vec![(11, 1)]);
     }
 }

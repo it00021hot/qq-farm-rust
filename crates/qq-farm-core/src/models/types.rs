@@ -375,6 +375,9 @@ pub struct AutomationConfig {
     pub ranch_clean: bool,
     #[serde(default = "default_true")]
     pub ranch_sell: bool,
+    /// 仓鼠集市只用便便兑换有机肥，先 4 小时再 1 小时（bot `ranch_market_organic`，默认开）
+    #[serde(default = "default_true")]
+    pub ranch_market_organic: bool,
     #[serde(default = "default_true")]
     pub ranch_fill_cans: bool,
     #[serde(default = "default_true")]

@@ -50,7 +50,7 @@ use crate::proto::generated::gamepb::taskpb::{
 #[path = "ranch_patrol.rs"]
 mod patrol;
 
-pub use patrol::{patrol_if_due, reset_patrol_schedule};
+pub use patrol::{patrol_if_due, reset_patrol_schedule, wake_market_exchange};
 
 const RANCH_SCENE: i32 = 2;
 const RANCH_MODULES: [i32; 3] = [6, 7, 8];
@@ -79,6 +79,10 @@ const MALL_SERVICE: &str = "gamepb.mallpb.MallService";
 const SHOP_CUBS: i64 = 5;
 const SHOP_FEED: i64 = 6;
 const MARKET_SHOP: i64 = 7;
+const POOP_ID: i64 = 7002;
+const ORGANIC_FOUR_HOUR_ID: i64 = 80012;
+const ORGANIC_ONE_HOUR_ID: i64 = 80011;
+const EXCHANGE_COUNT_CAP: i64 = i32::MAX as i64;
 const RANCH_TASK_GROWTH: i32 = 4;
 const RANCH_TASK_DAILY: i32 = 5;
 const RANCH_SHARE_ID: i64 = 103;
@@ -482,6 +486,92 @@ pub async fn exchange(
         .await
     })
     .await
+}
+
+struct PoopOffer {
+    goods_id: i64,
+    unit_price: i64,
+    remaining: Option<i64>,
+}
+
+/// 仓鼠集市只用便便兑换有机肥：先兑尽 4 小时，再兑 1 小时。
+pub(super) async fn exchange_poop_organic(
+    gateway: &Arc<Gateway>,
+    account_id: &str,
+    bag: &mut GetBagReply,
+) -> Result<bool> {
+    let info = market_info(gateway).await?;
+    let level = ranch_level(item_count(bag, RANCH_EXP));
+    let now = crate::utils::time::get_server_time_secs();
+    let mut bought = false;
+    for mut offer in poop_offers(&info, level, now) {
+        loop {
+            let count = poop_exchange_count(
+                unlocked_count(bag, POOP_ID),
+                offer.unit_price,
+                offer.remaining,
+            );
+            if count < 1 {
+                break;
+            }
+            let cost = offer.unit_price.saturating_mul(count);
+            match exchange(gateway, account_id, offer.goods_id, count).await {
+                Ok(()) => {
+                    bought = true;
+                    reduce_unlocked(bag, POOP_ID, cost);
+                    if let Some(left) = offer.remaining.as_mut() {
+                        *left = left.saturating_sub(count);
+                        if *left == 0 {
+                            break;
+                        }
+                    }
+                }
+                Err(Error::Business(_)) => break,
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    Ok(bought)
+}
+
+fn poop_offers(info: &RotationShopInfoReply, level: i64, now: i64) -> Vec<PoopOffer> {
+    let mut offers = Vec::new();
+    for reward_id in [ORGANIC_FOUR_HOUR_ID, ORGANIC_ONE_HOUR_ID] {
+        for card in &info.goods {
+            let offer = market_offer(card, info.opened, info.present, level, now);
+            if offer.available
+                && offer.item_id == reward_id
+                && offer.price_id == POOP_ID
+                && offer.unit_price > 0
+            {
+                offers.push(PoopOffer {
+                    goods_id: card.goods_id,
+                    unit_price: offer.unit_price,
+                    remaining: offer.remaining,
+                });
+            }
+        }
+    }
+    offers
+}
+
+fn poop_exchange_count(balance: i64, unit_price: i64, remaining: Option<i64>) -> i64 {
+    if unit_price <= 0 || balance <= 0 {
+        return 0;
+    }
+    let wanted = remaining.unwrap_or(EXCHANGE_COUNT_CAP).clamp(0, EXCHANGE_COUNT_CAP);
+    (balance / unit_price).min(wanted)
+}
+
+fn reduce_unlocked(bag: &mut GetBagReply, id: i64, mut cost: i64) {
+    for item in bag.physical_items.iter_mut().chain(bag.virtual_items.iter_mut()) {
+        if cost <= 0 || item.id != id || item.is_locked {
+            continue;
+        }
+        let take = item.count.min(cost);
+        item.count -= take;
+        cost -= take;
+    }
 }
 
 /// 牧场罐头商城。货架只接受 6 和 7。牧场未解锁时不切换场景。
