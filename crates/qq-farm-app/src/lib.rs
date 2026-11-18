@@ -25,6 +25,7 @@ pub mod milk_tea;
 pub mod muge;
 pub mod pets;
 pub mod qq_bot_bind;
+pub mod qq_login;
 pub mod ranch;
 pub mod ranch_activities;
 pub mod runtime_lease;

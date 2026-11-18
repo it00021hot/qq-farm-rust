@@ -61,6 +61,7 @@ pub mod monthcard;
 pub mod muge;
 pub mod mystery_shop;
 pub mod mystery_shop_auto;
+pub mod napcat_login;
 pub mod pay;
 pub mod pets;
 pub mod push;

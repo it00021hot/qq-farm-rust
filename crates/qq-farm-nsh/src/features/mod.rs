@@ -16,6 +16,7 @@ mod interaction_items;
 mod known_friends;
 mod mall;
 mod muge;
+mod napcat_login;
 mod offline_reminder;
 mod outcome;
 mod pets;

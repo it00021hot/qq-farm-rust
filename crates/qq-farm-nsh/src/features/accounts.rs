@@ -279,6 +279,7 @@ fn add_form(
             move || platform.get() == "wx",
             move || wx_panel(label, pending, failure, rows, wx_generation, wx_image, wx_status),
         ))
+        .child(super::napcat_login::section(label, pending, failure, rows))
 }
 
 fn add_account(

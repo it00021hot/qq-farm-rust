@@ -38,6 +38,37 @@ pub enum NotificationProvider {
     DingTalk,
 }
 
+/// 可选的 NapCat QQ 扫码。默认关闭，不改变登录码和微信扫码。
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QqLoginSettings {
+    pub qq_qr_login: bool,
+    pub nap_cat_endpoint: String,
+    pub nap_cat_signature: String,
+}
+
+impl std::fmt::Debug for QqLoginSettings {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("QqLoginSettings")
+            .field("qq_qr_login", &self.qq_qr_login)
+            .field("nap_cat_endpoint", &self.nap_cat_endpoint)
+            .field("nap_cat_signature", &"<redacted>")
+            .finish()
+    }
+}
+
+impl QqLoginSettings {
+    #[must_use]
+    pub fn normalized(self) -> Self {
+        Self {
+            qq_qr_login: self.qq_qr_login,
+            nap_cat_endpoint: self.nap_cat_endpoint.trim().to_owned(),
+            nap_cat_signature: self.nap_cat_signature.trim().to_owned(),
+        }
+    }
+}
+
 /// 全局 QQ 官方机器人凭据（部署者配置一次，用户不可见）。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -226,6 +257,8 @@ pub struct GlobalConfigState {
     pub system_config: Option<SystemConfig>,
     /// QQ 官方机器人全局凭据
     pub qq_bot_credentials: QqBotCredentials,
+    /// 可选 NapCat QQ 扫码
+    pub qq_login: QqLoginSettings,
 }
 
 impl GlobalConfigState {
@@ -240,6 +273,7 @@ impl GlobalConfigState {
             announcement_read_records: HashMap::new(),
             system_config: None,
             qq_bot_credentials: QqBotCredentials::default(),
+            qq_login: QqLoginSettings::default(),
         }
     }
 }
@@ -465,6 +499,27 @@ pub fn set_system_config(cfg: SystemConfig) {
 // 文件持久化
 // =====================================================================
 
+#[must_use]
+pub fn get_qq_login_settings() -> QqLoginSettings {
+    STATE.read().qq_login.clone()
+}
+
+/// `persist=false` 只改内存，避免测试把签名写进用户的 store.json。
+pub fn set_qq_login_settings(
+    settings: QqLoginSettings,
+    persist: bool,
+) -> Result<QqLoginSettings, String> {
+    let next = settings.normalized();
+    if next.qq_qr_login && (next.nap_cat_endpoint.is_empty() || next.nap_cat_signature.is_empty()) {
+        return Err("开启 QQ 扫码登录前，请配置 NapCat 接口地址和接口签名".to_owned());
+    }
+    STATE.write().qq_login = next.clone();
+    if persist {
+        let _ = save_global_config();
+    }
+    Ok(next)
+}
+
 /// 全局 store 文件路径
 #[must_use]
 pub fn store_file() -> PathBuf {
@@ -492,6 +547,7 @@ pub fn save_global_config() -> std::io::Result<()> {
         "announcementReadRecords": state.announcement_read_records,
         "systemConfig": state.system_config,
         "qqBotCredentials": state.qq_bot_credentials,
+        "loginSettings": state.qq_login,
     });
     let body = serde_json::to_string_pretty(&data).map_err(std::io::Error::other)?;
 
@@ -570,6 +626,11 @@ pub fn load_global_config() -> std::io::Result<()> {
     if let Some(creds) = data.get("qqBotCredentials") {
         if let Ok(parsed) = serde_json::from_value::<QqBotCredentials>(creds.clone()) {
             new_global.qq_bot_credentials = parsed;
+        }
+    }
+    if let Some(login) = data.get("loginSettings") {
+        if let Ok(parsed) = serde_json::from_value::<QqLoginSettings>(login.clone()) {
+            new_global.qq_login = parsed.normalized();
         }
     }
     set_state(new_global);
