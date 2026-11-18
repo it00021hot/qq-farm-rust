@@ -30,15 +30,17 @@ enum Shelf {
     Stellar,
     Qixi,
     QingMei,
+    Charity,
 }
 
 impl Shelf {
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 11] = [
         Self::Solar,
         Self::Wish,
         Self::Stellar,
         Self::Qixi,
         Self::QingMei,
+        Self::Charity,
         Self::Share,
         Self::Tea,
         Self::Muge,
@@ -53,6 +55,7 @@ impl Shelf {
             Self::Stellar => "stellar",
             Self::Qixi => "qixi",
             Self::QingMei => "qingmei",
+            Self::Charity => "charity",
             Self::Share => "share",
             Self::Tea => "tea",
             Self::Muge => "muge",
@@ -68,6 +71,7 @@ impl Shelf {
             Self::Stellar => "activities.stellar",
             Self::Qixi => "activities.qixi",
             Self::QingMei => "activities.qingmei",
+            Self::Charity => "activities.charity",
             Self::Share => "activities.share",
             Self::Tea => "activities.tea",
             Self::Muge => "activities.muge",
@@ -334,6 +338,11 @@ pub(crate) fn page(page: ActivityPage) -> impl IntoElement {
         qixi,
     );
     let qingmei = signal(super::qingmei::QingSession::default());
+    let charity = signal(super::charity::CharitySession::default());
+    super::charity::watch(
+        move || (shelf.get() == Shelf::Charity).then(|| running_account(page)).flatten(),
+        charity,
+    );
     super::qingmei::watch(
         move || (shelf.get() == Shelf::QingMei).then(|| running_account(page)).flatten(),
         qingmei,
@@ -586,6 +595,10 @@ pub(crate) fn page(page: ActivityPage) -> impl IntoElement {
         .child(when(
             move || shelf.get() == Shelf::QingMei && running(page),
             move || super::qingmei::panel(qingmei, page),
+        ))
+        .child(when(
+            move || shelf.get() == Shelf::Charity && running(page),
+            move || super::charity::panel(charity, page),
         ))
         .child(when(
             move || shelf.get() == Shelf::Share && running(page),
@@ -3591,6 +3604,10 @@ mod tests {
         assert!(super::Shelf::ALL.contains(&super::Shelf::QingMei));
         assert_eq!(super::Shelf::QingMei.id(), "qingmei");
         assert_eq!(super::Shelf::QingMei.label_key(), "activities.qingmei");
+        assert!(super::Shelf::ALL.contains(&super::Shelf::Charity));
+        assert_eq!(super::Shelf::Charity.id(), "charity");
+        assert_eq!(super::Shelf::Charity.label_key(), "activities.charity");
+        assert_eq!(super::Shelf::ALL.len(), 11);
     }
 
     #[test]

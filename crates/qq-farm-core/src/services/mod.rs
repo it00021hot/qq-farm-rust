@@ -42,6 +42,7 @@ pub mod analytics;
 pub mod auth;
 pub mod autumn_wish;
 pub mod career;
+pub mod charity;
 pub mod collections;
 pub mod commerce;
 pub mod daily;

@@ -4101,4 +4101,23 @@ bot 本轮 13 个提交**玩法层零变化**（活动/商城/日常自动化均
 - 读取窗不变：三个活动号有一条开放才查询酿造。四个写仍不套这扇窗。没有板就没有按钮。`1034014` 仍是按日期和账号服务的内存，测试注入日期键，不改系统钟。同日不重发，跨日可以再领。`ReportShare` 11/215 然后 `Operate` 16 mode 2 仍是隔离的游戏 RPC，不发聊天。
 - 本批新增、025 没有证明的检查：嵌套 extra 无 tips 与有 tips 标题；开始一次发出两组不同 uid/count，回包活动号或类型不符时不落奖励；另一账号在第一个账号持锁时仍能领种；NSH 结算通知含数量和金币，刷新失败仍留着并关掉旧写。
 - 离线：core `services::qingmei` 7 项通过。core `services::qixi` 7 项通过。app `qingmei` 3 项通过。NSH `features::qingmei` 3 项通过，结算和刷新失败断言在 `refresh_required_disables_stale_actions` 里。目录 `wish_is_a_directory_shelf` 通过。`nsh check crates/qq-farm-nsh` 通过。worker 源码没改，没有重跑 32 项。工具链文件仍是 1.98.1，命令用已安装的 1.99.1，并带 `--lib` 和 `--test-threads=1`。
-- 仍待独立复验。窗口未打开，真实接口未发。当前是否仍开放未知。真实青梅消耗未知。分母仍是 35。公益、萌宠日记未做。源全选和全部不作为本批阻塞。
+- 025A 随后独立离线通过。快捷全选和全部未做，逐组已可达。静态结束时间保留原数字。窗口未打开，真实接口未发。
+
+### 2026-11-19 — 公益小红花
+
+本条只做 ACT-02 的公益。秋祈、千星、七夕、青梅保持已独立离线通过。萌宠日记没有实现。没有自动捐献、领种子或领奖，没有连接服务端，没有启动窗口，没有构建 debug 客户端。协议 39 不发送，也不发聊天。
+
+| 基准 | Rust |
+| --- | --- |
+| `List` 里有 `2026090901` 的小红花状态才展示 | 没有状态时页面为空，没有按钮 |
+| 窗口用活动号，否则用组 `2026090900`；结束优先状态 `end_time` | 同一时间。未开放仍展示，四个写都不发 |
+| `Operate` 35 `claim_seed`、36 `donate_love`、37 `target`、38 `send_public_fund` | 写前重读种子、余额、礼包和该档是否可领。0、负数和未达成目标不发 |
+| 捐赠先确认，取消不发 | `press` 和按钮同一套。确认后才进 dispatcher |
+| 进度首次把已达成的最后一档留作待领，`1034087` 记已领 | 记录在该账号服务内存，并写入既有活动状态文件的 `charityRecords` |
+| 每日礼包看收获状态，或公益日期等于当天 | 注入日期键，不改系统钟。不是永久已领 |
+| 结算只展示，规则走 `textContent` | 页面保留奖励数量、进度、状态、规则和静态结束时间。成功通知含数量，刷新失败保留并停用旧写 |
+
+- 抓包请求 hex 来自固定基准 `core/tests/charity-red-flower-proto.test.js`，已放进 `charity-capture-vectors.json`。35、36、37、38 的请求与种子、进度回包能解码。礼包回包 hex 的外层长度比内层字段短 3 字节，prost 拒绝解码；没有改 hex，也不把它算成已经解出奖励数量。没有捐赠回包 hex。协议 39 的选择器只出现在该测试里，页面和服务都不发。
+- 同账号写共用当前 worker 的锁。换 worker 后排队的领取拒绝。另一账号不被挡住。空账号不发，也不把进度写成 `default` 文件。
+- 离线：core `services::charity` 7 项通过。app `charity` 3 项通过。NSH `features::charity` 3 项通过，其中 `dispatch_charity_sends_the_seed_operate` 用 `press` 的命令调用生产 `dispatch_charity`。目录 `wish_is_a_directory_shelf` 确认 `charity` / `activities.charity`，目录长度 11。`runtime::worker_loop::tests` 32 项通过。`nsh check crates/qq-farm-nsh` 通过。工具链文件仍是 1.98.1，命令用已安装的 1.99.1，并带 `--lib` 和 `--test-threads=1`。
+- 待独立复验。窗口未打开，真实接口未发。当前是否仍开放未知。真实爱心消耗未知。分母仍是 35。萌宠日记未做。页面外观没有在运行中的窗口里核对。

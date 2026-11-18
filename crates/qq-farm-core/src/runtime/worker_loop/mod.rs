@@ -110,6 +110,7 @@ pub struct WorkerLoop {
     stellar: Arc<crate::services::stellar::StellarService>,
     qixi: Arc<crate::services::qixi::QixiService>,
     qingmei: Arc<crate::services::qingmei::QingMeiService>,
+    charity: Arc<crate::services::charity::CharityService>,
 
     // —— 内部状态 ——
     /// 登录完成
@@ -361,6 +362,10 @@ impl WorkerLoop {
         ));
         let qixi = Arc::new(crate::services::qixi::QixiService::new(Arc::clone(&gateway)));
         let qingmei = Arc::new(crate::services::qingmei::QingMeiService::new(Arc::clone(&gateway)));
+        let charity = Arc::new(crate::services::charity::CharityService::new(
+            Arc::clone(&gateway),
+            account.id.clone(),
+        ));
         friend.api().set_bad_gate(
             Arc::new({
                 let friend = friend.clone();
@@ -397,6 +402,7 @@ impl WorkerLoop {
             stellar,
             qixi,
             qingmei,
+            charity,
             login_ready: AtomicBool::new(false),
             shutdown_started: AtomicBool::new(false),
             is_running: AtomicBool::new(false),
@@ -1871,6 +1877,11 @@ impl WorkerLoop {
     #[must_use]
     pub fn qingmei(&self) -> Arc<crate::services::qingmei::QingMeiService> {
         Arc::clone(&self.qingmei)
+    }
+
+    #[must_use]
+    pub fn charity(&self) -> Arc<crate::services::charity::CharityService> {
+        Arc::clone(&self.charity)
     }
     /// 自己的角色 GID（登录成功后写入；未登录为 0）
     #[must_use]

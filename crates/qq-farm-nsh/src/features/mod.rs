@@ -5,6 +5,7 @@ mod activities;
 mod analytics;
 mod autumn_wish;
 mod bag;
+mod charity;
 mod collections;
 mod confirm;
 mod dashboard;
