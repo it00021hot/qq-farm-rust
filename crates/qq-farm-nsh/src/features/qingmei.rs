@@ -41,6 +41,8 @@ pub(crate) struct QingBoard {
     pending_rounds: i64,
     rules_title: String,
     rules: Vec<String>,
+    end_time: String,
+    seed_claimed: bool,
     seed_enabled: bool,
     start_enabled: bool,
     continue_enabled: bool,
@@ -113,6 +115,8 @@ pub(crate) fn board_from(value: &Value) -> Option<QingBoard> {
         pending_rounds: (max_rounds - quotes.len() as i64).max(0),
         quotes,
         rules_title: value.pointer("/rules/title").and_then(Value::as_str).unwrap_or("").to_owned(),
+        end_time: end_time_text(value),
+        seed_claimed: value.pointer("/dailySeed/claimed").and_then(Value::as_bool) == Some(true),
         rules: value
             .pointer("/rules/paragraphs")
             .and_then(Value::as_array)
@@ -226,10 +230,13 @@ pub(crate) fn apply(
     match result {
         Ok(value) => {
             let refresh = value.get("refreshRequired").and_then(Value::as_bool) == Some(true);
-            if let Some(snapshot) =
-                value.get("snapshot").filter(|item| item.get("available").is_some())
+            if let Some(snapshot) = value
+                .get("snapshot")
+                .filter(|item| item.get("available").and_then(Value::as_bool) != Some(false))
             {
-                session.board = board_from(snapshot);
+                if let Some(board) = board_from(snapshot) {
+                    session.board = Some(board);
+                }
             } else if command.intent == QingIntent::Reload {
                 session.board = board_from(&value);
             }
@@ -241,11 +248,18 @@ pub(crate) fn apply(
                     board.continue_enabled = false;
                     board.settle_enabled = false;
                 }
-                session.note = Some("请刷新确认最新进度，刷新不会再次提交".into());
             } else {
                 session.needs_refresh = false;
-                session.note = None;
             }
+            let success = success_line(&value);
+            session.note = match (success, refresh) {
+                (Some(success), true) => {
+                    Some(format!("{success}。请刷新确认最新进度，刷新不会再次提交"))
+                }
+                (Some(success), false) => Some(success),
+                (None, true) => Some("请刷新确认最新进度，刷新不会再次提交".into()),
+                (None, false) => None,
+            };
             session.failure = None;
         }
         Err(message) => {
@@ -340,19 +354,28 @@ fn body(
                 return SharedString::from("");
             };
             SharedString::from(format!(
-                "{} · 可用青梅 {} · 保底 {}",
-                board.name, board.balance, board.guaranteed
+                "{} · 结束 {} · 可用青梅 {} · 保底 {}",
+                board.name, board.end_time, board.balance, board.guaranteed
             ))
         }))
         .child(
-            button(move || text_key("activities.qingmeiSeed"), ButtonVariant::Primary)
-                .disabled(move || {
-                    let current = session.get();
-                    current.busy
-                        || current.needs_refresh
-                        || !current.board.as_ref().is_some_and(|board| board.seed_enabled)
-                })
-                .on_press(move || fire(session, page, QingIntent::Seed, Vec::new())),
+            button(
+                move || {
+                    if session.get().board.as_ref().is_some_and(|board| board.seed_claimed) {
+                        text_key("activities.qingmeiSeedClaimed")
+                    } else {
+                        text_key("activities.qingmeiSeed")
+                    }
+                },
+                ButtonVariant::Primary,
+            )
+            .disabled(move || {
+                let current = session.get();
+                current.busy
+                    || current.needs_refresh
+                    || !current.board.as_ref().is_some_and(|board| board.seed_enabled)
+            })
+            .on_press(move || fire(session, page, QingIntent::Seed, Vec::new())),
         )
         .child(when(
             move || session.get().board.as_ref().is_some_and(|board| !board.started),
@@ -362,6 +385,18 @@ fn body(
             move || session.get().board.as_ref().is_some_and(|board| board.started),
             move || brewing(session, page),
         ))
+        .child(text(move || {
+            let Some(board) = session.get().board else {
+                return SharedString::from("");
+            };
+            if board.rules.is_empty() {
+                SharedString::from("")
+            } else if board.rules_title.is_empty() {
+                text_key("activities.qingmeiRules")
+            } else {
+                SharedString::from(board.rules_title)
+            }
+        }))
         .child(each(
             move || session.get().board.map(|board| board.rules).unwrap_or_default(),
             |rule: &String| rule.clone(),
@@ -437,6 +472,16 @@ fn brewing(session: Signal<QingSession>, page: ActivityPage) -> impl IntoElement
             let pending = session.get().board.map(|board| board.pending_rounds).unwrap_or(0);
             SharedString::from(format!("待酿造 {pending} 轮"))
         }))
+        .child(when(
+            move || {
+                session
+                    .get()
+                    .board
+                    .as_ref()
+                    .is_some_and(|board| board.started && board.quotes.is_empty())
+            },
+            move || text(move || text_key("activities.qingmeiFirstQuote")).text_sm(),
+        ))
         .child(
             button(move || text_key("activities.qingmeiContinue"), ButtonVariant::Primary)
                 .disabled(move || {
@@ -508,6 +553,61 @@ fn adjust(picks: Signal<Vec<QingPick>>, uid: i64, delta: i64, owned: i64) {
             pick.count = (pick.count + delta).clamp(1, owned.max(1));
         }
     });
+}
+
+fn end_time_text(value: &Value) -> String {
+    let raw = value.get("endTime").and_then(|item| {
+        item.as_i64().map(|time| time.to_string()).or_else(|| {
+            item.as_str().map(str::trim).filter(|text| !text.is_empty()).map(str::to_owned)
+        })
+    });
+    match raw {
+        Some(text) if text != "0" => text,
+        _ => "未知".to_owned(),
+    }
+}
+
+fn success_line(value: &Value) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(message) =
+        value.get("message").and_then(Value::as_str).map(str::trim).filter(|text| !text.is_empty())
+    {
+        parts.push(message.to_owned());
+    } else if value.get("alreadyClaimed").and_then(Value::as_bool) == Some(true) {
+        parts.push("今日青梅种子已经领取，无需重复领取".to_owned());
+    }
+    if let Some(rows) = value.get("rewards").and_then(Value::as_array) {
+        if !rows.is_empty() {
+            let text = rows
+                .iter()
+                .map(|row| {
+                    format!(
+                        "{}×{}",
+                        row.get("name").and_then(Value::as_str).unwrap_or("奖励"),
+                        row.get("count").and_then(Value::as_i64).unwrap_or(0)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("、");
+            if !parts.join("，").contains(&text) {
+                parts.push(format!("获得 {text}"));
+            }
+        }
+    }
+    if let Some(gold) = value
+        .pointer("/settlement/totalGold")
+        .and_then(Value::as_str)
+        .filter(|gold| !gold.is_empty())
+    {
+        if !parts.join("，").contains(gold) {
+            parts.push(format!("结算 {gold} 金币"));
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("，"))
+    }
 }
 
 fn item_from(value: &Value) -> Option<QingItem> {
@@ -742,11 +842,57 @@ mod tests {
         assert!(apply(
             &mut session,
             &command,
-            Ok(json!({ "rewards": [{ "count": 1 }], "refreshRequired": true }))
+            Ok(json!({
+                "rewards": [{ "name": "种子", "count": 2 }],
+                "refreshRequired": true,
+                "snapshot": {
+                    "available": true,
+                    "name": "青酿换万金",
+                    "endTime": 200,
+                    "balanceKnown": true,
+                    "balance": 3,
+                    "started": false,
+                    "rules": { "title": "说明", "paragraphs": ["酿造"] },
+                    "dailySeed": { "claimed": true },
+                    "actions": { "claimSeed": { "enabled": false }, "start": { "enabled": true } }
+                }
+            }))
         ));
+        let note = session.note.clone().unwrap_or_default();
+        assert!(note.contains("种子×2"), "{note}");
+        assert!(note.contains("刷新不会再次提交"), "{note}");
+        assert_eq!(session.board.as_ref().unwrap().rules_title, "说明");
+        assert_eq!(session.board.as_ref().unwrap().end_time, "200");
+        assert!(session.board.as_ref().unwrap().seed_claimed);
         assert!(session.needs_refresh);
         assert!(!session.board.as_ref().unwrap().seed_enabled);
         assert!(press(&mut session, QingIntent::Start, &[QingPick { uid: 9, count: 1 }], true)
             .is_none());
+        let mut selling = loaded();
+        selling.board.as_mut().unwrap().settle_enabled = true;
+        let sold = press(&mut selling, QingIntent::Settle, &[], true).unwrap();
+        assert!(apply(
+            &mut selling,
+            &sold,
+            Ok(json!({
+                "rewards": [{ "name": "金币", "count": 1 }],
+                "settlement": { "totalGold": "30" },
+                "snapshot": {
+                    "available": true,
+                    "name": "青酿换万金",
+                    "started": true,
+                    "currentRound": 1,
+                    "maxRounds": 3,
+                    "quoteTotals": [],
+                    "balanceKnown": true,
+                    "balance": 0,
+                    "rules": { "title": "说明", "paragraphs": ["酿造"] }
+                }
+            }))
+        ));
+        let sold_note = selling.note.clone().unwrap_or_default();
+        assert!(sold_note.contains("金币×1"), "{sold_note}");
+        assert!(sold_note.contains("结算 30 金币"), "{sold_note}");
+        assert!(selling.board.as_ref().unwrap().started);
     }
 }

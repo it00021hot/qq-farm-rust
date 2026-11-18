@@ -4090,3 +4090,15 @@ bot 本轮 13 个提交**玩法层零变化**（活动/商城/日常自动化均
 - 固定基准没有青梅官方 hex，不编造。
 - 离线：core `services::qingmei` 4 项通过。app `qingmei` 2 项通过。NSH `features::qingmei` 3 项通过，其中 `dispatch_qingmei_sends_the_pressed_ingredients` 用 `press` 的命令调用生产 `dispatch_qingmei`。目录 `wish_is_a_directory_shelf` 确认 `qingmei` / `activities.qingmei`。`runtime::worker_loop::tests` 32 项通过。`nsh check crates/qq-farm-nsh` 通过。秋祈、千星、七夕、节令 V2 源码没改，没有重跑。工具链文件仍是 1.98.1，命令用已安装的 1.99.1。
 - 待独立复验。窗口未打开，真实接口未发。当前是否仍开放未知。真实青梅消耗未知。
+
+### 2026-11-19 — 青梅 025A
+
+`761e7a9` 的定向离线当时通过了，不把那次结果抹掉，也不把它写成已经覆盖下面这些缺口。审计指出规则在 JSON 没有可用 `tips.txt` 时直接变空，页面也没有把规则标题、结束时间、首轮提示、今日已领和写成功结算留在板上。公益和萌宠日记仍未开始。
+
+- 青梅和七夕的规则都改走 `activity_text::text_content`。有非空 `tips.txt` 时用那段和 `tips.title`；否则按原文顺序收集字符串值，去标签，首次去重，空行丢掉。对象键和原始 JSON 不进正文。普通文本仍是一行。七夕规则测试随这次共用重跑。
+- 页面显示源规则标题，没有标题时用「活动说明」。结束时间用回包里的静态值，不逐秒倒计时，也不额外轮询。已开始且还没有报价时显示「青梅已投入，点击继续酿造生成首轮报价。」已领按钮文案是「今日已领取」。
+- 写成功带上源说明：领种成功或今日已领、投入数量、继续报价、分享出售金币。结算奖励数量另写在同一条通知里。随后的快照刷新不清除这条；`refreshRequired` 保留它并停用旧的领种、开始、继续和出售。不写成免费。
+- 读取窗不变：三个活动号有一条开放才查询酿造。四个写仍不套这扇窗。没有板就没有按钮。`1034014` 仍是按日期和账号服务的内存，测试注入日期键，不改系统钟。同日不重发，跨日可以再领。`ReportShare` 11/215 然后 `Operate` 16 mode 2 仍是隔离的游戏 RPC，不发聊天。
+- 本批新增、025 没有证明的检查：嵌套 extra 无 tips 与有 tips 标题；开始一次发出两组不同 uid/count，回包活动号或类型不符时不落奖励；另一账号在第一个账号持锁时仍能领种；NSH 结算通知含数量和金币，刷新失败仍留着并关掉旧写。
+- 离线：core `services::qingmei` 7 项通过。core `services::qixi` 7 项通过。app `qingmei` 3 项通过。NSH `features::qingmei` 3 项通过，结算和刷新失败断言在 `refresh_required_disables_stale_actions` 里。目录 `wish_is_a_directory_shelf` 通过。`nsh check crates/qq-farm-nsh` 通过。worker 源码没改，没有重跑 32 项。工具链文件仍是 1.98.1，命令用已安装的 1.99.1，并带 `--lib` 和 `--test-threads=1`。
+- 仍待独立复验。窗口未打开，真实接口未发。当前是否仍开放未知。真实青梅消耗未知。分母仍是 35。公益、萌宠日记未做。源全选和全部不作为本批阻塞。

@@ -252,4 +252,86 @@ mod tests {
         let error = queued.await.unwrap().unwrap_err();
         assert!(error.to_string().contains("账号会话已变化"), "{error}");
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn another_account_claims_while_the_first_holds_its_lock() {
+        let _data = TestDataDir::enter();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let rx = Arc::new(std::sync::Mutex::new(Some(rx)));
+        let entered = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&entered);
+        let waiter = Arc::clone(&rx);
+        let first = gateway();
+        first.install_reply_script(move |_service, method, _body| {
+            if method == "List" && !flag.swap(true, Ordering::AcqRel) {
+                if let Some(rx) = waiter.lock().expect("wait").take() {
+                    let _ = rx.recv();
+                }
+            }
+            if method == "Operate" {
+                return Ok(ActivityOperateReply {
+                    activity_id: 2_026_081_201,
+                    operate_type: 4,
+                    ..ActivityOperateReply::default()
+                }
+                .encode_to_vec());
+            }
+            Ok(ActivityListReply {
+                activity_windows: vec![ActivityWindow {
+                    id: 2_026_081_202,
+                    begin_time: 0,
+                    end_time: 0,
+                    ..ActivityWindow::default()
+                }],
+                ..ActivityListReply::default()
+            }
+            .encode_to_vec())
+        });
+        let second = gateway();
+        let other_claims = Arc::new(AtomicUsize::new(0));
+        let other_count = Arc::clone(&other_claims);
+        second.install_reply_script(move |_service, method, body| {
+            if method == "Operate"
+                && QueryActivityRequest::decode(body).map(|item| item.operate_type).unwrap_or(0)
+                    == 4
+            {
+                other_count.fetch_add(1, Ordering::SeqCst);
+                return Ok(ActivityOperateReply {
+                    activity_id: 2_026_081_201,
+                    operate_type: 4,
+                    ..ActivityOperateReply::default()
+                }
+                .encode_to_vec());
+            }
+            Ok(ActivityListReply {
+                activity_windows: vec![ActivityWindow {
+                    id: 2_026_081_202,
+                    begin_time: 0,
+                    end_time: 0,
+                    ..ActivityWindow::default()
+                }],
+                ..ActivityListReply::default()
+            }
+            .encode_to_vec())
+        });
+        let runtime = Arc::new(RuntimeEngine::assemble_with(
+            EngineConfig::default(),
+            Arc::new(RuntimeState::new(Arc::new(EmptyStore), Vec::new())),
+            None,
+        ));
+        runtime.register_worker_loop("acc", worker("acc", first));
+        runtime.register_worker_loop("beta", worker("beta", second));
+        let ctx = AppContext::new(runtime);
+        let queued = {
+            let ctx = ctx.clone();
+            tokio::spawn(async move { claim_seed(&ctx, "acc").await })
+        };
+        while !entered.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+        claim_seed(&ctx, "beta").await.unwrap();
+        assert_eq!(other_claims.load(Ordering::SeqCst), 1);
+        tx.send(()).unwrap();
+        queued.await.unwrap().unwrap();
+    }
 }

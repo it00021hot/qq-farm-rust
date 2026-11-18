@@ -23,7 +23,6 @@ use crate::proto::generated::gamepb::activitypb::{
 };
 use crate::proto::generated::gamepb::itempb::{BagReply, BagRequest};
 use crate::proto::generated::gamepb::sharepb::ReportShareRequest;
-use crate::services::activity_text::strip_html;
 use crate::utils::time::{get_server_time_secs, today_system_date_key};
 
 const ACTIVITY_SERVICE: &str = "gamepb.activitypb.ActivityService";
@@ -79,6 +78,14 @@ impl QingMeiService {
         &self,
         still_current: impl Fn() -> bool,
     ) -> Result<serde_json::Value> {
+        self.claim_seed_on(&today_system_date_key(), still_current).await
+    }
+
+    async fn claim_seed_on(
+        &self,
+        today: &str,
+        still_current: impl Fn() -> bool,
+    ) -> Result<serde_json::Value> {
         let _guard = self.mutation_lock.lock().await;
         if !still_current() {
             return Err(Error::Business(SESSION_MOVED.into()));
@@ -87,7 +94,7 @@ impl QingMeiService {
         if !still_current() {
             return Err(Error::Business(SESSION_MOVED.into()));
         }
-        if self.claimed_today() {
+        if seed_claimed(self.claimed_date.lock().expect("claimed").as_str(), today) {
             return self.claimed_payload(Vec::new(), true).await;
         }
         if !still_current() {
@@ -115,7 +122,7 @@ impl QingMeiService {
             }
             Err(error) => return Err(Error::Network(error)),
         };
-        *self.claimed_date.lock().expect("claimed") = today_system_date_key();
+        *self.claimed_date.lock().expect("claimed") = today.to_owned();
         self.claimed_payload(rewards, already).await
     }
 
@@ -172,7 +179,11 @@ impl QingMeiService {
         if reply.activity_id != BREW_ACTIVITY || reply.operate_type != START {
             return Err(Error::Business("青梅酿造回包不匹配，请刷新确认结果，勿重复提交".into()));
         }
-        let mut payload = serde_json::json!({ "started": true });
+        let total: i64 = ingredients.iter().map(|(_, count)| *count).sum();
+        let mut payload = serde_json::json!({
+            "started": true,
+            "message": format!("已投入 {total} 个青梅开始酿造"),
+        });
         attach_snapshot(&mut payload, self.snapshot().await);
         Ok(payload)
     }
@@ -209,7 +220,16 @@ impl QingMeiService {
                 "青梅继续酿造回包不匹配，请刷新确认结果，勿重复提交".into(),
             ));
         }
-        let mut payload = serde_json::json!({ "quote": quote_value(reply.qingmei_quote.as_ref()) });
+        let quote = reply
+            .qingmei_quote
+            .clone()
+            .or_else(|| reply.data.as_ref().and_then(|data| data.qingmei_quote.clone()));
+        let message = quote.as_ref().map_or_else(
+            || "酿造进度已更新".to_owned(),
+            |quote| format!("第 {} 轮报价：{} 金币", quote.round, quote.total_gold),
+        );
+        let mut payload =
+            serde_json::json!({ "quote": quote_value(quote.as_ref()), "message": message });
         attach_snapshot(&mut payload, self.snapshot().await);
         Ok(payload)
     }
@@ -258,7 +278,12 @@ impl QingMeiService {
         let settlement = reply.qingmei_settlement.as_ref().map(|item| {
             serde_json::json!({ "mode": item.settlement_mode, "totalGold": item.total_gold.to_string() })
         });
-        let mut payload = serde_json::json!({ "rewards": rewards, "settlement": settlement });
+        let message = reply.qingmei_settlement.as_ref().map_or_else(
+            || "青梅酿已按分享奖励出售（1.5倍）".to_owned(),
+            |item| format!("分享出售成功（1.5倍），获得 {} 金币", item.total_gold),
+        );
+        let mut payload =
+            serde_json::json!({ "rewards": rewards, "settlement": settlement, "message": message });
         attach_snapshot(&mut payload, self.snapshot().await);
         Ok(payload)
     }
@@ -270,6 +295,7 @@ impl QingMeiService {
     ) -> Result<serde_json::Value> {
         let mut payload = serde_json::json!({
             "alreadyClaimed": already,
+            "message": if already { "今日青梅种子已经领取，无需重复领取" } else { "青梅种子领取成功" },
             "rewards": rewards.iter().map(reward_value).collect::<Vec<_>>(),
         });
         attach_snapshot(&mut payload, self.snapshot().await);
@@ -277,7 +303,7 @@ impl QingMeiService {
     }
 
     fn claimed_today(&self) -> bool {
-        self.claimed_date.lock().expect("claimed").as_str() == today_system_date_key()
+        seed_claimed(self.claimed_date.lock().expect("claimed").as_str(), &today_system_date_key())
     }
 
     async fn window_is_open(&self) -> Result<bool> {
@@ -335,6 +361,10 @@ struct IngredientRow {
     count: i64,
     mutant_types: Vec<i64>,
     mutant_names: Vec<String>,
+}
+
+fn seed_claimed(stored: &str, today: &str) -> bool {
+    !today.is_empty() && stored == today
 }
 
 pub fn require_qingmei_account(account_id: &str) -> Result<()> {
@@ -468,34 +498,7 @@ fn item_name(id: i64) -> String {
 }
 
 fn rules_from(extra: &[u8]) -> (String, Vec<String>) {
-    let text = String::from_utf8_lossy(extra).trim().to_owned();
-    if text.is_empty() {
-        return (String::new(), Vec::new());
-    }
-    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) else {
-        let plain = strip_html(&text).trim().to_owned();
-        return (String::new(), if plain.is_empty() { Vec::new() } else { vec![plain] });
-    };
-    let paragraphs = parsed
-        .pointer("/tips/txt")
-        .and_then(serde_json::Value::as_array)
-        .map(|rows| {
-            rows.iter()
-                .filter_map(serde_json::Value::as_str)
-                .map(|line| strip_html(line).trim().to_owned())
-                .filter(|line| !line.is_empty())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    if !paragraphs.is_empty() {
-        let title = parsed
-            .pointer("/tips/title")
-            .and_then(serde_json::Value::as_str)
-            .map(|line| strip_html(line).trim().to_owned())
-            .unwrap_or_default();
-        return (title, paragraphs);
-    }
-    (String::new(), Vec::new())
+    crate::services::activity_text::text_content(extra)
 }
 
 #[cfg(test)]
@@ -506,7 +509,6 @@ mod tests {
     use crate::proto::generated::corepb::{Item as CoreItem, ItemBag};
     use crate::proto::generated::gamepb::activitypb::{
         ActivityContent, ActivityData, QingMeiBrewData, QingMeiDailySeedData, QingMeiQuote,
-        QingMeiSettlement,
     };
 
     fn gateway() -> Arc<Gateway> {
@@ -758,5 +760,96 @@ mod tests {
         assert_eq!(reports.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert_eq!(settles.load(std::sync::atomic::Ordering::SeqCst), 1);
         let _ = now;
+    }
+
+    #[test]
+    fn rules_without_tips_keep_nested_strings_and_tips_keep_the_title() {
+        let raw = r#"{"title":"不要当规则","note":{"body":"<b>甲</b>","more":["乙","甲"]}}"#;
+        let (title, lines) = rules_from(raw.as_bytes());
+        assert!(title.is_empty());
+        assert_eq!(lines, vec!["不要当规则".to_string(), "甲".to_string(), "乙".to_string()]);
+        let (tips_title, tips) =
+            rules_from(r#"{"tips":{"title":"<b>说明</b>","txt":["<b>酿造</b>"]}}"#.as_bytes());
+        assert_eq!(tips_title, "说明");
+        assert_eq!(tips, vec!["酿造".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn start_sends_two_different_stacks_and_a_mismatched_reply_is_not_a_reward() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let bodies = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Vec<u8>>::new()));
+        let log = std::sync::Arc::clone(&bodies);
+        let gateway = gateway();
+        gateway.install_reply_script(move |_service, method, body| {
+            if method == "List" {
+                return Ok(windows(2_026_081_200, 0, 0));
+            }
+            if method == "Bag" {
+                return Ok(BagReply {
+                    item_bag: Some(ItemBag {
+                        items: vec![
+                            CoreItem { id: QINGMEI_ITEM, count: 2, uid: 9, ..CoreItem::default() },
+                            CoreItem { id: QINGMEI_ITEM, count: 4, uid: 11, ..CoreItem::default() },
+                        ],
+                        ..ItemBag::default()
+                    }),
+                }
+                .encode_to_vec());
+            }
+            if method == "Operate"
+                && QueryActivityRequest::decode(body).map(|item| item.operate_type).unwrap_or(0)
+                    == START
+            {
+                log.lock().expect("log").push(body.to_vec());
+                return Ok(ActivityOperateReply {
+                    activity_id: 1,
+                    operate_type: 1,
+                    rewards: vec![CoreItem { id: 9, count: 9, ..CoreItem::default() }],
+                    ..ActivityOperateReply::default()
+                }
+                .encode_to_vec());
+            }
+            Ok(brew(0, 0, false).encode_to_vec())
+        });
+        let service = QingMeiService::new(gateway);
+        let error = service.start(&[(9, 2), (11, 3)]).await.unwrap_err();
+        assert!(error.to_string().contains("不匹配"), "{error}");
+        let request =
+            StartQingMeiBrewRequest::decode(bodies.lock().expect("log")[0].as_slice()).unwrap();
+        let picked = request.params.unwrap().ingredients;
+        assert_eq!(picked.len(), 2);
+        assert_eq!((picked[0].uid, picked[0].count), (9, 2));
+        assert_eq!((picked[1].uid, picked[1].count), (11, 3));
+    }
+
+    #[tokio::test]
+    async fn the_same_date_does_not_claim_again_and_the_next_date_does() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let writes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = std::sync::Arc::clone(&writes);
+        let gateway = gateway();
+        gateway.install_reply_script(move |_service, method, body| {
+            if method == "List" {
+                return Ok(windows(BREW_ACTIVITY, 0, 0));
+            }
+            if method == "Operate"
+                && QueryActivityRequest::decode(body).map(|item| item.operate_type).unwrap_or(0)
+                    == CLAIM_SEED
+            {
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                return Ok(ActivityOperateReply {
+                    activity_id: DAILY_ACTIVITY,
+                    operate_type: CLAIM_SEED,
+                    ..ActivityOperateReply::default()
+                }
+                .encode_to_vec());
+            }
+            Ok(brew(0, 0, false).encode_to_vec())
+        });
+        let service = QingMeiService::new(gateway);
+        service.claim_seed_on("2026-11-18", || true).await.unwrap();
+        service.claim_seed_on("2026-11-18", || true).await.unwrap();
+        service.claim_seed_on("2026-11-19", || true).await.unwrap();
+        assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 }

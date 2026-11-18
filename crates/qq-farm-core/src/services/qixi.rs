@@ -17,7 +17,6 @@ use crate::proto::generated::gamepb::activitypb::{
     GiftQixiSachetRequest, QixiBridgeConfig, QixiBridgeStage, QixiGiftExchange, QixiGiftProgress,
 };
 use crate::proto::generated::gamepb::itempb::{BagReply, BagRequest};
-use crate::services::activity_text::strip_html;
 use crate::utils::time::get_server_time_secs;
 
 const SERVICE: &str = "gamepb.activitypb.ActivityService";
@@ -343,70 +342,6 @@ fn exchange_value(entry: &QixiGiftExchange) -> serde_json::Value {
     })
 }
 
-fn ordered_string_values(text: &str) -> Vec<String> {
-    use serde::de::DeserializeSeed as _;
-    struct Seed<'a>(&'a mut Vec<String>);
-    impl<'de, 'a> serde::de::DeserializeSeed<'de> for Seed<'a> {
-        type Value = ();
-        fn deserialize<D>(self, deserializer: D) -> std::result::Result<(), D::Error>
-        where
-            D: serde::de::Deserializer<'de>,
-        {
-            deserializer.deserialize_any(self)
-        }
-    }
-    impl<'de, 'a> serde::de::Visitor<'de> for Seed<'a> {
-        type Value = ();
-        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-            formatter.write_str("json")
-        }
-        fn visit_str<E: serde::de::Error>(self, value: &str) -> std::result::Result<(), E> {
-            let plain = strip_html(value).trim().to_owned();
-            if !plain.is_empty() && !self.0.iter().any(|have| have == &plain) {
-                self.0.push(plain);
-            }
-            Ok(())
-        }
-        fn visit_seq<A: serde::de::SeqAccess<'de>>(
-            self,
-            mut seq: A,
-        ) -> std::result::Result<(), A::Error> {
-            let output = self.0;
-            while seq.next_element_seed(Seed(output))?.is_some() {}
-            Ok(())
-        }
-        fn visit_map<A: serde::de::MapAccess<'de>>(
-            self,
-            mut map: A,
-        ) -> std::result::Result<(), A::Error> {
-            let output = self.0;
-            while map.next_key::<serde::de::IgnoredAny>()?.is_some() {
-                map.next_value_seed(Seed(output))?;
-            }
-            Ok(())
-        }
-        fn visit_bool<E: serde::de::Error>(self, _value: bool) -> std::result::Result<(), E> {
-            Ok(())
-        }
-        fn visit_i64<E: serde::de::Error>(self, _value: i64) -> std::result::Result<(), E> {
-            Ok(())
-        }
-        fn visit_u64<E: serde::de::Error>(self, _value: u64) -> std::result::Result<(), E> {
-            Ok(())
-        }
-        fn visit_f64<E: serde::de::Error>(self, _value: f64) -> std::result::Result<(), E> {
-            Ok(())
-        }
-        fn visit_unit<E: serde::de::Error>(self) -> std::result::Result<(), E> {
-            Ok(())
-        }
-    }
-    let mut found = Vec::new();
-    let mut deserializer = serde_json::Deserializer::from_str(text);
-    let _ = Seed(&mut found).deserialize(&mut deserializer);
-    found
-}
-
 fn window_label(begin: i64, end: i64, now: i64) -> &'static str {
     if begin > 0 && now < begin {
         "upcoming"
@@ -418,34 +353,7 @@ fn window_label(begin: i64, end: i64, now: i64) -> &'static str {
 }
 
 fn rules_from(extra: &[u8]) -> (String, Vec<String>) {
-    let text = String::from_utf8_lossy(extra).trim().to_owned();
-    if text.is_empty() {
-        return (String::new(), Vec::new());
-    }
-    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) else {
-        let plain = strip_html(&text).trim().to_owned();
-        return (String::new(), if plain.is_empty() { Vec::new() } else { vec![plain] });
-    };
-    let paragraphs = parsed
-        .pointer("/tips/txt")
-        .and_then(serde_json::Value::as_array)
-        .map(|rows| {
-            rows.iter()
-                .filter_map(serde_json::Value::as_str)
-                .map(|line| strip_html(line).trim().to_owned())
-                .filter(|line| !line.is_empty())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    if paragraphs.is_empty() {
-        return (String::new(), ordered_string_values(&text));
-    }
-    let title = parsed
-        .pointer("/tips/title")
-        .and_then(serde_json::Value::as_str)
-        .map(strip_html)
-        .unwrap_or_default();
-    (title, paragraphs)
+    crate::services::activity_text::text_content(extra)
 }
 
 fn item_value(id: i64, count: i64) -> serde_json::Value {
