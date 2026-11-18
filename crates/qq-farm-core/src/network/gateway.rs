@@ -801,6 +801,12 @@ impl Gateway {
         self.inner.last_rx_ms.load(Ordering::Acquire)
     }
 
+    /// 测试用：把最近入站时间设成指定毫秒，让健康度闸门看到静默或恢复。
+    #[cfg(test)]
+    pub fn set_last_rx_ms_for_test(&self, at_ms: i64) {
+        self.inner.last_rx_ms.store(at_ms, Ordering::Release);
+    }
+
     /// 订阅 Notify 事件（永久订阅；worker 主循环用）
     pub fn subscribe_notify(&self) -> mpsc::Receiver<NotifyEvent> {
         let (tx, rx) = mpsc::channel(32);

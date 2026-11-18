@@ -1882,6 +1882,160 @@ mod tests {
         (loop_, tx)
     }
 
+    fn silence_gateway(gateway: &Gateway) {
+        gateway.mark_online();
+        gateway.set_last_rx_ms_for_test(
+            now_ms() - crate::constants::HEARTBEAT_SILENCE_MS as i64 - 1_000,
+        );
+        assert!(!gateway.is_gateway_healthy_for_business());
+    }
+
+    fn recover_gateway(gateway: &Gateway) {
+        gateway.set_last_rx_ms_for_test(now_ms());
+        assert!(gateway.is_gateway_healthy_for_business());
+    }
+
+    fn backoff_loop() -> (Arc<WorkerLoop>, tokio::sync::broadcast::Receiver<WorkerEvent>) {
+        let account = AccountSession::new("gateway-backoff", "code-1", "Backoff");
+        let mut config =
+            crate::models::store::account_config::get_account_config_snapshot(Some(&account.id));
+        config.friend_quiet_hours.enabled = false;
+        crate::models::store::account_config::set_account_config_snapshot(
+            Some(&account.id),
+            config,
+            false,
+        );
+        let (tx, rx) = broadcast::channel(64);
+        crate::infra::panel_log::register(&account.id, &account.display_name, tx.clone());
+        let gateway = make_gateway();
+        let farm = Arc::new(FarmService::new(gateway.clone()));
+        let friend = Arc::new(FriendService::new(gateway.clone(), 5));
+        farm.set_host_gid(7);
+        friend.set_host_gid(7);
+        let email = Arc::new(EmailService::new(gateway.clone(), account.id.clone()));
+        let share = Arc::new(ShareService::new(gateway.clone()));
+        let monthcard = Arc::new(MonthCardService::new(gateway.clone()));
+        let mall = Arc::new(MallService::new(gateway.clone()));
+        let qqvip = Arc::new(QQVipService::new(gateway.clone(), mall.clone()));
+        let task = Arc::new(TaskService::new(gateway.clone()));
+        let warehouse = Arc::new(WarehouseService::new(gateway.clone()));
+        let mystery_shop = Arc::new(MysteryShopService::new(gateway.clone()));
+        let loop_ = Arc::new(WorkerLoop::new(
+            account,
+            WorkerLoopConfig::default(),
+            gateway,
+            tx,
+            farm,
+            friend,
+            email,
+            share,
+            monthcard,
+            qqvip,
+            mall,
+            task,
+            warehouse,
+            mystery_shop,
+        ));
+        loop_.mark_login_ready();
+        (loop_, rx)
+    }
+
+    fn log_messages(rx: &mut broadcast::Receiver<WorkerEvent>) -> Vec<String> {
+        let mut messages = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            if let WorkerEvent::Log { message, .. } = event {
+                messages.push(message);
+            }
+        }
+        messages
+    }
+
+    fn assert_defer_window(at: i64, started: i64, expected_ms: i64) {
+        let delta = at - started;
+        assert!(
+            (expected_ms - 2_000..=expected_ms + 2_000).contains(&delta),
+            "next check {delta} ms, expected about {expected_ms}"
+        );
+    }
+
+    struct BackoffCleanup;
+    impl Drop for BackoffCleanup {
+        fn drop(&mut self) {
+            // 只摘日志钩子。删除账号配置会把整份用户配置写回磁盘，测试进程不能这么做。
+            crate::infra::panel_log::unregister("gateway-backoff");
+        }
+    }
+
+    #[tokio::test]
+    async fn patrol_ticks_wait_out_a_silent_gateway_and_resume_separately() {
+        let _cleanup = BackoffCleanup;
+        let (loop_, mut rx) = backoff_loop();
+        silence_gateway(loop_.gateway());
+        let farm_started = now_ms();
+        loop_.run_farm_tick().await;
+        assert_eq!(loop_.farm_backoff_ms.load(Ordering::Acquire), 30_000);
+        assert_eq!(loop_.friend_backoff_ms.load(Ordering::Acquire), 0);
+        assert_defer_window(loop_.next_runs.lock().farm_at, farm_started, 30_000);
+        let first = log_messages(&mut rx);
+        assert_eq!(first.iter().filter(|message| message.contains("farm巡查退避")).count(), 1);
+        assert!(first.iter().all(|message| !message.contains("巡查异常")));
+
+        loop_.run_farm_tick().await;
+        loop_.run_farm_tick().await;
+        assert_eq!(loop_.farm_backoff_ms.load(Ordering::Acquire), 60_000);
+        assert_defer_window(loop_.next_runs.lock().farm_at, now_ms(), 60_000);
+        assert_eq!(
+            log_messages(&mut rx).iter().filter(|message| message.contains("farm巡查退避")).count(),
+            0
+        );
+
+        let friend_started = now_ms();
+        loop_.run_friend_tick().await;
+        assert_eq!(loop_.friend_backoff_ms.load(Ordering::Acquire), 30_000);
+        assert_eq!(loop_.farm_backoff_ms.load(Ordering::Acquire), 60_000);
+        assert_defer_window(loop_.next_runs.lock().friend_at, friend_started, 30_000);
+        let friend_logs = log_messages(&mut rx);
+        assert_eq!(
+            friend_logs.iter().filter(|message| message.contains("friend巡查退避")).count(),
+            1
+        );
+        assert!(friend_logs.iter().all(|message| !message.contains("巡查异常")));
+        loop_.run_friend_tick().await;
+        assert_eq!(loop_.friend_backoff_ms.load(Ordering::Acquire), 60_000);
+        assert!(log_messages(&mut rx).iter().all(|message| !message.contains("friend巡查退避")));
+
+        recover_gateway(loop_.gateway());
+        loop_.run_farm_tick().await;
+        assert_eq!(loop_.farm_backoff_ms.load(Ordering::Acquire), 0);
+        assert_eq!(loop_.friend_backoff_ms.load(Ordering::Acquire), 60_000);
+        let resumed_offset = loop_.next_runs.lock().farm_at - now_ms();
+        assert!(
+            (19_000..=26_000).contains(&resumed_offset),
+            "resumed farm interval {resumed_offset}"
+        );
+        let resume_logs = log_messages(&mut rx);
+        assert_eq!(
+            resume_logs.iter().filter(|message| message.contains("farm巡查回到正常间隔")).count(),
+            1
+        );
+        loop_.run_farm_tick().await;
+        assert!(log_messages(&mut rx).iter().all(|message| !message.contains("回到正常间隔")));
+
+        loop_.run_friend_tick().await;
+        assert_eq!(loop_.friend_backoff_ms.load(Ordering::Acquire), 0);
+        let resumed_friend = log_messages(&mut rx);
+        assert_eq!(
+            resumed_friend
+                .iter()
+                .filter(|message| message.contains("friend巡查回到正常间隔"))
+                .count(),
+            1
+        );
+        assert!(resumed_friend.iter().any(|message| message.contains("巡查异常")));
+        loop_.run_friend_tick().await;
+        assert!(log_messages(&mut rx).iter().all(|message| !message.contains("回到正常间隔")));
+    }
+
     #[test]
     fn weather_service_is_reused_for_the_account() {
         let (loop_, _) = make_loop();
