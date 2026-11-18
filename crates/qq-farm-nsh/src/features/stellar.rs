@@ -13,6 +13,7 @@ pub(crate) enum StellarIntent {
     Claim,
     Exchange,
     Light,
+    Solar,
 }
 
 #[derive(Clone, PartialEq, Eq, Default)]
@@ -24,19 +25,57 @@ pub(crate) struct StellarSession {
     pub failure: Option<String>,
     pub note: Option<String>,
     pub attempted: bool,
+    pub needs_refresh: bool,
 }
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct StellarBoard {
+    level: String,
+    progress: String,
+    nodes: Vec<PassNode>,
+    goods: Vec<ShopGood>,
+    groups: Vec<StarGroup>,
+    rules: Vec<String>,
+    catalog_status: String,
+    terms: Vec<SolarRow>,
     claimable: bool,
     lightable: bool,
-    goods_id: i64,
-    goods_name: String,
-    cost_name: String,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct PassNode {
+    level: String,
+    state: String,
+    rewards: String,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct ShopGood {
+    id: i64,
+    name: String,
+    category: String,
+    owned: bool,
+    cost: String,
     unit_cost: i64,
     max_count: i64,
     balance_known: bool,
-    day: String,
+    balance: Option<i64>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct StarGroup {
+    name: String,
+    state: String,
+    rewards: String,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct SolarRow {
+    id: i64,
+    name: String,
+    can_claim: bool,
+    status: String,
+    rewards: String,
 }
 
 #[derive(Clone)]
@@ -46,97 +85,103 @@ pub(crate) struct StellarCommand {
     pub intent: StellarIntent,
     pub goods_id: i64,
     pub count: i64,
+    pub term_id: i64,
 }
 
 pub(crate) fn board_from(value: &Value) -> Option<StellarBoard> {
     let season = value.get("season")?;
-    let claimable = season.pointer("/pass/nodes").and_then(Value::as_array).is_some_and(|nodes| {
-        nodes.iter().any(|node| node.get("claimable").and_then(Value::as_bool) == Some(true))
-    });
-    let goods =
-        value.pointer("/shop/goods").and_then(Value::as_array).and_then(|rows| rows.first());
-    let groups = value.pointer("/constellation/groups").and_then(Value::as_array);
-    let lightable = groups.is_some_and(|groups| {
-        groups.iter().any(|group| {
-            matches!(
-                group.get("visualState").and_then(Value::as_str),
-                Some("lightable" | "claimableUnknown")
-            )
-        })
-    });
+    let nodes = season
+        .pointer("/pass/nodes")
+        .and_then(Value::as_array)
+        .map(|rows| rows.iter().filter_map(pass_node).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let goods = value
+        .pointer("/shop/goods")
+        .and_then(Value::as_array)
+        .map(|rows| rows.iter().filter_map(shop_good).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let groups = value
+        .pointer("/constellation/groups")
+        .and_then(Value::as_array)
+        .map(|rows| rows.iter().filter_map(star_group).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let terms = value
+        .pointer("/solarTerms/terms")
+        .and_then(Value::as_array)
+        .map(|rows| rows.iter().filter_map(solar_row).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let rules = value
+        .pointer("/constellation/rules")
+        .and_then(Value::as_array)
+        .map(|rows| rows.iter().filter_map(|row| row.as_str()).map(str::to_owned).collect())
+        .unwrap_or_default();
     Some(StellarBoard {
-        claimable,
-        lightable,
-        goods_id: goods
-            .and_then(|goods| goods.get("id"))
-            .and_then(Value::as_str)
-            .and_then(|id| id.parse().ok())
-            .unwrap_or(0),
-        goods_name: goods
-            .and_then(|goods| goods.get("name"))
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_owned(),
-        cost_name: goods
-            .and_then(|goods| goods.pointer("/cost/name"))
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_owned(),
-        unit_cost: goods
-            .and_then(|goods| goods.pointer("/cost/count"))
+        level: season
+            .pointer("/pass/level")
             .and_then(Value::as_i64)
-            .unwrap_or(0),
-        max_count: goods
-            .and_then(|goods| goods.get("maxExchangeCount"))
-            .and_then(Value::as_i64)
-            .unwrap_or(0),
-        balance_known: goods.and_then(|goods| goods.get("balanceKnown")).and_then(Value::as_bool)
-            == Some(true),
-        day: value
-            .pointer("/constellation/currentDay")
-            .and_then(Value::as_i64)
-            .map(|day| day.to_string())
+            .map(|level| level.to_string())
             .unwrap_or_else(|| "-".into()),
+        progress: format!(
+            "{}/{}",
+            season.pointer("/pass/progress").and_then(Value::as_i64).unwrap_or(0),
+            season.pointer("/pass/progressMax").and_then(Value::as_i64).unwrap_or(0)
+        ),
+        claimable: nodes.iter().any(|node| node.state == "可领取"),
+        lightable: groups.iter().any(|group| group.state == "可点亮" || group.state == "待同步"),
+        nodes,
+        goods,
+        groups,
+        rules,
+        catalog_status: value
+            .pointer("/constellation/catalogStatus")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned(),
+        terms,
     })
 }
 
 pub(crate) fn press(
     session: &mut StellarSession,
     intent: StellarIntent,
+    goods_id: i64,
     count: i64,
+    term_id: i64,
     running: bool,
 ) -> Option<StellarCommand> {
-    if !running || session.account_id.is_empty() || session.busy {
+    if !running
+        || session.account_id.is_empty()
+        || session.busy
+        || session.needs_refresh && intent != StellarIntent::Reload
+    {
         return None;
     }
     let board = session.board.as_ref();
-    let (goods_id, count) = match intent {
-        StellarIntent::Reload => (0, 0),
+    match intent {
+        StellarIntent::Reload => {}
         StellarIntent::Claim => {
             if !board.is_some_and(|board| board.claimable) {
                 return None;
             }
-            (0, 0)
         }
         StellarIntent::Light => {
             if !board.is_some_and(|board| board.lightable) {
                 return None;
             }
-            (0, 0)
         }
         StellarIntent::Exchange => {
-            let board = board?;
-            if count <= 0
-                || !board.balance_known
-                || board.goods_id <= 0
-                || board.unit_cost <= 0
-                || count > board.max_count
-            {
+            let good = board?.goods.iter().find(|good| good.id == goods_id)?;
+            if count <= 0 || !good.balance_known || good.unit_cost <= 0 || count > good.max_count {
                 return None;
             }
-            (board.goods_id, count)
         }
-    };
+        StellarIntent::Solar => {
+            let term = board?.terms.iter().find(|term| term.id == term_id)?;
+            if !term.can_claim {
+                return None;
+            }
+        }
+    }
     session.busy = true;
     session.attempted = true;
     session.generation += 1;
@@ -147,6 +192,7 @@ pub(crate) fn press(
         intent,
         goods_id,
         count,
+        term_id,
     })
 }
 
@@ -172,18 +218,45 @@ pub(crate) fn apply(
     session.busy = false;
     match result {
         Ok(value) => {
-            if command.intent == StellarIntent::Reload {
+            let refresh = value.get("refreshRequired").and_then(Value::as_bool) == Some(true);
+            if let Some(snapshot) =
+                value.get("snapshot").filter(|snapshot| snapshot.get("season").is_some())
+            {
+                session.board = board_from(snapshot);
+            } else if command.intent == StellarIntent::Reload {
                 session.board = board_from(&value);
-            } else if value.get("refreshRequired").and_then(Value::as_bool) == Some(true) {
-                session.note = Some("请刷新确认最新进度".into());
-            } else if let Some(board) = value.get("season").and_then(|_| board_from(&serde_json::json!({"season": value.get("season"), "shop": value.get("shop"), "constellation": value.get("constellation")}))) {
-                session.board = Some(board);
+            } else if let Some(board) = session.board.as_mut() {
+                if let Some(rows) = value.pointer("/shop/goods").and_then(Value::as_array) {
+                    board.goods = rows.iter().filter_map(shop_good).collect();
+                }
+                if let Some(rows) = value.pointer("/constellation/groups").and_then(Value::as_array)
+                {
+                    board.groups = rows.iter().filter_map(star_group).collect();
+                    board.lightable = board
+                        .groups
+                        .iter()
+                        .any(|group| group.state == "可点亮" || group.state == "待同步");
+                }
+            }
+            if refresh {
+                session.needs_refresh = true;
+                if let Some(board) = session.board.as_mut() {
+                    board.claimable = false;
+                    board.lightable = false;
+                    for term in &mut board.terms {
+                        term.can_claim = false;
+                    }
+                }
+                session.note = Some("请刷新确认最新进度，刷新不会再次提交".into());
+            } else {
+                session.needs_refresh = false;
+                session.note = None;
             }
             session.failure = None;
         }
         Err(message) => {
             if command.intent != StellarIntent::Reload {
-                session.board = None;
+                session.needs_refresh = true;
             }
             session.failure = Some(message);
         }
@@ -210,6 +283,9 @@ pub(crate) async fn dispatch_stellar(
             )
             .await
         }
+        StellarIntent::Solar => {
+            qq_farm_app::stellar::claim_solar(context, &command.account_id, command.term_id).await
+        }
     }
 }
 
@@ -230,82 +306,129 @@ pub(crate) fn watch(
             return;
         }
         let mut owned = current;
-        if let Some(command) = press(&mut owned, StellarIntent::Reload, 0, true) {
+        if let Some(command) = press(&mut owned, StellarIntent::Reload, 0, 0, 0, true) {
             session.set(owned);
             launch(session, command);
         }
     });
 }
 
-pub(crate) fn panel(
-    session: Signal<StellarSession>,
-    page: ActivityPage,
-    open_solar: impl Fn() + 'static,
-) -> impl IntoElement {
+pub(crate) fn panel(session: Signal<StellarSession>, page: ActivityPage) -> impl IntoElement {
+    let goods_id = signal(0_i64);
     let count = signal(1_i64);
     view()
         .gap_3()
         .child(text(move || text_key("activities.stellar")).text_lg())
-        .child(
-            button(move || text_key("activities.stellarSolar"), ButtonVariant::Secondary)
-                .on_press(open_solar),
-        )
+        .child(when(
+            move || session.get().note.is_some(),
+            move || {
+                notice(move || SharedString::from(session.get().note.clone().unwrap_or_default()))
+            },
+        ))
         .child(when(
             move || session.get().board.is_none() && !session.get().busy,
             move || {
-                view().gap_2().child(notice(move || text_key("activities.stellarEmpty"))).child(
-                    button(move || text_key("activities.wishReload"), ButtonVariant::Secondary)
-                        .on_press(move || fire(session, page, StellarIntent::Reload, 0)),
-                )
+                button(move || text_key("activities.wishReload"), ButtonVariant::Secondary)
+                    .on_press(move || fire(session, page, StellarIntent::Reload, 0, 0, 0))
             },
         ))
-        .child(when(move || session.get().board.is_some(), move || body(session, page, count)))
+        .child(when(
+            move || session.get().board.is_some(),
+            move || body(session, page, goods_id, count),
+        ))
 }
 
 fn body(
     session: Signal<StellarSession>,
     page: ActivityPage,
+    goods_id: Signal<i64>,
     count: Signal<i64>,
 ) -> impl IntoElement {
-    let board = session.get().board.clone();
-    let claimable = board.as_ref().is_some_and(|board| board.claimable);
-    let lightable = board.as_ref().is_some_and(|board| board.lightable);
-    let cost = board
-        .as_ref()
-        .map(|board| {
-            format!(
-                "{} {} ×{}",
-                text_key("activities.stellarCost"),
-                board.cost_name,
-                board.unit_cost.saturating_mul(count.get())
-            )
-        })
-        .unwrap_or_default();
     view()
-        .gap_2()
-        .child(text(board.as_ref().map(|board| format!("第 {} 日", board.day)).unwrap_or_default()))
+        .gap_3()
+        .child(text(move || {
+            let board = session.get().board.clone().unwrap_or_else(empty_board);
+            SharedString::from(format!("游记等级 {} · 进度 {}", board.level, board.progress))
+        }))
+        .child(each(
+            move || session.get().board.clone().unwrap_or_else(empty_board).nodes,
+            |node: &PassNode| node.level.clone(),
+            move |node, _| {
+                let node = node.get_untracked();
+                text(format!("{} {} {}", node.level, node.state, node.rewards)).text_sm()
+            },
+        ))
         .child(
             button(move || text_key("activities.stellarClaim"), ButtonVariant::Primary)
-                .disabled(move || session.get().busy || !claimable)
-                .on_press(move || fire(session, page, StellarIntent::Claim, 0)),
+                .disabled(move || {
+                    let current = session.get();
+                    current.busy
+                        || current.needs_refresh
+                        || !current.board.as_ref().is_some_and(|board| board.claimable)
+                })
+                .on_press(move || fire(session, page, StellarIntent::Claim, 0, 0, 0)),
         )
-        .child(
-            button(move || text_key("activities.stellarLight"), ButtonVariant::Primary)
-                .disabled(move || session.get().busy || !lightable)
-                .on_press(move || fire(session, page, StellarIntent::Light, 0)),
-        )
-        .child(text(cost).text_sm())
+        .child(text(move || text_key("activities.stellarShop")))
+        .child(each(
+            move || session.get().board.clone().unwrap_or_else(empty_board).goods,
+            |good: &ShopGood| good.id,
+            move |good, _| {
+                let good = good.get_untracked();
+                let id = good.id;
+                let owned = if good.owned { "已拥有" } else { "未拥有" };
+                let balance = good
+                    .balance
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "余额未知".into());
+                let line = format!(
+                    "{} {} {} {} 余额{balance} 最多{}",
+                    good.category, good.name, owned, good.cost, good.max_count
+                );
+                button(move || SharedString::from(line.clone()), ButtonVariant::Quiet)
+                    .selected(move || goods_id.get() == id)
+                    .on_press(move || goods_id.set(id))
+            },
+        ))
+        .child(text(move || {
+            let chosen = count.get();
+            let Some(board) = session.get().board else {
+                return SharedString::from("");
+            };
+            let Some(good) = board.goods.iter().find(|good| good.id == goods_id.get()) else {
+                return SharedString::from(format!("数量 {chosen}"));
+            };
+            SharedString::from(format!(
+                "{} {} ×{} · 数量 {chosen}",
+                text_key("activities.stellarCost"),
+                good.cost,
+                good.unit_cost.saturating_mul(chosen.max(0))
+            ))
+        }))
+        .child(button(move || SharedString::from("-"), ButtonVariant::Secondary).on_press(
+            move || {
+                count.update(|value| *value = (*value - 1).max(1));
+            },
+        ))
+        .child(button(move || SharedString::from("+"), ButtonVariant::Secondary).on_press(
+            move || {
+                let max = session
+                    .get_untracked()
+                    .board
+                    .as_ref()
+                    .and_then(|board| {
+                        board.goods.iter().find(|good| good.id == goods_id.get_untracked())
+                    })
+                    .map(|good| good.max_count)
+                    .unwrap_or(1);
+                count.update(|value| *value = (*value + 1).min(max.max(1)));
+            },
+        ))
         .child(
             button(move || text_key("activities.stellarExchange"), ButtonVariant::Primary)
-                .disabled(move || {
-                    let Some(board) = session.get().board else { return true };
-                    session.get().busy
-                        || count.get() <= 0
-                        || !board.balance_known
-                        || count.get() > board.max_count
-                })
+                .disabled(move || session.get().busy || session.get().needs_refresh)
                 .on_press(move || {
-                    let count = count.get_untracked();
+                    let id = goods_id.get_untracked();
+                    let chosen = count.get_untracked();
                     confirm(
                         "activities.stellarExchange",
                         "activities.stellarExchange",
@@ -313,22 +436,90 @@ fn body(
                         "activities.stellarExchange",
                         move |accepted| {
                             if accepted {
-                                fire(session, page, StellarIntent::Exchange, count);
+                                fire(session, page, StellarIntent::Exchange, id, chosen, 0);
                             }
                         },
                     );
                 }),
         )
+        .child(text(move || {
+            let status = session
+                .get()
+                .board
+                .as_ref()
+                .map(|board| board.catalog_status.clone())
+                .unwrap_or_default();
+            if status == "unsupported" {
+                text_key("activities.stellarUnsupported")
+            } else {
+                text_key("activities.stellarStars")
+            }
+        }))
+        .child(each(
+            move || session.get().board.clone().unwrap_or_else(empty_board).rules,
+            |rule: &String| rule.clone(),
+            move |rule, _| text(rule.get_untracked().clone()).text_sm(),
+        ))
+        .child(each(
+            move || session.get().board.clone().unwrap_or_else(empty_board).groups,
+            |group: &StarGroup| group.name.clone(),
+            move |group, _| {
+                let group = group.get_untracked();
+                text(format!("{} {} {}", group.name, group.state, group.rewards)).text_sm()
+            },
+        ))
+        .child(
+            button(move || text_key("activities.stellarLight"), ButtonVariant::Primary)
+                .disabled(move || {
+                    let current = session.get();
+                    current.busy
+                        || current.needs_refresh
+                        || !current.board.as_ref().is_some_and(|board| board.lightable)
+                })
+                .on_press(move || fire(session, page, StellarIntent::Light, 0, 0, 0)),
+        )
+        .child(text(move || text_key("activities.stellarSolarV1")))
+        .child(each(
+            move || session.get().board.clone().unwrap_or_else(empty_board).terms,
+            |term: &SolarRow| term.id,
+            move |term, _| {
+                let term = term.get_untracked();
+                let id = term.id;
+                let can_claim = term.can_claim;
+                view()
+                    .gap_1()
+                    .child(
+                        text(format!("{} {} {}", term.name, term.status, term.rewards)).text_sm(),
+                    )
+                    .child(
+                        button(
+                            move || text_key("activities.stellarSolarClaim"),
+                            ButtonVariant::Secondary,
+                        )
+                        .disabled(move || {
+                            session.get().busy || session.get().needs_refresh || !can_claim
+                        })
+                        .on_press(move || fire(session, page, StellarIntent::Solar, 0, 0, id)),
+                    )
+            },
+        ))
 }
 
-fn fire(session: Signal<StellarSession>, page: ActivityPage, intent: StellarIntent, count: i64) {
+fn fire(
+    session: Signal<StellarSession>,
+    page: ActivityPage,
+    intent: StellarIntent,
+    goods_id: i64,
+    count: i64,
+    term_id: i64,
+) {
     let running = page
         .account_id
         .get_untracked()
         .zip(page.rows.get())
         .is_some_and(|(id, rows)| super::accounts::account_is_running(&rows, &id));
     let mut owned = session.get_untracked();
-    let Some(command) = press(&mut owned, intent, count, running) else {
+    let Some(command) = press(&mut owned, intent, goods_id, count, term_id, running) else {
         return;
     };
     session.set(owned);
@@ -338,75 +529,356 @@ fn fire(session: Signal<StellarSession>, page: ActivityPage, intent: StellarInte
 fn launch(session: Signal<StellarSession>, command: StellarCommand) {
     spawn(async move {
         let context = session::session().context.clone();
-        let intent = command.intent;
         let result = {
             let context = context.clone();
             let command = command.clone();
             session::call(async move { dispatch_stellar(&context, &command).await }).await
         };
         let mut owned = session.get_untracked();
-        let _accepted = apply(
-            &mut owned,
-            &command,
-            result.map_err(|error| error.to_string()).map(|value| {
-                if intent == StellarIntent::Reload {
-                    value
-                } else {
-                    value
-                }
-            }),
-        );
+        let _accepted = apply(&mut owned, &command, result);
         session.set(owned);
     });
 }
 
+fn pass_node(value: &Value) -> Option<PassNode> {
+    let level = value.get("level").and_then(Value::as_i64).unwrap_or(0).to_string();
+    let state = if value.get("claimable").and_then(Value::as_bool) == Some(true) {
+        "可领取"
+    } else if value.get("claimed").and_then(Value::as_bool) == Some(true) {
+        "已领取"
+    } else if value.get("locked").and_then(Value::as_bool) == Some(true) {
+        "未开放"
+    } else {
+        "进行中"
+    };
+    let rewards = value
+        .get("rewards")
+        .and_then(Value::as_array)
+        .map(|rows| reward_line(rows))
+        .unwrap_or_default();
+    Some(PassNode { level, state: state.into(), rewards })
+}
+
+fn shop_good(value: &Value) -> Option<ShopGood> {
+    let id = value.get("id").and_then(Value::as_str).and_then(|id| id.parse().ok())?;
+    Some(ShopGood {
+        id,
+        name: value.get("name").and_then(Value::as_str).unwrap_or("").to_owned(),
+        category: value.get("category").and_then(Value::as_str).unwrap_or("").to_owned(),
+        owned: value.get("owned").and_then(Value::as_bool) == Some(true),
+        cost: value.pointer("/cost/name").and_then(Value::as_str).unwrap_or("").to_owned(),
+        unit_cost: value.pointer("/cost/count").and_then(Value::as_i64).unwrap_or(0),
+        max_count: value.get("maxExchangeCount").and_then(Value::as_i64).unwrap_or(0),
+        balance_known: value.get("balanceKnown").and_then(Value::as_bool) == Some(true),
+        balance: value.get("balance").and_then(Value::as_i64),
+    })
+}
+
+fn star_group(value: &Value) -> Option<StarGroup> {
+    let state = match value.get("visualState").and_then(Value::as_str).unwrap_or("") {
+        "lit" => "已点亮",
+        "lightable" => "可点亮",
+        "locked" => "未开放",
+        "claimableUnknown" => "待同步",
+        "claimedToday" => "今日已领取",
+        _ => "未知",
+    };
+    Some(StarGroup {
+        name: value.get("name").and_then(Value::as_str).unwrap_or("").to_owned(),
+        state: state.into(),
+        rewards: value
+            .get("rewards")
+            .and_then(Value::as_array)
+            .map(|rows| reward_line(rows))
+            .unwrap_or_default(),
+    })
+}
+
+fn solar_row(value: &Value) -> Option<SolarRow> {
+    Some(SolarRow {
+        id: value.get("id").and_then(Value::as_str).and_then(|id| id.parse().ok())?,
+        name: value.get("name").and_then(Value::as_str).unwrap_or("").to_owned(),
+        can_claim: value.get("canClaim").and_then(Value::as_bool) == Some(true),
+        status: value.get("statusCode").and_then(Value::as_str).unwrap_or("").to_owned(),
+        rewards: value
+            .get("rewards")
+            .and_then(Value::as_array)
+            .map(|rows| reward_line(rows))
+            .unwrap_or_default(),
+    })
+}
+
+fn reward_line(rows: &[Value]) -> String {
+    rows.iter()
+        .map(|row| {
+            format!(
+                "{}×{}",
+                row.get("name").and_then(Value::as_str).unwrap_or(""),
+                row.get("count").and_then(Value::as_i64).unwrap_or(0)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("、")
+}
+
+fn empty_board() -> StellarBoard {
+    StellarBoard {
+        level: "-".into(),
+        progress: "0/0".into(),
+        nodes: Vec::new(),
+        goods: Vec::new(),
+        groups: Vec::new(),
+        rules: Vec::new(),
+        catalog_status: String::new(),
+        terms: Vec::new(),
+        claimable: false,
+        lightable: false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use prost::Message as _;
+    use qq_farm_core::models::types::AccountConfigSnapshot;
+    use qq_farm_core::proto::generated::corepb::{Item as CoreItem, ItemBag};
+    use qq_farm_core::proto::generated::gamepb::activitypb::{
+        ActivityData, ActivityItem, ActivityOperateReply, ExchangeShopRequest, StarSandGoods,
+        StarSandGoodsList,
+    };
+    use qq_farm_core::proto::generated::gamepb::itempb::BagReply;
+    use qq_farm_core::proto::generated::gamepb::seasonpb::{
+        GetSeasonInfoReply, SeasonActivity, SeasonInfo,
+    };
+    use qq_farm_core::proto::generated::gamepb::solartermspb::{
+        ClaimSolarTermsReply, ClaimSolarTermsRequest, GetSolarTermsReply, SolarTermInfo,
+    };
+    use qq_farm_core::runtime::runtime_state::AccountStoreLike;
     use serde_json::json;
 
     use super::*;
 
-    fn session() -> StellarSession {
-        StellarSession {
-            account_id: "acc".into(),
-            board: Some(StellarBoard {
-                claimable: false,
-                lightable: true,
-                goods_id: 4,
-                goods_name: "种子".into(),
-                cost_name: "星砂".into(),
-                unit_cost: 3,
-                max_count: 1,
-                balance_known: true,
-                day: "2".into(),
-            }),
-            ..StellarSession::default()
+    struct EmptyStore;
+    impl AccountStoreLike for EmptyStore {
+        fn get_config_snapshot(&self, _id: &str) -> AccountConfigSnapshot {
+            AccountConfigSnapshot::default()
+        }
+        fn get_automation(&self, _id: &str) -> serde_json::Value {
+            serde_json::Value::Null
+        }
+        fn get_preferred_seed(&self, _id: &str) -> i64 {
+            0
         }
     }
 
-    #[test]
-    fn exchange_cancel_quantity_and_unknown_balance_do_not_make_a_command() {
-        let mut owned = session();
-        assert!(press(&mut owned, StellarIntent::Exchange, 0, true).is_none());
-        assert!(press(&mut owned, StellarIntent::Exchange, 2, true).is_none());
-        owned.board.as_mut().unwrap().balance_known = false;
-        assert!(press(&mut owned, StellarIntent::Exchange, 1, true).is_none());
-        assert_eq!(owned.generation, 0);
-        owned.board.as_mut().unwrap().balance_known = true;
-        let command = press(&mut owned, StellarIntent::Exchange, 1, true).unwrap();
-        assert_eq!(command.goods_id, 4);
-        assert_eq!(command.count, 1);
+    fn loaded() -> StellarSession {
+        let board = board_from(&json!({
+            "season": { "pass": { "level": 2, "progress": 3, "progressMax": 10, "nodes": [
+                { "level": 1, "claimed": true, "claimable": false, "locked": false, "rewards": [{ "name": "点券", "count": 5 }] },
+                { "level": 2, "claimed": false, "claimable": true, "locked": false, "rewards": [{ "name": "种子", "count": 1 }] }
+            ] } },
+            "shop": { "goods": [
+                { "id": "4", "name": "甲", "category": "种子", "owned": false, "cost": { "name": "星砂", "count": 3 }, "maxExchangeCount": 1, "balanceKnown": true },
+                { "id": "5", "name": "乙", "category": "道具", "owned": true, "cost": { "name": "星砂", "count": 4 }, "maxExchangeCount": 0, "balanceKnown": true }
+            ] },
+            "constellation": { "catalogStatus": "supported", "rules": ["每日馈赠"], "groups": [
+                { "name": "角宿", "visualState": "claimedToday" },
+                { "name": "亢宿", "visualState": "lightable" }
+            ] },
+            "solarTerms": { "terms": [{ "id": "8", "name": "立春", "statusCode": "2", "canClaim": true }] }
+        })).unwrap();
+        StellarSession { account_id: "acc".into(), board: Some(board), ..StellarSession::default() }
     }
 
     #[test]
-    fn stellar_directory_key_is_stable() {
-        let board = board_from(&json!({
-            "season": { "pass": { "nodes": [{ "claimable": true }] } },
-            "constellation": { "currentDay": null, "groups": [{ "visualState": "claimableUnknown" }] },
-            "shop": { "goods": [{ "id": "4", "name": "种子", "cost": { "name": "星砂", "count": 3 }, "maxExchangeCount": 1, "balanceKnown": true }] }
-        })).unwrap();
-        assert!(board.claimable);
-        assert!(board.lightable);
-        assert_eq!(board.day, "-");
+    fn lists_keep_every_good_and_cancel_does_not_press() {
+        let board = loaded().board.unwrap();
+        assert_eq!(board.goods.len(), 2);
+        assert_eq!(board.nodes.len(), 2);
+        assert_eq!(board.groups[0].state, "今日已领取");
+        assert_eq!(board.rules, vec!["每日馈赠".to_string()]);
+        assert!(board.terms[0].can_claim);
+        let mut session = loaded();
+        assert!(press(&mut session, StellarIntent::Exchange, 4, 0, 0, true).is_none());
+        assert!(press(&mut session, StellarIntent::Exchange, 5, 1, 0, true).is_none());
+        let command = press(&mut session, StellarIntent::Solar, 0, 0, 8, true).unwrap();
+        assert_eq!(command.term_id, 8);
+    }
+
+    #[test]
+    fn refresh_required_disables_another_write_and_a_late_apply_is_dropped() {
+        let mut session = loaded();
+        let command = press(&mut session, StellarIntent::Claim, 0, 0, 0, true).unwrap();
+        assert!(apply(
+            &mut session,
+            &command,
+            Ok(json!({ "refreshRequired": true, "rewards": [{ "id": 1, "count": 1 }] }))
+        ));
+        assert!(session.needs_refresh);
+        assert!(!session.board.as_ref().unwrap().claimable);
+        assert!(press(&mut session, StellarIntent::Exchange, 4, 1, 0, true).is_none());
+        let mut other = session.clone();
+        reset_account(&mut other, "other".into());
+        assert!(!apply(&mut other, &command, Ok(json!({ "season": { "pass": { "nodes": [] } } }))));
+    }
+
+    #[test]
+    fn a_write_without_a_top_level_season_refreshes_from_the_snapshot() {
+        let mut session = loaded();
+        let command = press(&mut session, StellarIntent::Exchange, 4, 1, 0, true).unwrap();
+        assert!(apply(
+            &mut session,
+            &command,
+            Ok(json!({
+                "purchaseCount": 1,
+                "snapshot": {
+                    "season": { "pass": { "level": 2, "progress": 4, "progressMax": 10, "nodes": [] } },
+                    "shop": { "goods": [
+                        { "id": "4", "name": "甲", "category": "种子", "owned": true, "cost": { "name": "星砂", "count": 3 }, "balance": 6, "maxExchangeCount": 2, "balanceKnown": true },
+                        { "id": "5", "name": "乙", "category": "道具", "owned": false, "cost": { "name": "星砂", "count": 4 }, "balance": 6, "maxExchangeCount": 1, "balanceKnown": true }
+                    ] }
+                }
+            }))
+        ));
+        let board = session.board.unwrap();
+        assert_eq!(board.progress, "4/10");
+        assert_eq!(board.goods.len(), 2);
+        assert_eq!(board.goods[0].balance, Some(6));
+        assert!(!session.needs_refresh);
+    }
+
+    #[tokio::test]
+    async fn dispatch_stellar_sends_the_pressed_exchange_and_solar_claim() {
+        let _data = qq_farm_core::config::paths::TestDataDir::enter();
+        let runtime = Arc::new(qq_farm_core::runtime::engine::RuntimeEngine::assemble_with(
+            qq_farm_core::runtime::engine::EngineConfig::default(),
+            Arc::new(qq_farm_core::runtime::runtime_state::RuntimeState::new(
+                Arc::new(EmptyStore),
+                Vec::new(),
+            )),
+            None,
+        ));
+        let gateway = Arc::new(qq_farm_core::network::gateway::Gateway::new(
+            qq_farm_core::network::gateway::GatewayConfig {
+                server_url: "wss://gate.example.com/ws".into(),
+                platform: "qq".into(),
+                os: "Windows".into(),
+                client_version: "1".into(),
+                auth_code: "test".into(),
+                headers: std::collections::HashMap::new(),
+            },
+            Arc::new(qq_farm_core::network::encryptor::NoopEncryptor),
+        ));
+        gateway.mark_online();
+        let seen = Arc::new(Mutex::new(Vec::<(String, Vec<u8>)>::new()));
+        let log = Arc::clone(&seen);
+        gateway.install_reply_script(move |_service, method, body| {
+            log.lock().expect("log").push((method.to_owned(), body.to_vec()));
+            match method {
+                "GetSeasonInfo" => Ok(GetSeasonInfoReply {
+                    season_info: Some(SeasonInfo {
+                        season_id: 7,
+                        server_time: 1_700_000_000,
+                        activities: vec![SeasonActivity {
+                            activity_id: 900,
+                            r#type: 3,
+                            ..SeasonActivity::default()
+                        }],
+                        ..SeasonInfo::default()
+                    }),
+                }
+                .encode_to_vec()),
+                "Bag" => Ok(BagReply {
+                    item_bag: Some(ItemBag {
+                        items: vec![CoreItem { id: 3, count: 10, ..CoreItem::default() }],
+                        ..ItemBag::default()
+                    }),
+                }
+                .encode_to_vec()),
+                "Operate" => {
+                    let kind = qq_farm_core::proto::generated::gamepb::activitypb::QueryActivityRequest::decode(body)
+                        .map(|request| request.operate_type)
+                        .unwrap_or(7);
+                    Ok(ActivityOperateReply {
+                    activity_id: 900,
+                    operate_type: kind,
+                    data: Some(ActivityData {
+                        catalog: Some(StarSandGoodsList {
+                            goods: vec![StarSandGoods {
+                                goods_id: 4,
+                                cost: Some(ActivityItem { item_id: 3, count: 3 }),
+                                ..StarSandGoods::default()
+                            }],
+                        }),
+                        ..ActivityData::default()
+                    }),
+                    ..ActivityOperateReply::default()
+                }
+                .encode_to_vec())
+                }
+                "GetSolarTerms" => Ok(GetSolarTermsReply {
+                    terms: vec![SolarTermInfo { term_id: 8, status: 2, ..SolarTermInfo::default() }],
+                    ..GetSolarTermsReply::default()
+                }
+                .encode_to_vec()),
+                "ClaimSolarTerms" => Ok(ClaimSolarTermsReply::default().encode_to_vec()),
+                _ => Err(qq_farm_core::network::error::NetworkError::Phase(method.into())),
+            }
+        });
+        let (tx, _) = tokio::sync::broadcast::channel(4);
+        let gate = Arc::clone(&gateway);
+        runtime.register_worker_loop(
+            "acc",
+            Arc::new(qq_farm_core::runtime::worker_loop::WorkerLoop::new(
+                qq_farm_core::models::account::AccountSession::new("acc", "code", "name"),
+                qq_farm_core::runtime::worker_loop::WorkerLoopConfig::default(),
+                Arc::clone(&gate),
+                tx,
+                Arc::new(qq_farm_core::services::farm::FarmService::new(Arc::clone(&gate))),
+                Arc::new(qq_farm_core::services::friend::scheduler::FriendService::new(
+                    Arc::clone(&gate),
+                    5,
+                )),
+                Arc::new(qq_farm_core::services::email::EmailService::new(
+                    Arc::clone(&gate),
+                    "acc",
+                )),
+                Arc::new(qq_farm_core::services::share::ShareService::new(Arc::clone(&gate))),
+                Arc::new(qq_farm_core::services::monthcard::MonthCardService::new(Arc::clone(
+                    &gate,
+                ))),
+                Arc::new(qq_farm_core::services::qqvip::QQVipService::new(
+                    Arc::clone(&gate),
+                    Arc::new(qq_farm_core::services::mall::MallService::new(Arc::clone(&gate))),
+                )),
+                Arc::new(qq_farm_core::services::mall::MallService::new(Arc::clone(&gate))),
+                Arc::new(qq_farm_core::services::task::TaskService::new(Arc::clone(&gate))),
+                Arc::new(qq_farm_core::services::warehouse::WarehouseService::new(Arc::clone(
+                    &gate,
+                ))),
+                Arc::new(qq_farm_core::services::mystery_shop::MysteryShopService::new(gate)),
+            )),
+        );
+        let context = qq_farm_app::AppContext::new(runtime);
+        let mut session = loaded();
+        session.board.as_mut().unwrap().goods[0].max_count = 3;
+        let exchange = press(&mut session, StellarIntent::Exchange, 4, 2, 0, true).unwrap();
+        assert_eq!(exchange.count, 2);
+        dispatch_stellar(&context, &exchange).await.unwrap();
+        session.busy = false;
+        let solar = press(&mut session, StellarIntent::Solar, 0, 0, 8, true).unwrap();
+        dispatch_stellar(&context, &solar).await.unwrap();
+        let saved = seen.lock().expect("seen");
+        let exchange_body = saved.iter().find(|(method, body)| {
+            method == "Operate"
+                && ExchangeShopRequest::decode(body.as_slice()).unwrap().operate_type == 1
+        });
+        let request = ExchangeShopRequest::decode(exchange_body.unwrap().1.as_slice()).unwrap();
+        let params = request.exchange_shop_operate.unwrap();
+        assert_eq!(params.goods_id, 4);
+        assert_eq!(params.count, 2);
+        let claim = saved.iter().find(|(method, _)| method == "ClaimSolarTerms").unwrap();
+        assert_eq!(ClaimSolarTermsRequest::decode(claim.1.as_slice()).unwrap().term_id, 8);
     }
 }

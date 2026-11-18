@@ -353,7 +353,10 @@ impl WorkerLoop {
         let weather = Arc::new(crate::services::weather::WeatherService::new(Arc::clone(&gateway)));
         let autumn_wish =
             Arc::new(crate::services::autumn_wish::AutumnWishService::new(Arc::clone(&gateway)));
-        let stellar = Arc::new(crate::services::stellar::StellarService::new(Arc::clone(&gateway)));
+        let stellar = Arc::new(crate::services::stellar::StellarService::new(
+            Arc::clone(&gateway),
+            account.id.clone(),
+        ));
         friend.api().set_bad_gate(
             Arc::new({
                 let friend = friend.clone();

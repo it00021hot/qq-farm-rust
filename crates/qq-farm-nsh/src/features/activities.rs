@@ -541,7 +541,7 @@ pub(crate) fn page(page: ActivityPage) -> impl IntoElement {
         ))
         .child(when(
             move || shelf.get() == Shelf::Stellar && running(page),
-            move || super::stellar::panel(stellar, page, move || shelf.set(Shelf::Solar)),
+            move || super::stellar::panel(stellar, page),
         ))
         .child(when(
             move || shelf.get() == Shelf::Share && running(page),
@@ -3538,6 +3538,7 @@ mod tests {
         assert!(super::Shelf::ALL.contains(&super::Shelf::Wish));
         assert!(super::Shelf::ALL.contains(&super::Shelf::Stellar));
         assert_eq!(super::Shelf::Stellar.id(), "stellar");
+        assert_eq!(super::Shelf::Stellar.label_key(), "activities.stellar");
         assert_eq!(super::Shelf::Wish.id(), "wish");
         assert_eq!(super::Shelf::Wish.label_key(), "activities.wish");
     }

@@ -4003,3 +4003,25 @@ bot 本轮 13 个提交**玩法层零变化**（活动/商城/日常自动化均
 - 固定基准的测试夹具里没有千星官方 hex 向量。
 - 离线：core `services::stellar` 5 项通过。app `stellar` 2 项通过。NSH `features::stellar` 2 项通过。活动目录测试仍通过，并确认 `stellar` 在目录枚举里。`runtime::worker_loop::tests` 32 项通过。`nsh check crates/qq-farm-nsh` 通过。工具链文件仍是 1.98.1，命令用已安装的 1.99.1。
 - 待验：窗口点击、真实赛季和商店回包、服务端是否另有未在基准页面出现的付费入口。当前是否仍开放未知。
+
+### 2026-11-19 — 千星 023A
+
+`ec905c8` 的定向测试当时通过了，产品审计不接受那一版算完整千星：界面收成三个按钮，节令跳到 `GetSolarTermsV2`。本条只补这五处，不把上一节改写成已经验收。七夕、青梅、公益、萌宠日记仍然没有实现。母项 ACT-02 仍是未实现。没有自动点星、兑换或领取，没有连接服务端，没有启动窗口，没有构建 debug 客户端，没有读真实数据目录。
+
+源控件和 Rust 对应：
+
+| 基准 | Rust |
+| --- | --- |
+| 游记等级、进度、逐级奖励、已领/可领 | `pass.level`、`progress`/`progressMax`、每个节点的状态和奖励。只有「领取游记奖励」 |
+| 无免费/付费分档，无购买通行证 | 不新增这两种控件 |
+| 星砂全部商品、分类、已拥有、单价、可调数量、确认/取消 | `shop.goods` 全列。`+`/`-` 只改数量。确认后 `dispatch_stellar` 带 `goods_id` 和 `count`。取消不调用 `press` |
+| 二十八星宿、已亮/可点/未开/待同步、今日已领取、目录不支持、rules | `visualState` 分别是 `lit`、`lightable`、`locked`、`claimableUnknown`、`claimedToday`。不支持时用目录提示。规则是配置 `rules.lines` 去标签后的正文，不用 `displayName` |
+| V1 `GetSolarTerms` / `ClaimSolarTerms(term_id)`，仅 `status==2` | 千星页内的节令列表和「领取节令」。`Shelf::Solar` 仍是 V2，不再充当这一段 |
+
+持久化沿用基准 `activity-center-state.ts`：文件 `activity-center-state-{sha256(账号，空账号写 default)}.json`，`version` 为 1，记录键 `seasonId:activityId:v{catalogVersion}`。合并只并上已打开和已点亮的节点，后来的 false 不删已确认的 true。`noClaimableDays` 保留 `serverTime` 更新的那条。写星宿时保留文件里的 `charityRecords`。赛季、活动或目录版本不同就读到空记录，不跨账号、不跨活动合并。基准页面把 `1034038` 画成已点亮并标 `confirmed-no-claimable`；这里按审计改成单独的「今日已领取」，不冒充已点亮。
+
+- 成功读到空背包时，缺的货币是已知 0。背包请求失败才是未知，未知不发兑换。兑换成功后重读背包，页面用这次余额，不用兑换前的数。商品 status 仍不过滤。
+- 写操作返回里没有顶层 `season` 时，有 `snapshot` 就整页换成它。刷新失败置 `refreshRequired`：保留本次结果，停用旧的可领、可点、可兑和可领节令，并提示需要刷新。刷新只读，不自动重发写。同账号写仍串行；换 worker 后旧操作拒绝；别的账号不等这把锁。
+- 固定基准的测试夹具里仍然没有千星官方 hex，不编造。
+- 离线：core `services::stellar` 11 项通过。app `stellar` 4 项通过，兑换、点星和 V1 领取走 app 门面。NSH `features::stellar` 4 项通过，其中 `dispatch_stellar_sends_the_pressed_exchange_and_solar_claim` 用 `press` 的命令调用生产 `dispatch_stellar`。活动目录 `wish_is_a_directory_shelf` 确认标签 `activities.stellar` 和路由 `stellar`。`runtime::worker_loop::tests` 32 项、core `services::autumn_wish` 14 项、core `services::solar_calendar` 7 项通过。`nsh check crates/qq-farm-nsh` 通过。工具链文件仍是 1.98.1，命令用已安装的 1.99.1。
+- 待独立复验。窗口未打开，真实接口未发。当前是否仍开放未知。真实星砂或节令消耗未知，不承诺免费。

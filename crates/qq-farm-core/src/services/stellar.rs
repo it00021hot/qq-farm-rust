@@ -2,12 +2,15 @@
 //!
 //! 通行证走 `SeasonService.GetSeasonInfo` / `ClaimBattlePassRewards`。
 //! 星砂商店是 `ActivityService.Operate` 7 和 1。点星是 `Operate` 21。
-//! 节令不在这里再实现一套。
+//! 千星页内的节令是 V1 `SolarTermsService.GetSolarTerms` / `ClaimSolarTerms`。
+//! 已有节令架的 V2 不从这里调用。
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use prost::Message as _;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::config::game_config::global as global_game_config;
 use crate::error::{Error, Result};
@@ -27,6 +30,7 @@ use crate::services::activity_text::strip_tags;
 const SEASON_SERVICE: &str = "gamepb.seasonpb.SeasonService";
 const ACTIVITY_SERVICE: &str = "gamepb.activitypb.ActivityService";
 const ITEM_SERVICE: &str = "gamepb.itempb.ItemService";
+const SOLAR_SERVICE: &str = "gamepb.solartermspb.SolarTermsService";
 const SHOP_TYPE: i64 = 3;
 const CONSTELLATION_TYPE: i64 = 13;
 const QUERY_SHOP: i64 = 7;
@@ -46,6 +50,12 @@ struct CatalogFile {
     #[serde(rename = "displayName")]
     display_name: String,
     groups: Vec<CatalogGroup>,
+    rules: CatalogRules,
+}
+
+#[derive(Debug, Deserialize)]
+struct CatalogRules {
+    lines: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -62,6 +72,8 @@ struct CatalogGroup {
 struct CatalogReward {
     #[serde(rename = "itemId")]
     item_id: String,
+    #[serde(default)]
+    name: String,
     count: i64,
 }
 
@@ -98,35 +110,41 @@ fn item_name(id: i64) -> String {
 
 pub struct StellarService {
     gateway: Arc<Gateway>,
+    account_id: String,
     mutation_lock: tokio::sync::Mutex<()>,
     nodes: Mutex<Vec<ConstellationNode>>,
-    no_claimable_day: Mutex<Option<i64>>,
 }
 
 impl StellarService {
     #[must_use]
-    pub fn new(gateway: Arc<Gateway>) -> Self {
+    pub fn new(gateway: Arc<Gateway>, account_id: impl Into<String>) -> Self {
+        let account_id = account_id.into();
         Self {
             gateway,
+            account_id: if account_id.is_empty() { "default".into() } else { account_id },
             mutation_lock: tokio::sync::Mutex::new(()),
             nodes: Mutex::new(Vec::new()),
-            no_claimable_day: Mutex::new(None),
         }
     }
 
     pub async fn snapshot(&self) -> Result<serde_json::Value> {
         let season = self.season().await?;
         let shop = match find_activity(&season, SHOP_TYPE) {
-            Some(activity) => match self.shop_value(&season, activity).await {
+            Some(activity) => match self.shop_value(activity).await {
                 Ok(value) => value,
                 Err(error) => serde_json::json!({ "error": error.to_string() }),
             },
             None => serde_json::Value::Null,
         };
+        let solar = match self.solar_terms().await {
+            Ok(value) => value,
+            Err(error) => serde_json::json!({ "error": error.to_string() }),
+        };
         Ok(serde_json::json!({
             "season": season_value(&season),
             "shop": shop,
-            "constellation": constellation_value(&season, &self.nodes.lock().expect("nodes"), *self.no_claimable_day.lock().expect("day")),
+            "constellation": self.constellation_snapshot(&season),
+            "solarTerms": solar,
         }))
     }
 
@@ -224,15 +242,26 @@ impl StellarService {
                 "活动商店兑换回包不匹配，请刷新确认结果，勿重复提交".into(),
             ));
         }
+        let item_id = raw.item.as_ref().map(|item| item.item_id).unwrap_or(0);
         let item_count =
             raw.item.as_ref().map(|item| item.count).unwrap_or(0).saturating_mul(count);
-        Ok(serde_json::json!({
+        let catalog = reply.data.as_ref().and_then(|data| data.catalog.clone());
+        let latest = self.balances(&[currency]).await.ok();
+        let mut payload = serde_json::json!({
             "purchaseCount": count,
             "totalCost": total,
             "currencyId": currency,
-            "rewards": [{ "id": raw.item.as_ref().map(|item| item.item_id).unwrap_or(0), "count": item_count, "name": item_name(raw.item.as_ref().map(|item| item.item_id).unwrap_or(0)) }],
-            "shop": shop_value(&reply, &season, &balances).unwrap_or(serde_json::Value::Null),
-        }))
+            "rewards": [{ "id": item_id, "count": item_count, "name": item_name(item_id) }],
+            "shop": catalog.as_ref().map(|catalog| shop_rows(activity, &catalog.goods, latest.as_ref())).unwrap_or(serde_json::Value::Null),
+        });
+        if latest.is_none() {
+            payload["refreshRequired"] = serde_json::json!(true);
+        }
+        match self.snapshot().await {
+            Ok(snapshot) => payload["snapshot"] = snapshot,
+            Err(_) => payload["refreshRequired"] = serde_json::json!(true),
+        }
+        Ok(payload)
     }
 
     pub async fn light(&self) -> Result<serde_json::Value> {
@@ -265,11 +294,17 @@ impl StellarService {
                 let active =
                     constellation_write_window(activity.begin_time, activity.end_time, now);
                 if active && (1..=28).contains(&day) {
-                    *self.no_claimable_day.lock().expect("day") = Some(day);
-                    return Ok(serde_json::json!({
+                    self.remember_no_claimable(&season, activity, day);
+                    let mut payload = serde_json::json!({
                         "outcome": "nothingToClaim",
                         "message": "今日星宿奖励已经领取，无需重复操作",
-                    }));
+                        "constellation": self.constellation_snapshot(&season),
+                    });
+                    match self.snapshot().await {
+                        Ok(snapshot) => payload["snapshot"] = snapshot,
+                        Err(_) => payload["refreshRequired"] = serde_json::json!(true),
+                    }
+                    return Ok(payload);
                 }
                 return Err(Error::Network(NetworkError::Gateway {
                     code,
@@ -290,11 +325,65 @@ impl StellarService {
             .as_ref()
             .and_then(|data| data.constellation.clone())
             .ok_or_else(|| Error::Business("星座操作成功但回包缺少动态状态".into()))?;
-        *self.nodes.lock().expect("nodes") = data.nodes.clone();
-        Ok(serde_json::json!({
+        self.remember_nodes(&season, activity, &data.nodes);
+        let mut payload = serde_json::json!({
             "outcome": "lighted",
-            "constellation": constellation_value(&season, &data.nodes, None),
-        }))
+            "constellation": self.constellation_snapshot(&season),
+        });
+        match self.snapshot().await {
+            Ok(snapshot) => payload["snapshot"] = snapshot,
+            Err(_) => payload["refreshRequired"] = serde_json::json!(true),
+        }
+        Ok(payload)
+    }
+
+    pub async fn claim_solar(&self, term_id: i64) -> Result<serde_json::Value> {
+        self.claim_solar_if(term_id, || true).await
+    }
+
+    pub async fn claim_solar_if(
+        &self,
+        term_id: i64,
+        still_current: impl Fn() -> bool,
+    ) -> Result<serde_json::Value> {
+        if term_id <= 0 {
+            return Err(Error::Business("termId 必须是正十进制整数".into()));
+        }
+        let _guard = self.mutation_lock.lock().await;
+        if !still_current() {
+            return Err(Error::Business(SESSION_MOVED.into()));
+        }
+        let terms = self.solar_reply().await?;
+        let term = terms.terms.iter().find(|term| term.term_id == term_id);
+        let Some(term) = term else {
+            return Err(Error::Business("服务端未发现指定节令".into()));
+        };
+        if term.status != 2 {
+            return Err(Error::Business("指定节令当前不可领取".into()));
+        }
+        if !still_current() {
+            return Err(Error::Business(SESSION_MOVED.into()));
+        }
+        let request =
+            crate::proto::generated::gamepb::solartermspb::ClaimSolarTermsRequest { term_id };
+        let bytes = self
+            .gateway
+            .request(SOLAR_SERVICE, "ClaimSolarTerms", &request.encode_to_vec())
+            .await?;
+        let reply = crate::proto::generated::gamepb::solartermspb::ClaimSolarTermsReply::decode(
+            &bytes[..],
+        )?;
+        let mut payload = serde_json::json!({
+            "rewards": reply.rewards.iter().map(|item| serde_json::json!({
+                "id": item.item_id, "count": item.count, "name": item_name(item.item_id),
+            })).collect::<Vec<_>>(),
+            "term": reply.term.as_ref().map(solar_term_value),
+        });
+        match self.snapshot().await {
+            Ok(snapshot) => payload["snapshot"] = snapshot,
+            Err(_) => payload["refreshRequired"] = serde_json::json!(true),
+        }
+        Ok(payload)
     }
 
     async fn season(&self) -> Result<SeasonInfo> {
@@ -325,20 +414,34 @@ impl StellarService {
         Ok((reply, goods))
     }
 
-    async fn shop_value(
-        &self,
-        _season: &SeasonInfo,
-        activity: &SeasonActivity,
-    ) -> Result<serde_json::Value> {
+    async fn shop_value(&self, activity: &SeasonActivity) -> Result<serde_json::Value> {
         let (_reply, goods) = self.shop_goods(activity).await?;
         let ids: Vec<i64> = goods
             .iter()
             .filter_map(|goods| goods.cost.as_ref().map(|cost| cost.item_id))
             .filter(|id| *id != 0)
             .collect();
-        let balances = self.balances(&ids).await.unwrap_or_default();
-        let known = !balances.is_empty() || ids.is_empty();
-        Ok(shop_rows(activity, &goods, if known { Some(&balances) } else { None }))
+        let balances = self.balances(&ids).await.ok();
+        Ok(shop_rows(activity, &goods, balances.as_ref()))
+    }
+
+    async fn solar_terms(&self) -> Result<serde_json::Value> {
+        Ok(solar_terms_value(&self.solar_reply().await?))
+    }
+
+    async fn solar_reply(
+        &self,
+    ) -> Result<crate::proto::generated::gamepb::solartermspb::GetSolarTermsReply> {
+        let bytes = self
+            .gateway
+            .request(
+                SOLAR_SERVICE,
+                "GetSolarTerms",
+                &crate::proto::generated::gamepb::solartermspb::GetSolarTermsRequest {}
+                    .encode_to_vec(),
+            )
+            .await?;
+        Ok(crate::proto::generated::gamepb::solartermspb::GetSolarTermsReply::decode(&bytes[..])?)
     }
 
     async fn balances(&self, ids: &[i64]) -> Result<std::collections::HashMap<i64, i64>> {
@@ -356,6 +459,251 @@ impl StellarService {
         }
         Ok(totals)
     }
+
+    fn constellation_snapshot(&self, season: &SeasonInfo) -> serde_json::Value {
+        let Some(activity) = find_activity(season, CONSTELLATION_TYPE) else {
+            return serde_json::Value::Null;
+        };
+        let identity = identity_for(season, activity);
+        let saved = load_record(&self.account_id, &identity);
+        let nodes = self.nodes.lock().expect("nodes").clone();
+        constellation_value(season, &nodes, &saved)
+    }
+
+    fn remember_nodes(
+        &self,
+        season: &SeasonInfo,
+        activity: &SeasonActivity,
+        nodes: &[ConstellationNode],
+    ) {
+        let identity = identity_for(season, activity);
+        let mut opened = Vec::new();
+        let mut lit = Vec::new();
+        for node in nodes {
+            if node.node_id <= 0 {
+                continue;
+            }
+            if node.field_2 || node.field_3 {
+                opened.push(node.node_id.to_string());
+            }
+            if node.field_3 {
+                lit.push(node.node_id.to_string());
+            }
+        }
+        let incoming = ConstellationRecord {
+            season_id: identity.season_id.clone(),
+            activity_id: identity.activity_id.clone(),
+            catalog_version: identity.catalog_version,
+            confirmed_opened_node_ids: opened,
+            confirmed_lit_node_ids: lit,
+            no_claimable_days: BTreeMap::new(),
+        };
+        let _ = persist_record(&self.account_id, &identity, &incoming);
+        *self.nodes.lock().expect("nodes") = nodes.to_vec();
+    }
+
+    fn remember_no_claimable(&self, season: &SeasonInfo, activity: &SeasonActivity, day: i64) {
+        let identity = identity_for(season, activity);
+        let mut incoming = empty_record(&identity);
+        incoming.no_claimable_days.insert(
+            day.to_string(),
+            ClaimObservation {
+                observed_at: crate::utils::time::now_ms().to_string(),
+                server_time: season.server_time.to_string(),
+            },
+        );
+        let _ = persist_record(&self.account_id, &identity, &incoming);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct ConstellationRecord {
+    #[serde(rename = "seasonId")]
+    season_id: String,
+    #[serde(rename = "activityId")]
+    activity_id: String,
+    #[serde(rename = "catalogVersion")]
+    catalog_version: i64,
+    #[serde(rename = "confirmedOpenedNodeIds")]
+    confirmed_opened_node_ids: Vec<String>,
+    #[serde(rename = "confirmedLitNodeIds")]
+    confirmed_lit_node_ids: Vec<String>,
+    #[serde(rename = "noClaimableDays")]
+    no_claimable_days: BTreeMap<String, ClaimObservation>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct ClaimObservation {
+    #[serde(rename = "observedAt")]
+    observed_at: String,
+    #[serde(rename = "serverTime")]
+    server_time: String,
+}
+
+#[derive(Clone, Debug)]
+struct StateIdentity {
+    season_id: String,
+    activity_id: String,
+    catalog_version: i64,
+}
+
+fn identity_for(season: &SeasonInfo, activity: &SeasonActivity) -> StateIdentity {
+    StateIdentity {
+        season_id: season.season_id.to_string(),
+        activity_id: activity.activity_id.to_string(),
+        catalog_version: catalog().catalog_version,
+    }
+}
+
+fn record_key(identity: &StateIdentity) -> String {
+    format!("{}:{}:v{}", identity.season_id, identity.activity_id, identity.catalog_version)
+}
+
+fn empty_record(identity: &StateIdentity) -> ConstellationRecord {
+    ConstellationRecord {
+        season_id: identity.season_id.clone(),
+        activity_id: identity.activity_id.clone(),
+        catalog_version: identity.catalog_version,
+        confirmed_opened_node_ids: Vec::new(),
+        confirmed_lit_node_ids: Vec::new(),
+        no_claimable_days: BTreeMap::new(),
+    }
+}
+
+fn account_token(account_id: &str) -> String {
+    let digest = Sha256::digest(account_id.as_bytes());
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn state_path(account_id: &str) -> std::path::PathBuf {
+    let path = crate::config::paths::get_data_file(&format!(
+        "activity-center-state-{}.json",
+        account_token(account_id)
+    ));
+    #[cfg(any(test, feature = "test-isolation"))]
+    crate::config::paths::refuse_default_data_io(&path);
+    path
+}
+
+#[derive(Serialize, Deserialize)]
+struct StateFile {
+    version: i64,
+    records: BTreeMap<String, ConstellationRecord>,
+    #[serde(default, rename = "charityRecords")]
+    charity_records: serde_json::Map<String, serde_json::Value>,
+}
+
+fn load_record(account_id: &str, identity: &StateIdentity) -> ConstellationRecord {
+    let path = state_path(account_id);
+    let file = crate::infra::json_db::read_json_with_default(path, || StateFile {
+        version: 1,
+        records: BTreeMap::new(),
+        charity_records: serde_json::Map::new(),
+    });
+    if file.version != 1 {
+        return empty_record(identity);
+    }
+    file.records
+        .get(&record_key(identity))
+        .cloned()
+        .filter(|record| {
+            record.season_id == identity.season_id
+                && record.activity_id == identity.activity_id
+                && record.catalog_version == identity.catalog_version
+        })
+        .unwrap_or_else(|| empty_record(identity))
+}
+
+fn persist_record(
+    account_id: &str,
+    identity: &StateIdentity,
+    incoming: &ConstellationRecord,
+) -> Result<ConstellationRecord> {
+    let path = state_path(account_id);
+    let mut file = crate::infra::json_db::read_json_with_default(path.clone(), || StateFile {
+        version: 1,
+        records: BTreeMap::new(),
+        charity_records: serde_json::Map::new(),
+    });
+    if file.version != 1 {
+        file = StateFile {
+            version: 1,
+            records: BTreeMap::new(),
+            charity_records: file.charity_records,
+        };
+    }
+    let key = record_key(identity);
+    let previous = file.records.get(&key).cloned().unwrap_or_else(|| empty_record(identity));
+    let merged = merge_records(identity, &previous, incoming);
+    file.records.insert(key, merged.clone());
+    crate::infra::json_db::write_json_file_atomic(path, &file)
+        .map_err(|error| Error::Business(error.to_string()))?;
+    Ok(merged)
+}
+
+fn merge_records(
+    identity: &StateIdentity,
+    left: &ConstellationRecord,
+    right: &ConstellationRecord,
+) -> ConstellationRecord {
+    let mut opened = left.confirmed_opened_node_ids.clone();
+    let mut lit = left.confirmed_lit_node_ids.clone();
+    for id in right.confirmed_opened_node_ids.iter().chain(right.confirmed_lit_node_ids.iter()) {
+        if !opened.contains(id) {
+            opened.push(id.clone());
+        }
+    }
+    for id in &right.confirmed_lit_node_ids {
+        if !lit.contains(id) {
+            lit.push(id.clone());
+        }
+        if !opened.contains(id) {
+            opened.push(id.clone());
+        }
+    }
+    let mut days = left.no_claimable_days.clone();
+    for (day, observation) in &right.no_claimable_days {
+        let replace = days.get(day).is_none_or(|existing| {
+            observation.server_time.parse::<i64>().unwrap_or(0)
+                >= existing.server_time.parse::<i64>().unwrap_or(0)
+        });
+        if replace {
+            days.insert(day.clone(), observation.clone());
+        }
+    }
+    ConstellationRecord {
+        season_id: identity.season_id.clone(),
+        activity_id: identity.activity_id.clone(),
+        catalog_version: identity.catalog_version,
+        confirmed_opened_node_ids: opened,
+        confirmed_lit_node_ids: lit,
+        no_claimable_days: days,
+    }
+}
+
+fn solar_terms_value(
+    reply: &crate::proto::generated::gamepb::solartermspb::GetSolarTermsReply,
+) -> serde_json::Value {
+    serde_json::json!({
+        "serverTime": reply.server_time,
+        "terms": reply.terms.iter().map(solar_term_value).collect::<Vec<_>>(),
+    })
+}
+
+fn solar_term_value(
+    term: &crate::proto::generated::gamepb::solartermspb::SolarTermInfo,
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": term.term_id.to_string(),
+        "name": text_bytes(&term.name),
+        "statusCode": term.status.to_string(),
+        "canClaim": term.status == 2,
+        "startTime": term.begin_time,
+        "endTime": term.end_time,
+        "rewards": term.rewards.iter().map(|item| serde_json::json!({
+            "id": item.item_id, "count": item.count, "name": item_name(item.item_id),
+        })).collect::<Vec<_>>(),
+    })
 }
 
 fn find_activity(season: &SeasonInfo, type_code: i64) -> Option<&SeasonActivity> {
@@ -437,7 +785,7 @@ fn shop_rows(
             let cost_id = goods.cost.as_ref().map(|cost| cost.item_id).unwrap_or(0);
             let cost_count = goods.cost.as_ref().map(|cost| cost.count).unwrap_or(0);
             let exchangeable = cost_id != 0 && cost_count > 0;
-            let balance = balances.and_then(|map| map.get(&cost_id).copied());
+            let balance = balances.map(|map| map.get(&cost_id).copied().unwrap_or(0));
             let max = match (exchangeable, balance) {
                 (true, Some(balance)) => balance / cost_count,
                 _ => 0,
@@ -445,12 +793,14 @@ fn shop_rows(
             serde_json::json!({
                 "id": goods.goods_id.to_string(),
                 "name": text_bytes(&goods.name),
+                "category": text_bytes(&goods.category),
                 "statusCode": goods.status.to_string(),
                 "owned": goods.owned,
                 "item": goods.item.as_ref().map(|item| serde_json::json!({"id": item.item_id, "count": item.count, "name": item_name(item.item_id)})),
                 "cost": { "id": cost_id, "count": cost_count, "name": item_name(cost_id) },
                 "exchangeable": exchangeable,
                 "balanceKnown": balances.is_some(),
+                "balance": balance,
                 "maxExchangeCount": max,
             })
         })
@@ -463,16 +813,6 @@ fn shop_rows(
     })
 }
 
-fn shop_value(
-    reply: &ActivityOperateReply,
-    season: &SeasonInfo,
-    balances: &std::collections::HashMap<i64, i64>,
-) -> Option<serde_json::Value> {
-    let activity = find_activity(season, SHOP_TYPE)?;
-    let goods = reply.data.as_ref()?.catalog.as_ref()?;
-    Some(shop_rows(activity, &goods.goods, Some(balances)))
-}
-
 /// 点星写路径里解释 1034038 用的窗口。开始或现在为 0 时不把该错误当成「今日已领」。
 #[must_use]
 pub fn constellation_write_window(start: i64, end: i64, now: i64) -> bool {
@@ -482,7 +822,7 @@ pub fn constellation_write_window(start: i64, end: i64, now: i64) -> bool {
 fn constellation_value(
     season: &SeasonInfo,
     nodes: &[ConstellationNode],
-    no_claimable_day: Option<i64>,
+    saved: &ConstellationRecord,
 ) -> serde_json::Value {
     let Some(activity) = find_activity(season, CONSTELLATION_TYPE) else {
         return serde_json::Value::Null;
@@ -506,7 +846,7 @@ fn constellation_value(
         .iter()
         .map(|group| {
             let node = nodes.iter().find(|node| node.node_id == group.node_id);
-            let visual = visual_state(group.order, day, node, no_claimable_day);
+            let visual = visual_state(group, day, node, saved);
             serde_json::json!({
                 "id": group.id,
                 "nodeId": group.node_id.to_string(),
@@ -515,6 +855,7 @@ fn constellation_value(
                 "visualState": visual,
                 "rewards": group.rewards.iter().map(|reward| serde_json::json!({
                     "id": reward.item_id,
+                    "name": reward.name,
                     "count": reward.count,
                 })).collect::<Vec<_>>(),
             })
@@ -529,26 +870,33 @@ fn constellation_value(
         "endTime": activity.end_time,
         "serverTime": season.server_time,
         "currentDay": day,
-        "rules": file.groups.first().map(|_| strip_tags(&file.display_name)).unwrap_or_default(),
+        "rules": file.rules.lines.iter().map(|line| strip_tags(line)).collect::<Vec<_>>(),
         "groups": groups,
     })
 }
 
 fn visual_state(
-    order: i64,
+    group: &CatalogGroup,
     day: Option<i64>,
     node: Option<&ConstellationNode>,
-    no_claimable_day: Option<i64>,
+    saved: &ConstellationRecord,
 ) -> &'static str {
-    let lit = node.is_some_and(|node| node.field_3) || no_claimable_day == Some(order);
-    let lightable = node.is_some_and(|node| node.field_2 && !node.field_3);
-    if lit {
+    let id = group.node_id.to_string();
+    let confirmed_lit = saved.confirmed_lit_node_ids.iter().any(|saved_id| saved_id == &id);
+    let confirmed_open =
+        confirmed_lit || saved.confirmed_opened_node_ids.iter().any(|saved_id| saved_id == &id);
+    let dynamic_lit = node.is_some_and(|node| node.field_3);
+    let dynamic_open = node.is_some_and(|node| node.field_2);
+    let no_claimable = saved.no_claimable_days.contains_key(&group.order.to_string());
+    if confirmed_lit || dynamic_lit {
         "lit"
-    } else if lightable {
+    } else if no_claimable {
+        "claimedToday"
+    } else if (confirmed_open || dynamic_open) && !dynamic_lit && !confirmed_lit {
         "lightable"
-    } else if day.is_some_and(|day| order > day) {
+    } else if day.is_some_and(|day| group.order > day) {
         "locked"
-    } else if day.is_some_and(|day| order == day) {
+    } else if day.is_some_and(|day| group.order == day) {
         "claimableUnknown"
     } else {
         "unknown"
@@ -562,7 +910,8 @@ mod tests {
     use crate::network::gateway::{Gateway, GatewayConfig};
     use crate::proto::generated::corepb::{Item as CoreItem, ItemBag};
     use crate::proto::generated::gamepb::activitypb::{
-        ActivityData, ActivityItem, StarSandGoodsList,
+        ActivityData, ActivityItem, ConstellationData, ConstellationNode, ExchangeShopRequest,
+        StarSandGoods, StarSandGoodsList,
     };
     use crate::proto::generated::gamepb::seasonpb::SeasonItem;
 
@@ -634,6 +983,8 @@ mod tests {
         assert!(constellation_write_window(100, 150, 150));
         assert!(!constellation_write_window(0, 200, 150));
         assert!(!constellation_write_window(100, 150, 0));
+        assert!(!constellation_write_window(200, 300, 150));
+        assert!(!constellation_write_window(100, 150, 151));
     }
 
     #[tokio::test]
@@ -642,7 +993,10 @@ mod tests {
         let calls = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let log = Arc::clone(&calls);
         let gateway = gateway();
-        gateway.install_reply_script(move |_service, method, _body| {
+        gateway.install_reply_script(move |_service, method, body| {
+            if method == "GetSeasonInfo" || method == "ClaimBattlePassRewards" {
+                assert!(body.is_empty(), "{method}");
+            }
             log.lock().expect("log").push(method.to_owned());
             if method == "ClaimBattlePassRewards" {
                 return Ok(ClaimBattlePassRewardsReply {
@@ -665,7 +1019,7 @@ mod tests {
             Ok(GetSeasonInfoReply { season_info: Some(season(1_700_000_000, 0, 1)) }
                 .encode_to_vec())
         });
-        let value = StellarService::new(gateway).claim_pass().await.unwrap();
+        let value = StellarService::new(gateway, "acc").claim_pass().await.unwrap();
         assert_eq!(value["rewards"][0]["count"], 5);
         assert_eq!(value["refreshRequired"], true);
         assert_eq!(
@@ -690,7 +1044,7 @@ mod tests {
             Ok(GetSeasonInfoReply { season_info: Some(season(1_700_000_000, 1, 1)) }
                 .encode_to_vec())
         });
-        let service = StellarService::new(gateway);
+        let service = StellarService::new(gateway, "acc");
         assert!(service.claim_pass().await.unwrap_err().to_string().contains("没有可领取"));
         assert!(service.exchange(1, 0).await.unwrap_err().to_string().contains("数量"));
         assert!(calls
@@ -753,7 +1107,7 @@ mod tests {
             }
             _ => Err(NetworkError::Phase(method.into())),
         });
-        let service = StellarService::new(gateway);
+        let service = StellarService::new(gateway, "acc");
         assert!(service.exchange(4, 2).await.unwrap_err().to_string().contains("余额不足"));
         assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 0);
         let error = service.exchange(4, 1).await.unwrap_err();
@@ -770,7 +1124,7 @@ mod tests {
         let closed_flag = Arc::clone(&closed);
         let gateway = gateway();
         gateway.install_reply_script(move |_service, method, body| {
-            if method == "Operate" {
+            if method == "Operate" && operate_kind(body) == LIGHT {
                 count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 return Err(NetworkError::Gateway {
                     code: NOTHING_TO_CLAIM,
@@ -779,6 +1133,9 @@ mod tests {
                     error_message: String::new(),
                     client_seq: 1,
                 });
+            }
+            if method == "Operate" || method == "Bag" || method == "GetSolarTerms" {
+                return Err(NetworkError::Phase(method.into()));
             }
             let mut info = season(1_700_000_000, 0, 1);
             if closed_flag.load(std::sync::atomic::Ordering::SeqCst) {
@@ -795,11 +1152,265 @@ mod tests {
             let _ = body;
             Ok(GetSeasonInfoReply { season_info: Some(info) }.encode_to_vec())
         });
-        let service = StellarService::new(gateway);
+        let service = StellarService::new(gateway, "acc");
         let value = service.light().await.unwrap();
         assert_eq!(value["outcome"], "nothingToClaim");
         closed.store(true, std::sync::atomic::Ordering::SeqCst);
         assert!(service.light().await.is_err());
         assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn zero_balance_is_known_and_a_failed_bag_is_unknown() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let fail_bag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = Arc::clone(&fail_bag);
+        let gateway = gateway();
+        gateway.install_reply_script(move |_service, method, body| match method {
+            "GetSeasonInfo" => {
+                Ok(GetSeasonInfoReply { season_info: Some(season(1_700_000_000, 0, 1)) }
+                    .encode_to_vec())
+            }
+            "GetSolarTerms" => {
+                Ok(crate::proto::generated::gamepb::solartermspb::GetSolarTermsReply::default()
+                    .encode_to_vec())
+            }
+            "Bag" if flag.load(std::sync::atomic::Ordering::SeqCst) => {
+                Err(NetworkError::Phase("bag".into()))
+            }
+            "Bag" => Ok(BagReply { item_bag: Some(ItemBag::default()) }.encode_to_vec()),
+            "Operate" if operate_kind(body) == QUERY_SHOP => Ok(goods(3).encode_to_vec()),
+            _ => Err(NetworkError::Phase(method.into())),
+        });
+        let service = StellarService::new(gateway, "acc");
+        let known = service.snapshot().await.unwrap();
+        assert_eq!(known["shop"]["goods"][0]["balanceKnown"], true);
+        assert_eq!(known["shop"]["goods"][0]["maxExchangeCount"], 0);
+        fail_bag.store(true, std::sync::atomic::Ordering::SeqCst);
+        let unknown = service.snapshot().await.unwrap();
+        assert_eq!(unknown["shop"]["goods"][0]["balanceKnown"], false);
+    }
+
+    #[tokio::test]
+    async fn solar_claim_sends_term_id_only_when_status_is_two() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let bodies = Arc::new(std::sync::Mutex::new(Vec::<Vec<u8>>::new()));
+        let log = Arc::clone(&bodies);
+        let gateway = gateway();
+        gateway.install_reply_script(move |_service, method, body| {
+            if method == "ClaimSolarTerms" {
+                log.lock().expect("log").push(body.to_vec());
+                return Ok(crate::proto::generated::gamepb::solartermspb::ClaimSolarTermsReply {
+                    rewards: vec![crate::proto::generated::gamepb::solartermspb::SolarTermReward {
+                        item_id: 1,
+                        count: 2,
+                    }],
+                    ..Default::default()
+                }
+                .encode_to_vec());
+            }
+            if method == "GetSolarTerms" {
+                return Ok(crate::proto::generated::gamepb::solartermspb::GetSolarTermsReply {
+                    terms: vec![crate::proto::generated::gamepb::solartermspb::SolarTermInfo {
+                        term_id: 8,
+                        status: 2,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }
+                .encode_to_vec());
+            }
+            Ok(GetSeasonInfoReply { season_info: Some(season(1_700_000_000, 0, 1)) }
+                .encode_to_vec())
+        });
+        let service = StellarService::new(gateway, "solar");
+        assert!(service.claim_solar(9).await.is_err());
+        assert!(bodies.lock().expect("log").is_empty());
+        service.claim_solar(8).await.unwrap();
+        let request =
+            crate::proto::generated::gamepb::solartermspb::ClaimSolarTermsRequest::decode(
+                bodies.lock().expect("log")[0].as_slice(),
+            )
+            .unwrap();
+        assert_eq!(request.term_id, 8);
+    }
+
+    #[test]
+    fn confirmed_true_survives_a_later_false_and_stays_on_that_account() {
+        let data = crate::config::paths::TestDataDir::enter();
+        let identity = StateIdentity {
+            season_id: "7".into(),
+            activity_id: "2026072701".into(),
+            catalog_version: 1,
+        };
+        let mut incoming = empty_record(&identity);
+        incoming.confirmed_lit_node_ids.push("1".into());
+        persist_record("alpha", &identity, &incoming).unwrap();
+        let false_reply = empty_record(&identity);
+        let merged = persist_record("alpha", &identity, &false_reply).unwrap();
+        assert!(merged.confirmed_lit_node_ids.iter().any(|id| id == "1"));
+        assert!(load_record("beta", &identity).confirmed_lit_node_ids.is_empty());
+        let other = StateIdentity { season_id: "8".into(), ..identity.clone() };
+        assert!(load_record("alpha", &other).confirmed_lit_node_ids.is_empty());
+        assert!(data.path().read_dir().unwrap().next().is_some());
+    }
+
+    fn lit_reply(lit: bool) -> Vec<u8> {
+        ActivityOperateReply {
+            activity_id: 2_026_072_701,
+            operate_type: LIGHT,
+            data: Some(ActivityData {
+                constellation: Some(ConstellationData {
+                    nodes: vec![ConstellationNode {
+                        node_id: 1,
+                        field_2: false,
+                        field_3: lit,
+                        ..ConstellationNode::default()
+                    }],
+                    ..ConstellationData::default()
+                }),
+                ..ActivityData::default()
+            }),
+            ..ActivityOperateReply::default()
+        }
+        .encode_to_vec()
+    }
+
+    #[tokio::test]
+    async fn a_later_false_reply_does_not_erase_a_confirmed_true() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let lights = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = Arc::clone(&lights);
+        let gateway = gateway();
+        gateway.install_reply_script(move |_service, method, body| {
+            if method == "Operate" && operate_kind(body) == LIGHT {
+                let seen = count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                return Ok(lit_reply(seen == 0));
+            }
+            if method == "GetSeasonInfo" {
+                return Ok(GetSeasonInfoReply { season_info: Some(season(1_700_000_000, 0, 1)) }
+                    .encode_to_vec());
+            }
+            Err(NetworkError::Phase(method.into()))
+        });
+        let first = StellarService::new(Arc::clone(&gateway), "alpha");
+        first.light().await.unwrap();
+        first.light().await.unwrap();
+        let second = StellarService::new(gateway, "alpha");
+        let snapshot = second.snapshot().await.unwrap();
+        assert_eq!(snapshot["constellation"]["groups"][0]["visualState"], "lit");
+        assert_eq!(snapshot["constellation"]["groups"][0]["name"], "角宿");
+        assert!(snapshot["constellation"]["rules"][1].as_str().unwrap().contains("星宿轮转"));
+        assert_eq!(lights.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn exchange_refreshes_the_balance_read_after_the_write() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = Arc::clone(&writes);
+        let gateway = gateway();
+        gateway.install_reply_script(move |_service, method, body| match method {
+            "GetSeasonInfo" => {
+                Ok(GetSeasonInfoReply { season_info: Some(season(1_700_000_000, 0, 1)) }
+                    .encode_to_vec())
+            }
+            "Bag" => {
+                let balance =
+                    if count.load(std::sync::atomic::Ordering::SeqCst) > 0 { 4 } else { 10 };
+                Ok(BagReply {
+                    item_bag: Some(ItemBag {
+                        items: vec![CoreItem { id: 3, count: balance, ..CoreItem::default() }],
+                        ..ItemBag::default()
+                    }),
+                }
+                .encode_to_vec())
+            }
+            "Operate" if operate_kind(body) == QUERY_SHOP => {
+                let mut reply = goods(3);
+                reply.data.as_mut().unwrap().catalog.as_mut().unwrap().goods.push(StarSandGoods {
+                    goods_id: 5,
+                    name: "乙".as_bytes().to_vec().into(),
+                    cost: Some(ActivityItem { item_id: 3, count: 4 }),
+                    ..StarSandGoods::default()
+                });
+                Ok(reply.encode_to_vec())
+            }
+            "Operate" if operate_kind(body) == EXCHANGE_SHOP => {
+                let request = ExchangeShopRequest::decode(body).unwrap();
+                assert_eq!(request.activity_id, 900);
+                assert_eq!(request.exchange_shop_operate.as_ref().unwrap().goods_id, 4);
+                assert_eq!(request.exchange_shop_operate.as_ref().unwrap().count, 2);
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(ActivityOperateReply {
+                    activity_id: 900,
+                    operate_type: EXCHANGE_SHOP,
+                    ..ActivityOperateReply::default()
+                }
+                .encode_to_vec())
+            }
+            "GetSolarTerms" => {
+                Ok(crate::proto::generated::gamepb::solartermspb::GetSolarTermsReply::default()
+                    .encode_to_vec())
+            }
+            _ => Err(NetworkError::Phase(method.into())),
+        });
+        let value = StellarService::new(gateway, "acc").exchange(4, 2).await.unwrap();
+        assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(value["snapshot"]["shop"]["goods"].as_array().unwrap().len(), 2);
+        assert_eq!(value["snapshot"]["shop"]["goods"][0]["balance"], 4);
+        assert_eq!(value["totalCost"], 6);
+    }
+
+    #[tokio::test]
+    async fn known_code_follows_each_time_bound_and_still_sends_once() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let mode = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let selected = Arc::clone(&mode);
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = Arc::clone(&writes);
+        let gateway = gateway();
+        gateway.install_reply_script(move |_service, method, body| {
+            if method == "Operate" && operate_kind(body) == LIGHT {
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                return Err(NetworkError::Gateway {
+                    code: NOTHING_TO_CLAIM,
+                    service_name: ACTIVITY_SERVICE.into(),
+                    method_name: "Operate".into(),
+                    error_message: String::new(),
+                    client_seq: 1,
+                });
+            }
+            if method == "GetSeasonInfo" {
+                let (begin, end, now) = match selected.load(std::sync::atomic::Ordering::SeqCst) {
+                    0 => (0, 200, 100),
+                    1 => (200, 300, 150),
+                    2 => (100, 0, 150),
+                    3 => (100, 150, 151),
+                    _ => (100, 150, 150),
+                };
+                let mut info = season(now, 0, 1);
+                let activity = info
+                    .activities
+                    .iter_mut()
+                    .find(|activity| activity.r#type == CONSTELLATION_TYPE)
+                    .unwrap();
+                activity.begin_time = begin;
+                activity.end_time = end;
+                return Ok(GetSeasonInfoReply { season_info: Some(info) }.encode_to_vec());
+            }
+            Err(NetworkError::Phase(method.into()))
+        });
+        let service = StellarService::new(gateway, "bounds");
+        assert!(service.light().await.is_err());
+        mode.store(1, std::sync::atomic::Ordering::SeqCst);
+        assert!(service.light().await.is_err());
+        mode.store(2, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(service.light().await.unwrap()["outcome"], "nothingToClaim");
+        mode.store(3, std::sync::atomic::Ordering::SeqCst);
+        assert!(service.light().await.is_err());
+        mode.store(4, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(service.light().await.unwrap()["outcome"], "nothingToClaim");
+        assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 5);
     }
 }
