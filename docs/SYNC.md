@@ -3898,3 +3898,7 @@ bot 本轮 13 个提交**玩法层零变化**（活动/商城/日常自动化均
 - NSH 账号页可以保存开关、地址和签名。开启后能取二维码、看状态、取消，并在确认后把 code 交给现有 `upsert_account`，平台是 qq。取消或换代后先取到的 code 不会入库。
 - 待验：真实 NapCat 服务、真实 QQ 扫码，以及窗口上的二维码和状态。没有部署或注册 NapCat。
 - 补验：`QqMiniappCode` 和 NapCat 回包的 Debug 不再打印 code；回包体只留长度。`store_code` 在代次不一致时返回 false，并且不会把合成 code 写入账号表。成功确认仍会进入 `upsert_account`，该路径会启动 worker，本轮没有执行。
+
+### 2026-11-18 — Windows 租约锁不再挡住唤醒元数据
+
+`File::try_lock` 在 Windows 上锁住 `engine.lock` 的全部字节。同一进程或另一进程再用新句柄读这个文件会得到 OS 错误 33，`wake_existing_owner` 因此返回空。互斥仍是这把锁。端口、令牌和 owner 改写到未加锁的 `engine.wake`，释放租约时先删这个文件再解锁。坏掉或空的元数据不会唤醒。不同临时目录可以同时持有租约。非 Windows 的文件锁行为本机没有交叉编译，未验。

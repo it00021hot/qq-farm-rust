@@ -1,7 +1,7 @@
 //! 跨桌面宿主的运行时互斥锁。
 
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,6 +12,9 @@ use std::time::Duration;
 use thiserror::Error;
 
 const WAKE_TIMEOUT: Duration = Duration::from_secs(2);
+/// Windows 对 `engine.lock` 的排他锁会让其他句柄读该文件时得到错误 33。
+/// 唤醒所需的端口、令牌和 owner 放在未加锁的旁路文件里。
+const WAKE_FILE_NAME: &str = "engine.wake";
 
 #[derive(Debug, Error)]
 pub enum EngineLeaseError {
@@ -25,6 +28,7 @@ pub enum EngineLeaseError {
 pub struct EngineLease {
     _file: File,
     path: PathBuf,
+    wake_path: PathBuf,
     wake_receiver: Mutex<Option<mpsc::Receiver<()>>>,
     wake_shutdown: Arc<AtomicBool>,
     wake_thread: Option<JoinHandle<()>>,
@@ -39,7 +43,7 @@ impl EngineLease {
     pub fn acquire_for(data_dir: &Path, owner: &str) -> Result<Self, EngineLeaseError> {
         std::fs::create_dir_all(data_dir)?;
         let path = data_dir.join("engine.lock");
-        let mut file =
+        let file =
             OpenOptions::new().create(true).truncate(false).read(true).write(true).open(&path)?;
         match file.try_lock() {
             Ok(()) => {
@@ -47,10 +51,8 @@ impl EngineLease {
                 listener.set_nonblocking(true)?;
                 let port = listener.local_addr()?.port();
                 let token = uuid::Uuid::new_v4().to_string();
-                file.set_len(0)?;
-                file.seek(SeekFrom::Start(0))?;
-                writeln!(&file, "{port} {token} {owner}")?;
-                file.sync_all()?;
+                let wake_path = wake_metadata_path(data_dir);
+                std::fs::write(&wake_path, format!("{port} {token} {owner}\n"))?;
 
                 let (wake_sender, wake_receiver) = mpsc::channel();
                 let wake_shutdown = Arc::new(AtomicBool::new(false));
@@ -78,6 +80,7 @@ impl EngineLease {
                 Ok(Self {
                     _file: file,
                     path,
+                    wake_path,
                     wake_receiver: Mutex::new(Some(wake_receiver)),
                     wake_shutdown,
                     wake_thread: Some(wake_thread),
@@ -106,7 +109,7 @@ impl EngineLease {
 
     /// Wake the owning host and return its owner identifier when successful.
     pub fn wake_existing_owner(data_dir: &Path) -> Option<String> {
-        let Ok(metadata) = std::fs::read_to_string(data_dir.join("engine.lock")) else {
+        let Ok(metadata) = std::fs::read_to_string(wake_metadata_path(data_dir)) else {
             return None;
         };
         let mut parts = metadata.split_whitespace();
@@ -134,6 +137,10 @@ impl EngineLease {
     }
 }
 
+fn wake_metadata_path(data_dir: &Path) -> PathBuf {
+    data_dir.join(WAKE_FILE_NAME)
+}
+
 /// 应答单个唤醒请求：token 匹配则通知宿主进程并回 `ok`，否则回 `no`。
 fn handle_wake_connection(mut stream: TcpStream, token: &str, wake_sender: &mpsc::Sender<()>) {
     let _ = stream.set_read_timeout(Some(WAKE_TIMEOUT));
@@ -146,6 +153,8 @@ fn handle_wake_connection(mut stream: TcpStream, token: &str, wake_sender: &mpsc
 
 impl Drop for EngineLease {
     fn drop(&mut self) {
+        // 先摘掉唤醒元数据，锁还在，避免下一个进程刚接手就被删掉新文件。
+        let _ = std::fs::remove_file(&self.wake_path);
         self.wake_shutdown.store(true, Ordering::Relaxed);
         if let Some(thread) = self.wake_thread.take() {
             let _ = thread.join();
@@ -166,7 +175,7 @@ mod tests {
         assert!(matches!(EngineLease::acquire(&dir), Err(EngineLeaseError::AlreadyRunning)));
         let receiver_guard = first.wake_receiver.lock().expect("wake receiver lock");
         let receiver = receiver_guard.as_ref().expect("wake receiver");
-        let metadata = std::fs::read_to_string(dir.join("engine.lock")).expect("lease metadata");
+        let metadata = std::fs::read_to_string(wake_metadata_path(&dir)).expect("lease metadata");
         let port = metadata.split_whitespace().next().expect("port").parse::<u16>().unwrap();
         let mut invalid = TcpStream::connect(("127.0.0.1", port)).expect("wake endpoint");
         invalid.write_all(b"invalid-token").expect("send invalid token");
@@ -208,6 +217,33 @@ mod tests {
 
         drop(gpui);
         std::fs::remove_dir_all(dir).expect("remove test directory");
+    }
+
+    #[test]
+    fn separate_data_directories_do_not_block_each_other() {
+        let left =
+            std::env::temp_dir().join(format!("qq-farm-lease-left-{}", uuid::Uuid::new_v4()));
+        let right =
+            std::env::temp_dir().join(format!("qq-farm-lease-right-{}", uuid::Uuid::new_v4()));
+        let left_lease = EngineLease::acquire_for(&left, "left").expect("left lease");
+        let right_lease = EngineLease::acquire_for(&right, "right").expect("right lease");
+        assert_eq!(EngineLease::wake_existing_owner(&left).as_deref(), Some("left"));
+        assert_eq!(EngineLease::wake_existing_owner(&right).as_deref(), Some("right"));
+        drop(left_lease);
+        drop(right_lease);
+        std::fs::remove_dir_all(left).expect("remove left");
+        std::fs::remove_dir_all(right).expect("remove right");
+    }
+
+    #[test]
+    fn malformed_lease_metadata_does_not_wake() {
+        let dir = std::env::temp_dir().join(format!("qq-farm-lease-bad-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("create directory");
+        std::fs::write(wake_metadata_path(&dir), "not a lease").expect("write bad metadata");
+        assert!(EngineLease::wake_existing_owner(&dir).is_none());
+        std::fs::write(wake_metadata_path(&dir), "").expect("write empty metadata");
+        assert!(EngineLease::wake_existing_owner(&dir).is_none());
+        std::fs::remove_dir_all(dir).expect("remove directory");
     }
 
     #[test]
