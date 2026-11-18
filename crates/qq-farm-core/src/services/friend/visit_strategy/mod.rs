@@ -284,6 +284,7 @@ mod tests {
 
     #[test]
     fn blacklist_add_and_remove() {
+        let _data = crate::config::paths::TestDataDir::enter();
         let aid = "test-bl-add-remove";
         crate::models::store::account_config::remove_account_config(aid);
         add_friend_to_blacklist(aid, 100, "alice", "test");
@@ -311,6 +312,7 @@ mod tests {
 
     #[test]
     fn handle_friend_enter_error_classifies() {
+        let _data = crate::config::paths::TestDataDir::enter();
         let aid = "test-bl-enter";
         crate::models::store::account_config::remove_account_config(aid);
         let k = handle_friend_enter_error(aid, 200, "bob", "code=1002003");
@@ -407,6 +409,7 @@ mod tests {
 
     #[test]
     fn plant_blacklist_per_account() {
+        let _data = crate::config::paths::TestDataDir::enter();
         let a1 = "vs_plant_bl_acc1";
         let a2 = "vs_plant_bl_acc2";
         let a3 = "vs_plant_bl_acc3";
@@ -427,6 +430,7 @@ mod tests {
 
     #[test]
     fn account_friend_blacklist_per_account() {
+        let _data = crate::config::paths::TestDataDir::enter();
         let a1 = "vs_friend_bl_acc1";
         let a2 = "vs_friend_bl_acc2";
         let a3 = "vs_friend_bl_acc3";

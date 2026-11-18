@@ -265,20 +265,20 @@ mod tests {
     use super::*;
     use serial_test::serial;
 
-    fn reset() {
+    fn reset() -> crate::config::paths::TestDataDir {
+        let data = crate::config::paths::TestDataDir::enter();
         RECORDS.write().clear();
         *ENABLED.write() = true;
         let _ = fs::remove_file(card_claim_file());
-        // 卡库存存在 users 的 cards.json；一并清理，避免其它用例创建的卡密
-        // 持久化后让「库存不足」断言失效（claim 前会重新 load_cards）
         let _ = fs::remove_file(crate::models::user_store::users::cards_file());
+        data
     }
 
     #[test]
     #[serial(user_store)]
     #[serial(farm_data_dir)]
     fn default_enabled() {
-        reset();
+        let _data = reset();
         assert!(get_card_claim_status());
     }
 
@@ -286,7 +286,7 @@ mod tests {
     #[serial(user_store)]
     #[serial(farm_data_dir)]
     fn set_status() {
-        reset();
+        let _data = reset();
         set_card_claim_status(false);
         assert!(!get_card_claim_status());
         set_card_claim_status(true);
@@ -297,7 +297,7 @@ mod tests {
     #[serial(user_store)]
     #[serial(farm_data_dir)]
     fn claim_blocked_when_disabled() {
-        reset();
+        let _data = reset();
         set_card_claim_status(false);
         let r = claim_card_by_ua("test-ua", None);
         assert!(r.is_err());
@@ -308,7 +308,7 @@ mod tests {
     #[serial(user_store)]
     #[serial(farm_data_dir)]
     fn claim_no_cards_available() {
-        reset();
+        let _data = reset();
         let r = claim_card_by_ua("test-ua", None);
         assert!(r.is_err());
         assert!(r.unwrap_err().contains("库存不足"));
@@ -318,7 +318,7 @@ mod tests {
     #[serial(user_store)]
     #[serial(farm_data_dir)]
     fn claim_success() {
-        reset();
+        let _data = reset();
         let _c = users::create_card("test", 30, "time");
         let r = claim_card_by_ua("test-ua", Some("alice"));
         assert!(r.is_ok(), "error = {:?}", r.err());
@@ -329,7 +329,7 @@ mod tests {
     #[serial(user_store)]
     #[serial(farm_data_dir)]
     fn claim_rate_limit_24h() {
-        reset();
+        let _data = reset();
         let _c1 = users::create_card("test", 30, "time");
         let _c2 = users::create_card("test", 30, "time");
         let r1 = claim_card_by_ua("same-ua", None);
@@ -342,7 +342,7 @@ mod tests {
     #[serial(user_store)]
     #[serial(farm_data_dir)]
     fn check_ua_limit_allows_first_time() {
-        reset();
+        let _data = reset();
         let r = check_ua_claim_limit("new-ua");
         assert!(r.allowed);
     }
@@ -351,7 +351,7 @@ mod tests {
     #[serial(user_store)]
     #[serial(farm_data_dir)]
     fn clear_expired_keeps_recent() {
-        reset();
+        let _data = reset();
         let _c = users::create_card("test", 30, "time");
         claim_card_by_ua("u1", None).ok();
         claim_card_by_ua("u2", None).ok();

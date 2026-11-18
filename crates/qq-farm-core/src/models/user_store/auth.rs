@@ -578,7 +578,7 @@ mod tests {
     #[serial(user_store)]
     #[serial(farm_data_dir)]
     fn rate_limit_first_call_allowed() {
-        // 清空状态
+        let _data = crate::config::paths::TestDataDir::enter();
         LOGIN_ATTEMPTS.write().clear();
         let _ = fs::remove_file(login_attempts_file());
         let r = check_rate_limit("127.0.0.1");
@@ -589,6 +589,7 @@ mod tests {
     #[serial(user_store)]
     #[serial(farm_data_dir)]
     fn rate_limit_blocks_after_max() {
+        let _data = crate::config::paths::TestDataDir::enter();
         LOGIN_ATTEMPTS.write().clear();
         let _ = fs::remove_file(login_attempts_file());
         for _ in 0..MAX_ATTEMPTS_PER_IP {
@@ -604,6 +605,7 @@ mod tests {
     #[serial(user_store)]
     #[serial(farm_data_dir)]
     fn account_lockout_after_max_attempts() {
+        let _data = crate::config::paths::TestDataDir::enter();
         LOGIN_ATTEMPTS.write().clear();
         let _ = fs::remove_file(login_attempts_file());
         for _ in 0..MAX_LOGIN_ATTEMPTS {
@@ -617,6 +619,7 @@ mod tests {
     #[serial(user_store)]
     #[serial(farm_data_dir)]
     fn clear_failed_attempts_unlocks() {
+        let _data = crate::config::paths::TestDataDir::enter();
         LOGIN_ATTEMPTS.write().clear();
         let _ = fs::remove_file(login_attempts_file());
         for _ in 0..MAX_LOGIN_ATTEMPTS {
@@ -631,6 +634,7 @@ mod tests {
     #[serial(user_store)]
     #[serial(farm_data_dir)]
     fn add_login_log_keeps_recent() {
+        let _data = crate::config::paths::TestDataDir::enter();
         LOGIN_LOGS.write().clear();
         let _ = fs::remove_file(login_logs_file());
         for i in 0..5 {

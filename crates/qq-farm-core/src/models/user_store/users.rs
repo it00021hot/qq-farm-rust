@@ -781,19 +781,20 @@ mod tests {
     use super::*;
     use serial_test::serial;
 
-    fn reset() {
+    fn reset() -> crate::config::paths::TestDataDir {
+        let data = crate::config::paths::TestDataDir::enter();
         *USERS.write() = Vec::new();
         *CARDS.write() = Vec::new();
-        // 清理磁盘文件，避免测试间状态泄漏
         let _ = fs::remove_file(users_file());
         let _ = fs::remove_file(cards_file());
+        data
     }
 
     #[test]
     #[serial(user_store)]
     #[serial(farm_data_dir)]
     fn register_user_validates_username() {
-        reset();
+        let _data = reset();
         let r = register_user("ab", "pass1234");
         assert!(r.is_err());
         assert!(r.unwrap_err().contains("长度"));
@@ -803,7 +804,7 @@ mod tests {
     #[serial(user_store)]
     #[serial(farm_data_dir)]
     fn register_user_validates_username_chars() {
-        reset();
+        let _data = reset();
         let r = register_user("ab-cd", "pass1234");
         assert!(r.is_err());
     }
@@ -812,7 +813,7 @@ mod tests {
     #[serial(user_store)]
     #[serial(farm_data_dir)]
     fn register_user_success() {
-        reset();
+        let _data = reset();
         let r = register_user("alice", "Pass1234");
         assert!(r.is_ok(), "error = {:?}", r.err());
         assert_eq!(r.as_ref().unwrap().account_limit, DEFAULT_ACCOUNT_LIMIT);
@@ -824,7 +825,7 @@ mod tests {
     #[serial(user_store)]
     #[serial(farm_data_dir)]
     fn register_user_duplicate_name() {
-        reset();
+        let _data = reset();
         register_user("alice", "Pass1234").ok();
         let r = register_user("alice", "Pass1234");
         assert!(r.is_err());
@@ -834,7 +835,7 @@ mod tests {
     #[serial(user_store)]
     #[serial(farm_data_dir)]
     fn validate_user_wrong_password() {
-        reset();
+        let _data = reset();
         register_user("alice", "Pass1234").ok();
         let r = validate_user("alice", "WrongPass", "127.0.0.1");
         assert_eq!(r.error.as_deref(), Some("invalid_credentials"));
@@ -844,7 +845,7 @@ mod tests {
     #[serial(user_store)]
     #[serial(farm_data_dir)]
     fn validate_user_success() {
-        reset();
+        let _data = reset();
         register_user("alice", "Pass1234").ok();
         let r = validate_user("alice", "Pass1234", "127.0.0.1");
         assert!(r.error.is_none());
@@ -855,7 +856,7 @@ mod tests {
     #[serial(user_store)]
     #[serial(farm_data_dir)]
     fn renew_user_quota() {
-        reset();
+        let _data = reset();
         register_user("alice", "Pass1234").ok();
         let quota_card = create_card("q", 3, "quota");
         let r = renew_user("alice", &quota_card.code);
@@ -867,7 +868,7 @@ mod tests {
     #[serial(user_store)]
     #[serial(farm_data_dir)]
     fn renew_user_time_extends() {
-        reset();
+        let _data = reset();
         register_user("alice", "Pass1234").ok();
         let c1 = create_card("c1", 30, "time");
         renew_user("alice", &c1.code).ok();
@@ -880,7 +881,7 @@ mod tests {
     #[serial(user_store)]
     #[serial(farm_data_dir)]
     fn renew_user_time_permanent() {
-        reset();
+        let _data = reset();
         register_user("alice", "Pass1234").ok();
         let c1 = create_card("c1", 30, "time");
         renew_user("alice", &c1.code).ok();
@@ -895,7 +896,7 @@ mod tests {
     #[serial(user_store)]
     #[serial(farm_data_dir)]
     fn test_delete_user() {
-        reset();
+        let _data = reset();
         register_user("alice", "Pass1234").ok();
         register_user("bob", "Pass1234").ok();
         assert_eq!(get_all_users().len(), 2);
@@ -907,7 +908,7 @@ mod tests {
     #[serial(user_store)]
     #[serial(farm_data_dir)]
     fn test_change_password() {
-        reset();
+        let _data = reset();
         register_user("alice", "Pass1234").ok();
         assert!(super::change_password("alice", "Pass1234", "NewPass56").is_ok());
         // 旧密码失败
@@ -922,7 +923,7 @@ mod tests {
     #[serial(user_store)]
     #[serial(farm_data_dir)]
     fn create_and_delete_card() {
-        reset();
+        let _data = reset();
         let c = create_card("test", 30, "time");
         assert!(!c.code.is_empty());
         assert_eq!(c.code.len(), 16);
@@ -934,7 +935,7 @@ mod tests {
     #[serial(user_store)]
     #[serial(farm_data_dir)]
     fn create_cards_batch_limit() {
-        reset();
+        let _data = reset();
         let cards = create_cards_batch("batch", 7, 50, "time");
         assert_eq!(cards.len(), 50);
         assert!(cards.iter().all(|c| c.days == 7));
@@ -944,7 +945,7 @@ mod tests {
     #[serial(user_store)]
     #[serial(farm_data_dir)]
     fn update_card_fields() {
-        reset();
+        let _data = reset();
         let c = create_card("test", 30, "time");
         let updated = update_card(&c.code, Some(false), Some(60), Some("new desc".to_string()));
         let u = updated.expect("update");
@@ -957,7 +958,7 @@ mod tests {
     #[serial(user_store)]
     #[serial(farm_data_dir)]
     fn test_delete_cards_batch() {
-        reset();
+        let _data = reset();
         let c1 = create_card("a", 30, "time");
         let c2 = create_card("b", 30, "time");
         let _c3 = create_card("c", 30, "time");

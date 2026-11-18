@@ -320,29 +320,8 @@ fn now_ms_i64() -> i64 {
 mod tests {
     use super::*;
 
-    /// 临时 FARM_DATA_DIR 隔离数据目录；Drop 恢复环境变量。
-    /// `#[serial(farm_data_dir)]` 与仓库内其它数据目录测试互斥。
-    struct DataDirGuard(Option<String>);
-    impl Drop for DataDirGuard {
-        fn drop(&mut self) {
-            match self.0.clone() {
-                Some(v) => std::env::set_var("FARM_DATA_DIR", v),
-                None => std::env::remove_var("FARM_DATA_DIR"),
-            }
-        }
-    }
-
-    fn temp_data_dir() -> DataDirGuard {
-        let tmp = std::env::temp_dir().join(format!(
-            "qq-farm-pet-cache-{}-{}",
-            std::process::id(),
-            crate::services::friend::visit_strategy::now_ms()
-        ));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).expect("mkdir");
-        let prev = std::env::var("FARM_DATA_DIR").ok();
-        std::env::set_var("FARM_DATA_DIR", &tmp);
-        DataDirGuard(prev)
+    fn temp_data_dir() -> crate::config::paths::TestDataDir {
+        crate::config::paths::TestDataDir::enter()
     }
 
     /// 账号名加原子序号：仅靠毫秒时间戳时，同组串行测试背靠背执行可能落在

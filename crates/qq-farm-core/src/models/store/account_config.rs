@@ -777,8 +777,10 @@ mod tests {
     use super::*;
     use serial_test::serial;
 
-    fn reset() {
+    fn reset() -> crate::config::paths::TestDataDir {
+        let data = crate::config::paths::TestDataDir::enter();
         set_state(AccountConfigState::new());
+        data
     }
 
     #[test]
@@ -840,7 +842,7 @@ mod tests {
     #[serial(account_config)]
     #[serial(farm_data_dir)]
     fn get_snapshot_no_id_returns_fallback() {
-        reset();
+        let _data = reset();
         // FARM_ACCOUNT_ID not set
         let s = get_account_config_snapshot(None);
         assert_eq!(s.planting_strategy, PlantingStrategy::BagPriority);
@@ -850,7 +852,7 @@ mod tests {
     #[serial(account_config)]
     #[serial(farm_data_dir)]
     fn set_then_get_roundtrip() {
-        reset();
+        let _data = reset();
         let mut cfg = default_account_config();
         cfg.preferred_seed_id = 12345;
         cfg.planting_strategy = PlantingStrategy::MaxExp;
@@ -865,7 +867,7 @@ mod tests {
     #[serial(account_config)]
     #[serial(farm_data_dir)]
     fn ensure_creates_default() {
-        reset();
+        let _data = reset();
         let cfg = ensure_account_config("acc2").expect("ensure");
         assert_eq!(cfg.planting_strategy, PlantingStrategy::BagPriority);
         // 第二次调用应返回已存在的
@@ -877,7 +879,7 @@ mod tests {
     #[serial(account_config)]
     #[serial(farm_data_dir)]
     fn known_friend_gids_with_file_cache_fallback() {
-        reset();
+        let _data = reset();
         let aid = "test_known_gids_acc";
         // 写文件缓存
         crate::models::store::gid_cache::write_cache(aid, &[100, 200]).unwrap();
@@ -891,7 +893,7 @@ mod tests {
     #[serial(account_config)]
     #[serial(farm_data_dir)]
     fn add_to_blacklist_idempotent() {
-        reset();
+        let _data = reset();
         let aid = "test_blacklist_acc";
         remove_account_config(aid); // 先清
         assert!(add_friend_to_blacklist(aid, 100));
@@ -905,7 +907,7 @@ mod tests {
     #[serial(account_config)]
     #[serial(farm_data_dir)]
     fn apply_config_snapshot_overrides_planting() {
-        reset();
+        let _data = reset();
         let mut s = serde_json::Map::new();
         s.insert("plantingStrategy".to_string(), serde_json::json!("max_profit"));
         s.insert("preferredSeedId".to_string(), serde_json::json!(7777));
@@ -919,7 +921,7 @@ mod tests {
     #[serial(account_config)]
     #[serial(farm_data_dir)]
     fn apply_config_snapshot_clamp_intervals() {
-        reset();
+        let _data = reset();
         let mut s = serde_json::Map::new();
         let mut intervals = serde_json::Map::new();
         intervals.insert("farm".to_string(), serde_json::json!(0));
@@ -936,7 +938,7 @@ mod tests {
     #[serial(account_config)]
     #[serial(farm_data_dir)]
     fn bag_seed_multi_land_reservation_round_trips() {
-        reset();
+        let _data = reset();
         let fresh = get_account_config_snapshot(Some("acc_multi"));
         assert!(!fresh.bag_seed_multi_land_reservation_enabled, "新配置默认关闭（opt-in）");
 

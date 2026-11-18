@@ -582,39 +582,15 @@ fn now_ms() -> i64 {
 mod tests {
     use super::*;
     use parking_lot::Mutex;
-    use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// 隔离会落盘的 global_config 写操作，避免覆盖真实 `store.json`。
     struct TempFarmData {
-        prev: Option<String>,
-        dir: PathBuf,
+        _dir: crate::config::paths::TestDataDir,
     }
 
     impl TempFarmData {
         fn enter() -> Self {
-            let dir = std::env::temp_dir().join(format!(
-                "qq-farm-relogin-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0)
-            ));
-            let _ = std::fs::create_dir_all(&dir);
-            let prev = std::env::var("FARM_DATA_DIR").ok();
-            std::env::set_var("FARM_DATA_DIR", &dir);
-            Self { prev, dir }
-        }
-    }
-
-    impl Drop for TempFarmData {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.dir);
-            match &self.prev {
-                Some(v) => std::env::set_var("FARM_DATA_DIR", v),
-                None => std::env::remove_var("FARM_DATA_DIR"),
-            }
+            Self { _dir: crate::config::paths::TestDataDir::enter() }
         }
     }
 

@@ -1307,9 +1307,14 @@ pub fn load_fruits_config() -> Vec<PlantFruit> {
 mod tests {
     use super::*;
 
+    fn isolated_config() -> GameConfig {
+        let _data = crate::config::paths::TestDataDir::enter();
+        reload_for_test()
+    }
+
     #[test]
     fn loads_all_data() {
-        let gc = reload_for_test();
+        let gc = isolated_config();
         assert!(!gc.get_all_plants().is_empty());
         assert_eq!(gc.get_plant_by_id(1020381).expect("plant").name, "鸡蛋花");
         assert!(!gc.get_all_items().is_empty());
@@ -1343,7 +1348,7 @@ mod tests {
 
     #[test]
     fn embedded_buff_cfg_yields_non_empty_upgrade_buffs() {
-        let gc = reload_for_test();
+        let gc = isolated_config();
         assert!(
             !gc.illustrated_buffs().is_empty(),
             "内嵌 BuffCfg.json 必须能整表解析出超变升级 buff"
@@ -1353,7 +1358,7 @@ mod tests {
 
     #[test]
     fn get_plant_by_id_works() {
-        let gc = reload_for_test();
+        let gc = isolated_config();
         // Plant.json 第一条 id=2020002 (白萝卜)
         let plant = gc.get_plant_by_id(2020002).expect("plant 2020002");
         assert_eq!(plant.name, "白萝卜");
@@ -1363,14 +1368,14 @@ mod tests {
 
     #[test]
     fn get_plant_by_seed_id_works() {
-        let gc = reload_for_test();
+        let gc = isolated_config();
         let plant = gc.get_plant_by_seed_id(29999).expect("plant by seed_id 29999");
         assert_eq!(plant.id, 2020002);
     }
 
     #[test]
     fn get_plant_grow_time_parses_phases() {
-        let gc = reload_for_test();
+        let gc = isolated_config();
         // 白萝卜 grow_phases 随官方配置更新为 "种子:1;发芽:1;成熟:0;"
         let secs = gc.get_plant_grow_time(2020002);
         assert_eq!(secs, 2); // 1+1
@@ -1378,7 +1383,7 @@ mod tests {
 
     #[test]
     fn get_all_seeds_extracts() {
-        let gc = reload_for_test();
+        let gc = isolated_config();
         let seeds = gc.get_all_seeds();
         assert!(!seeds.is_empty());
         assert!(seeds.iter().any(|s| s.seed_id == 29999));
@@ -1391,7 +1396,7 @@ mod tests {
 
     #[test]
     fn item_image_url_matches_panel_path() {
-        let gc = reload_for_test();
+        let gc = isolated_config();
         assert_eq!(gc.get_item_image_by_id(0), None);
         assert_eq!(gc.get_item_image_by_id(-1), None);
         // bot 46bb710：磁盘有图的物品直接命中（100001 是新增解锁卡图标）
@@ -1405,14 +1410,14 @@ mod tests {
 
     #[test]
     fn get_item_by_id_works() {
-        let gc = reload_for_test();
+        let gc = isolated_config();
         let item = gc.get_item_by_id(10000).expect("item 10000");
         assert!(!item.name.is_empty());
     }
 
     #[test]
     fn mutant_effects_load_all_entries_with_null_fields() {
-        let gc = reload_for_test();
+        let gc = isolated_config();
         // 官方配置含大量 null(effect_type/param/activity_id/icon/tips...),必须全部加载成功
         for id in 1..=14i64 {
             let dto = gc
@@ -1438,7 +1443,7 @@ mod tests {
 
     #[test]
     fn get_level_exp_progress_works() {
-        let gc = reload_for_test();
+        let gc = isolated_config();
         let (current, needed) = gc.get_level_exp_progress(1, 50);
         // level 1 需 0 exp, level 2 需 100 exp
         assert_eq!(current, 50);
@@ -1447,7 +1452,7 @@ mod tests {
 
     #[test]
     fn get_land_config_by_id_works() {
-        let gc = reload_for_test();
+        let gc = isolated_config();
         let land = gc.get_land_config_by_id(1).expect("land 1");
         assert_eq!(land.grid_x, 0);
         assert_eq!(land.grid_y, 5);
@@ -1457,7 +1462,7 @@ mod tests {
 
     #[test]
     fn format_grow_time_human() {
-        let gc = reload_for_test();
+        let gc = isolated_config();
         assert_eq!(gc.format_grow_time(0), "0秒");
         assert_eq!(gc.format_grow_time(30), "30秒");
         assert_eq!(gc.format_grow_time(60), "1分0秒");
@@ -1473,7 +1478,7 @@ mod tests {
 
     #[test]
     fn golden_fruit_sellable_from_sells_string() {
-        let gc = reload_for_test();
+        let gc = isolated_config();
         let item = gc
             .get_all_items()
             .into_iter()

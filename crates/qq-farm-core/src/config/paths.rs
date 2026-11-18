@@ -69,6 +69,10 @@ pub fn get_app_root() -> PathBuf {
 /// 优先 FARM_DATA_DIR 环境变量；否则 `<app_root>/data`
 #[must_use]
 pub fn get_data_dir() -> PathBuf {
+    #[cfg(test)]
+    if let Some(dir) = test_data::current() {
+        return dir;
+    }
     if let Ok(dir) = std::env::var("FARM_DATA_DIR") {
         if !dir.is_empty() {
             return PathBuf::from(dir);
@@ -76,6 +80,59 @@ pub fn get_data_dir() -> PathBuf {
     }
     get_app_root().join("data")
 }
+
+#[cfg(test)]
+mod test_data {
+    use super::*;
+    use std::cell::RefCell;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    thread_local! {
+        static STACK: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
+    }
+
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+
+    /// 当前测试线程的数据目录。只在测试构建存在，发布构建不会读它。
+    pub struct TestDataDir {
+        dir: PathBuf,
+    }
+
+    impl TestDataDir {
+        pub fn enter() -> Self {
+            let n = NEXT.fetch_add(1, Ordering::Relaxed);
+            let dir =
+                std::env::temp_dir().join(format!("qq-farm-lib-{}-{}", std::process::id(), n));
+            fs::create_dir_all(&dir).expect("测试数据目录");
+            STACK.with(|stack| stack.borrow_mut().push(dir.clone()));
+            Self { dir }
+        }
+
+        #[must_use]
+        pub fn path(&self) -> &Path {
+            &self.dir
+        }
+    }
+
+    impl Drop for TestDataDir {
+        fn drop(&mut self) {
+            STACK.with(|stack| {
+                let mut stack = stack.borrow_mut();
+                if let Some(pos) = stack.iter().rposition(|dir| dir == &self.dir) {
+                    stack.remove(pos);
+                }
+            });
+            let _ = fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    pub fn current() -> Option<PathBuf> {
+        STACK.with(|stack| stack.borrow().last().cloned())
+    }
+}
+
+#[cfg(test)]
+pub use test_data::TestDataDir;
 
 /// 确保数据目录存在，返回目录路径
 pub fn ensure_data_dir() -> std::io::Result<PathBuf> {
@@ -133,23 +190,66 @@ mod tests {
         assert_eq!(d.file_name().and_then(|s| s.to_str()), Some("data"));
     }
 
+    struct EnvData {
+        prev: Option<String>,
+        dir: PathBuf,
+    }
+
+    impl EnvData {
+        fn enter() -> Self {
+            let dir = std::env::temp_dir()
+                .join(format!("qq-farm-env-data-{}", std::process::id()))
+                .join("data");
+            let _ = fs::create_dir_all(&dir);
+            let prev = std::env::var("FARM_DATA_DIR").ok();
+            std::env::set_var("FARM_DATA_DIR", &dir);
+            Self { prev, dir }
+        }
+    }
+
+    impl Drop for EnvData {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.dir);
+            match &self.prev {
+                Some(value) => std::env::set_var("FARM_DATA_DIR", value),
+                None => std::env::remove_var("FARM_DATA_DIR"),
+            }
+        }
+    }
+
     #[test]
     #[serial(farm_data_dir)]
     fn ensure_data_dir_creates() {
-        let tmp = std::env::temp_dir().join(format!("qq-farm-ensure-data-{}", std::process::id()));
-        let prev = std::env::var("FARM_DATA_DIR").ok();
-        std::env::set_var("FARM_DATA_DIR", &tmp);
-        let _ = fs::remove_dir_all(&tmp);
+        let env = EnvData::enter();
         let created = ensure_data_dir().expect("ensure");
         assert!(created.exists());
         assert!(created.is_dir());
+        assert_eq!(created, env.dir);
         let again = ensure_data_dir().expect("ensure again");
         assert_eq!(again, created);
-        let _ = fs::remove_dir_all(&tmp);
-        match prev {
-            Some(v) => std::env::set_var("FARM_DATA_DIR", v),
-            None => std::env::remove_var("FARM_DATA_DIR"),
-        }
+    }
+
+    #[test]
+    fn test_data_dir_contains_writes_and_leaves_a_sentinel_unchanged() {
+        let sentinel_dir =
+            std::env::temp_dir().join(format!("qq-farm-sentinel-{}", std::process::id()));
+        fs::create_dir_all(&sentinel_dir).expect("sentinel dir");
+        let sentinel = sentinel_dir.join("sentinel.txt");
+        fs::write(&sentinel, b"sentinel").expect("sentinel");
+        let before = fs::metadata(&sentinel).expect("sentinel metadata");
+        let before_len = before.len();
+        let before_modified = before.modified().expect("sentinel time");
+        let data = TestDataDir::enter();
+        let probe = get_data_file("isolation-probe.json");
+        assert!(probe.starts_with(data.path()));
+        fs::write(&probe, b"{}").expect("probe");
+        assert_eq!(fs::read(&probe).expect("probe bytes"), b"{}");
+        drop(data);
+        assert!(!probe.exists());
+        let after = fs::metadata(&sentinel).expect("sentinel still there");
+        assert_eq!(after.len(), before_len);
+        assert_eq!(after.modified().expect("sentinel time"), before_modified);
+        let _ = fs::remove_dir_all(sentinel_dir);
     }
 
     #[test]

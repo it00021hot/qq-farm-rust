@@ -665,38 +665,14 @@ pub fn load_global_config() -> std::io::Result<()> {
 mod tests {
     use super::*;
     use serial_test::serial;
-    use std::fs;
 
-    /// 把会落盘的 store 操作隔离到临时目录，避免覆盖开发/安装包的 `store.json`。
     struct TempFarmData {
-        prev: Option<String>,
-        dir: PathBuf,
+        _dir: crate::config::paths::TestDataDir,
     }
 
     impl TempFarmData {
         fn enter() -> Self {
-            let dir = std::env::temp_dir().join(format!(
-                "qq-farm-global-cfg-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0)
-            ));
-            let _ = fs::create_dir_all(&dir);
-            let prev = std::env::var("FARM_DATA_DIR").ok();
-            std::env::set_var("FARM_DATA_DIR", &dir);
-            Self { prev, dir }
-        }
-    }
-
-    impl Drop for TempFarmData {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.dir);
-            match &self.prev {
-                Some(v) => std::env::set_var("FARM_DATA_DIR", v),
-                None => std::env::remove_var("FARM_DATA_DIR"),
-            }
+            Self { _dir: crate::config::paths::TestDataDir::enter() }
         }
     }
 

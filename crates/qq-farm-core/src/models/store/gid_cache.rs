@@ -80,6 +80,7 @@ mod tests {
     #[test]
     #[serial(farm_data_dir)]
     fn write_and_read_cache() {
+        let _data = crate::config::paths::TestDataDir::enter();
         let aid = "test_acc_cache_42";
         // 清理
         let _ = remove_cache(aid);
@@ -96,6 +97,7 @@ mod tests {
     #[test]
     #[serial(farm_data_dir)]
     fn read_cache_empty_returns_none() {
+        let _data = crate::config::paths::TestDataDir::enter();
         let aid = "test_empty_acc";
         let _ = remove_cache(aid);
         write_cache(aid, &[]).expect("write empty");

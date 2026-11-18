@@ -13,8 +13,6 @@ use std::sync::LazyLock;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
-use crate::config::paths::get_data_dir;
-
 /// 操作计数器
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -157,8 +155,7 @@ fn put_slot(account_id: &str, slot: StatsSlot) {
 
 #[must_use]
 pub fn stats_file(account_id: &str) -> PathBuf {
-    let dir = std::env::var("FARM_DATA_DIR").ok().map(PathBuf::from).unwrap_or_else(get_data_dir);
-    dir.join("stats").join(format!("{account_id}.json"))
+    crate::config::paths::get_data_dir().join("stats").join(format!("{account_id}.json"))
 }
 
 // =====================================================================
@@ -727,6 +724,7 @@ mod tests {
     #[test]
     #[serial(stats)]
     fn get_stats_for_session_exp_from_float_json() {
+        let _data = crate::config::paths::TestDataDir::enter();
         reset_for_test();
         let account = "acc-eff";
         init_stats_with_persistence(account, 100, 50, 0);
@@ -741,10 +739,7 @@ mod tests {
     #[test]
     #[serial(farm_data_dir)]
     fn save_and_load_persisted_roundtrip() {
-        // 用临时目录避免污染 data/stats
-        let temp_dir = std::env::temp_dir().join("qq-farm-stats-test");
-        let prev = std::env::var("FARM_DATA_DIR").ok();
-        std::env::set_var("FARM_DATA_DIR", &temp_dir);
+        let _data = crate::config::paths::TestDataDir::enter();
         let acc = "test-acc-save";
         let data = PersistedStats {
             date: get_today_key(),
@@ -759,9 +754,5 @@ mod tests {
         assert_eq!(loaded.operations.fertilize, 5);
         // 清理
         let _ = std::fs::remove_file(stats_file(acc));
-        match prev {
-            Some(v) => std::env::set_var("FARM_DATA_DIR", v),
-            None => std::env::remove_var("FARM_DATA_DIR"),
-        }
     }
 }

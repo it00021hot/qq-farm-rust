@@ -2254,6 +2254,7 @@ mod tests {
     #[test]
     #[serial(farm_data_dir)]
     fn bad_daily_state_roundtrip() {
+        let _data = crate::config::paths::TestDataDir::enter();
         let acc = format!("test-bad-{}", std::process::id());
         let today = beijing_date_key();
         assert!(!load_bad_daily_stop(&acc, &today));
