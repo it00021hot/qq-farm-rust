@@ -81,6 +81,7 @@ pub mod security;
 pub mod share;
 pub mod share_reward;
 pub mod solar_calendar;
+pub mod stellar;
 pub mod task;
 pub mod tasks;
 pub mod warehouse;

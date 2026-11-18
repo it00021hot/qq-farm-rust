@@ -26,6 +26,7 @@ mod preferences;
 mod ranch;
 mod section_page;
 mod settings;
+mod stellar;
 mod system_runtime;
 mod weather;
 

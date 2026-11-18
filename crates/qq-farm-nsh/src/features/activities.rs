@@ -27,16 +27,26 @@ enum Shelf {
     Muge,
     Ranch,
     Weather,
+    Stellar,
 }
 
 impl Shelf {
-    const ALL: [Self; 7] =
-        [Self::Solar, Self::Wish, Self::Share, Self::Tea, Self::Muge, Self::Ranch, Self::Weather];
+    const ALL: [Self; 8] = [
+        Self::Solar,
+        Self::Wish,
+        Self::Stellar,
+        Self::Share,
+        Self::Tea,
+        Self::Muge,
+        Self::Ranch,
+        Self::Weather,
+    ];
 
     const fn id(self) -> &'static str {
         match self {
             Self::Solar => "solar",
             Self::Wish => "wish",
+            Self::Stellar => "stellar",
             Self::Share => "share",
             Self::Tea => "tea",
             Self::Muge => "muge",
@@ -49,6 +59,7 @@ impl Shelf {
         match self {
             Self::Solar => "activities.solar",
             Self::Wish => "activities.wish",
+            Self::Stellar => "activities.stellar",
             Self::Share => "activities.share",
             Self::Tea => "activities.tea",
             Self::Muge => "activities.muge",
@@ -304,6 +315,11 @@ pub(crate) fn page(page: ActivityPage) -> impl IntoElement {
         move || (shelf.get() == Shelf::Wish).then(|| running_account(page)).flatten(),
         wish,
     );
+    let stellar = signal(super::stellar::StellarSession::default());
+    super::stellar::watch(
+        move || (shelf.get() == Shelf::Stellar).then(|| running_account(page)).flatten(),
+        stellar,
+    );
     let shares = resource(
         move || (shelf.get() == Shelf::Share).then(|| running_account(page)).flatten(),
         |id, _| async move { load_shares(id).await },
@@ -522,6 +538,10 @@ pub(crate) fn page(page: ActivityPage) -> impl IntoElement {
         .child(when(
             move || shelf.get() == Shelf::Wish && running(page),
             move || super::autumn_wish::panel(wish, page, wish_group, wish_choice),
+        ))
+        .child(when(
+            move || shelf.get() == Shelf::Stellar && running(page),
+            move || super::stellar::panel(stellar, page, move || shelf.set(Shelf::Solar)),
         ))
         .child(when(
             move || shelf.get() == Shelf::Share && running(page),
@@ -3516,6 +3536,8 @@ mod tests {
     #[test]
     fn wish_is_a_directory_shelf() {
         assert!(super::Shelf::ALL.contains(&super::Shelf::Wish));
+        assert!(super::Shelf::ALL.contains(&super::Shelf::Stellar));
+        assert_eq!(super::Shelf::Stellar.id(), "stellar");
         assert_eq!(super::Shelf::Wish.id(), "wish");
         assert_eq!(super::Shelf::Wish.label_key(), "activities.wish");
     }

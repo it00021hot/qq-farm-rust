@@ -107,6 +107,7 @@ pub struct WorkerLoop {
     mystery_shop: Arc<MysteryShopService>,
     weather: Arc<crate::services::weather::WeatherService>,
     autumn_wish: Arc<crate::services::autumn_wish::AutumnWishService>,
+    stellar: Arc<crate::services::stellar::StellarService>,
 
     // —— 内部状态 ——
     /// 登录完成
@@ -352,6 +353,7 @@ impl WorkerLoop {
         let weather = Arc::new(crate::services::weather::WeatherService::new(Arc::clone(&gateway)));
         let autumn_wish =
             Arc::new(crate::services::autumn_wish::AutumnWishService::new(Arc::clone(&gateway)));
+        let stellar = Arc::new(crate::services::stellar::StellarService::new(Arc::clone(&gateway)));
         friend.api().set_bad_gate(
             Arc::new({
                 let friend = friend.clone();
@@ -385,6 +387,7 @@ impl WorkerLoop {
             mystery_shop,
             weather,
             autumn_wish,
+            stellar,
             login_ready: AtomicBool::new(false),
             shutdown_started: AtomicBool::new(false),
             is_running: AtomicBool::new(false),
@@ -1844,6 +1847,11 @@ impl WorkerLoop {
     #[must_use]
     pub fn autumn_wish(&self) -> Arc<crate::services::autumn_wish::AutumnWishService> {
         Arc::clone(&self.autumn_wish)
+    }
+
+    #[must_use]
+    pub fn stellar(&self) -> Arc<crate::services::stellar::StellarService> {
+        Arc::clone(&self.stellar)
     }
     /// 自己的角色 GID（登录成功后写入；未登录为 0）
     #[must_use]

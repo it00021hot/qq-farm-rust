@@ -34,6 +34,7 @@ pub mod session;
 pub mod settings;
 pub mod share_reward;
 pub mod solar_calendar;
+pub mod stellar;
 pub mod weather;
 pub mod wx_login;
 
