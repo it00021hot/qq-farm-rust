@@ -3868,3 +3868,13 @@ bot 本轮 13 个提交**玩法层零变化**（活动/商城/日常自动化均
 - 摘掉两处 `defer_unhealthy_tick` 接线后，同一测试在农场退避断言失败（得到 0，期望 30000）。计算单测 `business_backoff_first_30s_then_double_capped_60s` 不替代这条。
 - 不足：农场 AllLands 没有单独计数，农场「未发请求」由函数在 `NextSlotGuard` 之前返回推出。健康度的另一条件（在途请求年龄至少 5 秒）没有单独拨时钟。时钟仍是 `now_ms()`，断言窗口 ±2 秒，没有注入时钟。好友静默在测试账号内存配置里关掉，避免 01:00–08:30 把恢复后的巡查跳过；`persist=false`，不调用会写回用户配置的删除。
 - 验证命令见本批回报。工具链文件仍是 1.98.1，检查用已安装的 1.99.1。
+
+### 2026-11-18 — 天气通知清掉同一账号的全部好友扫描缓存
+
+本条只收口 WEATHER-02。不把能力矩阵改成「齐」。窗口没有打开，没有真实 `WeatherChangeNotify`。天气任务领取仍是 EXTRA-01，本批不做。
+
+- 对照 bot `6765449`：`network.ts` 把 `WeatherChangeNotify` 解成 `weatherChanged`；`weather-activity.ts` 的 `networkEvents.on('weatherChanged')` 不读 `hostGid`，执行 `friendWeatherCache.clear()`。`activitiesChanged` 只清活动快照。`disconnected` 另清缓存；本客户端断开连接原先不调用 `invalidate_visits`，这次保持不动。
+- `WeatherService::invalidate_visits` 现在对任意 `host_gid`（含 0）清掉该服务的全部好友扫描缓存，并把 `visits_generation` 加一。扫描写回不加代次。扫描持有 `mutation_lock` 时，失效会等写回后再删。另一份 `WeatherService` 不受影响。
+- 扫描结果写入 `visitGeneration`。NSH 活动页在雨落成诗可见时每 400 毫秒读取该账号的代次；与已显示结果的代次不一致就不再显示。土地、活动列表和任务通知仍不产生天气缓存宿主。
+- 把失效改回只删除被点名农场后，`named_farm_notify_clears_the_account_after_the_scan_writes` 失败，断言是另一位好友仍留在缓存里。该改动已恢复。
+- 待验：窗口上的扫描结果在真实通知到达后消失，以及真实网关的 `WeatherChangeNotify`。

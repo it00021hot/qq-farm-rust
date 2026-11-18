@@ -73,9 +73,9 @@
 | ID | 行为 | 代码对照 | mock | 窗口 | 真实接口 |
 | --- | --- | --- | --- | --- | --- |
 | WEATHER-01 | 扫描、采集、召唤、研究、青蛙和乌云 | 代码已有。bot `weather-activity.ts`、`weather-routes.ts`。`WeatherService` 同名方法。NSH `features/weather.rs` | 先前批次的扫描测试通过；本批未重跑。真实 Enter 未跑 | 未验 | 未验 |
-| WEATHER-02 | 天气通知使扫描缓存失效 | 代码部分。bot `network.ts` 解析 `WeatherChangeNotify` 后，`weather-activity.ts` 不看 `hostGid`，清掉整个进程缓存。Rust `notify::parse_event` 得到 `WeatherChanged`，`WeatherService::invalidate_visits` 只删该账号里被点名的农场；`host_gid == 0` 才清该账号全部。NSH 已显示的扫描结果不会自动清掉 | 先前批次 mock 通过；本批未重跑 | 未验 | 未验 |
+| WEATHER-02 | 天气通知使扫描缓存失效 | 代码已有。bot `network.ts` 解析 `WeatherChangeNotify` 后发出 `weatherChanged`；`weather-activity.ts` 的监听不看 `hostGid`，`friendWeatherCache.clear()`。Rust `WeatherService::invalidate_visits` 对任意 `host_gid`（含 0）清掉收到通知的那个账号的全部好友扫描缓存，并增加 `visits_generation`。另一账号是另一份 `WeatherService`，不会被清。扫描持有 `mutation_lock` 时，失效等写回后再删。NSH 用扫描结果里的 `visitGeneration` 对比实时代次，不一致就不再显示。土地、活动、任务通知仍不产生天气缓存宿主。断开连接仍不调用 `invalidate_visits`，与本客户端原先一致 | `named_farm_notify_clears_the_account_after_the_scan_writes` 与 `displayed_scan_hides_when_the_visit_generation_moves`。把失效改回只删被点名农场时，前一项失败。窗口未打开 | 未验 | 未验 |
 
-本组 2 项：代码已有 1，代码部分 1。
+本组 2 项：代码已有 2。
 
 ## 活动
 
@@ -101,7 +101,7 @@
 
 ## 基线计数
 
-基线 30 项。代码已有 26，代码部分 1（WEATHER-02），代码缺失 1（AUTH-03），语义待确认 1（AUTH-05），范围待核实 1（ACT-02）。窗口通过 0，真实接口通过 0。没有「验证通过」项。
+基线 30 项。代码已有 27，代码缺失 1（AUTH-03），语义待确认 1（AUTH-05），范围待核实 1（ACT-02）。窗口通过 0，真实接口通过 0。没有「验证通过」项。
 
 ## 非基线
 
