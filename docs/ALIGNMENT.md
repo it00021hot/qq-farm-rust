@@ -12,7 +12,7 @@
 | --- | --- | --- | --- | --- | --- |
 | AUTH-01 | 用登录码添加账号 | 代码已有。bot 账号路由；`qq-farm-app::accounts::upsert_account`；NSH `accounts.rs` 登录码输入 | 无 | 未验 | 未验 |
 | AUTH-02 | 微信扫码登录 | 代码已有。bot `wx-login/service.ts`、`/api/wx-login/tasks`；`qq-farm-app::wx_login`；NSH `accounts.rs` 二维码 | 无 | 未验 | 未验 |
-| AUTH-03 | QQ NapCat 扫码 | 代码已有，可选。bot `qq-login/service.ts` 在 `qqQrLogin` 开启且地址和签名都有时，向 NapCat 发 `/api/qq/login/qrcode`、`/status`、`/miniapp/code`、`/logout`，头是 `X-API-Signature`。默认关闭，登录码和微信扫码不改道。NSH 账号页可保存这三项并走扫码状态；确认后的 code 交给现有 `upsert_account`，平台仍是 qq。取消或换代后的迟到结果不入库 | `services::napcat_login` 4 项与 `displayed_status_follows_the_napcat_action_and_late_flows_drop`。没有真实 NapCat | 未验 | 未验 |
+| AUTH-03 | QQ NapCat 扫码 | 代码已有，可选。bot `qq-login/service.ts` 在 `qqQrLogin` 开启且地址和签名都有时，向 NapCat 发 `/api/qq/login/qrcode`、`/status`、`/miniapp/code`、`/logout`，头是 `X-API-Signature`。默认关闭，登录码和微信扫码不改道。NSH 账号页可保存这三项并走扫码状态；确认后的 code 交给现有 `upsert_account`，平台仍是 qq。取消或换代后的迟到结果不入库 | `services::napcat_login` 与 `stale_napcat_code_is_not_stored`：代次不一致时 `store_code` 不调用入库。Debug 不打印 code 和回包体。没有真实 NapCat | 未验 | 未验 |
 | AUTH-04 | 启停和删除账号 | 代码已有。bot `/api/accounts/:id/start`、`stop`；`accounts::start_account`、`stop_account`、`delete_account`；NSH 账号页 | 无 | 未验 | 未验 |
 | AUTH-05 | Web 面板密码登录 | 语义待确认。bot `auth-routes.ts` 的 `POST /api/login`。桌面 `auth::local_owner_session` 不设密码门。这不是已对齐，本批也不加密码门 | 无 | 未验 | 未验 |
 

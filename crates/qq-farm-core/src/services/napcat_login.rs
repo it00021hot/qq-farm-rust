@@ -25,11 +25,22 @@ pub struct QqLoginTask {
     pub expires_at: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct QqMiniappCode {
     pub code: String,
     pub nickname: String,
     pub app_id: String,
+}
+
+impl std::fmt::Debug for QqMiniappCode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("QqMiniappCode")
+            .field("code", &"<redacted>")
+            .field("nickname", &self.nickname)
+            .field("app_id", &self.app_id)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,10 +83,20 @@ impl std::fmt::Display for NapCatLoginError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct NapCatReply {
     pub status: u16,
     pub body: String,
+}
+
+impl std::fmt::Debug for NapCatReply {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NapCatReply")
+            .field("status", &self.status)
+            .field("body_len", &self.body.len())
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -415,6 +436,14 @@ mod tests {
             format!("{}", NapCatLoginError::Remote("NapCat 接口签名无效，请检查配置".to_owned()));
         assert!(!rendered.contains("test-signature"));
         assert!(!format!("{settings:?}").contains("test-signature"));
+        let issued = QqMiniappCode {
+            code: "mini-code".to_owned(),
+            nickname: "果农".to_owned(),
+            app_id: QQ_MINIAPP_APP_ID.to_owned(),
+        };
+        let reply = NapCatReply { status: 200, body: json!({ "code": "mini-code" }).to_string() };
+        assert!(!format!("{issued:?}").contains("mini-code"));
+        assert!(!format!("{reply:?}").contains("mini-code"));
     }
 
     #[tokio::test]
