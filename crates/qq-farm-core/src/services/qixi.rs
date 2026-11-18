@@ -119,6 +119,9 @@ impl QixiService {
             return Err(Error::Business(SESSION_MOVED.into()));
         }
         let current = self.snapshot().await?;
+        if current["giftPresent"] != true {
+            return Err(Error::Business("当前无法赠送鹊羽香囊".into()));
+        }
         if current["balances"]["known"] == true
             && current["balances"]["sachet"].as_i64().unwrap_or(0) < 1
         {
@@ -212,14 +215,14 @@ fn qixi_value(
 ) -> Result<serde_json::Value> {
     let bridge = find_child(reply, BRIDGE_ACTIVITY)
         .ok_or_else(|| Error::Business("服务端未发现鹊桥寄情活动".into()))?;
-    let gift = find_child(reply, GIFT_ACTIVITY)
-        .ok_or_else(|| Error::Business("服务端未发现鹊桥寄情活动".into()))?;
+    let gift = find_child(reply, GIFT_ACTIVITY);
     let bridge_activity = bridge
         .activity
         .as_ref()
         .ok_or_else(|| Error::Business("服务端未发现鹊桥寄情活动".into()))?;
     let config = bridge.qixi_bridge.clone().unwrap_or_default();
-    let progress = gift.qixi_gift.clone().unwrap_or_default();
+    let gift_present = gift.is_some();
+    let progress = gift.as_ref().and_then(|child| child.qixi_gift.clone()).unwrap_or_default();
     let known = balances.is_some();
     let amount = |id: i64| balances.map(|map| map.get(&id).copied().unwrap_or(0));
     let sachet = amount(SACHET);
@@ -255,10 +258,11 @@ fn qixi_value(
         "dew": item_value(DEW, amount(DEW).unwrap_or(0)),
         "dewHint": "鹊羽灵露在土地上使用：好友土地前往「好友」页，自己的土地前往「农场」页。",
         "bridge": bridge_value(&config, claimable),
+        "giftPresent": gift_present,
         "gift": gift_value(&progress),
         "actions": {
             "bridge": { "enabled": active && claimable },
-            "gift": { "enabled": active && (!known || sachet.unwrap_or(0) > 0) },
+            "gift": { "enabled": gift_present && active && (!known || sachet.unwrap_or(0) > 0) },
         },
     }))
 }
@@ -339,6 +343,70 @@ fn exchange_value(entry: &QixiGiftExchange) -> serde_json::Value {
     })
 }
 
+fn ordered_string_values(text: &str) -> Vec<String> {
+    use serde::de::DeserializeSeed as _;
+    struct Seed<'a>(&'a mut Vec<String>);
+    impl<'de, 'a> serde::de::DeserializeSeed<'de> for Seed<'a> {
+        type Value = ();
+        fn deserialize<D>(self, deserializer: D) -> std::result::Result<(), D::Error>
+        where
+            D: serde::de::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(self)
+        }
+    }
+    impl<'de, 'a> serde::de::Visitor<'de> for Seed<'a> {
+        type Value = ();
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("json")
+        }
+        fn visit_str<E: serde::de::Error>(self, value: &str) -> std::result::Result<(), E> {
+            let plain = strip_html(value).trim().to_owned();
+            if !plain.is_empty() && !self.0.iter().any(|have| have == &plain) {
+                self.0.push(plain);
+            }
+            Ok(())
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            self,
+            mut seq: A,
+        ) -> std::result::Result<(), A::Error> {
+            let output = self.0;
+            while seq.next_element_seed(Seed(output))?.is_some() {}
+            Ok(())
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(
+            self,
+            mut map: A,
+        ) -> std::result::Result<(), A::Error> {
+            let output = self.0;
+            while map.next_key::<serde::de::IgnoredAny>()?.is_some() {
+                map.next_value_seed(Seed(output))?;
+            }
+            Ok(())
+        }
+        fn visit_bool<E: serde::de::Error>(self, _value: bool) -> std::result::Result<(), E> {
+            Ok(())
+        }
+        fn visit_i64<E: serde::de::Error>(self, _value: i64) -> std::result::Result<(), E> {
+            Ok(())
+        }
+        fn visit_u64<E: serde::de::Error>(self, _value: u64) -> std::result::Result<(), E> {
+            Ok(())
+        }
+        fn visit_f64<E: serde::de::Error>(self, _value: f64) -> std::result::Result<(), E> {
+            Ok(())
+        }
+        fn visit_unit<E: serde::de::Error>(self) -> std::result::Result<(), E> {
+            Ok(())
+        }
+    }
+    let mut found = Vec::new();
+    let mut deserializer = serde_json::Deserializer::from_str(text);
+    let _ = Seed(&mut found).deserialize(&mut deserializer);
+    found
+}
+
 fn window_label(begin: i64, end: i64, now: i64) -> &'static str {
     if begin > 0 && now < begin {
         "upcoming"
@@ -355,7 +423,8 @@ fn rules_from(extra: &[u8]) -> (String, Vec<String>) {
         return (String::new(), Vec::new());
     }
     let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return (String::new(), vec![strip_html(&text)]);
+        let plain = strip_html(&text).trim().to_owned();
+        return (String::new(), if plain.is_empty() { Vec::new() } else { vec![plain] });
     };
     let paragraphs = parsed
         .pointer("/tips/txt")
@@ -363,13 +432,13 @@ fn rules_from(extra: &[u8]) -> (String, Vec<String>) {
         .map(|rows| {
             rows.iter()
                 .filter_map(serde_json::Value::as_str)
-                .map(strip_html)
+                .map(|line| strip_html(line).trim().to_owned())
                 .filter(|line| !line.is_empty())
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
     if paragraphs.is_empty() {
-        return (String::new(), vec![strip_html(&text)]);
+        return (String::new(), ordered_string_values(&text));
     }
     let title = parsed
         .pointer("/tips/title")
@@ -678,5 +747,99 @@ mod tests {
         let error = QixiService::new(open_gateway).claim().await.unwrap_err();
         assert!(error.to_string().contains("不匹配"), "{error}");
         assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn rules_without_tips_keep_nested_strings_in_order() {
+        let raw = r#"{"title":"不要当规则","note":{"body":"<b>甲</b>","more":["乙","甲"]}}"#;
+        let (title, lines) = rules_from(raw.as_bytes());
+        assert!(title.is_empty());
+        assert_eq!(lines, vec!["不要当规则".to_string(), "甲".to_string(), "乙".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn a_missing_gift_child_keeps_the_bridge_and_does_not_send_the_bridge_id() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let writes = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Vec<u8>>::new()));
+        let log = std::sync::Arc::clone(&writes);
+        let gateway = gateway();
+        gateway.install_reply_script(move |_service, method, body| {
+            if method == "Operate" {
+                log.lock().expect("log").push(body.to_vec());
+                return Ok(ActivityOperateReply {
+                    activity_id: BRIDGE_ACTIVITY,
+                    operate_type: CLAIM,
+                    ..ActivityOperateReply::default()
+                }
+                .encode_to_vec());
+            }
+            if method == "Bag" {
+                return Ok(bag(2));
+            }
+            Ok(GetGroupReply {
+                group: Some(ActivityData {
+                    children: vec![ActivityData {
+                        activity: Some(activity(BRIDGE_ACTIVITY, 0, 0, 1)),
+                        qixi_bridge: Some(QixiBridgeConfig {
+                            current_stage: 1,
+                            stages: vec![QixiBridgeStage {
+                                stage: 1,
+                                status: 1,
+                                cost: None,
+                                rewards: vec![ActivityItem { item_id: DEW, count: 2 }],
+                            }],
+                            ..QixiBridgeConfig::default()
+                        }),
+                        ..ActivityData::default()
+                    }],
+                    ..ActivityData::default()
+                }),
+            }
+            .encode_to_vec())
+        });
+        let service = QixiService::new(gateway);
+        let snapshot = service.snapshot().await.unwrap();
+        assert_eq!(snapshot["giftPresent"], false);
+        assert_eq!(snapshot["actions"]["bridge"]["enabled"], true);
+        assert_eq!(snapshot["actions"]["gift"]["enabled"], false);
+        assert_eq!(snapshot["balances"]["feather"], 40);
+        assert_eq!(snapshot["balances"]["sachet"], 2);
+        assert_eq!(snapshot["balances"]["receivedSachet"], 3);
+        assert_eq!(snapshot["balances"]["dew"], 4);
+        assert_eq!(snapshot["gift"]["sendLimit"], 0);
+        assert_eq!(snapshot["gift"]["receiveLimit"], 0);
+        assert_eq!(snapshot["bridge"]["stages"][0]["rewards"][0]["count"], 2);
+        service.claim().await.unwrap();
+        let error = service.gift(88).await.unwrap_err();
+        assert!(error.to_string().contains("无法赠送"), "{error}");
+        let saved = writes.lock().expect("log");
+        assert_eq!(saved.len(), 1);
+        let request = ClaimQixiBridgeRewardsRequest::decode(saved[0].as_slice()).unwrap();
+        assert_eq!(request.activity_id, BRIDGE_ACTIVITY);
+        assert_eq!(request.operate_type, CLAIM);
+    }
+
+    #[tokio::test]
+    async fn an_open_window_without_field_23_does_not_claim() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let writes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = std::sync::Arc::clone(&writes);
+        let gateway = gateway();
+        gateway.install_reply_script(move |_service, method, _body| {
+            if method == "Operate" {
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            if method == "Bag" {
+                return Ok(bag(1));
+            }
+            Ok(group(0, 0, 0).encode_to_vec())
+        });
+        let service = QixiService::new(gateway);
+        let snapshot = service.snapshot().await.unwrap();
+        assert_eq!(snapshot["active"], true);
+        assert_eq!(snapshot["window"], "open");
+        assert_eq!(snapshot["actions"]["bridge"]["enabled"], false);
+        assert!(service.claim().await.is_err());
+        assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 }

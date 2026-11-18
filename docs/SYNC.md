@@ -4060,3 +4060,15 @@ bot 本轮 13 个提交**玩法层零变化**（活动/商城/日常自动化均
 - 固定基准的测试夹具里没有七夕官方 hex。`farm-interaction-cleanup.test.js` 只提到活动名，不是向量，不编造。
 - 离线：core `services::qixi` 4 项通过。app `qixi` 2 项通过。NSH `features::qixi` 3 项通过，其中 `dispatch_qixi_sends_the_pressed_friend` 用 `press` 的命令调用生产 `dispatch_qixi`。目录 `wish_is_a_directory_shelf` 确认 `qixi` / `activities.qixi`。`runtime::worker_loop::tests` 32 项、秋祈 14 项、千星 15 项、节令 V2 7 项通过。`nsh check crates/qq-farm-nsh` 通过。工具链文件仍是 1.98.1，命令用已安装的 1.99.1。
 - 待独立复验。窗口未打开，真实接口未发。当前是否仍开放未知。真实香囊或鹊羽消耗未知。
+
+### 2026-11-19 — 七夕 024A
+
+024 的定向离线已经通过，不把那次结果抹掉，也不把这一版叫做整页完整。审计指出的是四处合同差，不是像素。青梅仍未开始。
+
+- 缺赠送子活动时，按 `qixi.ts` 用桥活动把页面留住，赠送标成未下发。领取仍用桥活动号。26 不改发到桥活动号；没有赠送子项就不发。
+- 阶段没有 cost 时仍显示，奖励和状态保留，消耗写成「消耗未知」，不补成 0 或免费。
+- `extra` 能解析但没有 `tips.txt` 时，按原文顺序收集字符串值并去标签、去重。对象键和原始 JSON 不进正文。有 `tips.txt` 时仍用那段，不用活动名当规则。
+- 未知余额：core 继续允许赠送，与 `qixi.ts` 一致。NSH 按基准页面把未知当成不可赠送，按钮和 `press` 用同一套拒绝。已知 0 两边都拒，已知正数可以赠。这是页面门禁，不是把 core 改严。
+- 七夕窗口不变：(0, 0) 开放，结束时刻包含在内。没有确认框。没有官方 hex。
+- 离线：core `services::qixi` 7 项通过。app `qixi` 2 项通过。NSH `features::qixi` 4 项通过。目录 `wish_is_a_directory_shelf` 通过。`nsh check crates/qq-farm-nsh` 通过。worker、秋祈、千星、节令 V2 源码没改，没有重跑。工具链文件仍是 1.98.1，命令用已安装的 1.99.1。
+- 待独立复验。窗口未打开，真实接口未发。当前是否仍开放未知。真实消耗未知。

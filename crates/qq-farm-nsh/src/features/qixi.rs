@@ -43,6 +43,9 @@ pub(crate) struct QixiBoard {
     exchanges: Vec<String>,
     claim_enabled: bool,
     gift_enabled: bool,
+    gift_present: bool,
+    balance_known: bool,
+    sachet_count: Option<i64>,
     dew_hint: String,
 }
 
@@ -111,8 +114,37 @@ pub(crate) fn board_from(value: &Value) -> Option<QixiBoard> {
         claim_enabled: value.pointer("/actions/bridge/enabled").and_then(Value::as_bool)
             == Some(true),
         gift_enabled: value.pointer("/actions/gift/enabled").and_then(Value::as_bool) == Some(true),
+        gift_present: value.get("giftPresent").and_then(Value::as_bool) != Some(false),
+        balance_known: value.pointer("/balances/known").and_then(Value::as_bool) == Some(true),
+        sachet_count: value
+            .pointer("/balances/known")
+            .and_then(Value::as_bool)
+            .filter(|known| *known)
+            .and_then(|_| value.pointer("/balances/sachet").and_then(Value::as_i64)),
         dew_hint: value.get("dewHint").and_then(Value::as_str).unwrap_or("").to_owned(),
     })
+}
+
+pub(crate) fn gift_refusal(board: Option<&QixiBoard>, friend_gid: i64) -> Option<&'static str> {
+    let Some(board) = board else {
+        return Some("activities.qixiGiftClosed");
+    };
+    if !board.gift_present {
+        return Some("activities.qixiGiftMissing");
+    }
+    if !board.balance_known {
+        return Some("activities.qixiBalanceUnknown");
+    }
+    if board.sachet_count.unwrap_or(0) <= 0 {
+        return Some("activities.qixiNoSachet");
+    }
+    if !board.active || !board.gift_enabled {
+        return Some("activities.qixiGiftClosed");
+    }
+    if friend_gid <= 0 {
+        return Some("activities.qixiPickFriend");
+    }
+    None
 }
 
 pub(crate) fn press(
@@ -136,8 +168,7 @@ pub(crate) fn press(
             }
         }
         QixiIntent::Gift => {
-            let board = session.board.as_ref()?;
-            if !board.active || !board.gift_enabled || friend_gid <= 0 {
+            if gift_refusal(session.board.as_ref(), friend_gid).is_some() {
                 return None;
             }
         }
@@ -394,17 +425,18 @@ fn gift_section(
                     .on_press(move || picked.set(gid))
             },
         ))
+        .child(text(move || {
+            gift_refusal(session.get().board.as_ref(), picked.get())
+                .map(text_key)
+                .unwrap_or_default()
+        }))
         .child(
             button(move || text_key("activities.qixiSend"), ButtonVariant::Primary)
                 .disabled(move || {
                     let current = session.get();
                     current.busy
                         || current.needs_refresh
-                        || picked.get() <= 0
-                        || !current
-                            .board
-                            .as_ref()
-                            .is_some_and(|board| board.active && board.gift_enabled)
+                        || gift_refusal(current.board.as_ref(), picked.get()).is_some()
                 })
                 .on_press(move || fire(session, page, QixiIntent::Gift, picked.get_untracked())),
         )
@@ -453,15 +485,20 @@ fn visible_friends(friends: Vec<QixiFriend>, search: &str) -> Vec<QixiFriend> {
 }
 
 fn stage_from(value: &Value) -> Option<QixiStage> {
-    let cost = value.get("cost")?;
-    Some(QixiStage {
-        stage: value.get("stage").and_then(Value::as_i64).unwrap_or(0).to_string(),
-        state: value.get("state").and_then(Value::as_str).unwrap_or("").to_owned(),
-        cost: format!(
+    if !value.is_object() {
+        return None;
+    }
+    let cost = value.get("cost").filter(|cost| !cost.is_null()).map(|cost| {
+        format!(
             "{}×{}",
             cost.get("name").and_then(Value::as_str).unwrap_or(""),
             cost.get("count").and_then(Value::as_i64).unwrap_or(0)
-        ),
+        )
+    });
+    Some(QixiStage {
+        stage: value.get("stage").and_then(Value::as_i64).unwrap_or(0).to_string(),
+        state: value.get("state").and_then(Value::as_str).unwrap_or("").to_owned(),
+        cost: cost.unwrap_or_else(|| "消耗未知".into()),
         rewards: value
             .get("rewards")
             .and_then(Value::as_array)
@@ -490,7 +527,7 @@ fn exchange_line(value: &Value) -> String {
 
 fn balance_text(value: &Value, key: &str) -> String {
     if value.pointer("/balances/known").and_then(Value::as_bool) != Some(true) {
-        return "--".into();
+        return "余额未知".into();
     }
     value.pointer(&format!("/balances/{key}")).and_then(Value::as_i64).unwrap_or(0).to_string()
 }
@@ -542,6 +579,49 @@ mod tests {
         assert!(press(&mut session, QixiIntent::Gift, 0, true).is_none());
         let command = press(&mut session, QixiIntent::Gift, 88, true).unwrap();
         assert_eq!(command.friend_gid, 88);
+        assert_eq!(board.feather, "40");
+        assert_eq!(board.sachet, "2");
+        assert_eq!(board.received, "1");
+        assert_eq!(board.dew, "0");
+        assert_eq!(board.send_limit, "5");
+        assert_eq!(board.receive_limit, "7");
+    }
+
+    #[test]
+    fn a_stage_without_cost_stays_and_unknown_or_zero_balance_blocks_the_same_press() {
+        let board = board_from(&json!({
+            "active": true,
+            "giftPresent": true,
+            "balances": { "known": false },
+            "bridge": { "stages": [
+                { "stage": 2, "state": "待领取", "rewards": [{ "name": "露", "count": 2 }] }
+            ] },
+            "actions": { "bridge": { "enabled": true }, "gift": { "enabled": true } }
+        }))
+        .unwrap();
+        assert_eq!(board.stages.len(), 1);
+        assert_eq!(board.stages[0].state, "待领取");
+        assert_eq!(board.stages[0].rewards, "露×2");
+        assert_eq!(board.stages[0].cost, "消耗未知");
+        assert_eq!(board.feather, "余额未知");
+        assert_eq!(gift_refusal(Some(&board), 88), Some("activities.qixiBalanceUnknown"));
+        let mut unknown =
+            QixiSession { account_id: "acc".into(), board: Some(board), ..QixiSession::default() };
+        assert!(press(&mut unknown, QixiIntent::Gift, 88, true).is_none());
+        let zero = board_from(&json!({
+            "active": true,
+            "giftPresent": true,
+            "balances": { "known": true, "sachet": 0, "feather": 1, "receivedSachet": 1, "dew": 1 },
+            "actions": { "gift": { "enabled": false } }
+        }))
+        .unwrap();
+        assert_eq!(gift_refusal(Some(&zero), 88), Some("activities.qixiNoSachet"));
+        let mut empty =
+            QixiSession { account_id: "acc".into(), board: Some(zero), ..QixiSession::default() };
+        assert!(press(&mut empty, QixiIntent::Gift, 88, true).is_none());
+        let mut ready = loaded();
+        assert!(gift_refusal(ready.board.as_ref(), 88).is_none());
+        assert!(press(&mut ready, QixiIntent::Gift, 88, true).is_some());
     }
 
     #[test]
