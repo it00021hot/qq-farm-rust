@@ -28,13 +28,15 @@ enum Shelf {
     Ranch,
     Weather,
     Stellar,
+    Qixi,
 }
 
 impl Shelf {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::Solar,
         Self::Wish,
         Self::Stellar,
+        Self::Qixi,
         Self::Share,
         Self::Tea,
         Self::Muge,
@@ -47,6 +49,7 @@ impl Shelf {
             Self::Solar => "solar",
             Self::Wish => "wish",
             Self::Stellar => "stellar",
+            Self::Qixi => "qixi",
             Self::Share => "share",
             Self::Tea => "tea",
             Self::Muge => "muge",
@@ -60,6 +63,7 @@ impl Shelf {
             Self::Solar => "activities.solar",
             Self::Wish => "activities.wish",
             Self::Stellar => "activities.stellar",
+            Self::Qixi => "activities.qixi",
             Self::Share => "activities.share",
             Self::Tea => "activities.tea",
             Self::Muge => "activities.muge",
@@ -320,6 +324,29 @@ pub(crate) fn page(page: ActivityPage) -> impl IntoElement {
         move || (shelf.get() == Shelf::Stellar).then(|| running_account(page)).flatten(),
         stellar,
     );
+    let qixi = signal(super::qixi::QixiSession::default());
+    super::qixi::watch(
+        move || (shelf.get() == Shelf::Qixi).then(|| running_account(page)).flatten(),
+        qixi,
+    );
+    let qixi_friends = resource(
+        move || (shelf.get() == Shelf::Qixi).then(|| running_account(page)).flatten(),
+        |id, _| async move {
+            let context = session::session().context.clone();
+            let rows = session::call(async move {
+                qq_farm_app::friend::list_friends(&context, &id, false).await
+            })
+            .await?;
+            Ok(rows
+                .into_iter()
+                .map(|friend| super::qixi::QixiFriend {
+                    gid: friend.gid,
+                    name: friend.name,
+                    level: friend.level,
+                })
+                .collect())
+        },
+    );
     let shares = resource(
         move || (shelf.get() == Shelf::Share).then(|| running_account(page)).flatten(),
         |id, _| async move { load_shares(id).await },
@@ -542,6 +569,10 @@ pub(crate) fn page(page: ActivityPage) -> impl IntoElement {
         .child(when(
             move || shelf.get() == Shelf::Stellar && running(page),
             move || super::stellar::panel(stellar, page),
+        ))
+        .child(when(
+            move || shelf.get() == Shelf::Qixi && running(page),
+            move || super::qixi::panel(qixi, page, qixi_friends),
         ))
         .child(when(
             move || shelf.get() == Shelf::Share && running(page),
@@ -3541,6 +3572,9 @@ mod tests {
         assert_eq!(super::Shelf::Stellar.label_key(), "activities.stellar");
         assert_eq!(super::Shelf::Wish.id(), "wish");
         assert_eq!(super::Shelf::Wish.label_key(), "activities.wish");
+        assert!(super::Shelf::ALL.contains(&super::Shelf::Qixi));
+        assert_eq!(super::Shelf::Qixi.id(), "qixi");
+        assert_eq!(super::Shelf::Qixi.label_key(), "activities.qixi");
     }
 
     #[test]

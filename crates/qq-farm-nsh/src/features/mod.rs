@@ -23,6 +23,7 @@ mod outcome;
 mod pets;
 mod planting;
 mod preferences;
+mod qixi;
 mod ranch;
 mod section_page;
 mod settings;

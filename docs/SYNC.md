@@ -4037,3 +4037,26 @@ bot 本轮 13 个提交**玩法层零变化**（活动/商城/日常自动化均
 - 固定基准仍然没有千星官方 hex，不编造。
 - 离线：core `services::stellar` 15 项通过。app `stellar` 5 项通过。NSH `features::stellar` 5 项通过。`runtime::worker_loop::tests` 32 项、core `services::solar_calendar` 7 项通过。`nsh check crates/qq-farm-nsh` 通过。工具链文件仍是 1.98.1，命令用已安装的 1.99.1。秋祈源码没改，没有重跑。
 - 待独立复验。窗口未打开，真实接口未发。当前是否仍开放未知。真实消耗未知。
+
+023B 随后独立离线通过。窗口和真实接口仍是 0。
+
+### 2026-11-19 — 七夕鹊桥寄情
+
+本条只做 ACT-02 的七夕。秋祈和千星维持已独立离线通过。青梅、公益、萌宠日记没有实现。没有自动送香囊或领鹊桥，没有连接服务端，没有启动窗口，没有构建 debug 客户端。送香囊只走游戏 `Operate` 26，不发送任何聊天消息。
+
+源页面到 Rust：
+
+| 基准 | Rust |
+| --- | --- |
+| `GetGroup` 组 `2026081800` | 同一读取。缺鹊桥或香囊子活动就报「服务端未发现鹊桥寄情活动」，不发写 |
+| 鹊桥各阶段、消耗、奖励、待领取/已完成/建设中/未达成 | `bridge.stages` 全列，不取 first |
+| 鹊羽、香囊、获赠香囊、灵露、已赠和赠送/获赠上限 | 余额已知显示数字，失败显示未知，不用 0 冒充 |
+| 领鹊桥 `Operate` 25，`step` 为 0 | `claim` 只在窗口开放且 `field_23` 非 0 时发 |
+| 送 1 个香囊给选中好友，文案号 15 | `gift` 带 `target_gid` 和 `msg_text_id` 15。未选好友、非正 GID、已知余额为 0 不发 |
+| rules 的标题和段落 | `extra` 里 `tips.title` / `tips.txt`，去标签，不用活动名代替 |
+| 窗口 `(begin<=0 或 now>=begin) 且 (end<=0 或 now<=end)` | 同式。结束时刻仍开放，(0, 0) 开放。不套秋祈或千星 |
+
+- 同账号两次领取共用当前 worker 的一把锁，后一次重读资格。换 worker 后排队的领取拒绝。另一个账号不等这把锁。写回刷新失败保留奖励并置 `refreshRequired`，不重发。回包活动号或操作类型不匹配时失败，不用回包里的别的奖励冒充成功。
+- 固定基准的测试夹具里没有七夕官方 hex。`farm-interaction-cleanup.test.js` 只提到活动名，不是向量，不编造。
+- 离线：core `services::qixi` 4 项通过。app `qixi` 2 项通过。NSH `features::qixi` 3 项通过，其中 `dispatch_qixi_sends_the_pressed_friend` 用 `press` 的命令调用生产 `dispatch_qixi`。目录 `wish_is_a_directory_shelf` 确认 `qixi` / `activities.qixi`。`runtime::worker_loop::tests` 32 项、秋祈 14 项、千星 15 项、节令 V2 7 项通过。`nsh check crates/qq-farm-nsh` 通过。工具链文件仍是 1.98.1，命令用已安装的 1.99.1。
+- 待独立复验。窗口未打开，真实接口未发。当前是否仍开放未知。真实香囊或鹊羽消耗未知。
