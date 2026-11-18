@@ -38,18 +38,9 @@ const PET_ID: i64 = 2_026_090_101;
 const SEEDS_ID: i64 = 2_026_090_102;
 const SHOP_ID: i64 = 2_026_090_103;
 const DIAMOND_ID: i64 = 1004;
-const TICKET_ID: i64 = 1002;
-const FEED_ITEM: i64 = 1028;
-const FEED_COST: i64 = 700;
-const FEED_LIMIT: i32 = 16;
-const TREASURE_LIMIT: i32 = 10;
-const BATTLE_LIMIT: i32 = 20;
-const ADULT_GROWTH: i64 = 7000;
 const ADULT_STAGE: i32 = 2;
 const BABY_STAGE: i32 = 1;
-const FREE_REFRESH_LIMIT: i64 = 1;
-const PAID_REFRESH_LIMIT: i64 = 3;
-const REFRESH_COST: i64 = 30;
+const PLANT_IDS: [i64; 6] = [20516, 29004, 25995, 21625, 20154, 21072];
 const SHOP_QUERY: i64 = 7;
 const INITIALIZE: i64 = 27;
 const FEED: i64 = 29;
@@ -71,6 +62,100 @@ const FRIEND_INFO: i64 = 47;
 const SESSION_MOVED: &str = "账号会话已变化，未发送操作";
 const ACCOUNT_INVALID: &str = "账号身份无效，未发送操作";
 const CLOSED: &str = "萌宠成长日记当前不在活动时间内";
+const MISSING_RESULT: &str = "活动响应缺少操作结果，请刷新后查看结果";
+
+#[derive(serde::Deserialize)]
+struct PetCatalog {
+    #[serde(rename = "ActivityPetTreasureHuntBase")]
+    base: Vec<PetBase>,
+    #[serde(rename = "ActivityPetTreasureHuntFight")]
+    fight: Vec<PetFight>,
+    #[serde(rename = "ActivityPetTreasureCharmRefresh")]
+    refresh: Vec<PetRefresh>,
+    #[serde(rename = "ActivityPetTreasureHuntCharm")]
+    charms: Vec<PetCharm>,
+}
+
+#[derive(serde::Deserialize)]
+struct PetBase {
+    feed_items: String,
+    growth_adult_threshold: i64,
+    daily_feed_limit: i32,
+    daily_treasure_limit: i32,
+}
+
+#[derive(serde::Deserialize)]
+struct PetFight {
+    daily_battle_limit: i32,
+}
+
+#[derive(serde::Deserialize)]
+struct PetRefresh {
+    free_refresh_daily_limit: i64,
+    manual_refresh_cost_id: i64,
+    manual_refresh_cost_count: i64,
+    manual_refresh_daily_limit: i64,
+}
+
+#[derive(serde::Deserialize)]
+struct PetCharm {
+    charm_id: i32,
+    name: String,
+    desc: String,
+    #[serde(default)]
+    short_desc: String,
+    use_limit: i32,
+    #[serde(default)]
+    icon_path: String,
+}
+
+fn catalog() -> &'static PetCatalog {
+    static LOADED: std::sync::OnceLock<PetCatalog> = std::sync::OnceLock::new();
+    LOADED.get_or_init(|| {
+        serde_json::from_str(include_str!("fixtures/pet-diary-2026090101.json"))
+            .expect("萌宠配置无法解析")
+    })
+}
+
+fn feed_pair() -> (i64, i64) {
+    let mut parts = catalog().base[0].feed_items.split(':');
+    let id = parts.next().unwrap_or("0").parse().unwrap_or(0);
+    let count = parts.next().unwrap_or("0").parse().unwrap_or(0);
+    (id, count)
+}
+
+fn charm_config(id: i32) -> Option<&'static PetCharm> {
+    catalog().charms.iter().find(|charm| charm.charm_id == id)
+}
+
+fn feed_limit() -> i32 {
+    catalog().base[0].daily_feed_limit
+}
+
+fn treasure_limit() -> i32 {
+    catalog().base[0].daily_treasure_limit
+}
+
+fn battle_limit() -> i32 {
+    catalog().fight[0].daily_battle_limit
+}
+
+fn adult_growth() -> i64 {
+    catalog().base[0].growth_adult_threshold
+}
+
+fn free_refresh_limit() -> i64 {
+    catalog().refresh[0].free_refresh_daily_limit
+}
+
+fn paid_refresh_limit() -> i64 {
+    catalog().refresh[0].manual_refresh_daily_limit
+}
+
+fn refresh_cost() -> (i64, i64) {
+    let refresh = &catalog().refresh[0];
+    (refresh.manual_refresh_cost_id, refresh.manual_refresh_cost_count)
+}
 
 pub struct PetDiaryService {
     gateway: Arc<Gateway>,
@@ -124,10 +209,10 @@ impl PetDiaryService {
             let state = hunt_state(&group.pet)?;
             let nurture = state.nurture.clone().unwrap_or_default();
             let feed = state.feed.clone().unwrap_or_default();
-            if nurture.stage != BABY_STAGE || feed.feed_count >= FEED_LIMIT {
+            if nurture.stage != BABY_STAGE || feed.feed_count >= feed_limit() {
                 return Err(Error::Business("当前不可投喂".into()));
             }
-            if !costs_ok(&[(FEED_ITEM, FEED_COST)], bag, 1) {
+            if !costs_ok(&[feed_pair()], bag, 1) {
                 return Err(Error::Business("萌宠元气糕不足，请先种植活动作物".into()));
             }
             Ok((
@@ -146,7 +231,7 @@ impl PetDiaryService {
             let state = hunt_state(&group.pet)?;
             let nurture = state.nurture.clone().unwrap_or_default();
             let hunt = state.hunt.clone().unwrap_or_default();
-            if nurture.stage != ADULT_STAGE || hunt.treasure_count >= TREASURE_LIMIT {
+            if nurture.stage != ADULT_STAGE || hunt.treasure_count >= treasure_limit() {
                 return Err(Error::Business("当前不可寻宝".into()));
             }
             let costs = item_pairs(&hunt.treasure_cost);
@@ -278,7 +363,7 @@ impl PetDiaryService {
             if !battle.charm_equipped.is_empty() && !battle.charm_pick_used {
                 return Err(Error::Business("请先替换或保留当前锦囊，再刷新".into()));
             }
-            let free = battle.charm_free_refresh_count < FREE_REFRESH_LIMIT;
+            let free = battle.charm_free_refresh_count < free_refresh_limit();
             if free {
                 if payment != "free" {
                     return Err(Error::Business("刷新次数已变化，请刷新状态后重试".into()));
@@ -287,13 +372,13 @@ impl PetDiaryService {
                 if payment != "tickets" {
                     return Err(Error::Business("免费刷新已用完，请确认点券费用后再操作".into()));
                 }
-                if battle.charm_paid_refresh_count >= PAID_REFRESH_LIMIT {
+                if battle.charm_paid_refresh_count >= paid_refresh_limit() {
                     return Err(Error::Business("今日付费刷新次数已用完".into()));
                 }
                 if expected_paid != Some(battle.charm_paid_refresh_count) {
                     return Err(Error::Business("刷新次数已变化，请刷新状态后重试".into()));
                 }
-                if !costs_ok(&[(TICKET_ID, REFRESH_COST)], bag, 1) {
+                if !costs_ok(&[refresh_cost()], bag, 1) {
                     return Err(Error::Business("点券不足，已停止刷新，不使用钻石".into()));
                 }
             }
@@ -358,7 +443,7 @@ impl PetDiaryService {
         let state = hunt_state(&group.pet)?;
         let hunt = state.hunt.clone().unwrap_or_default();
         let battle = state.battle.clone().unwrap_or_default();
-        if !hunt.can_play_plunder || battle.battle_count >= BATTLE_LIMIT {
+        if !hunt.can_play_plunder || battle.battle_count >= battle_limit() {
             return Err(Error::Business("当前不可夺宝".into()));
         }
         let bag = self.bag().await?;
@@ -707,6 +792,9 @@ impl PetDiaryService {
         if reply.activity_id != activity || reply.operate_type != operate {
             return Err(Error::Business("活动响应不匹配，请刷新后查看结果".into()));
         }
+        if !selector_present(&reply, operate) {
+            return Err(Error::Business(MISSING_RESULT.into()));
+        }
         let rewards = reply_rewards(&reply);
         let mut payload = serde_json::json!({
             "message": if operate == BATTLE {
@@ -720,6 +808,7 @@ impl PetDiaryService {
             },
             "rewards": rewards,
         });
+        attach_operation(&mut payload, &reply, operate);
         self.attach_snapshot(&mut payload).await;
         Ok(payload)
     }
@@ -727,9 +816,9 @@ impl PetDiaryService {
     async fn attach_snapshot(&self, payload: &mut serde_json::Value) {
         match self.snapshot().await {
             Ok(snapshot) => payload["snapshot"] = snapshot,
-            Err(_) => {
+            Err(error) => {
                 payload["refreshRequired"] = serde_json::json!(true);
-                payload["refreshError"] = serde_json::json!("操作已成功，刷新失败");
+                payload["refreshError"] = serde_json::json!(refresh_failure(&error));
             }
         }
     }
@@ -824,7 +913,7 @@ impl PetDiaryService {
         let active = head_active(&group.pet);
         let adult = nurture.stage == ADULT_STAGE;
         let known = bag.is_some();
-        let feed_costs = vec![(FEED_ITEM, FEED_COST)];
+        let feed_costs = vec![feed_pair()];
         let draw_costs = item_pairs(&hunt.treasure_cost);
         let seeds = group.seeds.as_ref();
         let seed_rewards = seeds
@@ -835,6 +924,7 @@ impl PetDiaryService {
         let end = head.end_time;
         let (rules_title, rules) =
             crate::services::activity_text::text_content(head.desc.as_bytes());
+        let (treasure_title, treasure_rules) = treasure_rule_lines(&head.desc);
         serde_json::json!({
             "available": true,
             "activityId": PET_ID.to_string(),
@@ -846,26 +936,29 @@ impl PetDiaryService {
             "endTimeText": readable_time(end),
             "rulesTitle": rules_title,
             "rules": rules,
+            "treasureRulesTitle": treasure_title,
+            "treasureRules": treasure_rules,
             "warnings": warnings,
             "balances": balance_rows(bag),
             "nurture": {
                 "initialized": nurture.cg_played,
                 "adult": adult,
                 "growth": nurture.growth,
-                "adultGrowth": ADULT_GROWTH,
+                "adultGrowth": adult_growth(),
                 "dogGranted": nurture.dog_granted,
                 "feedCount": feed.feed_count,
-                "feedLimit": FEED_LIMIT,
+                "feedLimit": feed_limit(),
                 "feedCosts": cost_rows(&feed_costs, bag),
-                "canFeed": active && !adult && nurture.stage == BABY_STAGE && feed.feed_count < FEED_LIMIT && costs_ok(&feed_costs, bag, 1),
+                "canFeed": active && !adult && nurture.stage == BABY_STAGE && feed.feed_count < feed_limit() && costs_ok(&feed_costs, bag, 1),
             },
             "hunt": {
                 "count": hunt.treasure_count,
-                "limit": TREASURE_LIMIT,
+                "limit": treasure_limit(),
                 "total": hunt.treasure_total.to_string(),
+                "luckyStarTotal": hunt.lucky_star_gained_total.to_string(),
                 "costs": cost_rows(&draw_costs, bag),
-                "canDraw": active && adult && hunt.treasure_count < TREASURE_LIMIT && costs_ok(&draw_costs, bag, 1),
-                "canPlunder": active && hunt.can_play_plunder && battle.battle_count < BATTLE_LIMIT,
+                "canDraw": active && adult && hunt.treasure_count < treasure_limit() && costs_ok(&draw_costs, bag, 1),
+                "canPlunder": active && hunt.can_play_plunder && battle.battle_count < battle_limit(),
             },
             "seeds": {
                 "canClaim": active && seeds.is_some_and(head_active) && seed_rewards.iter().any(|reward| reward.claimable && !reward.claimed),
@@ -876,8 +969,9 @@ impl PetDiaryService {
             "treasures": state.pool.clone().unwrap_or_default().treasures.iter().map(treasure_row).collect::<Vec<_>>(),
             "compensationCount": state.plunder.clone().unwrap_or_default().plunder_compensation_count.to_string(),
             "battleCount": battle.battle_count,
-            "battleLimit": BATTLE_LIMIT,
+            "battleLimit": battle_limit(),
             "skipBattle": battle.is_skip_battle_cg,
+            "plants": plant_rows(bag),
             "shop": shop.map(|data| shop_rows(data, bag, active)).unwrap_or_default(),
             "shopKnown": shop.is_some(),
             "bagKnown": known,
@@ -898,6 +992,85 @@ pub fn require_pet_account(account_id: &str) -> Result<()> {
 #[must_use]
 pub fn pet_window_is_open(begin: i64, end: i64, now: i64) -> bool {
     begin > 0 && now >= begin && now <= end
+}
+
+fn selector_present(reply: &PetDiaryOperateReply, operate: i64) -> bool {
+    match operate {
+        INITIALIZE => reply.pet_treasure_hunt_finish_cg.is_some(),
+        FEED => reply.pet_treasure_hunt_feed.is_some(),
+        DRAW => reply.pet_treasure_hunt_draw.is_some(),
+        STORY => reply.pet_treasure_hunt_claim_story.is_some(),
+        REFRESH_CHARM => reply.pet_treasure_hunt_refresh_charm_pool.is_some(),
+        EQUIP_CHARM => reply.pet_treasure_hunt_equip_charms.is_some(),
+        BATTLE => reply.pet_treasure_hunt_start_battle.is_some(),
+        OPEN_TREASURE => reply.pet_treasure_hunt_open_treasure.is_some(),
+        COMPENSATION => reply.pet_treasure_hunt_claim_plunder_compensation.is_some(),
+        CLAIM_DOG => reply.pet_treasure_hunt_claim_dog.is_some(),
+        MARK_STORIES => reply.pet_treasure_hunt_mark_story_animated.is_some(),
+        SKIP_BATTLE => reply.pet_treasure_hunt_set_skip_battle_cg.is_some(),
+        SEEDS => reply.mega_event_claim_all.is_some(),
+        EXCHANGE => reply.shop_buy.is_some(),
+        INTERACT_LOG => reply.pet_treasure_hunt_get_log.is_some(),
+        PLUNDER_LOG => reply.pet_treasure_hunt_get_plundered_log.is_some(),
+        FRIEND_INFO => reply.pet_treasure_hunt_get_friend_activity_info.is_some(),
+        SHOP_QUERY => reply.data.as_ref().is_some_and(|data| data.shop.is_some()),
+        _ => false,
+    }
+}
+
+fn attach_operation(payload: &mut serde_json::Value, reply: &PetDiaryOperateReply, operate: i64) {
+    if operate == FRIEND_INFO {
+        if let Some(result) = reply.pet_treasure_hunt_get_friend_activity_info.as_ref() {
+            payload["friend"] = serde_json::json!({
+                "gid": result.gid.to_string(),
+                "treasures": result.info.clone().unwrap_or_default().treasures.iter().map(treasure_row).collect::<Vec<_>>(),
+            });
+        }
+    }
+    if operate == INTERACT_LOG {
+        if let Some(result) = reply.pet_treasure_hunt_get_log.as_ref() {
+            payload["logs"] = serde_json::json!(result
+                .logs
+                .iter()
+                .map(|entry| serde_json::json!({
+                    "timeText": readable_time(entry.ts),
+                    "type": entry.r#type,
+                    "costs": entry.costs.iter().map(reward_value).collect::<Vec<_>>(),
+                    "rewards": entry.rewards.iter().map(reward_value).collect::<Vec<_>>(),
+                }))
+                .collect::<Vec<_>>());
+        }
+    }
+    if operate == PLUNDER_LOG {
+        if let Some(result) = reply.pet_treasure_hunt_get_plundered_log.as_ref() {
+            payload["plunderLogs"] =
+                serde_json::json!(result.logs.iter().map(|entry| serde_json::json!({
+                "timeText": readable_time(entry.ts),
+                "name": entry.attacker_name,
+                "gid": entry.attacker_gid.to_string(),
+                "won": entry.attacker_won,
+                "challengeId": entry.challenge_item_id.to_string(),
+                "challengeName": item_name(entry.challenge_item_id),
+                "lost": entry.lost_items.iter().map(reward_value).collect::<Vec<_>>(),
+                "injected": entry.injected_items.iter().map(reward_value).collect::<Vec<_>>(),
+                "level": entry.attacker_level,
+                "fake": entry.is_fake,
+            })).collect::<Vec<_>>());
+        }
+    }
+}
+
+fn refresh_failure(error: &Error) -> String {
+    let text = error.to_string();
+    let safe = if text.to_ascii_lowercase().contains("token")
+        || text.to_ascii_lowercase().contains("password")
+        || text.to_ascii_lowercase().contains("secret")
+    {
+        "内部错误".to_owned()
+    } else {
+        text
+    };
+    format!("操作已成功，刷新失败：{safe}")
 }
 
 fn head_active(data: &PetDiaryActivityData) -> bool {
@@ -1023,11 +1196,15 @@ fn seed_row(reward: &PetDiaryMegaEventRewardState) -> serde_json::Value {
 }
 
 fn story_row(story: &PetTreasureHuntStoryInfo) -> serde_json::Value {
+    let parsed =
+        serde_json::from_str::<serde_json::Value>(&story.selected_desc).unwrap_or_default();
     serde_json::json!({
         "order": story.order,
         "unlocked": story.unlocked,
         "claimed": story.claimed,
         "animated": story.animated,
+        "photo": parsed.get("photo").and_then(|item| item.as_str()).unwrap_or(""),
+        "note": parsed.get("note").or_else(|| parsed.get("text")).and_then(|item| item.as_str()).unwrap_or(""),
     })
 }
 
@@ -1045,7 +1222,17 @@ fn treasure_row(treasure: &PetTreasureHuntTreasure) -> serde_json::Value {
         "status": status,
         "statusCode": treasure.status,
         "item": reward_value(&CoreItem { id: treasure.item_id, count: treasure.count, ..CoreItem::default() }),
+        "count": treasure.count,
+        "startTimeText": readable_time(treasure.start_at),
         "endTimeText": readable_time(treasure.end_at),
+        "plunderCount": treasure.plunder_count,
+        "maxPlunderCount": treasure.max_plunder_count,
+        "previews": treasure.battle_previews.iter().map(|preview| serde_json::json!({
+            "challengeId": preview.challenge_item_id.to_string(),
+            "challengeName": item_name(preview.challenge_item_id),
+            "canStart": preview.can_start,
+            "plunderableCount": preview.plunderable_count.to_string(),
+        })).collect::<Vec<_>>(),
     })
 }
 
@@ -1055,22 +1242,24 @@ fn charm_rows(
     active: bool,
     adult: bool,
 ) -> serde_json::Value {
-    let free_remaining = (FREE_REFRESH_LIMIT - battle.charm_free_refresh_count).max(0);
-    let paid_remaining = (PAID_REFRESH_LIMIT - battle.charm_paid_refresh_count).max(0);
+    let free_remaining = (free_refresh_limit() - battle.charm_free_refresh_count).max(0);
+    let paid_remaining = (paid_refresh_limit() - battle.charm_paid_refresh_count).max(0);
     let needs_choice = !battle.charm_equipped.is_empty() && !battle.charm_pick_used;
-    let ticket_ok = costs_ok(&[(TICKET_ID, REFRESH_COST)], bag, 1);
+    let ticket_ok = costs_ok(&[refresh_cost()], bag, 1);
     serde_json::json!({
-        "pool": battle.charm_daily_pool,
+        "pool": battle.charm_daily_pool.iter().map(|id| charm_line(*id, battle)).collect::<Vec<_>>(),
+        "equipped": battle.charm_equipped.iter().map(|id| charm_line(*id, battle)).collect::<Vec<_>>(),
+        "poolIds": battle.charm_daily_pool,
         "equipped": battle.charm_equipped,
         "picked": battle.charm_pick_used,
         "canChoose": active && adult && !battle.charm_pick_used && !battle.charm_daily_pool.is_empty(),
         "freeRefreshRemaining": free_remaining,
         "paidRefreshCount": battle.charm_paid_refresh_count,
         "paidRefreshRemaining": paid_remaining,
-        "refreshCost": { "id": TICKET_ID.to_string(), "count": REFRESH_COST, "name": item_name(TICKET_ID), "known": bag.is_some() },
+        "refreshCost": { "id": refresh_cost().0.to_string(), "count": refresh_cost().1, "name": item_name(refresh_cost().0), "known": bag.is_some() },
         "canRefreshFree": active && adult && !needs_choice && free_remaining > 0,
         "canRefreshPaid": active && adult && !needs_choice && free_remaining == 0 && paid_remaining > 0 && ticket_ok,
-        "refreshNote": format!("每日免费 {FREE_REFRESH_LIMIT} 次，之后每次 {REFRESH_COST} 点券，今日还可付费刷新 {paid_remaining} 次。点券不足时不刷新。"),
+        "refreshNote": format!("每日免费 {} 次，之后每次 {} 点券，今日还可付费刷新 {paid_remaining} 次。点券不足时不刷新。", free_refresh_limit(), refresh_cost().1),
     })
 }
 
@@ -1115,6 +1304,48 @@ fn solar_rows(reply: &GetSolarTermsReply, start: i64, end: i64) -> Vec<serde_jso
                 "canClaim": term.status == 2,
                 "beginTimeText": readable_time(term.begin_time),
                 "endTimeText": readable_time(term.end_time),
+            })
+        })
+        .collect()
+}
+
+fn treasure_rule_lines(desc: &str) -> (String, Vec<String>) {
+    let tips2 = serde_json::from_str::<serde_json::Value>(desc)
+        .ok()
+        .and_then(|value| value.get("tips2").cloned())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let wrapped = serde_json::json!({ "tips": tips2 }).to_string();
+    crate::services::activity_text::text_content(wrapped.as_bytes())
+}
+
+fn charm_line(id: i32, battle: &PetTreasureHuntBattle) -> serde_json::Value {
+    let config = charm_config(id);
+    let remaining = battle
+        .charm_effect_remaining_count
+        .iter()
+        .filter(|entry| entry.charm_id == id)
+        .map(|entry| entry.remaining_count)
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "id": id,
+        "name": config.map(|item| item.name.clone()).unwrap_or_else(|| format!("锦囊 {id}")),
+        "description": config.map(|item| item.desc.clone()).unwrap_or_default(),
+        "shortDescription": config.map(|item| if item.short_desc.is_empty() { item.desc.clone() } else { item.short_desc.clone() }).unwrap_or_default(),
+        "useLimit": config.map(|item| item.use_limit).unwrap_or(0),
+        "icon": config.map(|item| item.icon_path.clone()).unwrap_or_default(),
+        "remaining": remaining,
+    })
+}
+
+fn plant_rows(bag: Option<&HashMap<i64, i64>>) -> Vec<serde_json::Value> {
+    PLANT_IDS
+        .into_iter()
+        .map(|id| {
+            serde_json::json!({
+                "id": id.to_string(),
+                "name": item_name(id),
+                "count": bag.and_then(|bag| bag.get(&id).copied()).unwrap_or(0).to_string(),
+                "known": bag.is_some(),
             })
         })
         .collect()
@@ -1197,7 +1428,7 @@ mod tests {
                             feed: Some(PetTreasureHuntFeed { feed_count }),
                             hunt: Some(PetTreasureHuntHunt {
                                 treasure_cost: vec![CoreItem {
-                                    id: FEED_ITEM,
+                                    id: feed_pair().0,
                                     count: 10,
                                     ..CoreItem::default()
                                 }],
@@ -1255,8 +1486,12 @@ mod tests {
         BagReply {
             item_bag: Some(ItemBag {
                 items: vec![
-                    CoreItem { id: FEED_ITEM, count: 800, ..CoreItem::default() },
-                    CoreItem { id: TICKET_ID, count: 30, ..CoreItem::default() },
+                    CoreItem { id: feed_pair().0, count: 800, ..CoreItem::default() },
+                    CoreItem {
+                        id: refresh_cost().0,
+                        count: refresh_cost().1,
+                        ..CoreItem::default()
+                    },
                     CoreItem { id: 80101, count: 1, ..CoreItem::default() },
                 ],
                 ..ItemBag::default()
@@ -1338,7 +1573,7 @@ mod tests {
                                 PetDiaryShopGoodsInfo {
                                     id: 8,
                                     item: vec![PetDiaryShopItemInfo { id: 9, count: 1 }],
-                                    cost: vec![PetDiaryShopItemInfo { id: FEED_ITEM, count: 2 }],
+                                    cost: vec![PetDiaryShopItemInfo { id: feed_pair().0, count: 2 }],
                                     purchase_limit: 3,
                                     name: "种子".into(),
                                     ..PetDiaryShopGoodsInfo::default()
@@ -1353,9 +1588,17 @@ mod tests {
                         }),
                         ..PetDiaryActivityData::default()
                     }),
-                    mega_event_claim_all: Some(PetDiaryMegaEventClaimAllRsp {
-                        awards: vec![CoreItem { id: 9, count: 2, ..CoreItem::default() }],
-                        ..PetDiaryMegaEventClaimAllRsp::default()
+                    mega_event_claim_all: (request.operate_type == SEEDS).then(|| {
+                        PetDiaryMegaEventClaimAllRsp {
+                            awards: vec![CoreItem { id: 9, count: 2, ..CoreItem::default() }],
+                            ..PetDiaryMegaEventClaimAllRsp::default()
+                        }
+                    }),
+                    shop_buy: (request.operate_type == EXCHANGE).then(|| {
+                        crate::proto::generated::gamepb::activitypb::PetDiaryShopBuyRsp {
+                            awards: vec![CoreItem { id: 9, count: 1, ..CoreItem::default() }],
+                            ..crate::proto::generated::gamepb::activitypb::PetDiaryShopBuyRsp::default()
+                        }
                     }),
                     ..PetDiaryOperateReply::default()
                 }
@@ -1387,5 +1630,677 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(kinds.iter().filter(|item| item.1 == EXCHANGE).count(), 1, "{kinds:?}");
         assert_eq!(kinds.iter().find(|item| item.1 == EXCHANGE).unwrap().2, Some(2), "{kinds:?}");
+    }
+
+    fn operate_log() -> (
+        PetDiaryService,
+        std::sync::Arc<std::sync::Mutex<Vec<PetDiaryOperateRequest>>>,
+        std::sync::Arc<std::sync::atomic::AtomicI32>,
+        std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+        let stage = std::sync::Arc::new(AtomicI32::new(BABY_STAGE));
+        let paid = std::sync::Arc::new(AtomicBool::new(false));
+        let seen_stage = std::sync::Arc::clone(&stage);
+        let seen_paid = std::sync::Arc::clone(&paid);
+        let bodies =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::<PetDiaryOperateRequest>::new()));
+        let log = std::sync::Arc::clone(&bodies);
+        let gate = gateway();
+        gate.install_reply_script(move |_service, method, body| {
+            if method == "Bag" {
+                return Ok(bag_bytes());
+            }
+            if method == "GetSolarTerms" {
+                return Ok(GetSolarTermsReply {
+                    terms: vec![crate::proto::generated::gamepb::solartermspb::SolarTermInfo {
+                        term_id: 7,
+                        status: 2,
+                        begin_time: 1,
+                        end_time: get_server_time_secs() + 100,
+                        name: "白露".into(),
+                        ..Default::default()
+                    }],
+                    ..GetSolarTermsReply::default()
+                }
+                .encode_to_vec());
+            }
+            if method == "ClaimSolarTerms" {
+                let request = ClaimSolarTermsRequest::decode(body).unwrap();
+                return Ok(ClaimSolarTermsReply {
+                    rewards: vec![crate::proto::generated::gamepb::solartermspb::SolarTermReward {
+                        item_id: 9,
+                        count: 4,
+                    }],
+                    term: Some(crate::proto::generated::gamepb::solartermspb::SolarTermInfo {
+                        term_id: request.term_id,
+                        status: 3,
+                        ..Default::default()
+                    }),
+                    ..ClaimSolarTermsReply::default()
+                }
+                .encode_to_vec());
+            }
+            if method == "Operate" {
+                let request = PetDiaryOperateRequest::decode(body).unwrap();
+                log.lock().expect("log").push(request.clone());
+                return Ok(scripted_reply(&request).encode_to_vec());
+            }
+            let mut reply = PetDiaryGetGroupReply::decode(
+                group(seen_stage.load(Ordering::SeqCst), 0, 1).as_slice(),
+            )
+            .unwrap();
+            if seen_paid.load(Ordering::SeqCst) {
+                reply.group.as_mut().unwrap().children[0]
+                    .pet_treasure_hunt
+                    .as_mut()
+                    .unwrap()
+                    .battle
+                    .as_mut()
+                    .unwrap()
+                    .charm_free_refresh_count = free_refresh_limit();
+            }
+            Ok(reply.encode_to_vec())
+        });
+        (PetDiaryService::new(gate), bodies, stage, paid)
+    }
+
+    fn scripted_reply(request: &PetDiaryOperateRequest) -> PetDiaryOperateReply {
+        use crate::proto::generated::gamepb::activitypb::{
+            PetTreasureHuntBattlePreview, PetTreasureHuntClaimDogRsp,
+            PetTreasureHuntClaimPlunderCompensationRsp, PetTreasureHuntDrawRsp,
+            PetTreasureHuntEquipCharmsRsp, PetTreasureHuntFeedRsp,
+            PetTreasureHuntGetFriendActivityInfoRsp, PetTreasureHuntGetLogRsp,
+            PetTreasureHuntGetPlunderedLogRsp, PetTreasureHuntLogEntry,
+            PetTreasureHuntOpenTreasureRsp, PetTreasureHuntPlunderedLogEntry,
+            PetTreasureHuntRefreshCharmPoolRsp, PetTreasureHuntStartBattleRsp,
+        };
+        let mut reply = PetDiaryOperateReply {
+            activity_id: request.activity_id,
+            operate_type: request.operate_type,
+            ..PetDiaryOperateReply::default()
+        };
+        let reward = CoreItem { id: 9, count: 2, ..CoreItem::default() };
+        match request.operate_type {
+            FEED => reply.pet_treasure_hunt_feed = Some(PetTreasureHuntFeedRsp::default()),
+            DRAW => {
+                reply.pet_treasure_hunt_draw = Some(PetTreasureHuntDrawRsp {
+                    rewards: vec![reward],
+                    ..PetTreasureHuntDrawRsp::default()
+                })
+            }
+            INITIALIZE => {
+                reply.pet_treasure_hunt_finish_cg =
+                    Some(crate::proto::generated::gamepb::activitypb::PetTreasureHuntFinishCgRsp {})
+            }
+            STORY => {
+                reply.pet_treasure_hunt_claim_story = Some(
+                    crate::proto::generated::gamepb::activitypb::PetTreasureHuntClaimStoryRsp {
+                        awards: vec![reward],
+                        ..Default::default()
+                    },
+                )
+            }
+            REFRESH_CHARM => {
+                reply.pet_treasure_hunt_refresh_charm_pool =
+                    Some(PetTreasureHuntRefreshCharmPoolRsp::default())
+            }
+            EQUIP_CHARM => {
+                reply.pet_treasure_hunt_equip_charms =
+                    Some(PetTreasureHuntEquipCharmsRsp::default())
+            }
+            BATTLE => {
+                reply.pet_treasure_hunt_start_battle = Some(PetTreasureHuntStartBattleRsp {
+                    won: true,
+                    rewards: vec![reward],
+                    ..PetTreasureHuntStartBattleRsp::default()
+                })
+            }
+            OPEN_TREASURE => {
+                reply.pet_treasure_hunt_open_treasure = Some(PetTreasureHuntOpenTreasureRsp {
+                    rewards: vec![reward],
+                    ..Default::default()
+                })
+            }
+            COMPENSATION => {
+                reply.pet_treasure_hunt_claim_plunder_compensation =
+                    Some(PetTreasureHuntClaimPlunderCompensationRsp {
+                        rewards: vec![reward],
+                        ..Default::default()
+                    })
+            }
+            CLAIM_DOG => {
+                reply.pet_treasure_hunt_claim_dog = Some(PetTreasureHuntClaimDogRsp::default())
+            }
+            SEEDS => {
+                reply.mega_event_claim_all = Some(PetDiaryMegaEventClaimAllRsp {
+                    awards: vec![reward],
+                    ..PetDiaryMegaEventClaimAllRsp::default()
+                })
+            }
+            EXCHANGE => {
+                reply.shop_buy =
+                    Some(crate::proto::generated::gamepb::activitypb::PetDiaryShopBuyRsp {
+                        awards: vec![reward],
+                        ..Default::default()
+                    })
+            }
+            INTERACT_LOG => {
+                reply.pet_treasure_hunt_get_log = Some(PetTreasureHuntGetLogRsp {
+                    logs: vec![PetTreasureHuntLogEntry {
+                        ts: 1_700_000_000,
+                        r#type: 3,
+                        costs: vec![CoreItem {
+                            id: feed_pair().0,
+                            count: 1,
+                            ..CoreItem::default()
+                        }],
+                        rewards: vec![reward],
+                        ..PetTreasureHuntLogEntry::default()
+                    }],
+                })
+            }
+            PLUNDER_LOG => {
+                reply.pet_treasure_hunt_get_plundered_log =
+                    Some(PetTreasureHuntGetPlunderedLogRsp {
+                        logs: vec![PetTreasureHuntPlunderedLogEntry {
+                            ts: 1_700_000_100,
+                            attacker_name: "甲".into(),
+                            attacker_won: true,
+                            challenge_item_id: 80102,
+                            lost_items: vec![CoreItem { id: 9, count: 1, ..CoreItem::default() }],
+                            injected_items: vec![CoreItem {
+                                id: 8,
+                                count: 2,
+                                ..CoreItem::default()
+                            }],
+                            ..PetTreasureHuntPlunderedLogEntry::default()
+                        }],
+                    })
+            }
+            FRIEND_INFO => {
+                let gid = request
+                    .pet_treasure_hunt_get_friend_activity_info
+                    .as_ref()
+                    .map(|item| item.friend_gid)
+                    .unwrap_or(0);
+                reply.pet_treasure_hunt_get_friend_activity_info =
+                    Some(PetTreasureHuntGetFriendActivityInfoRsp {
+                        gid,
+                        info: Some(crate::proto::generated::gamepb::activitypb::PetTreasureHuntFriendInfo {
+                            treasures: vec![PetTreasureHuntTreasure {
+                                id: "box".into(),
+                                status: 2,
+                                item_id: 9,
+                                count: 3,
+                                battle_previews: vec![PetTreasureHuntBattlePreview {
+                                    challenge_item_id: 80101,
+                                    can_start: true,
+                                    ..PetTreasureHuntBattlePreview::default()
+                                }],
+                                ..PetTreasureHuntTreasure::default()
+                            }],
+                            ..Default::default()
+                        }),
+                    })
+            }
+            SHOP_QUERY => {
+                reply.data = Some(PetDiaryActivityData {
+                    head: Some(head(SHOP_ID, 1, get_server_time_secs() + 100)),
+                    shop: Some(PetDiaryActivityBodyShop {
+                        goods: vec![PetDiaryShopGoodsInfo {
+                            id: 8,
+                            item: vec![PetDiaryShopItemInfo { id: 9, count: 1 }],
+                            cost: vec![PetDiaryShopItemInfo { id: feed_pair().0, count: 2 }],
+                            purchase_limit: 3,
+                            name: "种子".into(),
+                            ..PetDiaryShopGoodsInfo::default()
+                        }],
+                    }),
+                    ..PetDiaryActivityData::default()
+                })
+            }
+            _ => {}
+        }
+        reply
+    }
+
+    #[test]
+    fn the_catalog_limits_are_read_from_the_fixed_source_file() {
+        let raw: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/pet-diary-2026090101.json")).unwrap();
+        let base = &raw["ActivityPetTreasureHuntBase"][0];
+        let fight = &raw["ActivityPetTreasureHuntFight"][0];
+        let refresh = &raw["ActivityPetTreasureCharmRefresh"][0];
+        assert_eq!(
+            format!("{}:{}", feed_pair().0, feed_pair().1),
+            base["feed_items"].as_str().unwrap()
+        );
+        assert_eq!(feed_limit() as i64, base["daily_feed_limit"].as_i64().unwrap());
+        assert_eq!(treasure_limit() as i64, base["daily_treasure_limit"].as_i64().unwrap());
+        assert_eq!(adult_growth(), base["growth_adult_threshold"].as_i64().unwrap());
+        assert_eq!(battle_limit() as i64, fight["daily_battle_limit"].as_i64().unwrap());
+        assert_eq!(free_refresh_limit(), refresh["free_refresh_daily_limit"].as_i64().unwrap());
+        assert_eq!(paid_refresh_limit(), refresh["manual_refresh_daily_limit"].as_i64().unwrap());
+        assert_eq!(refresh_cost().0, refresh["manual_refresh_cost_id"].as_i64().unwrap());
+        assert_eq!(refresh_cost().1, refresh["manual_refresh_cost_count"].as_i64().unwrap());
+        assert_eq!(base["feed_items"], "1028:700");
+        assert!(charm_config(101).is_some_and(|charm| charm.name == "惜糕探宝"));
+    }
+
+    #[tokio::test]
+    async fn both_rule_sets_treasures_charms_and_plants_reach_the_snapshot() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let gate = gateway();
+        gate.install_reply_script(move |_service, method, body| {
+            if method == "Bag" {
+                return Ok(bag_bytes());
+            }
+            if method == "GetSolarTerms" {
+                return Ok(GetSolarTermsReply::default().encode_to_vec());
+            }
+            if method == "Operate" {
+                let request = PetDiaryOperateRequest::decode(body).unwrap();
+                return Ok(scripted_reply(&request).encode_to_vec());
+            }
+            let mut reply = PetDiaryGetGroupReply::decode(group(BABY_STAGE, 0, 1).as_slice()).unwrap();
+            let child = &mut reply.group.as_mut().unwrap().children[0];
+            child.head.as_mut().unwrap().desc = r#"{"tips":{"title":"主规则","txt":["主文"]},"tips2":{"title":"护送规则","txt":["护送文"]}}"#.into();
+            let hunt = child.pet_treasure_hunt.as_mut().unwrap();
+            hunt.hunt.as_mut().unwrap().lucky_star_gained_total = 12;
+            hunt.battle.as_mut().unwrap().is_skip_battle_cg = true;
+            hunt.battle.as_mut().unwrap().charm_daily_pool = vec![101];
+            hunt.story.as_mut().unwrap().stories[0].selected_desc =
+                r#"{"photo":"gui/pet/photo","note":"爪印"}"#.into();
+            let treasure = &mut hunt.pool.as_mut().unwrap().treasures[0];
+            treasure.count = 4;
+            treasure.start_at = 10;
+            treasure.end_at = 20;
+            treasure.plunder_count = 1;
+            treasure.max_plunder_count = 3;
+            Ok(reply.encode_to_vec())
+        });
+        let snapshot = PetDiaryService::new(gate).snapshot().await.unwrap();
+        assert_eq!(snapshot["rulesTitle"], "主规则");
+        assert_eq!(snapshot["rules"][0], "主文");
+        assert_eq!(snapshot["treasureRulesTitle"], "护送规则");
+        assert_eq!(snapshot["treasureRules"][0], "护送文");
+        assert!(!snapshot["rules"].to_string().contains("护送文"));
+        assert_eq!(snapshot["hunt"]["luckyStarTotal"], "12");
+        assert_eq!(snapshot["skipBattle"], true);
+        assert_eq!(snapshot["stories"][0]["photo"], "gui/pet/photo");
+        assert_eq!(snapshot["stories"][0]["note"], "爪印");
+        assert_eq!(snapshot["charms"]["pool"][0]["name"], "惜糕探宝");
+        assert_eq!(snapshot["treasures"][0]["count"], 4);
+        assert_eq!(snapshot["treasures"][0]["plunderCount"], 1);
+        assert!(snapshot["plants"].as_array().unwrap().len() == 6);
+    }
+
+    #[tokio::test]
+    async fn initialize_accepts_an_empty_message_and_rejects_a_missing_selector() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let (service, log, _stage, _paid) = operate_log();
+        let adopted = service.initialize_if(|| true).await.unwrap();
+        assert_eq!(adopted["message"], "操作成功");
+        let request = log.lock().expect("log")[0].clone();
+        assert_eq!(hex::encode(request.encode_to_vec()), "08f5dc8ec607101bf20700");
+        assert!(request.pet_treasure_hunt_finish_cg.is_some());
+        let gate = gateway();
+        gate.install_reply_script(move |_service, method, body| {
+            if method == "Bag" {
+                return Ok(bag_bytes());
+            }
+            if method == "Operate" {
+                let request = PetDiaryOperateRequest::decode(body).unwrap();
+                return Ok(PetDiaryOperateReply {
+                    activity_id: request.activity_id,
+                    operate_type: request.operate_type,
+                    ..PetDiaryOperateReply::default()
+                }
+                .encode_to_vec());
+            }
+            Ok(group(BABY_STAGE, 0, 1))
+        });
+        let error = PetDiaryService::new(gate).feed().await.unwrap_err();
+        assert!(error.to_string().contains("活动响应缺少操作结果"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn feed_draw_story_seeds_open_and_compensation_send_their_own_fields() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let (service, log, stage, _paid) = operate_log();
+        let fed = service.feed_if(|| true).await.unwrap();
+        assert_eq!(fed["message"], "操作成功");
+        stage.store(ADULT_STAGE, std::sync::atomic::Ordering::SeqCst);
+        let drawn = service.draw_if(|| true).await.unwrap();
+        assert_eq!(drawn["rewards"][0]["count"], 2);
+        let story = service.claim_story_if(2, || true).await.unwrap();
+        assert_eq!(story["rewards"][0]["id"], "9");
+        assert!(service
+            .claim_story_if(9, || true)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("尚未解锁"));
+        let seeds = service.claim_seeds_if(|| true).await.unwrap();
+        assert_eq!(seeds["rewards"][0]["count"], 2);
+        let opened = service.open_treasure_if(|| true).await.unwrap();
+        assert_eq!(opened["rewards"][0]["count"], 2);
+        let paid_back = service.claim_compensation_if(|| true).await.unwrap();
+        assert_eq!(paid_back["message"], "操作成功");
+        let seen = log.lock().expect("log");
+        let feed = seen.iter().find(|item| item.operate_type == FEED).unwrap();
+        assert!(feed.pet_treasure_hunt_feed.is_some());
+        let draw = seen.iter().find(|item| item.operate_type == DRAW).unwrap();
+        assert!(draw.pet_treasure_hunt_draw.is_some());
+        let story_request = seen.iter().find(|item| item.operate_type == STORY).unwrap();
+        assert_eq!(story_request.pet_treasure_hunt_claim_story.as_ref().unwrap().order, 2);
+        let seeds_request = seen.iter().find(|item| item.operate_type == SEEDS).unwrap();
+        assert_eq!(seeds_request.activity_id, SEEDS_ID);
+        assert!(seeds_request.mega_event_claim_all.is_some());
+        assert!(seen.iter().any(|item| item.operate_type == OPEN_TREASURE
+            && item.pet_treasure_hunt_open_treasure.is_some()));
+        assert!(seen.iter().any(|item| item.operate_type == COMPENSATION
+            && item.pet_treasure_hunt_claim_plunder_compensation.is_some()));
+        assert!(seen.iter().all(|item| item.operate_type != STORY
+            || item.pet_treasure_hunt_claim_story.as_ref().is_some_and(|story| story.order == 2)));
+    }
+
+    #[tokio::test]
+    async fn charm_refresh_uses_free_then_tickets_and_never_diamonds() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let (service, log, stage, paid) = operate_log();
+        stage.store(ADULT_STAGE, std::sync::atomic::Ordering::SeqCst);
+        assert!(service
+            .refresh_charm_if("diamond", None, || true)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("不支持使用钻石"));
+        assert!(log.lock().expect("log").is_empty());
+        let free = service.refresh_charm_if("free", None, || true).await.unwrap();
+        assert_eq!(free["message"], "操作成功");
+        let wrong = service.refresh_charm_if("tickets", Some(0), || true).await.unwrap_err();
+        assert!(wrong.to_string().contains("刷新次数已变化"), "{wrong}");
+        paid.store(true, std::sync::atomic::Ordering::SeqCst);
+        let tickets = service.refresh_charm_if("tickets", Some(0), || true).await.unwrap();
+        assert_eq!(tickets["message"], "操作成功");
+        let seen = log.lock().expect("log");
+        let refreshes =
+            seen.iter().filter(|item| item.operate_type == REFRESH_CHARM).collect::<Vec<_>>();
+        assert_eq!(refreshes.len(), 2);
+        assert!(refreshes.iter().all(|item| item.pet_treasure_hunt_refresh_charm_pool.is_some()));
+        assert!(seen
+            .iter()
+            .all(|item| item.operate_type == REFRESH_CHARM || item.operate_type == SHOP_QUERY));
+    }
+
+    #[tokio::test]
+    async fn equip_dog_and_exchange_quantity_follow_the_source_limits() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let (service, log, stage, _paid) = operate_log();
+        stage.store(ADULT_STAGE, std::sync::atomic::Ordering::SeqCst);
+        let dog = service.claim_dog_if(|| true).await.unwrap();
+        assert_eq!(dog["message"], "操作成功");
+        let equipped = service.equip_charm_if(4, || true).await.unwrap();
+        assert_eq!(equipped["message"], "操作成功");
+        let bought = service.exchange_if(8, 2, || true).await.unwrap();
+        assert_eq!(bought["message"], "操作成功");
+        let over = service.exchange_if(8, 4, || true).await.unwrap_err();
+        assert!(over.to_string().contains("超过剩余限购"), "{over}");
+        let seen = log.lock().expect("log");
+        let exchange = seen.iter().find(|item| item.operate_type == EXCHANGE).unwrap();
+        assert_eq!(exchange.shop_buy.as_ref().unwrap().count, 2);
+        assert_eq!(exchange.shop_buy.as_ref().unwrap().goods_id, 8);
+        assert!(seen.iter().filter(|item| item.operate_type == EXCHANGE).count() == 1);
+        assert!(seen.iter().any(
+            |item| item.operate_type == CLAIM_DOG && item.pet_treasure_hunt_claim_dog.is_some()
+        ));
+        assert_eq!(
+            seen.iter()
+                .find(|item| item.operate_type == EQUIP_CHARM)
+                .unwrap()
+                .pet_treasure_hunt_equip_charms
+                .as_ref()
+                .unwrap()
+                .charm_ids,
+            vec![4]
+        );
+    }
+
+    #[tokio::test]
+    async fn friend_query_must_match_before_battle_and_a_wrong_treasure_does_not_send_43() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let (service, log, _stage, _paid) = operate_log();
+        assert!(service.battle_if(0, "box", 80101, || true).await.is_err());
+        assert!(log.lock().expect("log").is_empty());
+        let missed = service.battle_if(9, "missing", 80101, || true).await.unwrap_err();
+        assert!(missed.to_string().contains("好友宝藏状态已变化"), "{missed}");
+        let kinds =
+            log.lock().expect("log").iter().map(|item| item.operate_type).collect::<Vec<_>>();
+        assert_eq!(kinds, vec![FRIEND_INFO]);
+        let won = service.battle_if(9, "box", 80101, || true).await.unwrap();
+        assert_eq!(won["message"], "夺宝成功");
+        let seen = log.lock().expect("log");
+        let friend = seen.iter().find(|item| item.operate_type == FRIEND_INFO).unwrap();
+        assert_eq!(
+            friend.pet_treasure_hunt_get_friend_activity_info.as_ref().unwrap().friend_gid,
+            9
+        );
+        let battle = seen.iter().find(|item| item.operate_type == BATTLE).unwrap();
+        let body = battle.pet_treasure_hunt_start_battle.as_ref().unwrap();
+        assert_eq!(
+            (body.defender_gid, body.treasure_id.as_str(), body.challenge_item_id),
+            (9, "box", 80101)
+        );
+        assert!(service
+            .battle_if(9, "box", 80000, || true)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("挑战书无效"));
+    }
+
+    #[tokio::test]
+    async fn interact_and_plunder_logs_keep_the_source_fields() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let (service, log, _stage, _paid) = operate_log();
+        let interact = service.interact_log_if(|| true).await.unwrap();
+        assert_eq!(interact["logs"][0]["type"], 3);
+        assert_eq!(interact["logs"][0]["costs"][0]["count"], 1);
+        let plunder = service.plunder_log_if(|| true).await.unwrap();
+        assert_eq!(plunder["plunderLogs"][0]["won"], true);
+        assert_eq!(plunder["plunderLogs"][0]["challengeId"], "80102");
+        assert_eq!(plunder["plunderLogs"][0]["lost"][0]["count"], 1);
+        assert_eq!(plunder["plunderLogs"][0]["injected"][0]["count"], 2);
+        let seen = log.lock().expect("log");
+        assert!(seen
+            .iter()
+            .any(|item| item.operate_type == INTERACT_LOG
+                && item.pet_treasure_hunt_get_log.is_some()));
+        assert!(seen.iter().any(|item| item.operate_type == PLUNDER_LOG
+            && item.pet_treasure_hunt_get_plundered_log.is_some()));
+    }
+
+    #[tokio::test]
+    async fn solar_claim_uses_v1_and_checks_the_returned_term() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let (service, _log, _stage, _paid) = operate_log();
+        let claimed = service.claim_solar_if(7, || true).await.unwrap();
+        assert_eq!(claimed["message"], "节令好礼领取成功");
+        assert_eq!(claimed["rewards"][0]["count"], 4);
+        let gate = gateway();
+        gate.install_reply_script(move |_service, method, _body| {
+            if method == "GetSolarTerms" {
+                return Ok(GetSolarTermsReply {
+                    terms: vec![crate::proto::generated::gamepb::solartermspb::SolarTermInfo {
+                        term_id: 7,
+                        status: 2,
+                        begin_time: 1,
+                        end_time: get_server_time_secs() + 100,
+                        ..Default::default()
+                    }],
+                    ..GetSolarTermsReply::default()
+                }
+                .encode_to_vec());
+            }
+            if method == "ClaimSolarTerms" {
+                return Ok(ClaimSolarTermsReply {
+                    term: Some(crate::proto::generated::gamepb::solartermspb::SolarTermInfo {
+                        term_id: 7,
+                        status: 2,
+                        ..Default::default()
+                    }),
+                    ..ClaimSolarTermsReply::default()
+                }
+                .encode_to_vec());
+            }
+            if method == "Bag" {
+                return Ok(bag_bytes());
+            }
+            Ok(group(BABY_STAGE, 0, 1))
+        });
+        let error = PetDiaryService::new(gate).claim_solar_if(7, || true).await.unwrap_err();
+        assert!(error.to_string().contains("节令回包不匹配"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_timeout_is_not_replayed_and_refresh_failure_keeps_the_result() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = std::sync::Arc::clone(&calls);
+        let gate = gateway();
+        gate.install_reply_script(move |_service, method, _body| {
+            if method == "Operate" {
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                return Err(crate::network::error::NetworkError::Phase("timeout".into()));
+            }
+            if method == "Bag" {
+                return Ok(bag_bytes());
+            }
+            Ok(group(BABY_STAGE, 0, 1))
+        });
+        assert!(PetDiaryService::new(gate).feed().await.is_err());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = std::sync::Arc::clone(&calls);
+        let gate = gateway();
+        gate.install_reply_script(move |_service, method, body| {
+            if method == "Operate" {
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let request = PetDiaryOperateRequest::decode(body).unwrap();
+                return Ok(scripted_reply(&request).encode_to_vec());
+            }
+            if method == "Bag" {
+                return Ok(bag_bytes());
+            }
+            if method == "GetSolarTerms" {
+                return Ok(GetSolarTermsReply::default().encode_to_vec());
+            }
+            if count.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+                return Err(crate::network::error::NetworkError::Phase("token=abc".into()));
+            }
+            Ok(group(BABY_STAGE, 0, 1))
+        });
+        let fed = PetDiaryService::new(gate).feed().await.unwrap();
+        assert_eq!(fed["message"], "操作成功");
+        assert_eq!(fed["refreshRequired"], true);
+        let refresh = fed["refreshError"].as_str().unwrap();
+        assert!(refresh.contains("操作已成功，刷新失败"), "{refresh}");
+        assert!(refresh.contains("内部错误"), "{refresh}");
+        assert!(!refresh.to_ascii_lowercase().contains("token"), "{refresh}");
+        assert!(!refresh.contains("abc"), "{refresh}");
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn captured_vectors_decode_strictly_and_the_empty_error_reply_stays_empty() {
+        let diary = serde_json::from_str::<Vec<serde_json::Value>>(include_str!(
+            "fixtures/pet-diary-capture.json"
+        ))
+        .unwrap();
+        let charms = serde_json::from_str::<Vec<serde_json::Value>>(include_str!(
+            "fixtures/pet-charm-refresh-capture.json"
+        ))
+        .unwrap();
+        let treasures = serde_json::from_str::<Vec<serde_json::Value>>(include_str!(
+            "fixtures/pet-treasure-capture.json"
+        ))
+        .unwrap();
+        let official = serde_json::from_str::<Vec<serde_json::Value>>(include_str!(
+            "fixtures/pet-diary-official-vectors.json"
+        ))
+        .unwrap();
+        assert_eq!((diary.len(), charms.len(), treasures.len(), official.len()), (16, 4, 6, 17));
+        let mut missing = Vec::new();
+        let mut bad = Vec::new();
+        for row in diary.iter().chain(charms.iter()).chain(treasures.iter()) {
+            let file = row["file"].as_str().unwrap_or("unknown");
+            let hex = row["hex"].as_str().unwrap_or("");
+            let error = row["error"].as_str().unwrap_or("0");
+            if file == "000310-recv.bin" {
+                assert_eq!(error, "1000019");
+                assert!(hex.is_empty(), "{file}");
+                missing.push(file.to_owned());
+                continue;
+            }
+            let bytes = hex::decode(hex).unwrap_or_default();
+            if bytes.is_empty() {
+                bad.push(format!("{file}: hex 为空"));
+                continue;
+            }
+            let decoded = if row["direction"] == "send" {
+                PetDiaryOperateRequest::decode(bytes.as_slice())
+                    .map(|request| request.encode_to_vec())
+            } else if error == "0" {
+                PetDiaryOperateReply::decode(bytes.as_slice()).map(|reply| reply.encode_to_vec())
+            } else {
+                bad.push(format!("{file}: error {error}"));
+                continue;
+            };
+            match decoded {
+                Ok(again) if again == bytes => {}
+                Ok(_) => bad.push(format!("{file}: 重编码与抓包字节不一致")),
+                Err(err) => bad.push(format!("{file}: 解码失败 {err}")),
+            }
+        }
+        assert_eq!(missing, vec!["000310-recv.bin".to_owned()]);
+        let mut synthetic = Vec::new();
+        for row in &official {
+            let name = row["name"].as_str().unwrap_or("synthetic");
+            let bytes = hex::decode(row["hex"].as_str().unwrap_or("")).unwrap_or_default();
+            let decoded = if row["direction"] == "recv" {
+                PetDiaryOperateReply::decode(bytes.as_slice()).map(|reply| reply.encode_to_vec())
+            } else {
+                PetDiaryOperateRequest::decode(bytes.as_slice())
+                    .map(|request| request.encode_to_vec())
+            };
+            match decoded {
+                Ok(again) if again == bytes => {}
+                Ok(_) => synthetic.push(format!("{name}: 合成向量重编码不一致")),
+                Err(err) => synthetic.push(format!("{name}: 合成向量解码失败 {err}")),
+            }
+        }
+        let solar = serde_json::from_str::<serde_json::Value>(include_str!(
+            "fixtures/pet-solar-claim-capture.json"
+        ))
+        .unwrap();
+        let solar_bytes = hex::decode(solar["hex"].as_str().unwrap()).unwrap();
+        let solar_reply = ClaimSolarTermsReply::decode(solar_bytes.as_slice()).expect("节令抓包");
+        assert_eq!(solar_reply.encode_to_vec(), solar_bytes);
+        let mall = serde_json::from_str::<serde_json::Value>(include_str!(
+            "fixtures/pet-mall-capture.json"
+        ))
+        .unwrap();
+        let mall_bytes = hex::decode(mall["hex"].as_str().unwrap()).unwrap();
+        let mall_reply =
+            crate::proto::generated::gamepb::mallpb::GetMallListBySlotTypeResponse::decode(
+                mall_bytes.as_slice(),
+            );
+        if let Err(err) = mall_reply {
+            bad.push(format!("pet-mall-capture.json: 解码失败 {err}"));
+        }
+        assert!(bad.is_empty(), "坏向量:\n{}", bad.join("\n"));
+        assert!(synthetic.is_empty(), "合成编码参考（不是实机抓包）:\n{}", synthetic.join("\n"));
     }
 }

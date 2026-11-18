@@ -352,6 +352,20 @@ pub(crate) fn page(page: ActivityPage) -> impl IntoElement {
         move || (shelf.get() == Shelf::Pet).then(|| running_account(page)).flatten(),
         pet,
     );
+    let pet_friends = resource(
+        move || (shelf.get() == Shelf::Pet).then(|| running_account(page)).flatten(),
+        |id, _| async move {
+            let context = session::session().context.clone();
+            let rows = session::call(async move {
+                qq_farm_app::friend::list_friends(&context, &id, false).await
+            })
+            .await?;
+            Ok(rows
+                .into_iter()
+                .map(|friend| super::pet_diary::PetFriend { gid: friend.gid, name: friend.name })
+                .collect())
+        },
+    );
     super::qingmei::watch(
         move || (shelf.get() == Shelf::QingMei).then(|| running_account(page)).flatten(),
         qingmei,
@@ -611,7 +625,7 @@ pub(crate) fn page(page: ActivityPage) -> impl IntoElement {
         ))
         .child(when(
             move || shelf.get() == Shelf::Pet && running(page),
-            move || super::pet_diary::panel(pet, page),
+            move || super::pet_diary::panel(pet, page, pet_friends),
         ))
         .child(when(
             move || shelf.get() == Shelf::Share && running(page),
