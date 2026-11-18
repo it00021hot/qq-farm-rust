@@ -21,6 +21,7 @@
 //! - [`solar_calendar`] — 节令日历（GetSolarTermsV2 / 答题 / 季度奖励，bot 0533264）
 //! - [`milk_tea`] — 奶茶活动（GetGroup 2026110100 / Operate 53-76，1.15 新活动）
 //! - [`share_reward`] — 快乐不独享（分享奖励，实例 2026110104）
+//! - [`autumn_wish`] — 秋祈良愿（GetGroup 2026092400 / Operate 51-52）
 //! - [`security`] — 密码 / 限流 / 会话 token（1G-7）
 //! - [`qrlogin`] — QQ 小程序扫码登录（1G-7）
 //! - [`login_url_profile`] — 登录 URL hints 写入系统配置（1G-7）
@@ -39,6 +40,7 @@ pub(crate) mod activity_text;
 pub mod activity_windows;
 pub mod analytics;
 pub mod auth;
+pub mod autumn_wish;
 pub mod career;
 pub mod collections;
 pub mod commerce;

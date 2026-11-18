@@ -21,6 +21,7 @@ pub(crate) struct ActivityPage {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Shelf {
     Solar,
+    Wish,
     Share,
     Tea,
     Muge,
@@ -29,12 +30,13 @@ enum Shelf {
 }
 
 impl Shelf {
-    const ALL: [Self; 6] =
-        [Self::Solar, Self::Share, Self::Tea, Self::Muge, Self::Ranch, Self::Weather];
+    const ALL: [Self; 7] =
+        [Self::Solar, Self::Wish, Self::Share, Self::Tea, Self::Muge, Self::Ranch, Self::Weather];
 
     const fn id(self) -> &'static str {
         match self {
             Self::Solar => "solar",
+            Self::Wish => "wish",
             Self::Share => "share",
             Self::Tea => "tea",
             Self::Muge => "muge",
@@ -46,6 +48,7 @@ impl Shelf {
     const fn label_key(self) -> &'static str {
         match self {
             Self::Solar => "activities.solar",
+            Self::Wish => "activities.wish",
             Self::Share => "activities.share",
             Self::Tea => "activities.tea",
             Self::Muge => "activities.muge",
@@ -294,6 +297,13 @@ pub(crate) fn page(page: ActivityPage) -> impl IntoElement {
             Ok(solar_board(&value))
         },
     );
+    let wish = signal(super::autumn_wish::WishSession::default());
+    let wish_group = signal(0_i64);
+    let wish_choice = signal(1_i64);
+    super::autumn_wish::watch(
+        move || (shelf.get() == Shelf::Wish).then(|| running_account(page)).flatten(),
+        wish,
+    );
     let shares = resource(
         move || (shelf.get() == Shelf::Share).then(|| running_account(page)).flatten(),
         |id, _| async move { load_shares(id).await },
@@ -508,6 +518,10 @@ pub(crate) fn page(page: ActivityPage) -> impl IntoElement {
         .child(when(
             move || shelf.get() == Shelf::Solar && running(page),
             move || loaded(solar, pending, failure, page, Shelf::Solar),
+        ))
+        .child(when(
+            move || shelf.get() == Shelf::Wish && running(page),
+            move || super::autumn_wish::panel(wish, page, wish_group, wish_choice),
         ))
         .child(when(
             move || shelf.get() == Shelf::Share && running(page),

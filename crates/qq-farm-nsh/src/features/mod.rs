@@ -3,6 +3,7 @@ mod account_toggle;
 mod accounts;
 mod activities;
 mod analytics;
+mod autumn_wish;
 mod bag;
 mod collections;
 mod confirm;

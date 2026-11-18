@@ -85,13 +85,13 @@
 | ID | 行为 | 代码对照 | mock | 窗口 | 真实接口 |
 | --- | --- | --- | --- | --- | --- |
 | ACT-01 | 节令、快乐不独享、奶茶、牧歌、牧场活动目录 | 代码已有。bot `solar-calendar.ts`、`share-reward-activity.ts`、`milk-tea.ts`、`muge-activity.ts`。NSH `activities.rs` 的 `Shelf::Solar`、`Share`、`Tea`、`Muge`、`Ranch` | 无 | 未验 | 未验 |
-| ACT-02 | 秋祈良愿、千星、七夕、青梅、公益、萌宠日记 | 未实现。`c500e08` 的 `ActivityCenter.vue` 仍能打开这六页。调用都在 worker 的页面 case 里，`worker.ts` 的定时器没有这些方法。时间取服务端回包的开始和结束；活动号里的日期、以及开始或结束为 0，都不能当成已经过期或当前可用。Rust 活动架只有节令、快乐不独享、奶茶、牧歌、牧场目录和天气。牧场目录在 `List` 带回 `2026090100`–`2026090103` 时把名称改成「萌宠成长日记」，不能喂养、寻宝或兑换。当前是否仍在服务端开放未知 | 无 | 未验 | 未验 |
+| ACT-02 | 秋祈良愿、千星、七夕、青梅、公益、萌宠日记 | 未实现。`c500e08` 的 `ActivityCenter.vue` 仍能打开这六页。调用都在 worker 的页面 case 里，`worker.ts` 的定时器没有这些方法。时间取服务端回包的开始和结束；活动号里的日期、以及开始或结束为 0，都不能当成已经过期或当前可用。秋祈良愿已接到活动目录和 core 服务，离线模拟通过，窗口和真实接口未验。千星、七夕、青梅、公益、萌宠日记仍没有读取和写操作。快乐不独享仍是 ACT-01。牧场目录仍只改萌宠日记的显示名。当前是否仍在服务端开放未知 | 秋祈见子表。其余无 | 未验 | 未验 |
 
 本组 2 项：代码已有 1，未实现 1。ACT-02 仍是一个母项。下面六条是组内行为，不另占 35 项分母。
 
 | 子行为 | bot `c500e08` | Rust | 静态结论 |
 | --- | --- | --- | --- |
-| 秋祈良愿 `wish` | `ActivityCenter.vue` 在 `wish` 挂 `AutumnActivityPage`。`autumn-activities.ts` 组 `2026092400`、活动 `2026092401`，读取 `ActivityService.GetGroup`。抽签、领取是 `operateAutumnActivity` 的 `Operate` 51、52。写之前用回包开始、结束和服务器时间拒绝，结束时刻本身不算开放 | 无页面、无服务。快乐不独享走 `share_reward.rs`，是 ACT-01 | 缺口。是否仍开放未知 |
+| 秋祈良愿 `wish` | `ActivityCenter.vue` 在 `wish` 挂 `AutumnActivityPage`。`autumn-activities.ts` 组 `2026092400`、活动 `2026092401`，读取 `ActivityService.GetGroup`。抽签、领取是 `operateAutumnActivity` 的 `Operate` 51、52。写之前用回包开始、结束和服务器时间拒绝，结束时刻本身不算开放。抽签只提交 `choose_id`，不扣背包物品，页面没有确认框 | `activities.rs` 的 `Shelf::Wish` 打开 `autumn_wish::panel`。按钮先过 `press`，再进 `qq-farm-app::autumn_wish`，由 `AutumnWishService` 发 `GetGroup` 和 `Operate`。不走 `share_reward.rs`。结束时刻不开放。开始或结束为 0 且窗口不能判定时，页面写「活动时间未知」，写请求仍拒绝。签文方向不在配置里时不发领取；基准会提交 0 | 代码已有。core 12 项假网关、NSH 4 项门控本批通过。窗口未打开。真实接口未发。是否仍开放未知 |
 | 千星 `stellar` | `StellarActivityPage`。`stellar.ts`：`SeasonService.GetSeasonInfo`、`ClaimBattlePassRewards`；商店查询和兑换是 `Operate` 7、1；点星座是 `Operate` 21；节令是 `SolarTermsService.GetSolarTerms` 和 `claimSolarTerm` | 节令在 ACT-01 的 `Shelf::Solar`。通行证、星砂和星座没有入口 | 节令重叠已有；其余是缺口。是否仍开放未知 |
 | 七夕 `qixi` | `QixiActivityPage`。`qixi.ts` 的 `claimQixiBridgeRewards`、`giftQixiSachet` 分别是 `Operate` 25、26。写之前看 `actions.*.enabled`，而 enabled 含鹊桥窗口 `activityWindowIsActive` | 仅生成类型。出售条件测试用过活动号 `2026081800`，那不是七夕页 | 缺口。是否仍开放未知 |
 | 青梅 `qingmei` | `QingMeiActivityPage`。`qingmei.ts` 领取种子、开始、继续、结算是 `Operate` 4、14、15、16。`getCurrentQingMeiActivity` 在 `2026081200` 及每日、酿造窗口都不活跃时返回空，不继续查询。这四个写函数本身没有再看窗口 | 仅生成类型 | 缺口。页面是否把按钮关掉，这次没逐个控件核对。是否仍开放未知 |
@@ -121,7 +121,7 @@ SCHED-03 是农场和好友巡查先于牧场。TASK-03 是成长任务和牧场
 
 其余 34 项这次对照矩阵里已写的入口、服务和保存路径，没有新跑测试，也没有补功能。没有发现新的用户入口缺口。AUTH-05 继续是桌面本机直接进入。EXTRA-01 继续不占基线。
 
-接受层级停在这里：33 项是代码已有，0 项窗口通过，0 项真实接口通过。mock 列点了测试名的，只说明那次离线测试曾经写过或跑过，不是本批重跑，也不是窗口验收。mock 为「无」的代码项是 AUTH-01、AUTH-02、AUTH-04、FARM-02、FARM-04、FRIEND-01、FRIEND-02、FRIEND-05、RANCH-01、BAG-01、BAG-02、ACT-01、SCHED-01、LOG-01、REMIND-01、COLL-01、CONF-01。这些不能从「仓库里有别的测试」推成已经覆盖。SCHED-02 自己已经写明：在途请求卡住满 5 秒那条没有单独拨时钟。
+接受层级停在这里：33 项是代码已有，0 项窗口通过，0 项真实接口通过。mock 列点了测试名的，只说明那次离线测试曾经写过或跑过，不是本批重跑，也不是窗口验收。mock 为「无」的代码项是 AUTH-01、AUTH-02、AUTH-04、FARM-02、FARM-04、FRIEND-01、FRIEND-02、FRIEND-05、RANCH-01、BAG-01、BAG-02、ACT-01、SCHED-01、LOG-01、REMIND-01、COLL-01、CONF-01。这 17 行是证据欠账，矩阵没有列出测试名；不表示项目里完全没有相关测试，也不表示本批重新验收过。SCHED-02 在途请求卡住满 5 秒那条仍没有单独拨时钟，留到后面补。
 
 ## 非基线
 

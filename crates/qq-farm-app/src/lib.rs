@@ -11,6 +11,7 @@
 pub mod accounts;
 pub mod admin;
 pub mod auth;
+pub mod autumn_wish;
 pub mod bootstrap;
 pub mod collections;
 pub mod commerce;
