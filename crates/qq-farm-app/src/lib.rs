@@ -25,6 +25,7 @@ pub mod lifecycle;
 pub mod milk_tea;
 pub mod muge;
 pub mod pets;
+pub mod qingmei;
 pub mod qixi;
 pub mod qq_bot_bind;
 pub mod qq_login;

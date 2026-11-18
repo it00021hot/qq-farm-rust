@@ -29,14 +29,16 @@ enum Shelf {
     Weather,
     Stellar,
     Qixi,
+    QingMei,
 }
 
 impl Shelf {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 10] = [
         Self::Solar,
         Self::Wish,
         Self::Stellar,
         Self::Qixi,
+        Self::QingMei,
         Self::Share,
         Self::Tea,
         Self::Muge,
@@ -50,6 +52,7 @@ impl Shelf {
             Self::Wish => "wish",
             Self::Stellar => "stellar",
             Self::Qixi => "qixi",
+            Self::QingMei => "qingmei",
             Self::Share => "share",
             Self::Tea => "tea",
             Self::Muge => "muge",
@@ -64,6 +67,7 @@ impl Shelf {
             Self::Wish => "activities.wish",
             Self::Stellar => "activities.stellar",
             Self::Qixi => "activities.qixi",
+            Self::QingMei => "activities.qingmei",
             Self::Share => "activities.share",
             Self::Tea => "activities.tea",
             Self::Muge => "activities.muge",
@@ -329,6 +333,11 @@ pub(crate) fn page(page: ActivityPage) -> impl IntoElement {
         move || (shelf.get() == Shelf::Qixi).then(|| running_account(page)).flatten(),
         qixi,
     );
+    let qingmei = signal(super::qingmei::QingSession::default());
+    super::qingmei::watch(
+        move || (shelf.get() == Shelf::QingMei).then(|| running_account(page)).flatten(),
+        qingmei,
+    );
     let qixi_friends = resource(
         move || (shelf.get() == Shelf::Qixi).then(|| running_account(page)).flatten(),
         |id, _| async move {
@@ -573,6 +582,10 @@ pub(crate) fn page(page: ActivityPage) -> impl IntoElement {
         .child(when(
             move || shelf.get() == Shelf::Qixi && running(page),
             move || super::qixi::panel(qixi, page, qixi_friends),
+        ))
+        .child(when(
+            move || shelf.get() == Shelf::QingMei && running(page),
+            move || super::qingmei::panel(qingmei, page),
         ))
         .child(when(
             move || shelf.get() == Shelf::Share && running(page),
@@ -3575,6 +3588,9 @@ mod tests {
         assert!(super::Shelf::ALL.contains(&super::Shelf::Qixi));
         assert_eq!(super::Shelf::Qixi.id(), "qixi");
         assert_eq!(super::Shelf::Qixi.label_key(), "activities.qixi");
+        assert!(super::Shelf::ALL.contains(&super::Shelf::QingMei));
+        assert_eq!(super::Shelf::QingMei.id(), "qingmei");
+        assert_eq!(super::Shelf::QingMei.label_key(), "activities.qingmei");
     }
 
     #[test]

@@ -67,6 +67,7 @@ pub mod napcat_login;
 pub mod pay;
 pub mod pets;
 pub mod push;
+pub mod qingmei;
 pub mod qixi;
 pub mod qq_bot;
 pub mod qqvip;
