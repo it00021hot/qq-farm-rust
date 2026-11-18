@@ -655,6 +655,12 @@ struct StateFile {
 }
 
 fn load_record(account_id: &str, identity: &StateIdentity) -> ConstellationRecord {
+    crate::services::activity_state_file::with_account_state(account_id, || {
+        load_record_unlocked(account_id, identity)
+    })
+}
+
+fn load_record_unlocked(account_id: &str, identity: &StateIdentity) -> ConstellationRecord {
     if !account_is_usable(account_id) {
         return empty_record(identity);
     }
@@ -686,6 +692,16 @@ fn persist_record(
     if !account_is_usable(account_id) {
         return Err(Error::Business(ACCOUNT_INVALID.into()));
     }
+    crate::services::activity_state_file::with_account_state(account_id, || {
+        persist_record_unlocked(account_id, identity, incoming)
+    })
+}
+
+fn persist_record_unlocked(
+    account_id: &str,
+    identity: &StateIdentity,
+    incoming: &ConstellationRecord,
+) -> Result<ConstellationRecord> {
     let path = state_path(account_id);
     let mut file = crate::infra::json_db::read_json_with_default(path.clone(), || StateFile {
         version: 1,
@@ -1668,5 +1684,46 @@ mod tests {
         assert_eq!(shown["timeStatus"], "notStarted");
         assert_eq!(solar_time_status(100, 120, 130), "expired");
         assert_eq!(solar_time_status(100, 120, 120), "active");
+    }
+
+    #[test]
+    fn concurrent_charity_and_stellar_writes_keep_both_sections() {
+        let root = crate::config::paths::TestDataDir::enter();
+        let dir = root.path().to_path_buf();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let account = "race-account";
+        let charity_barrier = std::sync::Arc::clone(&barrier);
+        let charity_dir = dir.clone();
+        let charity = std::thread::spawn(move || {
+            let _guard = crate::config::paths::TestDataDir::attach(&charity_dir);
+            charity_barrier.wait();
+            for target in 1..=40 {
+                crate::services::charity::confirm_progress_target(account, &target.to_string())
+                    .unwrap();
+            }
+        });
+        let stellar = std::thread::spawn(move || {
+            let _guard = crate::config::paths::TestDataDir::attach(&dir);
+            barrier.wait();
+            for node in 1..=40 {
+                let identity = StateIdentity {
+                    season_id: "7".into(),
+                    activity_id: "2026072701".into(),
+                    catalog_version: 1,
+                };
+                let mut incoming = empty_record(&identity);
+                incoming.confirmed_lit_node_ids = vec![node.to_string()];
+                persist_record(account, &identity, &incoming).unwrap();
+            }
+        });
+        charity.join().unwrap();
+        stellar.join().unwrap();
+        let saved = std::fs::read_to_string(state_path(account)).unwrap();
+        let file: serde_json::Value = serde_json::from_str(&saved).unwrap();
+        let claimed =
+            file["charityRecords"]["2026090901"]["claimedProgressTargets"].as_array().unwrap();
+        let lit = file["records"]["7:2026072701:v1"]["confirmedLitNodeIds"].as_array().unwrap();
+        assert_eq!(claimed.len(), 40, "{saved}");
+        assert_eq!(lit.len(), 40, "{saved}");
     }
 }

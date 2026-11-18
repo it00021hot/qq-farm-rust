@@ -36,6 +36,7 @@
 
 pub mod account_resolver;
 pub mod ace;
+pub(crate) mod activity_state_file;
 pub(crate) mod activity_text;
 pub mod activity_windows;
 pub mod analytics;

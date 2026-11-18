@@ -25,6 +25,7 @@ pub(crate) struct CharitySession {
     pub board: Option<CharityBoard>,
     pub failure: Option<String>,
     pub note: Option<String>,
+    pub warning: Option<String>,
     pub attempted: bool,
     pub needs_refresh: bool,
     pub confirming_donate: bool,
@@ -219,6 +220,8 @@ pub(crate) fn press(
             session.confirming_donate = false;
             session.busy = true;
             session.attempted = true;
+            session.generation += 1;
+            session.failure = None;
             Some(CharityCommand {
                 account_id: session.account_id.clone(),
                 generation: session.generation,
@@ -226,6 +229,17 @@ pub(crate) fn press(
             })
         }
     }
+}
+
+pub(crate) fn reset_account(session: &mut CharitySession, account_id: String) {
+    if session.account_id == account_id {
+        return;
+    }
+    *session = CharitySession {
+        account_id,
+        generation: session.generation + 1,
+        ..CharitySession::default()
+    };
 }
 
 pub(crate) fn apply(
@@ -263,7 +277,18 @@ pub(crate) fn apply(
             } else {
                 session.needs_refresh = false;
             }
-            session.note = match (success_line(&value), refresh) {
+            if let Some(warning) = value
+                .get("persistenceWarning")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+            {
+                session.warning = Some(warning.to_owned());
+            } else if command.intent != CharityIntent::Reload {
+                session.warning = None;
+            }
+            let success = success_line(&value);
+            let mut note = match (success, refresh) {
                 (Some(success), true) => {
                     Some(format!("{success}。请刷新确认最新进度，刷新不会再次提交"))
                 }
@@ -271,6 +296,14 @@ pub(crate) fn apply(
                 (None, true) => Some("请刷新确认最新进度，刷新不会再次提交".into()),
                 (None, false) => None,
             };
+            if let Some(warning) = session.warning.clone() {
+                note = Some(match note {
+                    Some(text) if text.contains(&warning) => text,
+                    Some(text) => format!("{text}。{warning}"),
+                    None => warning,
+                });
+            }
+            session.note = note;
             session.failure = None;
             session.confirming_donate = false;
         }
@@ -357,15 +390,7 @@ pub(crate) fn watch(
         let current = session.get_untracked();
         if current.account_id != next {
             let mut owned = current;
-            owned.account_id = next.clone();
-            owned.generation += 1;
-            owned.board = None;
-            owned.busy = false;
-            owned.note = None;
-            owned.failure = None;
-            owned.attempted = false;
-            owned.needs_refresh = false;
-            owned.confirming_donate = false;
+            reset_account(&mut owned, next.clone());
             session.set(owned);
         }
         let current = session.get_untracked();
@@ -388,6 +413,14 @@ pub(crate) fn panel(session: Signal<CharitySession>, page: ActivityPage) -> impl
             move || session.get().note.is_some(),
             move || {
                 notice(move || SharedString::from(session.get().note.clone().unwrap_or_default()))
+            },
+        ))
+        .child(when(
+            move || session.get().warning.is_some(),
+            move || {
+                notice(move || {
+                    SharedString::from(session.get().warning.clone().unwrap_or_default())
+                })
             },
         ))
         .child(when(
@@ -862,5 +895,110 @@ mod tests {
         assert_eq!(request.operate_type, 35);
         assert!(request.claim_seed.is_some());
         assert_eq!(bodies.lock().expect("log").len(), 1);
+    }
+
+    #[test]
+    fn a_late_reply_does_not_clear_the_newer_command_and_a_save_warning_stays_visible() {
+        let mut session = loaded();
+        let generation = session.generation;
+        assert!(press(&mut session, CharityIntent::Donate, true).is_none());
+        assert!(press(&mut session, CharityIntent::CancelDonate, true).is_none());
+        assert_eq!(session.generation, generation);
+        let first = press(&mut session, CharityIntent::Seeds, true).unwrap();
+        assert!(apply(
+            &mut session,
+            &first,
+            Ok(json!({
+                "message": "小红花种子领取成功",
+                "rewards": [{ "name": "种子", "count": 6 }],
+                "persistenceWarning": "已确认进度未能保存",
+                "snapshot": {
+                    "available": true,
+                    "name": "公益小红花",
+                    "endTime": "200",
+                    "active": true,
+                    "loveBalanceText": "4",
+                    "seedStatus": "今日已领取",
+                    "seedReward": { "claimed": true, "reward": { "name": "种子", "count": 6 } },
+                    "actions": { "claimSeeds": { "enabled": false }, "donateLove": { "enabled": true }, "claimDailyGift": { "enabled": true } }
+                }
+            }))
+        ));
+        assert!(!session.busy);
+        assert!(!session.needs_refresh);
+        assert!(session.board.as_ref().unwrap().donate_enabled);
+        let note = session.note.clone().unwrap_or_default();
+        assert!(note.contains("小红花种子领取成功"), "{note}");
+        assert!(note.contains("种子×6"), "{note}");
+        assert!(note.contains("已确认进度未能保存"), "{note}");
+        assert_eq!(session.warning.as_deref(), Some("已确认进度未能保存"));
+        let second = press(&mut session, CharityIntent::Daily, true).unwrap();
+        assert!(session.busy);
+        assert_ne!(second.generation, first.generation);
+        assert!(!apply(
+            &mut session,
+            &first,
+            Ok(json!({"message": "旧回包", "rewards": [{ "name": "过期", "count": 1 }]}))
+        ));
+        assert!(session.busy);
+        assert!(session.note.as_deref().unwrap_or("").contains("已确认进度未能保存"));
+        assert!(!session.note.as_deref().unwrap_or("").contains("旧回包"));
+        assert!(apply(
+            &mut session,
+            &second,
+            Ok(json!({
+                "message": "今日公益礼包领取成功",
+                "rewards": [{ "name": "礼包", "count": 2 }],
+                "snapshot": {
+                    "available": true,
+                    "name": "公益小红花",
+                    "active": true,
+                    "loveBalanceText": "4",
+                    "actions": { "claimDailyGift": { "enabled": false }, "donateLove": { "enabled": true } }
+                }
+            }))
+        ));
+        assert!(!session.busy);
+        assert!(session.note.as_deref().unwrap_or("").contains("今日公益礼包领取成功"));
+        assert!(session.warning.is_none());
+        let stale = second.clone();
+        reset_account(&mut session, "beta".into());
+        session.note = Some("新账号".into());
+        session.busy = true;
+        assert!(!apply(&mut session, &stale, Ok(json!({"message": "旧账号"}))));
+        assert!(session.busy);
+        assert_eq!(session.note.as_deref(), Some("新账号"));
+        let generation = session.generation;
+        assert!(apply(
+            &mut session,
+            &CharityCommand {
+                account_id: "beta".into(),
+                generation,
+                intent: CharityIntent::Reload,
+            },
+            Ok(json!({
+                "available": true,
+                "name": "公益小红花",
+                "active": true,
+                "loveBalanceText": "1",
+                "actions": { "donateLove": { "enabled": true } }
+            }))
+        ));
+        assert_eq!(session.warning.as_deref(), None);
+        session.warning = Some("已确认进度未能保存".into());
+        let reload = press(&mut session, CharityIntent::Reload, true).unwrap();
+        assert!(apply(
+            &mut session,
+            &reload,
+            Ok(json!({
+                "available": true,
+                "name": "刷新后",
+                "active": true,
+                "loveBalanceText": "1"
+            }))
+        ));
+        assert_eq!(session.warning.as_deref(), Some("已确认进度未能保存"));
+        assert!(session.note.as_deref().unwrap_or("").contains("已确认进度未能保存"));
+        assert!(!session.needs_refresh);
     }
 }

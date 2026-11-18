@@ -468,42 +468,47 @@ impl CharityService {
     }
 
     fn reconcile(&self, state: &CharityRedFlowerData) -> ProgressState {
-        let stored = load_progress(&self.account_id);
-        let mut merged = merge_progress(&stored, &self.progress.lock().expect("progress").clone());
-        let reached = reached_targets(state);
-        if !merged.initialized {
-            if reached.len() > 1 {
-                merged.claimed.extend(reached[..reached.len() - 1].iter().cloned());
-            }
-            if let Some(last) = reached.last() {
-                merged.pending.insert(last.clone());
-            }
-        } else {
-            for target in &reached {
-                if !merged.claimed.contains(target) && !merged.pending.contains(target) {
-                    merged.pending.insert(target.clone());
+        crate::services::activity_state_file::with_account_state(&self.account_id, || {
+            let stored = load_progress_unlocked(&self.account_id);
+            let mut merged =
+                merge_progress(&stored, &self.progress.lock().expect("progress").clone());
+            let reached = reached_targets(state);
+            if !merged.initialized {
+                if reached.len() > 1 {
+                    merged.claimed.extend(reached[..reached.len() - 1].iter().cloned());
+                }
+                if let Some(last) = reached.last() {
+                    merged.pending.insert(last.clone());
+                }
+            } else {
+                for target in &reached {
+                    if !merged.claimed.contains(target) && !merged.pending.contains(target) {
+                        merged.pending.insert(target.clone());
+                    }
                 }
             }
-        }
-        merged.initialized = true;
-        for target in &merged.claimed {
-            merged.pending.remove(target);
-        }
-        *self.progress.lock().expect("progress") = merged.clone();
-        let _warning = save_progress(&self.account_id, &merged);
-        merged
+            merged.initialized = true;
+            for target in &merged.claimed.clone() {
+                merged.pending.remove(target);
+            }
+            *self.progress.lock().expect("progress") = merged.clone();
+            let _warning = save_progress_unlocked(&self.account_id, &merged);
+            merged
+        })
     }
 
     fn remember_claimed(&self, target: &str) -> Option<String> {
-        let mut current = merge_progress(
-            &load_progress(&self.account_id),
-            &self.progress.lock().expect("progress").clone(),
-        );
-        current.initialized = true;
-        current.claimed.insert(target.to_owned());
-        current.pending.remove(target);
-        *self.progress.lock().expect("progress") = current.clone();
-        save_progress(&self.account_id, &current).err()
+        crate::services::activity_state_file::with_account_state(&self.account_id, || {
+            let mut current = merge_progress(
+                &load_progress_unlocked(&self.account_id),
+                &self.progress.lock().expect("progress").clone(),
+            );
+            current.initialized = true;
+            current.claimed.insert(target.to_owned());
+            current.pending.remove(target);
+            *self.progress.lock().expect("progress") = current.clone();
+            save_progress_unlocked(&self.account_id, &current).err()
+        })
     }
 
     fn ensure_account(&self) -> Result<()> {
@@ -716,7 +721,14 @@ fn state_path(account_id: &str) -> Option<std::path::PathBuf> {
     Some(path)
 }
 
+#[cfg(test)]
 fn load_progress(account_id: &str) -> ProgressState {
+    crate::services::activity_state_file::with_account_state(account_id, || {
+        load_progress_unlocked(account_id)
+    })
+}
+
+fn load_progress_unlocked(account_id: &str) -> ProgressState {
     if !account_is_usable(account_id) {
         return ProgressState::default();
     }
@@ -742,7 +754,24 @@ fn load_progress(account_id: &str) -> ProgressState {
     )
 }
 
-fn save_progress(account_id: &str, state: &ProgressState) -> std::result::Result<(), String> {
+#[cfg(test)]
+pub(crate) fn confirm_progress_target(
+    account_id: &str,
+    target: &str,
+) -> std::result::Result<(), String> {
+    crate::services::activity_state_file::with_account_state(account_id, || {
+        let mut state = load_progress_unlocked(account_id);
+        state.initialized = true;
+        state.claimed.insert(target.to_owned());
+        state.pending.remove(target);
+        save_progress_unlocked(account_id, &state)
+    })
+}
+
+fn save_progress_unlocked(
+    account_id: &str,
+    state: &ProgressState,
+) -> std::result::Result<(), String> {
     if !account_is_usable(account_id) {
         return Err(ACCOUNT_INVALID.to_owned());
     }
@@ -769,11 +798,17 @@ fn save_progress(account_id: &str, state: &ProgressState) -> std::result::Result
     if !file.get("charityRecords").and_then(serde_json::Value::as_object).is_some() {
         file["charityRecords"] = serde_json::json!({});
     }
+    let existing = record_to_state(
+        file.pointer(&format!("/charityRecords/{ACTIVITY_ID}"))
+            .and_then(|value| serde_json::from_value::<ProgressRecord>(value.clone()).ok())
+            .filter(|record| record.activity_id == ACTIVITY_ID.to_string()),
+    );
+    let merged = merge_progress(&existing, state);
     let record = ProgressRecord {
         activity_id: ACTIVITY_ID.to_string(),
-        initialized: state.initialized,
-        claimed_progress_targets: sorted_targets(&state.claimed),
-        pending_progress_targets: sorted_targets(&state.pending),
+        initialized: merged.initialized,
+        claimed_progress_targets: sorted_targets(&merged.claimed),
+        pending_progress_targets: sorted_targets(&merged.pending),
     };
     file["charityRecords"][ACTIVITY_ID.to_string()] =
         serde_json::to_value(record).unwrap_or(serde_json::Value::Null);
@@ -1132,5 +1167,99 @@ mod tests {
         let snapshot = again.snapshot().await.unwrap();
         assert_eq!(snapshot["progressRewards"][1]["claimed"], true);
         assert_eq!(snapshot["progressRewards"][1]["claimable"], false);
+    }
+
+    fn write_raw(account: &str, bytes: &[u8]) -> std::path::PathBuf {
+        let path = state_path(account).expect("test root");
+        std::fs::create_dir_all(path.parent().expect("parent")).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    #[test]
+    fn charity_save_keeps_stellar_records_and_an_old_file_without_charity_records() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let raw = r#"{"version":1,"records":{"7:2026072701:v1":{"seasonId":"7","activityId":"2026072701","catalogVersion":1,"confirmedOpenedNodeIds":["9"],"confirmedLitNodeIds":["9"],"noClaimableDays":{}}}}"#;
+        write_raw("shared", raw.as_bytes());
+        assert!(load_progress("shared").claimed.is_empty());
+        confirm_progress_target("shared", "30").unwrap();
+        let saved = std::fs::read_to_string(state_path("shared").unwrap()).unwrap();
+        let file: serde_json::Value = serde_json::from_str(&saved).unwrap();
+        assert_eq!(file["records"]["7:2026072701:v1"]["confirmedLitNodeIds"][0], "9");
+        assert_eq!(
+            file["charityRecords"][ACTIVITY_ID.to_string()]["claimedProgressTargets"][0],
+            "30"
+        );
+        confirm_progress_target("other", "90").unwrap();
+        let other = std::fs::read_to_string(state_path("other").unwrap()).unwrap();
+        assert!(!other.contains("\"30\""));
+        assert!(!saved.contains("\"90\""));
+    }
+
+    #[test]
+    fn bad_json_and_a_foreign_version_load_empty_and_save_does_not_overwrite() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let broken = b"not-json{";
+        let broken_path = write_raw("broken", broken);
+        assert!(load_progress("broken").claimed.is_empty());
+        assert!(confirm_progress_target("broken", "30").is_err());
+        assert_eq!(std::fs::read(&broken_path).unwrap(), broken);
+        let foreign = br#"{"version":2,"records":{"keep":true},"secret":"synthetic"}"#;
+        let foreign_path = write_raw("foreign", foreign);
+        assert!(load_progress("foreign").claimed.is_empty());
+        assert!(confirm_progress_target("foreign", "30").is_err());
+        assert_eq!(std::fs::read(&foreign_path).unwrap(), foreign);
+    }
+
+    #[tokio::test]
+    async fn a_failed_save_keeps_the_confirmed_target_without_another_send() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let foreign = br#"{"version":2,"records":{"keep":true}}"#;
+        let path = write_raw("save-fail", foreign);
+        let writes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = std::sync::Arc::clone(&writes);
+        let gate = gateway();
+        gate.install_reply_script(move |_service, method, body| {
+            if method == "List" {
+                return Ok(listed(flower(3, 62, SEED_CLAIMED, FLOW_HARVESTED), 0, 0, b""));
+            }
+            if method == "Operate" {
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let request = CharityRedFlowerOperateRequest::decode(body).unwrap();
+                assert_eq!(request.claim_progress_reward.unwrap().target, 60);
+                return Err(NetworkError::Gateway {
+                    code: ALREADY_CLAIMED,
+                    service_name: ACTIVITY_SERVICE.into(),
+                    method_name: "Operate".into(),
+                    error_message: "claimed".into(),
+                    client_seq: 1,
+                });
+            }
+            Ok(Vec::new())
+        });
+        let service = CharityService::new(gate, "save-fail");
+        let claimed = service.claim_progress(60).await.unwrap();
+        assert_eq!(claimed["persistenceWarning"], PERSIST_WARNING);
+        assert_eq!(claimed["alreadyClaimed"], true);
+        assert!(service.claim_progress(60).await.is_err());
+        assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(std::fs::read(&path).unwrap(), foreign);
+        let mut state = flower(3, 62, SEED_CLAIMED, FLOW_HARVESTED);
+        state.progress_rewards[1].status = 0;
+        let shown = service.dto_from_entry(
+            &ActivityData {
+                activity: Some(ActivityContent {
+                    activity_id: ACTIVITY_ID,
+                    name: "公益小红花".into(),
+                    ..ActivityContent::default()
+                }),
+                charity_red_flower: Some(state),
+                ..ActivityData::default()
+            },
+            None,
+            "20260901",
+        );
+        assert_eq!(shown["progressRewards"][1]["target"], "60");
+        assert_eq!(shown["progressRewards"][1]["claimed"], true);
     }
 }

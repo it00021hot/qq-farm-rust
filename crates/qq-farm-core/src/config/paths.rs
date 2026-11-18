@@ -96,6 +96,7 @@ mod test_data {
     /// 当前测试线程的数据目录。只在测试构建存在，发布构建不会读它。
     pub struct TestDataDir {
         dir: PathBuf,
+        delete_on_drop: bool,
     }
 
     impl TestDataDir {
@@ -105,7 +106,14 @@ mod test_data {
                 std::env::temp_dir().join(format!("qq-farm-lib-{}-{}", std::process::id(), n));
             fs::create_dir_all(&dir).expect("测试数据目录");
             STACK.with(|stack| stack.borrow_mut().push(dir.clone()));
-            Self { dir }
+            Self { dir, delete_on_drop: true }
+        }
+
+        /// 在另一线程使用已有的测试根。不删除目录，只在该线程的栈上持有。
+        pub fn attach(dir: &Path) -> Self {
+            let dir = dir.to_path_buf();
+            STACK.with(|stack| stack.borrow_mut().push(dir.clone()));
+            Self { dir, delete_on_drop: false }
         }
 
         #[must_use]
@@ -122,7 +130,9 @@ mod test_data {
                     stack.remove(pos);
                 }
             });
-            let _ = fs::remove_dir_all(&self.dir);
+            if self.delete_on_drop {
+                let _ = fs::remove_dir_all(&self.dir);
+            }
         }
     }
 
