@@ -20,6 +20,8 @@
 | **qq-farm-rust** | `main`（本提交：bot 10-17/10-22 增量：连接平台分离 + 会员礼包修复 + 节令答案标注 + 20261022 资源与物品图标） | 2026-10-25 | 客户端 1.15.1.4（QQ `1792637519008` / 微信 `1792639106589` 独立演进）+ 双 TSDK wasm 20261022 构建 + PlayerLogin 现代布局（game_scene_id=1、report_data 收敛，微信 ≥1.15 同走两段式）；会员礼包独立容错（partial 态 + lastError 面板化）+ SVIP 目录免 refresh；节令答题官方答案下标双端标注；奶茶互动 items_gained 实数 + 排行 shopOpened + 物品图标存在性映射（91 张新图）；Tauri 与 GPUI 双端同步（实机待验） |
 | **qq-farm-bot** | `28a9614` | 2026-10-25 | PR #106（80488ec 统一导航与配置存储 + 20261022 资源）+ cc78f2b（QQ/微信连接配置分离与微信登录更新）+ fecf531（会员礼包领取与失败状态）+ 57cddb3（节令答题答案标注）+ 46bb710（物品小图标与映射）+ 8aaa5d0（奶茶爆单收益，JS-only）+ 一批 web 样式提交 |
 
+上表是 2026-10-25 的历史评分，bot `28a9614` 不是当前对照。当前逐项矩阵在 [ALIGNMENT.md](ALIGNMENT.md)，对照 bot `6765449723270e3e1b8b4e83d6f545f10fa92eba`（2026-11-17）。下文能力矩阵里的「齐」没有按这个新提交重评。
+
 文档范围：**业务行为 + 面板 HTTP/Socket 契约**（不含改 Vue 面板本身）。
 
 ### 版本语义（避免混用）
@@ -3839,3 +3841,12 @@ bot 本轮 13 个提交**玩法层零变化**（活动/商城/日常自动化均
 - 天气任务领取未做。bot 路由没有领取接口，天气页只展示任务进度，没有领取按钮。`WeatherTaskOperateRequest` 在 proto 里注明是采集请求 field 107 的兼容别名，服务没有发送它，文档也没有领取用的 `operate_type`。研究节点奖励仍走已有的 `operate_type = 40`。不另造领取请求。
 - 还没验：真实 `WeatherChangeNotify` 到达后的下一次扫描，以及窗口上一次扫描结果是否还留在页面上。页面结果要等用户再次查看才更新。
 - 验证：`cargo +1.99.1 test -p qq-farm-core --lib services::weather:: -- --test-threads=1` 11 项通过；`weather_service_is_reused_for_the_account`、`weather_services_are_not_shared_across_accounts`、`weather_change_names_its_farm_and_other_notifies_do_not_clear_it`、`activies_change_notify_matches_real_proto_name` 各 1 项通过；`cargo +1.99.1 test -p qq-farm-nsh --lib weather -- --test-threads=1` 3 项通过。`RUSTUP_TOOLCHAIN=1.99.1 nsh check crates/qq-farm-nsh` 通过。`rust-toolchain.toml` 仍是 1.98.1；这些命令用已安装的 1.99.1，不能代替 1.98.1 或实机验收。
+
+### 2026-11-18 — 现行对照改为 bot 6765449，并补保存后的化肥检查
+
+现行逐项矩阵见 [ALIGNMENT.md](ALIGNMENT.md)。bot `28a9614` 只保留为 2026-10-25 历史评分。本条不把能力矩阵改成「齐」。
+
+- 保存购买有机肥或普通肥的开关、数量、阈值或检查间隔，且保存后对应开关仍开着、账号仍在运行时，按已保存的数量和阈值立刻检查购买。关着的类型不买。数量为 0 或未低于阈值时不提示购买成功。检查失败时设置保存仍保留，并显示失败。重复点击仍由原来的保存中状态挡住。
+- 以前 `fertilizer_check_and_buy` 把数量和阈值写成 0，所以即使调用也不会买。现在读取账号已保存的配置。
+- 天气任务领取仍按 ALIGNMENT 记为阻塞：bot 没有这条领取。
+- 验证：`cargo +1.99.1 test -p qq-farm-app --lib fertilizer_check_uses_saved_counts_and_thresholds -- --test-threads=1` 通过；`cargo +1.99.1 test -p qq-farm-nsh --lib settings -- --test-threads=1` 2 项通过；`cargo +1.99.1 test -p qq-farm-nsh --lib planting -- --test-threads=1` 5 项通过；`RUSTUP_TOOLCHAIN=1.99.1 nsh check crates/qq-farm-nsh` 通过。真实商城购买和窗口未验。工具链文件仍是 1.98.1。
