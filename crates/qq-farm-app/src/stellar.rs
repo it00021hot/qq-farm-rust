@@ -8,12 +8,22 @@ use crate::error::{AppError, AppResult};
 use crate::farm::require_worker_loop;
 use crate::session::AppContext;
 
+fn require_account(account_id: &str) -> AppResult<()> {
+    if account_id.is_empty() || account_id.chars().all(char::is_whitespace) {
+        Err(AppError::BadRequest("账号身份无效，未发送操作".into()))
+    } else {
+        Ok(())
+    }
+}
+
 pub async fn snapshot(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
+    require_account(account_id)?;
     let worker = require_worker_loop(ctx, account_id)?;
     worker.stellar().snapshot().await.map_err(AppError::from_core)
 }
 
 pub async fn claim_pass(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
+    require_account(account_id)?;
     let worker = require_worker_loop(ctx, account_id)?;
     let service = worker.stellar();
     let engine = Arc::clone(&ctx.engine);
@@ -32,6 +42,7 @@ pub async fn exchange(
     goods_id: i64,
     count: i64,
 ) -> AppResult<Value> {
+    require_account(account_id)?;
     let worker = require_worker_loop(ctx, account_id)?;
     let service = worker.stellar();
     let engine = Arc::clone(&ctx.engine);
@@ -45,6 +56,7 @@ pub async fn exchange(
 }
 
 pub async fn claim_solar(ctx: &AppContext, account_id: &str, term_id: i64) -> AppResult<Value> {
+    require_account(account_id)?;
     let worker = require_worker_loop(ctx, account_id)?;
     let service = worker.stellar();
     let engine = Arc::clone(&ctx.engine);
@@ -58,6 +70,7 @@ pub async fn claim_solar(ctx: &AppContext, account_id: &str, term_id: i64) -> Ap
 }
 
 pub async fn light(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
+    require_account(account_id)?;
     let worker = require_worker_loop(ctx, account_id)?;
     let service = worker.stellar();
     let engine = Arc::clone(&ctx.engine);
@@ -528,5 +541,20 @@ mod tests {
         let error = queued.await.unwrap().unwrap_err();
         assert!(error.to_string().contains("账号会话已变化"), "{error}");
         assert_eq!(acc_writes.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_blank_account_is_rejected_before_the_gateway() {
+        let _data = TestDataDir::enter();
+        let (ctx, _runtime, gateway) = context();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&calls);
+        gateway.install_reply_script(move |_service, _method, _body| {
+            count.fetch_add(1, Ordering::SeqCst);
+            Ok(Vec::new())
+        });
+        let error = exchange(&ctx, " ", 4, 1).await.unwrap_err();
+        assert!(error.to_string().contains("账号身份无效"), "{error}");
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 }

@@ -24,6 +24,7 @@ pub(crate) struct StellarSession {
     pub board: Option<StellarBoard>,
     pub failure: Option<String>,
     pub note: Option<String>,
+    pub warning: Option<String>,
     pub attempted: bool,
     pub needs_refresh: bool,
 }
@@ -75,6 +76,7 @@ struct SolarRow {
     name: String,
     can_claim: bool,
     status: String,
+    time_status: String,
     rewards: String,
 }
 
@@ -141,6 +143,32 @@ pub(crate) fn board_from(value: &Value) -> Option<StellarBoard> {
     })
 }
 
+pub(crate) fn exchange_refusal(
+    board: Option<&StellarBoard>,
+    goods_id: i64,
+    count: i64,
+) -> Option<&'static str> {
+    let Some(board) = board else {
+        return Some("activities.stellarPickGoods");
+    };
+    let Some(good) = board.goods.iter().find(|good| good.id == goods_id) else {
+        return Some("activities.stellarPickGoods");
+    };
+    if count <= 0 {
+        return Some("activities.stellarBadCount");
+    }
+    if !good.balance_known {
+        return Some("activities.stellarBalanceUnknown");
+    }
+    if good.unit_cost <= 0 {
+        return Some("activities.stellarBadCost");
+    }
+    if count > good.max_count {
+        return Some("activities.stellarOverMax");
+    }
+    None
+}
+
 pub(crate) fn press(
     session: &mut StellarSession,
     intent: StellarIntent,
@@ -150,7 +178,7 @@ pub(crate) fn press(
     running: bool,
 ) -> Option<StellarCommand> {
     if !running
-        || session.account_id.is_empty()
+        || session.account_id.trim().is_empty()
         || session.busy
         || session.needs_refresh && intent != StellarIntent::Reload
     {
@@ -170,8 +198,7 @@ pub(crate) fn press(
             }
         }
         StellarIntent::Exchange => {
-            let good = board?.goods.iter().find(|good| good.id == goods_id)?;
-            if count <= 0 || !good.balance_known || good.unit_cost <= 0 || count > good.max_count {
+            if exchange_refusal(board, goods_id, count).is_some() {
                 return None;
             }
         }
@@ -252,6 +279,8 @@ pub(crate) fn apply(
                 session.needs_refresh = false;
                 session.note = None;
             }
+            session.warning =
+                value.get("persistenceWarning").and_then(Value::as_str).map(str::to_owned);
             session.failure = None;
         }
         Err(message) => {
@@ -323,6 +352,14 @@ pub(crate) fn panel(session: Signal<StellarSession>, page: ActivityPage) -> impl
             move || session.get().note.is_some(),
             move || {
                 notice(move || SharedString::from(session.get().note.clone().unwrap_or_default()))
+            },
+        ))
+        .child(when(
+            move || session.get().warning.is_some(),
+            move || {
+                notice(move || {
+                    SharedString::from(session.get().warning.clone().unwrap_or_default())
+                })
             },
         ))
         .child(when(
@@ -423,9 +460,23 @@ fn body(
                 count.update(|value| *value = (*value + 1).min(max.max(1)));
             },
         ))
+        .child(text(move || {
+            exchange_refusal(session.get().board.as_ref(), goods_id.get(), count.get())
+                .map(text_key)
+                .unwrap_or_default()
+        }))
         .child(
             button(move || text_key("activities.stellarExchange"), ButtonVariant::Primary)
-                .disabled(move || session.get().busy || session.get().needs_refresh)
+                .disabled(move || {
+                    session.get().busy
+                        || session.get().needs_refresh
+                        || exchange_refusal(
+                            session.get().board.as_ref(),
+                            goods_id.get(),
+                            count.get(),
+                        )
+                        .is_some()
+                })
                 .on_press(move || {
                     let id = goods_id.get_untracked();
                     let chosen = count.get_untracked();
@@ -486,10 +537,17 @@ fn body(
                 let term = term.get_untracked();
                 let id = term.id;
                 let can_claim = term.can_claim;
+                let name = term.name.clone();
+                let status = term.status.clone();
+                let rewards = term.rewards.clone();
+                let time_key = solar_time_key(&term.time_status);
                 view()
                     .gap_1()
                     .child(
-                        text(format!("{} {} {}", term.name, term.status, term.rewards)).text_sm(),
+                        text(move || {
+                            format!("{} {} {} {}", name, status, text_key(time_key), rewards)
+                        })
+                        .text_sm(),
                     )
                     .child(
                         button(
@@ -600,12 +658,22 @@ fn solar_row(value: &Value) -> Option<SolarRow> {
         name: value.get("name").and_then(Value::as_str).unwrap_or("").to_owned(),
         can_claim: value.get("canClaim").and_then(Value::as_bool) == Some(true),
         status: value.get("statusCode").and_then(Value::as_str).unwrap_or("").to_owned(),
+        time_status: value.get("timeStatus").and_then(Value::as_str).unwrap_or("").to_owned(),
         rewards: value
             .get("rewards")
             .and_then(Value::as_array)
             .map(|rows| reward_line(rows))
             .unwrap_or_default(),
     })
+}
+
+fn solar_time_key(status: &str) -> &'static str {
+    match status {
+        "notStarted" => "activities.stellarNotStarted",
+        "expired" => "activities.stellarExpired",
+        "active" => "activities.stellarActive",
+        _ => "activities.stellarTimeUnknown",
+    }
 }
 
 fn reward_line(rows: &[Value]) -> String {
@@ -880,5 +948,44 @@ mod tests {
         assert_eq!(params.count, 2);
         let claim = saved.iter().find(|(method, _)| method == "ClaimSolarTerms").unwrap();
         assert_eq!(ClaimSolarTermsRequest::decode(claim.1.as_slice()).unwrap().term_id, 8);
+    }
+
+    #[test]
+    fn an_unselected_exchange_matches_press_and_a_save_warning_keeps_the_success() {
+        let session = loaded();
+        assert_eq!(
+            exchange_refusal(session.board.as_ref(), 0, 1),
+            Some("activities.stellarPickGoods")
+        );
+        let mut idle = session.clone();
+        assert!(press(&mut idle, StellarIntent::Exchange, 0, 1, 0, true).is_none());
+        let mut session = loaded();
+        let command = press(&mut session, StellarIntent::Claim, 0, 0, 0, true).unwrap();
+        assert!(apply(
+            &mut session,
+            &command,
+            Ok(json!({
+                "rewards": [{ "id": 1, "count": 1 }],
+                "persistenceWarning": "已确认进度未能保存",
+                "snapshot": { "season": { "pass": { "level": 2, "progress": 3, "progressMax": 10, "nodes": [
+                    { "level": 2, "claimable": true, "claimed": false, "locked": false, "rewards": [] }
+                ] } } }
+            }))
+        ));
+        assert_eq!(session.warning.as_deref(), Some("已确认进度未能保存"));
+        assert!(session.board.as_ref().unwrap().claimable);
+        assert!(!session.needs_refresh);
+        let board = board_from(&json!({
+            "season": { "pass": { "nodes": [] } },
+            "solarTerms": { "terms": [
+                { "id": "1", "name": "立春", "statusCode": "1", "timeStatus": "notStarted", "canClaim": false },
+                { "id": "2", "name": "雨水", "statusCode": "1", "timeStatus": "expired", "canClaim": false }
+            ] }
+        }))
+        .unwrap();
+        assert_eq!(board.terms[0].time_status, "notStarted");
+        assert_eq!(solar_time_key(&board.terms[0].time_status), "activities.stellarNotStarted");
+        assert_eq!(board.terms[1].time_status, "expired");
+        assert_eq!(solar_time_key(&board.terms[1].time_status), "activities.stellarExpired");
     }
 }

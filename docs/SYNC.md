@@ -4025,3 +4025,15 @@ bot 本轮 13 个提交**玩法层零变化**（活动/商城/日常自动化均
 - 固定基准的测试夹具里仍然没有千星官方 hex，不编造。
 - 离线：core `services::stellar` 11 项通过。app `stellar` 4 项通过，兑换、点星和 V1 领取走 app 门面。NSH `features::stellar` 4 项通过，其中 `dispatch_stellar_sends_the_pressed_exchange_and_solar_claim` 用 `press` 的命令调用生产 `dispatch_stellar`。活动目录 `wish_is_a_directory_shelf` 确认标签 `activities.stellar` 和路由 `stellar`。`runtime::worker_loop::tests` 32 项、core `services::autumn_wish` 14 项、core `services::solar_calendar` 7 项通过。`nsh check crates/qq-farm-nsh` 通过。工具链文件仍是 1.98.1，命令用已安装的 1.99.1。
 - 待独立复验。窗口未打开，真实接口未发。当前是否仍开放未知。真实星砂或节令消耗未知，不承诺免费。
+
+### 2026-11-19 — 千星 023B
+
+023A 的定向结果已经由独立审计接受为功能信息，不要求照搬四段 Vue 外观。窗口仍未验。本条只收四项合同残留，不把 `ec905c8` 或 023A 改写成一开始就通过审计。七夕仍未开始。没有连接服务端，没有启动窗口，没有构建 debug 客户端，没有读真实数据目录。
+
+- 可点只看当前回包 `field_2 && !field_3`。已确认的点亮仍作历史展示并参与单调合并。仅有历史打开不再变成可点。没有当前支持时，当天是待同步，未到的日期是未开放，`1034038` 仍是今日已领取。
+- 星宿文件写失败时，成功、奖励和结果保持不变，DTO 与页面带「已确认进度未能保存」。不因此重发点星或兑换。已确认进度留在该服务内存。读快照不会补写。磁盘恢复后，下一次点星成功才再次保存，这与基准只在写操作里持久化一致。
+- 空账号和纯空白不再落到 `default` 文件。写操作直接拒绝且不发包。非空账号仍用原来的 sha256，不把 `acc` 和 ` acc` 收成同一个键，也不迁移或删除已有文件。
+- 节令列表按 V1 的开始、结束和 `server_time` 显示未开始、进行中、已过期。结束时刻本身仍算进行中，不用秋祈那个结束即关闭的窗口。领取仍只看 `status==2`。未选商品或数量不合法时，兑换按钮直接禁用并给出同一套理由，取消确认仍然不发。
+- 固定基准仍然没有千星官方 hex，不编造。
+- 离线：core `services::stellar` 15 项通过。app `stellar` 5 项通过。NSH `features::stellar` 5 项通过。`runtime::worker_loop::tests` 32 项、core `services::solar_calendar` 7 项通过。`nsh check crates/qq-farm-nsh` 通过。工具链文件仍是 1.98.1，命令用已安装的 1.99.1。秋祈源码没改，没有重跑。
+- 待独立复验。窗口未打开，真实接口未发。当前是否仍开放未知。真实消耗未知。

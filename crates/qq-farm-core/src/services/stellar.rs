@@ -38,6 +38,8 @@ const EXCHANGE_SHOP: i64 = 1;
 const LIGHT: i64 = 21;
 const NOTHING_TO_CLAIM: i64 = 1_034_038;
 const SESSION_MOVED: &str = "账号会话已变化，未发送操作";
+const ACCOUNT_INVALID: &str = "账号身份无效，未发送操作";
+const PERSIST_WARNING: &str = "已确认进度未能保存";
 const DAY_SECONDS: i64 = 86_400;
 const BEIJING_OFFSET: i64 = 8 * 60 * 60;
 
@@ -113,6 +115,7 @@ pub struct StellarService {
     account_id: String,
     mutation_lock: tokio::sync::Mutex<()>,
     nodes: Mutex<Vec<ConstellationNode>>,
+    confirmed: Mutex<BTreeMap<String, ConstellationRecord>>,
 }
 
 impl StellarService {
@@ -121,9 +124,18 @@ impl StellarService {
         let account_id = account_id.into();
         Self {
             gateway,
-            account_id: if account_id.is_empty() { "default".into() } else { account_id },
+            account_id,
             mutation_lock: tokio::sync::Mutex::new(()),
             nodes: Mutex::new(Vec::new()),
+            confirmed: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    fn ensure_account(&self) -> Result<()> {
+        if account_is_usable(&self.account_id) {
+            Ok(())
+        } else {
+            Err(Error::Business(ACCOUNT_INVALID.into()))
         }
     }
 
@@ -156,6 +168,7 @@ impl StellarService {
         &self,
         still_current: impl Fn() -> bool,
     ) -> Result<serde_json::Value> {
+        self.ensure_account()?;
         let _guard = self.mutation_lock.lock().await;
         if !still_current() {
             return Err(Error::Business(SESSION_MOVED.into()));
@@ -197,6 +210,7 @@ impl StellarService {
         count: i64,
         still_current: impl Fn() -> bool,
     ) -> Result<serde_json::Value> {
+        self.ensure_account()?;
         if goods_id <= 0 {
             return Err(Error::Business("活动商店中未找到指定商品".into()));
         }
@@ -269,6 +283,7 @@ impl StellarService {
     }
 
     pub async fn light_if(&self, still_current: impl Fn() -> bool) -> Result<serde_json::Value> {
+        self.ensure_account()?;
         let _guard = self.mutation_lock.lock().await;
         if !still_current() {
             return Err(Error::Business(SESSION_MOVED.into()));
@@ -294,12 +309,13 @@ impl StellarService {
                 let active =
                     constellation_write_window(activity.begin_time, activity.end_time, now);
                 if active && (1..=28).contains(&day) {
-                    self.remember_no_claimable(&season, activity, day);
+                    let warning = self.remember_no_claimable(&season, activity, day);
                     let mut payload = serde_json::json!({
                         "outcome": "nothingToClaim",
                         "message": "今日星宿奖励已经领取，无需重复操作",
                         "constellation": self.constellation_snapshot(&season),
                     });
+                    attach_warning(&mut payload, warning);
                     match self.snapshot().await {
                         Ok(snapshot) => payload["snapshot"] = snapshot,
                         Err(_) => payload["refreshRequired"] = serde_json::json!(true),
@@ -325,11 +341,12 @@ impl StellarService {
             .as_ref()
             .and_then(|data| data.constellation.clone())
             .ok_or_else(|| Error::Business("星座操作成功但回包缺少动态状态".into()))?;
-        self.remember_nodes(&season, activity, &data.nodes);
+        let warning = self.remember_nodes(&season, activity, &data.nodes);
         let mut payload = serde_json::json!({
             "outcome": "lighted",
             "constellation": self.constellation_snapshot(&season),
         });
+        attach_warning(&mut payload, warning);
         match self.snapshot().await {
             Ok(snapshot) => payload["snapshot"] = snapshot,
             Err(_) => payload["refreshRequired"] = serde_json::json!(true),
@@ -346,6 +363,7 @@ impl StellarService {
         term_id: i64,
         still_current: impl Fn() -> bool,
     ) -> Result<serde_json::Value> {
+        self.ensure_account()?;
         if term_id <= 0 {
             return Err(Error::Business("termId 必须是正十进制整数".into()));
         }
@@ -377,7 +395,7 @@ impl StellarService {
             "rewards": reply.rewards.iter().map(|item| serde_json::json!({
                 "id": item.item_id, "count": item.count, "name": item_name(item.item_id),
             })).collect::<Vec<_>>(),
-            "term": reply.term.as_ref().map(solar_term_value),
+            "term": reply.term.as_ref().map(|term| solar_term_value(term, terms.server_time)),
         });
         match self.snapshot().await {
             Ok(snapshot) => payload["snapshot"] = snapshot,
@@ -465,9 +483,37 @@ impl StellarService {
             return serde_json::Value::Null;
         };
         let identity = identity_for(season, activity);
-        let saved = load_record(&self.account_id, &identity);
+        let saved = self.saved_state(&identity);
         let nodes = self.nodes.lock().expect("nodes").clone();
         constellation_value(season, &nodes, &saved)
+    }
+
+    fn saved_state(&self, identity: &StateIdentity) -> ConstellationRecord {
+        let file = load_record(&self.account_id, identity);
+        let memory = self
+            .confirmed
+            .lock()
+            .expect("confirmed")
+            .get(&record_key(identity))
+            .cloned()
+            .unwrap_or_else(|| empty_record(identity));
+        merge_records(identity, &file, &memory)
+    }
+
+    fn remember_record(
+        &self,
+        identity: &StateIdentity,
+        incoming: &ConstellationRecord,
+    ) -> Option<String> {
+        let merged = merge_records(identity, &self.saved_state(identity), incoming);
+        self.confirmed.lock().expect("confirmed").insert(record_key(identity), merged.clone());
+        match persist_record(&self.account_id, identity, &merged) {
+            Ok(saved) => {
+                self.confirmed.lock().expect("confirmed").insert(record_key(identity), saved);
+                None
+            }
+            Err(_) => Some(PERSIST_WARNING.to_owned()),
+        }
     }
 
     fn remember_nodes(
@@ -475,7 +521,7 @@ impl StellarService {
         season: &SeasonInfo,
         activity: &SeasonActivity,
         nodes: &[ConstellationNode],
-    ) {
+    ) -> Option<String> {
         let identity = identity_for(season, activity);
         let mut opened = Vec::new();
         let mut lit = Vec::new();
@@ -498,11 +544,16 @@ impl StellarService {
             confirmed_lit_node_ids: lit,
             no_claimable_days: BTreeMap::new(),
         };
-        let _ = persist_record(&self.account_id, &identity, &incoming);
         *self.nodes.lock().expect("nodes") = nodes.to_vec();
+        self.remember_record(&identity, &incoming)
     }
 
-    fn remember_no_claimable(&self, season: &SeasonInfo, activity: &SeasonActivity, day: i64) {
+    fn remember_no_claimable(
+        &self,
+        season: &SeasonInfo,
+        activity: &SeasonActivity,
+        day: i64,
+    ) -> Option<String> {
         let identity = identity_for(season, activity);
         let mut incoming = empty_record(&identity);
         incoming.no_claimable_days.insert(
@@ -512,7 +563,17 @@ impl StellarService {
                 server_time: season.server_time.to_string(),
             },
         );
-        let _ = persist_record(&self.account_id, &identity, &incoming);
+        self.remember_record(&identity, &incoming)
+    }
+}
+
+fn account_is_usable(account_id: &str) -> bool {
+    !account_id.is_empty() && !account_id.chars().all(char::is_whitespace)
+}
+
+fn attach_warning(payload: &mut serde_json::Value, warning: Option<String>) {
+    if let Some(warning) = warning {
+        payload["persistenceWarning"] = serde_json::json!(warning);
     }
 }
 
@@ -594,6 +655,9 @@ struct StateFile {
 }
 
 fn load_record(account_id: &str, identity: &StateIdentity) -> ConstellationRecord {
+    if !account_is_usable(account_id) {
+        return empty_record(identity);
+    }
     let path = state_path(account_id);
     let file = crate::infra::json_db::read_json_with_default(path, || StateFile {
         version: 1,
@@ -619,6 +683,9 @@ fn persist_record(
     identity: &StateIdentity,
     incoming: &ConstellationRecord,
 ) -> Result<ConstellationRecord> {
+    if !account_is_usable(account_id) {
+        return Err(Error::Business(ACCOUNT_INVALID.into()));
+    }
     let path = state_path(account_id);
     let mut file = crate::infra::json_db::read_json_with_default(path.clone(), || StateFile {
         version: 1,
@@ -686,17 +753,31 @@ fn solar_terms_value(
 ) -> serde_json::Value {
     serde_json::json!({
         "serverTime": reply.server_time,
-        "terms": reply.terms.iter().map(solar_term_value).collect::<Vec<_>>(),
+        "terms": reply.terms.iter().map(|term| solar_term_value(term, reply.server_time)).collect::<Vec<_>>(),
     })
+}
+
+fn solar_time_status(start: i64, end: i64, now: i64) -> &'static str {
+    if start > end {
+        "unavailable"
+    } else if now < start {
+        "notStarted"
+    } else if now > end {
+        "expired"
+    } else {
+        "active"
+    }
 }
 
 fn solar_term_value(
     term: &crate::proto::generated::gamepb::solartermspb::SolarTermInfo,
+    now: i64,
 ) -> serde_json::Value {
     serde_json::json!({
         "id": term.term_id.to_string(),
         "name": text_bytes(&term.name),
         "statusCode": term.status.to_string(),
+        "timeStatus": solar_time_status(term.begin_time, term.end_time, now),
         "canClaim": term.status == 2,
         "startTime": term.begin_time,
         "endTime": term.end_time,
@@ -883,8 +964,6 @@ fn visual_state(
 ) -> &'static str {
     let id = group.node_id.to_string();
     let confirmed_lit = saved.confirmed_lit_node_ids.iter().any(|saved_id| saved_id == &id);
-    let confirmed_open =
-        confirmed_lit || saved.confirmed_opened_node_ids.iter().any(|saved_id| saved_id == &id);
     let dynamic_lit = node.is_some_and(|node| node.field_3);
     let dynamic_open = node.is_some_and(|node| node.field_2);
     let no_claimable = saved.no_claimable_days.contains_key(&group.order.to_string());
@@ -892,7 +971,7 @@ fn visual_state(
         "lit"
     } else if no_claimable {
         "claimedToday"
-    } else if (confirmed_open || dynamic_open) && !dynamic_lit && !confirmed_lit {
+    } else if dynamic_open && !dynamic_lit {
         "lightable"
     } else if day.is_some_and(|day| group.order > day) {
         "locked"
@@ -1155,6 +1234,11 @@ mod tests {
         let service = StellarService::new(gateway, "acc");
         let value = service.light().await.unwrap();
         assert_eq!(value["outcome"], "nothingToClaim");
+        assert!(value["constellation"]["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|group| group["visualState"] == "claimedToday"));
         closed.store(true, std::sync::atomic::Ordering::SeqCst);
         assert!(service.light().await.is_err());
         assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 2);
@@ -1298,6 +1382,7 @@ mod tests {
         first.light().await.unwrap();
         let second = StellarService::new(gateway, "alpha");
         let snapshot = second.snapshot().await.unwrap();
+        assert_eq!(snapshot["constellation"]["groups"].as_array().unwrap().len(), 28);
         assert_eq!(snapshot["constellation"]["groups"][0]["visualState"], "lit");
         assert_eq!(snapshot["constellation"]["groups"][0]["name"], "角宿");
         assert!(snapshot["constellation"]["rules"][1].as_str().unwrap().contains("星宿轮转"));
@@ -1412,5 +1497,176 @@ mod tests {
         mode.store(4, std::sync::atomic::Ordering::SeqCst);
         assert_eq!(service.light().await.unwrap()["outcome"], "nothingToClaim");
         assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 5);
+    }
+
+    #[test]
+    fn cached_open_does_not_become_lightable() {
+        let group = CatalogGroup {
+            id: "1".into(),
+            order: 1,
+            node_id: 1,
+            name: "角宿".into(),
+            rewards: vec![],
+        };
+        let identity = StateIdentity {
+            season_id: "7".into(),
+            activity_id: "2026072701".into(),
+            catalog_version: 1,
+        };
+        let mut saved = empty_record(&identity);
+        saved.confirmed_opened_node_ids.push("1".into());
+        let closed = ConstellationNode {
+            node_id: 1,
+            field_2: false,
+            field_3: false,
+            ..ConstellationNode::default()
+        };
+        assert_eq!(visual_state(&group, Some(1), Some(&closed), &saved), "claimableUnknown");
+        assert_eq!(visual_state(&group, Some(2), Some(&closed), &saved), "unknown");
+        assert_eq!(visual_state(&group, None, Some(&closed), &saved), "unknown");
+        let future = CatalogGroup {
+            id: "3".into(),
+            order: 3,
+            node_id: 1,
+            name: "氐宿".into(),
+            rewards: vec![],
+        };
+        assert_eq!(visual_state(&future, Some(1), Some(&closed), &saved), "locked");
+        let opened = ConstellationNode { field_2: true, ..closed.clone() };
+        assert_eq!(visual_state(&group, Some(1), Some(&opened), &saved), "lightable");
+        let lit = ConstellationNode { field_2: true, field_3: true, ..closed.clone() };
+        assert_eq!(visual_state(&group, Some(1), Some(&lit), &saved), "lit");
+        saved.confirmed_lit_node_ids.push("1".into());
+        assert_eq!(visual_state(&group, Some(1), Some(&closed), &saved), "lit");
+        saved.confirmed_lit_node_ids.clear();
+        saved.no_claimable_days.insert(
+            "1".into(),
+            ClaimObservation { observed_at: "1".into(), server_time: "2".into() },
+        );
+        assert_eq!(visual_state(&group, Some(1), Some(&opened), &saved), "claimedToday");
+    }
+
+    #[test]
+    fn blank_accounts_do_not_share_a_file_and_distinct_ids_stay_distinct() {
+        let data = crate::config::paths::TestDataDir::enter();
+        let identity = StateIdentity {
+            season_id: "7".into(),
+            activity_id: "2026072701".into(),
+            catalog_version: 1,
+        };
+        assert!(persist_record(" ", &identity, &empty_record(&identity)).is_err());
+        assert!(persist_record("", &identity, &empty_record(&identity)).is_err());
+        assert!(load_record(" ", &identity).confirmed_lit_node_ids.is_empty());
+        let mut kept = empty_record(&identity);
+        kept.confirmed_lit_node_ids.push("1".into());
+        persist_record("acc", &identity, &kept).unwrap();
+        assert!(load_record(" acc", &identity).confirmed_lit_node_ids.is_empty());
+        let other = StateIdentity { catalog_version: 2, ..identity.clone() };
+        assert!(load_record("acc", &other).confirmed_lit_node_ids.is_empty());
+        let path = state_path("acc");
+        std::fs::write(&path, "{not-json").unwrap();
+        assert!(load_record("acc", &identity).confirmed_lit_node_ids.is_empty());
+        assert!(!data
+            .path()
+            .join(format!("activity-center-state-{}.json", account_token("default")))
+            .exists());
+    }
+
+    #[tokio::test]
+    async fn a_failed_save_keeps_the_success_and_the_previous_confirmation() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let round = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = Arc::clone(&round);
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = Arc::clone(&writes);
+        let gateway = gateway();
+        gateway.install_reply_script(move |_service, method, body| {
+            if method == "Operate" && operate_kind(body) == LIGHT {
+                let step = seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let node = if step == 0 {
+                    ConstellationNode { node_id: 1, field_3: true, ..ConstellationNode::default() }
+                } else {
+                    ConstellationNode {
+                        node_id: 2,
+                        field_2: true,
+                        field_3: false,
+                        ..ConstellationNode::default()
+                    }
+                };
+                return Ok(ActivityOperateReply {
+                    activity_id: 2_026_072_701,
+                    operate_type: LIGHT,
+                    data: Some(ActivityData {
+                        constellation: Some(ConstellationData {
+                            nodes: vec![node],
+                            ..ConstellationData::default()
+                        }),
+                        ..ActivityData::default()
+                    }),
+                    ..ActivityOperateReply::default()
+                }
+                .encode_to_vec());
+            }
+            if method == "GetSeasonInfo" {
+                return Ok(GetSeasonInfoReply { season_info: Some(season(1_700_000_000, 0, 1)) }
+                    .encode_to_vec());
+            }
+            Err(NetworkError::Phase(method.into()))
+        });
+        let service = StellarService::new(gateway, "alpha");
+        service.light().await.unwrap();
+        let path = state_path("alpha");
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let value = service.light().await.unwrap();
+        assert_eq!(value["outcome"], "lighted");
+        assert_eq!(value["persistenceWarning"], PERSIST_WARNING);
+        assert_eq!(value["constellation"]["groups"][0]["visualState"], "lit");
+        assert_eq!(value["constellation"]["groups"][1]["visualState"], "lightable");
+        assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 2);
+        std::fs::remove_dir(&path).unwrap();
+        let snapshot = service.snapshot().await.unwrap();
+        assert_eq!(snapshot["constellation"]["groups"][0]["visualState"], "lit");
+        assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn the_same_term_with_another_status_is_not_claimed_and_a_blank_account_sends_nothing() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = Arc::clone(&calls);
+        let gateway = gateway();
+        gateway.install_reply_script(move |_service, method, _body| {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if method == "GetSolarTerms" {
+                return Ok(crate::proto::generated::gamepb::solartermspb::GetSolarTermsReply {
+                    server_time: 150,
+                    terms: vec![crate::proto::generated::gamepb::solartermspb::SolarTermInfo {
+                        term_id: 8,
+                        status: 1,
+                        begin_time: 200,
+                        end_time: 300,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }
+                .encode_to_vec());
+            }
+            Err(NetworkError::Phase(method.into()))
+        });
+        let service = StellarService::new(Arc::clone(&gateway), "solar");
+        let error = service.claim_solar(8).await.unwrap_err();
+        assert!(error.to_string().contains("不可领取"), "{error}");
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let blank = StellarService::new(gateway, " ");
+        assert!(blank.claim_solar(8).await.unwrap_err().to_string().contains("账号身份无效"));
+        assert!(blank.light().await.unwrap_err().to_string().contains("账号身份无效"));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let terms = service.solar_reply().await.unwrap();
+        let shown = solar_term_value(&terms.terms[0], terms.server_time);
+        assert_eq!(shown["timeStatus"], "notStarted");
+        assert_eq!(solar_time_status(100, 120, 130), "expired");
+        assert_eq!(solar_time_status(100, 120, 120), "active");
     }
 }
