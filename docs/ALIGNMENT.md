@@ -12,11 +12,11 @@
 | --- | --- | --- | --- | --- | --- |
 | AUTH-01 | 用登录码添加账号 | 代码已有。bot 账号路由；`qq-farm-app::accounts::upsert_account`；NSH `accounts.rs` 登录码输入 | 无 | 未验 | 未验 |
 | AUTH-02 | 微信扫码登录 | 代码已有。bot `wx-login/service.ts`、`/api/wx-login/tasks`；`qq-farm-app::wx_login`；NSH `accounts.rs` 二维码 | 无 | 未验 | 未验 |
-| AUTH-03 | QQ NapCat 扫码 | 代码缺失。bot `qq-login/service.ts` 的 `loginSettings` 要求 `qqQrLogin`、`napCatEndpoint`、`napCatSignature`。Rust `qrlogin.rs` 是另一条小程序扫码，NSH 没有 NapCat 入口 | 无 | 未验 | 未验 |
+| AUTH-03 | QQ NapCat 扫码 | 代码已有，可选。bot `qq-login/service.ts` 在 `qqQrLogin` 开启且地址和签名都有时，向 NapCat 发 `/api/qq/login/qrcode`、`/status`、`/miniapp/code`、`/logout`，头是 `X-API-Signature`。默认关闭，登录码和微信扫码不改道。NSH 账号页可保存这三项并走扫码状态；确认后的 code 交给现有 `upsert_account`，平台仍是 qq。取消或换代后的迟到结果不入库 | `services::napcat_login` 4 项与 `displayed_status_follows_the_napcat_action_and_late_flows_drop`。没有真实 NapCat | 未验 | 未验 |
 | AUTH-04 | 启停和删除账号 | 代码已有。bot `/api/accounts/:id/start`、`stop`；`accounts::start_account`、`stop_account`、`delete_account`；NSH 账号页 | 无 | 未验 | 未验 |
 | AUTH-05 | Web 面板密码登录 | 语义待确认。bot `auth-routes.ts` 的 `POST /api/login`。桌面 `auth::local_owner_session` 不设密码门。这不是已对齐，本批也不加密码门 | 无 | 未验 | 未验 |
 
-本组 5 项：代码已有 3，代码缺失 1，语义待确认 1。
+本组 5 项：代码已有 4，语义待确认 1。
 
 ## 农场
 
@@ -101,7 +101,7 @@
 
 ## 基线计数
 
-基线 30 项。代码已有 27，代码缺失 1（AUTH-03），语义待确认 1（AUTH-05），范围待核实 1（ACT-02）。窗口通过 0，真实接口通过 0。没有「验证通过」项。
+基线 30 项。代码已有 28，语义待确认 1（AUTH-05），范围待核实 1（ACT-02）。窗口通过 0，真实接口通过 0。没有「验证通过」项。
 
 ## 非基线
 

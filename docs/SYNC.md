@@ -3888,3 +3888,12 @@ bot 本轮 13 个提交**玩法层零变化**（活动/商城/日常自动化均
 - 活动窗口仍是全服一份。断线调用 `invalidate_activity_windows`，`loaded` 和 `loaded_at` 都清掉，下次拉取前不再当作已加载。一个账号断线会让这份共享日程变陈旧。Rust 没有 bot 那种进行中的 `pendingSnapshot` 可以丢弃，天气面板每次直接请求。
 - NSH 已显示的扫描要同时对上 `visitSession` 和 `visitGeneration`。代次变化、换了新 worker，或读取代次失败，都不再显示旧结果。
 - 待验：窗口在断线后扫掉旧结果，以及真实网关断线。旧活动、NapCat、密码门未碰。
+
+### 2026-11-18 — 可选 NapCat QQ 扫码
+
+本条只补 AUTH-03。默认仍关闭，登录码和微信扫码不改道。不把能力矩阵改成「齐」。没有连接真实 NapCat，没有真实 QQ 扫码。密码门未碰。
+
+- 对照 bot `6765449`：`qq-login/service.ts` 的 `createLoginTask`、`queryLoginStatus`、`getMiniappCode`、`cancelLoginTask`。地址去掉末尾斜杠后分别 POST `/api/qq/login/qrcode`、`/api/qq/login/status`（`refresh: false`）、`/api/qq/miniapp/code`（`appId` `1112386029`）、`/api/qq/logout`。请求头 `X-API-Signature`。超时 120 秒。`qqQrLogin` 关闭或地址、签名缺一不可调用。`AccountModal.vue` 按 `waiting_scan`、`scanned`、`confirmed`、`cancelled`/`expired`/`failed` 推进，确认后把 code 交给添加账号；`qqFlowVersion` 变化后丢掉迟到结果。
+- Rust `napcat_login` 按上述路径和文案适配。设置存在现有 `store.json` 的 `loginSettings`，与 QQ 机器人凭据同一套全局配置，不另建密钥库。测试只写内存。签名的 Debug 输出是 `<redacted>`，错误文案不带签名或 code。
+- NSH 账号页可以保存开关、地址和签名。开启后能取二维码、看状态、取消，并在确认后把 code 交给现有 `upsert_account`，平台是 qq。取消或换代后先取到的 code 不会入库。
+- 待验：真实 NapCat 服务、真实 QQ 扫码，以及窗口上的二维码和状态。没有部署或注册 NapCat。
