@@ -48,9 +48,9 @@
 | RANCH-01 | 牧场手动操作和巡查 | 代码已有。bot `services/ranch/*`、`/api/ranch/:action`。`qq-farm-app::ranch`。NSH `ranch.rs` | 无 | 未验 | 未验 |
 | RANCH-02 | 牧草低于阈值才补，自动出售留下 7001 | 代码已有。bot `ranch/automation.ts` 用 `ranch_grass_threshold_percent`；`warehouse.ts` `id === 7001` 跳过。Rust `ranch_patrol::grass_top_up`、`warehouse::included_in_auto_sell` | 仓库有对应测试，本批未跑 | 未验 | 未验 |
 | RANCH-03 | 便便优先兑换有机化肥 | 代码已有。`6d7aebe` 起、`c500e08` 的 `ranch/automation.ts`：`ranch_market_organic` 默认开，旧配置缺这个字段时也按开。只使用物品 7002 的便便，先兑商品 80012（4 小时有机肥），再兑 80011（1 小时）。限购和余额决定数量，付不起就停，不使用其它货币的同名商品。集市没开仍记下一轮；接口失败不把这轮记成完成，也不立刻重试。便便增加会把下一轮巡查提前到约 20 秒。Rust 巡查在出售之后调用 `exchange_poop_organic`，设置页开关走原来的保存 | `patrol_exchanges_four_hour_organic_before_one_hour_and_stops_cleanly`、`missing_market_switch_stays_on_and_the_save_path_can_change_it`。没有真实兑换 | 未验 | 未验 |
-| RANCH-04 | 窝棚分组、幼崽补栏和一键喂养 | 未实现。`c500e08` 增加窝棚幼崽优先级、先放背包再购买，以及一键喂养。Rust 巡查仍按原有放养和分桶喂养，没有这组入口 | 无 | 未验 | 未验 |
+| RANCH-04 | 窝棚分组、幼崽补栏和一键喂养 | 代码已有，分三块。分组：设施按模块 6 窝、7 棚、8 牧草机排列，同组合计只数和容量，组内动物按栏位再按编号。幼崽：`ranch_coop_cub_priority` / `ranch_shed_cub_priority` 默认空；旧配置缺字段仍是空。背包优先时先按这份顺序放养背包幼崽，放满或失败后才打开商店；指定动物时只放该动物再买。数量仍受空位、余额、单次上限和限购约束，取消确认不发购买。一键喂养：普通罐头要求桶里有时长且有不受限的可喂动物，有机罐头要求桶里有时长且有可喂动物；不满足时按钮不可用，不发请求 | `patrol_places_saved_cubs_before_opening_the_shop`、`bag_cubs_place_the_saved_order_ahead_of_the_default_order`、`missing_cub_priority_stays_empty_and_a_mismatched_id_is_kept_out`、`pens_are_grouped_coop_then_shed_and_animals_follow_slot`、`feed_all_stays_off_without_time_or_a_feedable_animal`、`moving_a_cub_earlier_keeps_cubs_that_are_not_on_screen`。没有真实放养、购买或喂养 | 未验 | 未验 |
 
-本组 4 项：代码已有 3，未实现 1。单次集市兑换拒绝余额不足已在 `ranch::exchange`。新提交里禁用购买按钮和收紧数量上限是界面，不单列、不重做。
+本组 4 项：代码已有 4。单次集市兑换拒绝余额不足已在 `ranch::exchange`。新提交里禁用购买按钮和收紧数量上限是界面，不单列、不重做。
 
 ## 背包与商店
 
@@ -106,7 +106,7 @@
 
 ## 基线计数
 
-基线 35 项。代码已有 32，未实现 1（RANCH-04），桌面差异 1（AUTH-05），范围待核实 1（ACT-02）。窗口通过 0，真实接口通过 0。没有「验证通过」项。空账号总览曾打开过；导航和其他页面没有窗口证据。`54fda84` 上的 1203 项测试不是本基准的全量回归。
+基线 35 项。代码已有 33，未实现 0，桌面差异 1（AUTH-05），范围待核实 1（ACT-02）。窗口通过 0，真实接口通过 0。没有「验证通过」项。空账号总览曾打开过；导航和其他页面没有窗口证据。`54fda84` 上的 1203 项测试不是本基准的全量回归。代码已有不等于对齐完成。
 
 ## 非基线
 

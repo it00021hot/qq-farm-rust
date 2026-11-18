@@ -984,10 +984,64 @@ async fn buy_phase(
     if facility_ids.is_empty() {
         return Ok((cells, bag, false));
     }
+    let saved = crate::models::store::account_config::get_automation(Some(account_id));
+    let mut blocked = HashSet::new();
+    if plan.bag_first {
+        for facility_id in &facility_ids {
+            if hold(account_id) {
+                return Ok((cells, bag, true));
+            }
+            let Some(kind) = cells
+                .facilities
+                .iter()
+                .find(|facility| facility.instance_id == *facility_id)
+                .map(stall_kind)
+            else {
+                continue;
+            };
+            let priority = if kind == super::NEST {
+                saved.ranch_coop_cub_priority.as_slice()
+            } else {
+                saved.ranch_shed_cub_priority.as_slice()
+            };
+            let finished = place_available(
+                gateway,
+                account_id,
+                flags,
+                *facility_id,
+                kind,
+                None,
+                priority,
+                &mut cells,
+                &mut bag,
+            )
+            .await?;
+            if hold(account_id) {
+                return Ok((cells, bag, true));
+            }
+            if !finished {
+                blocked.insert(*facility_id);
+            }
+        }
+    }
+    let room_left = facility_ids.iter().any(|facility_id| {
+        !blocked.contains(facility_id)
+            && cells
+                .facilities
+                .iter()
+                .find(|facility| facility.instance_id == *facility_id)
+                .is_some_and(|facility| stall_room(facility) > 0)
+    });
+    if !room_left {
+        return Ok((cells, bag, false));
+    }
     let now = crate::utils::time::get_server_time_secs();
     let info = super::shop_info(gateway, super::SHOP_CUBS).await?;
     let mut offers = super::shop_offers(&info.goods_list, super::SHOP_CUBS, now);
     for facility_id in facility_ids {
+        if blocked.contains(&facility_id) {
+            continue;
+        }
         let Some(kind) = cells
             .facilities
             .iter()
@@ -998,56 +1052,27 @@ async fn buy_phase(
         };
         let preferred = if kind == super::NEST { plan.coop } else { plan.shed };
         let choice = pick_cub(&cub_candidates(&offers), kind, plan.prefer, preferred);
-        let only_animal =
-            if plan.bag_first { None } else { choice.as_ref().map(|choice| choice.animal_id) };
-        if !plan.bag_first && only_animal.is_none() {
-            continue;
-        }
-        let mut skipped = HashSet::new();
-        loop {
+        if !plan.bag_first {
+            let Some(animal_id) = choice.as_ref().map(|choice| choice.animal_id) else {
+                continue;
+            };
+            let finished = place_available(
+                gateway,
+                account_id,
+                flags,
+                facility_id,
+                kind,
+                Some(animal_id),
+                &[],
+                &mut cells,
+                &mut bag,
+            )
+            .await?;
             if hold(account_id) {
                 return Ok((cells, bag, true));
             }
-            let room = cells
-                .facilities
-                .iter()
-                .find(|facility| facility.instance_id == facility_id)
-                .map(stall_room)
-                .unwrap_or(0);
-            if room <= 0 {
-                break;
-            }
-            let Some((item_id, stock)) = bag_cubs(&bag, kind, only_animal)
-                .into_iter()
-                .find(|(item_id, _)| !skipped.contains(item_id))
-            else {
-                break;
-            };
-            let Some(count) = i32::try_from(room.min(stock)).ok().filter(|count| *count > 0) else {
-                break;
-            };
-            match place_cub(gateway, &cells, &bag, facility_id, item_id, i64::from(count)).await {
-                Ok(()) => {
-                    tracing::info!(
-                        account_id,
-                        facility_id,
-                        item_id,
-                        count,
-                        "牧场巡查已放养背包幼崽"
-                    );
-                    note_acted(account_id, true);
-                    (cells, bag) = reload(gateway).await?;
-                    sync_board(account_id, flags, &cells);
-                    if hold(account_id) {
-                        return Ok((cells, bag, true));
-                    }
-                }
-                Err(Error::Business(message)) => {
-                    tracing::warn!(account_id, facility_id, item_id, %message, "牧场巡查跳过放养幼崽");
-                    note_acted(account_id, false);
-                    skipped.insert(item_id);
-                }
-                Err(error) => return Err(error),
+            if !finished {
+                continue;
             }
         }
         let Some(choice) = choice else {
@@ -1159,7 +1184,12 @@ fn pick_cub(
         .map(|(index, candidate)| CubChoice { index, animal_id: candidate.animal_id })
 }
 
-fn bag_cubs(bag: &GetBagReply, kind: i32, only_animal: Option<i64>) -> Vec<(i64, i64)> {
+fn bag_cubs(
+    bag: &GetBagReply,
+    kind: i32,
+    only_animal: Option<i64>,
+    priority: &[i64],
+) -> Vec<(i64, i64)> {
     let mut cubs = super::cub_catalog()
         .iter()
         .filter_map(|(item_id, spec)| {
@@ -1171,8 +1201,64 @@ fn bag_cubs(bag: &GetBagReply, kind: i32, only_animal: Option<i64>) -> Vec<(i64,
             (stock > 0).then_some((*item_id, spec.animal_id, stock))
         })
         .collect::<Vec<_>>();
-    cubs.sort_by(|left, right| right.1.cmp(&left.1).then(right.0.cmp(&left.0)));
+    cubs.sort_by(|left, right| {
+        let left_rank = priority.iter().position(|id| *id == left.0).unwrap_or(priority.len());
+        let right_rank = priority.iter().position(|id| *id == right.0).unwrap_or(priority.len());
+        left_rank.cmp(&right_rank).then(right.1.cmp(&left.1)).then(left.0.cmp(&right.0))
+    });
     cubs.into_iter().map(|(item_id, _, stock)| (item_id, stock)).collect()
+}
+
+async fn place_available(
+    gateway: &Gateway,
+    account_id: &str,
+    flags: PatrolFlags,
+    facility_id: i64,
+    kind: i32,
+    only_animal: Option<i64>,
+    priority: &[i64],
+    cells: &mut AllCellsReply,
+    bag: &mut GetBagReply,
+) -> Result<bool> {
+    let mut skipped = HashSet::new();
+    loop {
+        if hold(account_id) {
+            return Ok(false);
+        }
+        let room = cells
+            .facilities
+            .iter()
+            .find(|facility| facility.instance_id == facility_id)
+            .map(stall_room)
+            .unwrap_or(0);
+        if room <= 0 {
+            return Ok(true);
+        }
+        let Some((item_id, stock)) = bag_cubs(bag, kind, only_animal, priority)
+            .into_iter()
+            .find(|(item_id, _)| !skipped.contains(item_id))
+        else {
+            return Ok(true);
+        };
+        let Some(count) = i32::try_from(room.min(stock)).ok().filter(|count| *count > 0) else {
+            return Ok(true);
+        };
+        match place_cub(gateway, cells, bag, facility_id, item_id, i64::from(count)).await {
+            Ok(()) => {
+                tracing::info!(account_id, facility_id, item_id, count, "牧场巡查已放养背包幼崽");
+                note_acted(account_id, true);
+                (*cells, *bag) = reload(gateway).await?;
+                sync_board(account_id, flags, cells);
+            }
+            Err(Error::Business(message)) => {
+                tracing::warn!(account_id, facility_id, item_id, %message, "牧场巡查跳过放养幼崽");
+                note_acted(account_id, false);
+                skipped.insert(item_id);
+                return Ok(false);
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 fn stall_room(facility: &FacilityInfo) -> i64 {
@@ -1731,6 +1817,217 @@ mod tests {
         reset_patrol_schedule(account);
         assert!(cycles().lock().get(account).is_none());
         assert_eq!(next_checks().lock().get(account).copied(), Some(0));
+    }
+
+    #[test]
+    fn bag_cubs_place_the_saved_order_ahead_of_the_default_order() {
+        let nests = super::super::cub_choices()
+            .into_iter()
+            .filter(|cub| cub.nest)
+            .take(2)
+            .collect::<Vec<_>>();
+        assert!(nests.len() == 2, "窝幼崽目录不足两项");
+        let later = nests[0].id;
+        let earlier = nests[1].id;
+        let bag = GetBagReply {
+            physical_items: vec![
+                crate::proto::generated::gamepb::ranchpb::Item {
+                    id: later,
+                    count: 1,
+                    ..crate::proto::generated::gamepb::ranchpb::Item::default()
+                },
+                crate::proto::generated::gamepb::ranchpb::Item {
+                    id: earlier,
+                    count: 1,
+                    ..crate::proto::generated::gamepb::ranchpb::Item::default()
+                },
+            ],
+            ..GetBagReply::default()
+        };
+        let ordered = bag_cubs(&bag, super::super::NEST, None, &[earlier]);
+        assert_eq!(ordered[0].0, earlier);
+        assert_eq!(ordered[1].0, later);
+        let default_order = bag_cubs(&bag, super::super::NEST, None, &[]);
+        let first = if nests[0].animal_id == nests[1].animal_id {
+            nests[0].id.min(nests[1].id)
+        } else if nests[0].animal_id > nests[1].animal_id {
+            nests[0].id
+        } else {
+            nests[1].id
+        };
+        assert_eq!(default_order[0].0, first);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn patrol_places_saved_cubs_before_opening_the_shop() {
+        let _root = OpsRoot::new();
+        let mut seen = std::collections::HashSet::new();
+        let nests = super::super::cub_choices()
+            .into_iter()
+            .filter(|cub| cub.nest && seen.insert(cub.animal_id))
+            .take(2)
+            .collect::<Vec<_>>();
+        assert!(nests.len() == 2, "窝幼崽目录不足两项");
+        let account = "ranch-cub-place";
+        let mut config =
+            crate::models::store::account_config::get_account_config_snapshot(Some(account));
+        config.automation.ranch_harvest = false;
+        config.automation.ranch_produce = false;
+        config.automation.ranch_clean = false;
+        config.automation.ranch_sell = false;
+        config.automation.ranch_market_organic = false;
+        config.automation.ranch_upgrade = false;
+        config.automation.ranch_buy = true;
+        config.automation.ranch_strategy = crate::models::types::RanchStrategy::BagPriority;
+        config.automation.ranch_grass = false;
+        config.automation.ranch_grass_buy = false;
+        config.automation.ranch_fill_cans = false;
+        config.automation.ranch_feed_normal = false;
+        config.automation.ranch_feed_organic = false;
+        config.automation.ranch_friend_steal = false;
+        config.automation.ranch_stroke = false;
+        config.automation.ranch_friend_clean = false;
+        config.automation.ranch_friend_mosquito = false;
+        config.automation.ranch_coop_cub_priority = vec![nests[1].id];
+        crate::models::store::account_config::set_account_config_snapshot(
+            Some(account),
+            config,
+            false,
+        );
+        clear_cycle(account);
+        set_next(account, 0);
+        let placed = Arc::new(Mutex::new(Vec::<i64>::new()));
+        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let stocks = Arc::new(Mutex::new(vec![(nests[0].id, 1_i64), (nests[1].id, 1)]));
+        let occupied = Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let gateway = {
+            use crate::network::encryptor::{Encryptor, NoopEncryptor};
+            use crate::network::gateway::{Gateway, GatewayConfig};
+            use crate::proto::generated::gamepb::animalpb::{
+                PlaceAnimalReply, PlaceAnimalRequest, RanchDetail,
+            };
+            use crate::proto::generated::gamepb::globalscenepb::{
+                PlayerSceneLoginReply, PlayerSceneLoginRequest,
+            };
+            use crate::proto::generated::gamepb::homesteadpb::{AllCellsReply, FacilityInfo};
+            use crate::proto::generated::gamepb::ranchpb::{
+                GetBagReply, Item as RanchItem, SceneData,
+            };
+            use prost::Message;
+            let cfg = GatewayConfig {
+                server_url: "https://example.com".to_string(),
+                platform: "qq".to_string(),
+                os: "linux".to_string(),
+                client_version: "1.0".to_string(),
+                auth_code: "code-1".to_string(),
+                headers: std::collections::HashMap::new(),
+            };
+            let gateway =
+                Arc::new(Gateway::new(cfg, Arc::new(NoopEncryptor) as Arc<dyn Encryptor>));
+            gateway.mark_online();
+            gateway.set_unlocked_scenes(vec![2]);
+            let placed = Arc::clone(&placed);
+            let calls = Arc::clone(&calls);
+            let stocks = Arc::clone(&stocks);
+            let occupied = Arc::clone(&occupied);
+            gateway.install_reply_script(move |_service, method, body| {
+                calls.lock().push(method.to_owned());
+                let cells = AllCellsReply {
+                    facilities: vec![FacilityInfo {
+                        instance_id: 9,
+                        state: 1,
+                        module_type: 6,
+                        ranch: Some(RanchDetail {
+                            husbandry_type: super::super::NEST,
+                            capacity: 2,
+                            animal_count: occupied.load(std::sync::atomic::Ordering::Acquire),
+                            ..RanchDetail::default()
+                        }),
+                        ..FacilityInfo::default()
+                    }],
+                    ..AllCellsReply::default()
+                };
+                match method {
+                    "PlayerSceneLogin" => {
+                        let request = PlayerSceneLoginRequest::decode(body).map_err(|error| {
+                            crate::network::error::NetworkError::Phase(error.to_string())
+                        })?;
+                        let scene =
+                            SceneData { homestead_cells: Some(cells), ..SceneData::default() };
+                        let reply = if request.global_scene_id == 2 {
+                            PlayerSceneLoginReply {
+                                global_scene_id: 2,
+                                big_farm_scene_ext_data: scene.encode_to_vec().into(),
+                                ..PlayerSceneLoginReply::default()
+                            }
+                        } else {
+                            PlayerSceneLoginReply {
+                                global_scene_id: 1,
+                                farm_scene_ext_data: vec![1].into(),
+                                ..PlayerSceneLoginReply::default()
+                            }
+                        };
+                        Ok(reply.encode_to_vec())
+                    }
+                    "AllCells" => Ok(cells.encode_to_vec()),
+                    "GetBag" => {
+                        let reply = GetBagReply {
+                            global_scene_id: 2,
+                            physical_items: stocks
+                                .lock()
+                                .iter()
+                                .map(|(id, count)| RanchItem {
+                                    id: *id,
+                                    count: *count,
+                                    ..RanchItem::default()
+                                })
+                                .collect(),
+                            ..GetBagReply::default()
+                        };
+                        Ok(reply.encode_to_vec())
+                    }
+                    "PlaceAnimal" => {
+                        let request = PlaceAnimalRequest::decode(body).map_err(|error| {
+                            crate::network::error::NetworkError::Phase(error.to_string())
+                        })?;
+                        let animal_id =
+                            request.items.first().map(|item| item.animal_id).unwrap_or(0);
+                        placed.lock().push(animal_id);
+                        occupied.fetch_add(
+                            i32::try_from(request.items.len()).unwrap_or(0),
+                            std::sync::atomic::Ordering::Release,
+                        );
+                        if let Some(item) = request.items.first() {
+                            let mut stocks = stocks.lock();
+                            if let Some(stock) = stocks.iter_mut().find(|(id, _)| {
+                                super::super::cub_choices()
+                                    .iter()
+                                    .any(|cub| cub.id == *id && cub.animal_id == item.animal_id)
+                            }) {
+                                stock.1 = stock.1.saturating_sub(
+                                    i64::try_from(request.items.len()).unwrap_or(0),
+                                );
+                            }
+                        }
+                        Ok(PlaceAnimalReply {
+                            op_results: vec![Default::default(); request.items.len()],
+                            ..PlaceAnimalReply::default()
+                        }
+                        .encode_to_vec())
+                    }
+                    _ => {
+                        Err(crate::network::error::NetworkError::Phase(format!("未准备 {method}")))
+                    }
+                }
+            });
+            gateway
+        };
+        patrol_if_due(&gateway, account, 1, i64::MAX, || async { Vec::new() })
+            .await
+            .expect("place");
+        assert_eq!(placed.lock().as_slice(), &[nests[1].animal_id, nests[0].animal_id]);
+        assert!(calls.lock().iter().any(|call| call == "PlaceAnimal"));
+        assert!(calls.lock().iter().all(|call| call != "ShopInfo"));
     }
 
     fn grass_machine(filled: i32, capacity: i32) -> FacilityInfo {

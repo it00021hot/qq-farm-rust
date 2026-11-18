@@ -117,6 +117,10 @@ pub async fn snapshot(gateway: &Arc<Gateway>, account_id: &str) -> Result<Value>
             "unlocked": true,
             "sceneId": RANCH_SCENE,
             "grass": item_count(&bag, GRASS_ITEM),
+            "buckets": [
+                { "id": NORMAL_BUCKET, "seconds": item_count(&bag, NORMAL_BUCKET) },
+                { "id": ORGANIC_BUCKET, "seconds": item_count(&bag, ORGANIC_BUCKET) },
+            ],
             "cubs": cub_views(&bag),
             "products": product_views(&bag),
             "cans": can_views(&bag),
@@ -1548,6 +1552,14 @@ pub struct RanchAnimalChoice {
     pub nest: bool,
 }
 
+#[derive(Clone, Serialize)]
+pub struct RanchCubChoice {
+    pub id: i64,
+    pub name: String,
+    pub nest: bool,
+    pub animal_id: i64,
+}
+
 /// 已启用、并且能放进窝或棚的动物。供设置页选择指定幼崽。
 pub fn animal_choices() -> Vec<RanchAnimalChoice> {
     let mut choices = animal_configs()
@@ -1566,6 +1578,26 @@ pub fn animal_choices() -> Vec<RanchAnimalChoice> {
         })
         .collect::<Vec<_>>();
     choices.sort_by_key(|choice| choice.id);
+    choices
+}
+
+pub fn cub_fits(id: i64, nest: bool) -> bool {
+    let kind = if nest { NEST } else { SHED };
+    cub_catalog().get(&id).is_some_and(|cub| cub.kind == kind)
+}
+
+pub fn cub_choices() -> Vec<RanchCubChoice> {
+    let mut choices = cub_catalog()
+        .iter()
+        .map(|(id, cub)| RanchCubChoice {
+            id: *id,
+            name: cub.name.clone(),
+            nest: cub.kind == NEST,
+            animal_id: cub.animal_id,
+        })
+        .collect::<Vec<_>>();
+    choices
+        .sort_by(|left, right| right.animal_id.cmp(&left.animal_id).then(left.id.cmp(&right.id)));
     choices
 }
 
@@ -1885,6 +1917,15 @@ fn grass_request(
     Ok(AddFeedRequest { instance_id: facility_id, add_count: count, use_gold: false, host_gid: 0 })
 }
 
+fn facility_name(module_type: i32) -> &'static str {
+    match module_type {
+        6 => "窝",
+        7 => "棚",
+        GRASS_MACHINE => "牧草机",
+        _ => "设施",
+    }
+}
+
 fn facility_view(facility: &FacilityInfo, level: i64, now_ms: i64) -> Value {
     json!({
         "id": facility.instance_id.to_string(),
@@ -1895,6 +1936,9 @@ fn facility_view(facility: &FacilityInfo, level: i64, now_ms: i64) -> Value {
         "capacity": facility.capacity,
         "grassStored": facility.feed_machine.as_ref().map(|machine| machine.feed_count).unwrap_or(0),
         "hazardCount": facility.ranch.as_ref().map(|ranch| ranch.hazards.len()).unwrap_or(0),
+        "name": facility_name(facility.module_type),
+        "penCount": facility.ranch.as_ref().map(|ranch| ranch.animal_count).unwrap_or(0),
+        "penCapacity": facility.ranch.as_ref().map(|ranch| ranch.capacity).unwrap_or(0),
         "husbandryKind": facility.ranch.as_ref().map(|ranch| ranch.husbandry_type).unwrap_or(0),
         "openRoom": facility
             .ranch
@@ -1912,6 +1956,7 @@ fn animal_views(ranch: &crate::proto::generated::gamepb::animalpb::RanchDetail) 
 fn animal_view(animal: &AnimalDetail) -> Value {
     json!({
         "id": animal.animal_inst_id,
+        "slot": animal.slot_index,
         "ranchId": animal.ranch_inst_id.to_string(),
         "animalId": animal.animal_id,
         "name": animal_name(animal.animal_id),

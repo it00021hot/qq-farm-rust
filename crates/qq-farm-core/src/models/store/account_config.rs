@@ -479,6 +479,16 @@ pub fn apply_config_snapshot(
                         }
                     }
                 }
+                "ranch_coop_cub_priority" | "ranchCoopCubPriority" => {
+                    if let Some(ids) = cub_priority(v, true) {
+                        next.automation.ranch_coop_cub_priority = ids;
+                    }
+                }
+                "ranch_shed_cub_priority" | "ranchShedCubPriority" => {
+                    if let Some(ids) = cub_priority(v, false) {
+                        next.automation.ranch_shed_cub_priority = ids;
+                    }
+                }
                 "ranch_check_minutes" | "ranchCheckMinutes" => {
                     if let Some(minutes) = v.as_i64() {
                         if (1..=60).contains(&minutes) {
@@ -665,6 +675,19 @@ pub fn apply_config_snapshot(
     serde_json::to_value(&next).unwrap_or_default()
 }
 
+fn cub_priority(value: &serde_json::Value, nest: bool) -> Option<Vec<i64>> {
+    let rows = value.as_array()?;
+    let mut ids = Vec::new();
+    for row in rows {
+        let id = row.as_i64()?;
+        if !crate::services::ranch::cub_fits(id, nest) || ids.contains(&id) {
+            return None;
+        }
+        ids.push(id);
+    }
+    Some(ids)
+}
+
 fn ranch_strategy(value: &str) -> Option<crate::models::types::RanchStrategy> {
     match value {
         "level" => Some(crate::models::types::RanchStrategy::Level),
@@ -777,6 +800,30 @@ mod tests {
             false,
         );
         assert!(get_automation(Some(account)).ranch_market_organic);
+    }
+
+    #[test]
+    fn missing_cub_priority_stays_empty_and_a_mismatched_id_is_kept_out() {
+        let mut value = serde_json::to_value(AutomationConfig::default()).expect("config");
+        value.as_object_mut().expect("object").remove("ranch_coop_cub_priority");
+        let parsed: AutomationConfig = serde_json::from_value(value).expect("parse");
+        assert!(parsed.ranch_coop_cub_priority.is_empty());
+        let cubs = crate::services::ranch::cub_choices();
+        let nest = cubs.iter().find(|cub| cub.nest).expect("窝幼崽");
+        let shed = cubs.iter().find(|cub| !cub.nest).expect("棚幼崽");
+        let account = "ranch-cub-priority";
+        apply_config_snapshot(
+            serde_json::json!({ "automation": { "ranch_coop_cub_priority": [nest.id] } }),
+            Some(account),
+            false,
+        );
+        assert_eq!(get_automation(Some(account)).ranch_coop_cub_priority, vec![nest.id]);
+        apply_config_snapshot(
+            serde_json::json!({ "automation": { "ranch_coop_cub_priority": [shed.id] } }),
+            Some(account),
+            false,
+        );
+        assert_eq!(get_automation(Some(account)).ranch_coop_cub_priority, vec![nest.id]);
     }
 
     #[test]

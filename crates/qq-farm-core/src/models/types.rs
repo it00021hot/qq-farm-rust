@@ -411,6 +411,12 @@ pub struct AutomationConfig {
     /// 指定棚里的动物。0 表示不指定（bot `ranch_shed_animal`）
     #[serde(default)]
     pub ranch_shed_animal: i64,
+    /// 背包优先时，窝里幼崽的放养顺序。空列表按动物编号从高到低（bot `ranch_coop_cub_priority`）
+    #[serde(default)]
+    pub ranch_coop_cub_priority: Vec<i64>,
+    /// 背包优先时，棚里幼崽的放养顺序。空列表按动物编号从高到低（bot `ranch_shed_cub_priority`）
+    #[serde(default)]
+    pub ranch_shed_cub_priority: Vec<i64>,
     /// 牧草低于阈值时，用背包里的牧草补充（bot `ranch_grass`，默认开）
     #[serde(default = "default_true")]
     pub ranch_grass: bool,

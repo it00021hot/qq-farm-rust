@@ -878,6 +878,15 @@ fn ranch_tuning(
             move || wants_named_animal(&settings.get().unwrap_or(Value::Null)),
             move || animal_picker(false, page, pending, failure, note, settings),
         ))
+        .child(when(
+            move || strategy_of(&settings.get().unwrap_or(Value::Null)) == "bag_priority",
+            move || {
+                view()
+                    .gap_3()
+                    .child(cub_priority(true, page, pending, failure, note, settings))
+                    .child(cub_priority(false, page, pending, failure, note, settings))
+            },
+        ))
 }
 
 fn stepper(
@@ -1453,6 +1462,130 @@ fn stepped(current: i64, delta: i64, min: i64, max: i64) -> i64 {
     current.saturating_add(delta).clamp(min, max)
 }
 
+#[derive(Clone, PartialEq, Eq)]
+struct CubChoice {
+    id: i64,
+    name: String,
+    animal_id: i64,
+}
+
+fn cub_priority(
+    nest: bool,
+    page: SettingsPage,
+    pending: Signal<Option<String>>,
+    failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
+    settings: Resource<Value, String>,
+) -> View {
+    let key = if nest { "ranch_coop_cub_priority" } else { "ranch_shed_cub_priority" };
+    let title = if nest { "settings.ranchCubCoop" } else { "settings.ranchCubShed" };
+    view().gap_2().child(text(move || text_key(title)).text_sm()).child(each(
+        move || ordered_cubs(&settings.get().unwrap_or(Value::Null), key, nest),
+        |cub: &CubChoice| cub.id,
+        move |cub, _| {
+            let choice = cub.get_untracked();
+            let id = choice.id;
+            let name = choice.name.clone();
+            view()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .child(text(SharedString::from(name)).text_sm().flex_1())
+                .child(
+                    button(move || text_key("settings.cubEarlier"), ButtonVariant::Quiet)
+                        .disabled(move || pending.get().is_some())
+                        .on_press(move || {
+                            let current = settings.get().unwrap_or(Value::Null);
+                            let saved = saved_cub_ids(&current, key);
+                            let visible = ordered_cubs(&current, key, nest)
+                                .into_iter()
+                                .map(|cub| cub.id)
+                                .collect::<Vec<_>>();
+                            let next = move_cub_earlier(&saved, &visible, id);
+                            save(
+                                page,
+                                pending,
+                                failure,
+                                note,
+                                settings,
+                                json!({ "automation": { key: next } }),
+                            );
+                        }),
+                )
+        },
+    ))
+}
+
+fn saved_cub_ids(value: &Value, key: &str) -> Vec<i64> {
+    value
+        .pointer(&format!("/automation/{key}"))
+        .and_then(Value::as_array)
+        .map(|rows| rows.iter().filter_map(Value::as_i64).collect())
+        .unwrap_or_default()
+}
+
+fn cub_rows(value: &Value, nest: bool) -> Vec<CubChoice> {
+    value
+        .get("ranchCubs")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| {
+                    let id = row.get("id")?.as_i64()?;
+                    let name = row.get("name")?.as_str()?.to_owned();
+                    let animal_id =
+                        row.get("animalId").or_else(|| row.get("animal_id"))?.as_i64()?;
+                    let is_nest = row.get("nest")?.as_bool()?;
+                    (is_nest == nest).then_some(CubChoice { id, name, animal_id })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn ordered_cubs(value: &Value, key: &str, nest: bool) -> Vec<CubChoice> {
+    let saved = saved_cub_ids(value, key);
+    let mut cubs = cub_rows(value, nest);
+    cubs.sort_by(|left, right| {
+        let left_rank = saved.iter().position(|id| *id == left.id).unwrap_or(saved.len());
+        let right_rank = saved.iter().position(|id| *id == right.id).unwrap_or(saved.len());
+        left_rank
+            .cmp(&right_rank)
+            .then(right.animal_id.cmp(&left.animal_id))
+            .then(left.id.cmp(&right.id))
+    });
+    cubs
+}
+
+fn move_cub_earlier(saved: &[i64], visible: &[i64], id: i64) -> Vec<i64> {
+    let Some(from) = visible.iter().position(|item| *item == id) else {
+        return saved.to_vec();
+    };
+    if from == 0 {
+        return saved.to_vec();
+    }
+    let mut order = visible.to_vec();
+    order.remove(from);
+    order.insert(from - 1, id);
+    let visible_ids = order.iter().copied().collect::<std::collections::HashSet<_>>();
+    let mut position = 0;
+    let mut merged = Vec::new();
+    for item in saved {
+        if visible_ids.contains(item) {
+            if let Some(next) = order.get(position) {
+                merged.push(*next);
+                position += 1;
+            }
+        } else {
+            merged.push(*item);
+        }
+    }
+    merged.extend(order.iter().skip(position).copied());
+    let mut seen = std::collections::HashSet::new();
+    merged.retain(|item| seen.insert(*item));
+    merged
+}
+
 fn animal_rows(value: &Value, nest: bool) -> Vec<AnimalChoice> {
     value
         .get("ranchAnimals")
@@ -1549,6 +1682,14 @@ mod tests {
         order_random, quiet_continue, quiet_enabled, quiet_hm, root_flag, selected_land_types,
         stepped, toggled_land_types, wants_named_animal,
     };
+
+    #[test]
+    fn moving_a_cub_earlier_keeps_cubs_that_are_not_on_screen() {
+        let saved = vec![9, 7, 4];
+        let visible = vec![7, 4];
+        assert_eq!(super::move_cub_earlier(&saved, &visible, 7), vec![9, 7, 4]);
+        assert_eq!(super::move_cub_earlier(&saved, &visible, 4), vec![9, 4, 7]);
+    }
 
     #[test]
     fn toggles_read_the_automation_object() {

@@ -20,6 +20,7 @@ struct AnimalLine {
     can_feed: bool,
     can_release: bool,
     limited_can: bool,
+    slot: i32,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -31,6 +32,9 @@ struct FacilityLine {
     hazard_count: i64,
     kind: i64,
     open_room: i64,
+    name: String,
+    pen_count: i64,
+    pen_capacity: i64,
     upgrade: String,
     animals: Vec<AnimalLine>,
 }
@@ -80,6 +84,8 @@ struct RanchBoard {
     unlocked: bool,
     reason: String,
     grass: i64,
+    normal_seconds: i64,
+    organic_seconds: i64,
     cubs: Vec<CubLine>,
     products: Vec<ProductLine>,
     cans: Vec<CanLine>,
@@ -226,6 +232,22 @@ fn unlocked_body(
                     },
                 ))
                 .child(
+                    button(move || text_key("ranch.feedAllNormal"), ButtonVariant::Secondary)
+                        .disabled(move || {
+                            pending.get()
+                                || !board.get().is_some_and(|board| feed_all_ready(&board, false))
+                        })
+                        .on_press(move || feed(None, None, 2, pending, failure, account_id, board)),
+                )
+                .child(
+                    button(move || text_key("ranch.feedAllOrganic"), ButtonVariant::Secondary)
+                        .disabled(move || {
+                            pending.get()
+                                || !board.get().is_some_and(|board| feed_all_ready(&board, true))
+                        })
+                        .on_press(move || feed(None, None, 1, pending, failure, account_id, board)),
+                )
+                .child(
                     button(move || text_key("common.retry"), ButtonVariant::Secondary)
                         .disabled(move || pending.get())
                         .on_press(move || board.refetch()),
@@ -236,20 +258,45 @@ fn unlocked_body(
             move || notice(move || text_key("ranch.empty")),
         ))
         .child(each(
-            move || board.get().map(|board| board.facilities).unwrap_or_default(),
-            |facility: &FacilityLine| facility.id.clone(),
-            move |facility, _| {
-                let cubs = board.get().map(|board| board.cubs).unwrap_or_default();
-                facility_line(
-                    facility.get_untracked(),
-                    cubs,
-                    pending,
-                    failure,
-                    account_id,
-                    board,
-                    grass_counts,
-                    place_counts,
-                )
+            move || pen_groups(board.get().map(|board| board.facilities).unwrap_or_default()),
+            |group: &PenGroup| group.module_type,
+            move |group, _| {
+                let current = group.get_untracked();
+                let title = SharedString::from(current.name.clone());
+                let summary = format!("{} / {}", current.count, current.capacity);
+                let empty = current.capacity > 0 && current.count == 0;
+                view()
+                    .gap_2()
+                    .child(
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .gap_2()
+                            .child(text(title).text_sm().font_weight(FontWeight::SEMIBOLD))
+                            .child(
+                                text(summary)
+                                    .text_sm()
+                                    .text_color(move || nsh_base::theme().muted_foreground),
+                            ),
+                    )
+                    .child(when(move || empty, move || notice(move || text_key("ranch.penEmpty"))))
+                    .child(each(
+                        move || group.get().facilities.clone(),
+                        |facility: &FacilityLine| facility.id.clone(),
+                        move |facility, _| {
+                            let cubs = board.get().map(|board| board.cubs).unwrap_or_default();
+                            facility_line(
+                                facility.get_untracked(),
+                                cubs,
+                                pending,
+                                failure,
+                                account_id,
+                                board,
+                                grass_counts,
+                                place_counts,
+                            )
+                        },
+                    ))
             },
         ))
         .child(product_shelf(pending, failure, account_id, board))
@@ -3016,6 +3063,8 @@ fn board_from(value: &Value) -> RanchBoard {
         unlocked: value.get("unlocked").and_then(Value::as_bool).unwrap_or(false),
         reason: value.get("reason").and_then(Value::as_str).unwrap_or("").to_owned(),
         grass: value.get("grass").and_then(Value::as_i64).unwrap_or(0),
+        normal_seconds: bucket_seconds(value, 7003),
+        organic_seconds: bucket_seconds(value, 7004),
         cubs: value
             .get("cubs")
             .and_then(Value::as_array)
@@ -3076,6 +3125,9 @@ fn facility_from(value: &Value) -> Option<FacilityLine> {
         hazard_count: value.get("hazardCount").and_then(Value::as_i64).unwrap_or(0),
         kind: value.get("husbandryKind").and_then(Value::as_i64).unwrap_or(0),
         open_room: value.get("openRoom").and_then(Value::as_i64).unwrap_or(0),
+        name: value.get("name").and_then(Value::as_str).unwrap_or("").to_owned(),
+        pen_count: value.get("penCount").and_then(Value::as_i64).unwrap_or(0),
+        pen_capacity: value.get("penCapacity").and_then(Value::as_i64).unwrap_or(0),
         upgrade: value.get("upgrade").and_then(Value::as_str).unwrap_or("").to_owned(),
         animals: value
             .get("animals")
@@ -3135,7 +3187,90 @@ fn animal_from(value: &Value) -> Option<AnimalLine> {
         can_feed: value.get("canFeed").and_then(Value::as_bool).unwrap_or(false),
         can_release: value.get("canRelease").and_then(Value::as_bool).unwrap_or(false),
         limited_can: value.get("limitedCanUsed").and_then(Value::as_bool).unwrap_or(false),
+        slot: i32::try_from(value.get("slot").and_then(Value::as_i64).unwrap_or(0)).unwrap_or(0),
     })
+}
+
+fn bucket_seconds(value: &Value, id: i64) -> i64 {
+    value
+        .get("buckets")
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.iter().find(|row| row.get("id").and_then(Value::as_i64) == Some(id)))
+        .and_then(|row| row.get("seconds").and_then(Value::as_i64))
+        .unwrap_or(0)
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct PenGroup {
+    module_type: i64,
+    name: String,
+    count: i64,
+    capacity: i64,
+    facilities: Vec<FacilityLine>,
+}
+
+fn facility_rank(module_type: i64) -> i64 {
+    match module_type {
+        6 => 0,
+        7 => 1,
+        8 => 2,
+        other => 9 + other.max(0),
+    }
+}
+
+fn pen_groups(mut facilities: Vec<FacilityLine>) -> Vec<PenGroup> {
+    for facility in &mut facilities {
+        facility
+            .animals
+            .sort_by(|left, right| left.slot.cmp(&right.slot).then(left.id.cmp(&right.id)));
+    }
+    facilities.sort_by(|left, right| {
+        facility_rank(left.module_type)
+            .cmp(&facility_rank(right.module_type))
+            .then(left.id.cmp(&right.id))
+    });
+    let mut groups = Vec::new();
+    for facility in facilities {
+        if groups.last().is_some_and(|group: &PenGroup| group.module_type == facility.module_type) {
+            let group = groups.last_mut().expect("分组刚放入");
+            group.count += facility.pen_count;
+            group.capacity += facility.pen_capacity;
+            group.facilities.push(facility);
+        } else {
+            groups.push(PenGroup {
+                module_type: facility.module_type,
+                name: if facility.name.is_empty() {
+                    facility_rank_name(facility.module_type)
+                } else {
+                    facility.name.clone()
+                },
+                count: facility.pen_count,
+                capacity: facility.pen_capacity,
+                facilities: vec![facility],
+            });
+        }
+    }
+    groups
+}
+
+fn facility_rank_name(module_type: i64) -> String {
+    match module_type {
+        6 => "窝",
+        7 => "棚",
+        8 => "牧草机",
+        _ => "设施",
+    }
+    .to_owned()
+}
+
+fn feed_all_ready(board: &RanchBoard, organic: bool) -> bool {
+    let seconds = if organic { board.organic_seconds } else { board.normal_seconds };
+    seconds > 0
+        && board
+            .facilities
+            .iter()
+            .flat_map(|facility| facility.animals.iter())
+            .any(|animal| animal.can_feed && (organic || !animal.limited_can))
 }
 
 fn locked_reason(board: Resource<RanchBoard, String>) -> SharedString {
@@ -3195,6 +3330,72 @@ mod tests {
         assert_eq!(good.balance, 40);
         assert_eq!(shop_buy_limit(999, Some(2), 8, 40), 2);
         assert_eq!(shop_buy_limit(999, None, 0, 0), 999);
+    }
+
+    #[test]
+    fn pens_are_grouped_coop_then_shed_and_animals_follow_slot() {
+        let shed = facility(7, "2", 1, vec![(4, 2), (3, 1)]);
+        let coop = facility(6, "9", 2, vec![(8, 2), (7, 1)]);
+        let groups = super::pen_groups(vec![shed, coop]);
+        assert_eq!(groups.iter().map(|group| group.module_type).collect::<Vec<_>>(), vec![6, 7]);
+        assert_eq!(groups[0].count, 2);
+        assert_eq!(
+            groups[0].facilities[0].animals.iter().map(|animal| animal.id).collect::<Vec<_>>(),
+            vec![7, 8]
+        );
+    }
+
+    #[test]
+    fn feed_all_stays_off_without_time_or_a_feedable_animal() {
+        let mut board = super::board_from(&json!({
+            "unlocked": true,
+            "buckets": [{ "id": 7003, "seconds": 0 }, { "id": 7004, "seconds": 90 }],
+            "facilities": [{
+                "id": "9",
+                "moduleType": 6,
+                "animals": [{ "id": 3, "ranchId": "9", "canFeed": true, "limitedCanUsed": true }]
+            }]
+        }));
+        assert!(!super::feed_all_ready(&board, false));
+        assert!(super::feed_all_ready(&board, true));
+        board.organic_seconds = 0;
+        assert!(!super::feed_all_ready(&board, true));
+    }
+
+    fn facility(
+        module_type: i64,
+        id: &str,
+        count: i64,
+        animals: Vec<(i32, i32)>,
+    ) -> super::FacilityLine {
+        super::FacilityLine {
+            id: id.to_owned(),
+            level: 1,
+            module_type,
+            grass_room: 0,
+            hazard_count: 0,
+            kind: 0,
+            open_room: 0,
+            name: String::new(),
+            pen_count: count,
+            pen_capacity: 4,
+            upgrade: String::new(),
+            animals: animals
+                .into_iter()
+                .map(|(id, slot)| super::AnimalLine {
+                    id,
+                    ranch_id: "9".to_owned(),
+                    name: String::new(),
+                    stage: String::new(),
+                    can_harvest: false,
+                    can_produce: false,
+                    can_feed: false,
+                    can_release: false,
+                    limited_can: false,
+                    slot,
+                })
+                .collect(),
+        }
     }
 
     #[test]

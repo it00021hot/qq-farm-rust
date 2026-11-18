@@ -250,6 +250,8 @@ pub fn default_account_config() -> AccountConfig {
             ranch_bag_fallback: crate::models::types::RanchStrategy::Level,
             ranch_coop_animal: 0,
             ranch_shed_animal: 0,
+            ranch_coop_cub_priority: Vec::new(),
+            ranch_shed_cub_priority: Vec::new(),
             ranch_grass: true,
             ranch_grass_buy: true,
             ranch_grass_threshold_percent: 20,

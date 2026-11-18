@@ -38,6 +38,7 @@ pub fn settings_panel(account_id: &str, username: &str) -> Value {
         "friendQuietHours": quiet,
         "automation": automation,
         "ranchAnimals": qq_farm_core::services::ranch::animal_choices(),
+        "ranchCubs": qq_farm_core::services::ranch::cub_choices(),
         "stealDelaySeconds": snap.steal_delay_seconds,
         "plantOrderRandom": snap.plant_order_random,
         "plantDelaySeconds": snap.plant_delay_seconds,
