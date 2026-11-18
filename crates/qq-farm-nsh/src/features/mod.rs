@@ -21,6 +21,7 @@ mod muge;
 mod napcat_login;
 mod offline_reminder;
 mod outcome;
+mod pet_diary;
 mod pets;
 mod planting;
 mod preferences;

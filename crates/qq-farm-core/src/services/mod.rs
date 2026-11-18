@@ -67,6 +67,7 @@ pub mod mystery_shop;
 pub mod mystery_shop_auto;
 pub mod napcat_login;
 pub mod pay;
+pub mod pet_diary;
 pub mod pets;
 pub mod push;
 pub mod qingmei;

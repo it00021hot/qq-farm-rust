@@ -25,6 +25,7 @@ pub mod friend;
 pub mod lifecycle;
 pub mod milk_tea;
 pub mod muge;
+pub mod pet_diary;
 pub mod pets;
 pub mod qingmei;
 pub mod qixi;

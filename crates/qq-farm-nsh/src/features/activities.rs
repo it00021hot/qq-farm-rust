@@ -31,16 +31,18 @@ enum Shelf {
     Qixi,
     QingMei,
     Charity,
+    Pet,
 }
 
 impl Shelf {
-    const ALL: [Self; 11] = [
+    const ALL: [Self; 12] = [
         Self::Solar,
         Self::Wish,
         Self::Stellar,
         Self::Qixi,
         Self::QingMei,
         Self::Charity,
+        Self::Pet,
         Self::Share,
         Self::Tea,
         Self::Muge,
@@ -56,6 +58,7 @@ impl Shelf {
             Self::Qixi => "qixi",
             Self::QingMei => "qingmei",
             Self::Charity => "charity",
+            Self::Pet => "pet",
             Self::Share => "share",
             Self::Tea => "tea",
             Self::Muge => "muge",
@@ -72,6 +75,7 @@ impl Shelf {
             Self::Qixi => "activities.qixi",
             Self::QingMei => "activities.qingmei",
             Self::Charity => "activities.charity",
+            Self::Pet => "activities.petDiary",
             Self::Share => "activities.share",
             Self::Tea => "activities.tea",
             Self::Muge => "activities.muge",
@@ -343,6 +347,11 @@ pub(crate) fn page(page: ActivityPage) -> impl IntoElement {
         move || (shelf.get() == Shelf::Charity).then(|| running_account(page)).flatten(),
         charity,
     );
+    let pet = signal(super::pet_diary::PetSession::default());
+    super::pet_diary::watch(
+        move || (shelf.get() == Shelf::Pet).then(|| running_account(page)).flatten(),
+        pet,
+    );
     super::qingmei::watch(
         move || (shelf.get() == Shelf::QingMei).then(|| running_account(page)).flatten(),
         qingmei,
@@ -599,6 +608,10 @@ pub(crate) fn page(page: ActivityPage) -> impl IntoElement {
         .child(when(
             move || shelf.get() == Shelf::Charity && running(page),
             move || super::charity::panel(charity, page),
+        ))
+        .child(when(
+            move || shelf.get() == Shelf::Pet && running(page),
+            move || super::pet_diary::panel(pet, page),
         ))
         .child(when(
             move || shelf.get() == Shelf::Share && running(page),
@@ -3607,7 +3620,9 @@ mod tests {
         assert!(super::Shelf::ALL.contains(&super::Shelf::Charity));
         assert_eq!(super::Shelf::Charity.id(), "charity");
         assert_eq!(super::Shelf::Charity.label_key(), "activities.charity");
-        assert_eq!(super::Shelf::ALL.len(), 11);
+        assert_eq!(super::Shelf::ALL.len(), 12);
+        assert_eq!(super::Shelf::Pet.id(), "pet");
+        assert_eq!(super::Shelf::Pet.label_key(), "activities.petDiary");
     }
 
     #[test]
