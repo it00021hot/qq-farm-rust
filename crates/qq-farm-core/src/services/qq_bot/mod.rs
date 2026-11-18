@@ -743,6 +743,7 @@ mod tests {
 
     #[tokio::test]
     async fn sends_text_and_qr_through_official_flow() {
+        let _data = crate::config::paths::TestDataDir::enter();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = format!("http://{}", listener.local_addr().unwrap());
         let state = MockState {

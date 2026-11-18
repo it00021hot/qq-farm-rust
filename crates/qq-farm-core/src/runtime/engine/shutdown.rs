@@ -67,6 +67,7 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_waits_for_worker_cleanup_and_closes_background_loops() {
+        let _data = crate::config::paths::TestDataDir::enter();
         let engine = Arc::new(RuntimeEngine::assemble(EngineConfig::default()));
         engine.spawn_event_bridge();
         engine.spawn_wx_keepalive();

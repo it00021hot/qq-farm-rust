@@ -637,6 +637,7 @@ mod tests {
 
     #[test]
     fn build_default_status_has_all_operation_keys() {
+        let _data = crate::config::paths::TestDataDir::enter();
         let s = make_state();
         let st = s.build_default_status("acc1");
         let keys: HashSet<&str> = st.operations.keys().map(String::as_str).collect();
@@ -881,6 +882,7 @@ mod tests {
 
     #[test]
     fn default_status_operations_count() {
+        let _data = crate::config::paths::TestDataDir::enter();
         let s = make_state();
         let st = s.build_default_status("acc1");
         // 9 个 OPERATION_KEYS

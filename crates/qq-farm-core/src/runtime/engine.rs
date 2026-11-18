@@ -1563,6 +1563,7 @@ mod tests {
 
     #[test]
     fn worker_controls_delegate_to_engine() {
+        let _data = crate::config::paths::TestDataDir::enter();
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
             let engine = make_engine();
@@ -1603,6 +1604,7 @@ mod tests {
 
     #[test]
     fn start_worker_respects_max() {
+        let _data = crate::config::paths::TestDataDir::enter();
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
             let engine = Arc::new(RuntimeEngine::assemble(EngineConfig {
@@ -1621,6 +1623,7 @@ mod tests {
 
     #[test]
     fn stop_worker_removes_from_map() {
+        let _data = crate::config::paths::TestDataDir::enter();
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
             let engine = make_engine();
@@ -1634,6 +1637,7 @@ mod tests {
 
     #[test]
     fn shutdown_clears_all() {
+        let _data = crate::config::paths::TestDataDir::enter();
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
             let engine = make_engine();

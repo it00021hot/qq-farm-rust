@@ -320,6 +320,7 @@ mod tests {
 
     #[tokio::test]
     async fn interval_task_runs() {
+        let _data = crate::config::paths::TestDataDir::enter();
         let scheduler = Scheduler::new("test");
         let counter = Arc::new(AtomicUsize::new(0));
         let counter2 = counter.clone();
@@ -341,6 +342,7 @@ mod tests {
 
     #[tokio::test]
     async fn zero_interval_does_not_panic() {
+        let _data = crate::config::paths::TestDataDir::enter();
         let scheduler = Scheduler::new("zero");
         let counter = Arc::new(AtomicUsize::new(0));
         let c2 = counter.clone();
@@ -361,6 +363,7 @@ mod tests {
 
     #[tokio::test]
     async fn interval_prevent_overlap_skips_while_running() {
+        let _data = crate::config::paths::TestDataDir::enter();
         let scheduler = Scheduler::new("overlap");
         let entered = Arc::new(AtomicUsize::new(0));
         let finished = Arc::new(AtomicUsize::new(0));
@@ -394,6 +397,7 @@ mod tests {
 
     #[tokio::test]
     async fn timeout_task_fires_once() {
+        let _data = crate::config::paths::TestDataDir::enter();
         let scheduler = Scheduler::new("test-timeout");
         let counter = Arc::new(AtomicUsize::new(0));
         let c2 = counter.clone();
@@ -414,6 +418,7 @@ mod tests {
 
     #[tokio::test]
     async fn clear_timeout_does_not_abort_running_callback() {
+        let _data = crate::config::paths::TestDataDir::enter();
         let scheduler = Scheduler::new("test-clear-running");
         let started = Arc::new(AtomicUsize::new(0));
         let finished = Arc::new(AtomicUsize::new(0));
@@ -442,6 +447,7 @@ mod tests {
 
     #[tokio::test]
     async fn clear_stops_interval() {
+        let _data = crate::config::paths::TestDataDir::enter();
         let scheduler = Scheduler::new("test-clear");
         let counter = Arc::new(AtomicUsize::new(0));
         let c2 = counter.clone();

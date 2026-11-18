@@ -2488,6 +2488,7 @@ mod tests {
 
     #[test]
     fn start_schedulers_runs() {
+        let _data = crate::config::paths::TestDataDir::enter();
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let (loop_, _) = make_loop();
         rt.block_on(async {
