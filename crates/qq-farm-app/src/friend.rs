@@ -150,6 +150,21 @@ pub async fn illustrated_claim(ctx: &AppContext, account_id: &str, kind: i32) ->
         .map_err(AppError::from_core)
 }
 
+/// 把当前图鉴里的新增果实标成已读。空名单不发请求。
+pub async fn illustrated_clear_new(
+    ctx: &AppContext,
+    account_id: &str,
+    fruit_ids: &[i64],
+) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    let cleared =
+        qq_farm_core::services::illustrated::IllustratedService::new(loop_.gateway().clone())
+            .clear_new(fruit_ids)
+            .await
+            .map_err(AppError::from_core)?;
+    Ok(json!({ "cleared": cleared }))
+}
+
 /// 直接购买商店种子（图鉴购买入口；对齐 bot `purchaseSeed`，门控与文案逐条照抄）。
 pub async fn seed_purchase(
     ctx: &AppContext,

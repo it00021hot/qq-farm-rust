@@ -14,11 +14,13 @@ use crate::error::{Error, Result};
 use crate::network::gateway::Gateway;
 use crate::proto::generated::corepb::Item;
 use crate::proto::generated::gamepb::illustratedpb::{
-    ClaimAllRewardsV2Reply, ClaimAllRewardsV2Request, GetIllustratedLevelListV2Reply,
+    ClaimAllRewardsV2Reply, ClaimAllRewardsV2Request, ClearNewUnlockedFruitsV2Reply,
+    ClearNewUnlockedFruitsV2Request, GetIllustratedLevelListV2Reply,
     GetIllustratedLevelListV2Request, GetIllustratedListV2Reply, IllustratedInfoV2,
 };
 
 const SERVICE: &str = "gamepb.illustratedpb.IllustratedService";
+const CLEAR_NEW_METHOD: &str = "ClearNewUnlockedFruitsV2";
 
 pub struct IllustratedService {
     gateway: Arc<Gateway>,
@@ -56,6 +58,7 @@ fn item_dto(item: &IllustratedInfoV2) -> serde_json::Value {
         .unwrap_or_else(|| format!("种子#{seed_id}"));
     serde_json::json!({
         "seedId": seed_id,
+        "fruitId": seed_id,
         "name": name,
         "image": gc.get_item_image_by_id(seed_id).unwrap_or_default(),
         "rewardCategory": item.rarity,
@@ -69,6 +72,14 @@ fn item_dto(item: &IllustratedInfoV2) -> serde_json::Value {
         // v2 协议不再下发 attributes（guarantees 取代），对齐 bot 输出空数组
         "attributes": Vec::<serde_json::Value>::new(),
     })
+}
+
+fn positive_fruit_ids(fruit_ids: &[i64]) -> Vec<i32> {
+    fruit_ids.iter().filter_map(|id| i32::try_from(*id).ok()).filter(|id| *id > 0).collect()
+}
+
+fn cleared_fruit_ids(reply: &ClearNewUnlockedFruitsV2Reply) -> Vec<i64> {
+    reply.cleared_fruit_ids.iter().copied().filter(|id| *id > 0).map(i64::from).collect()
 }
 
 fn buff_dto(entry: &crate::config::game_config::BuffConfigItem) -> serde_json::Value {
@@ -196,6 +207,19 @@ impl IllustratedService {
         Ok(result)
     }
 
+    /// 把正数果实 id 标成已读。空名单不发请求。
+    pub async fn clear_new(&self, fruit_ids: &[i64]) -> Result<Vec<i64>> {
+        let ids = positive_fruit_ids(fruit_ids);
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let request = ClearNewUnlockedFruitsV2Request { fruit_ids: ids };
+        let body =
+            self.gateway.request(SERVICE, CLEAR_NEW_METHOD, &request.encode_to_vec()).await?;
+        let reply = ClearNewUnlockedFruitsV2Reply::decode(&body[..])?;
+        Ok(cleared_fruit_ids(&reply))
+    }
+
     /// 图鉴快照：作物（type=1）+ 变异（type=2）
     pub async fn get_snapshot(&self) -> Result<serde_json::Value> {
         let (crop_list, mutant_list) = tokio::join!(self.get_list(1), self.get_list(2));
@@ -295,6 +319,7 @@ mod tests {
         };
         let dto = item_dto(&item);
         assert_eq!(dto["seedId"].as_i64(), Some(40002001));
+        assert_eq!(dto["fruitId"].as_i64(), Some(40002001));
         assert_eq!(dto["unlocked"].as_bool(), Some(true));
         assert_eq!(dto["rewardCategory"].as_i64(), Some(2));
         assert_eq!(dto["cropCategory"].as_i64(), Some(1));
@@ -320,5 +345,36 @@ mod tests {
         let service = IllustratedService::new(gateway);
         let error = service.claim_rewards(3).await.expect_err("类型必须被拒绝");
         assert!(error.to_string().contains("图鉴类型无效"), "{error}");
+    }
+
+    #[test]
+    fn clear_new_keeps_only_positive_ids_and_reads_the_reply() {
+        let ids = positive_fruit_ids(&[0, -3, 12, 12, i64::from(i32::MAX) + 1]);
+        assert_eq!(ids, vec![12, 12]);
+        let request = ClearNewUnlockedFruitsV2Request { fruit_ids: ids };
+        let decoded = ClearNewUnlockedFruitsV2Request::decode(request.encode_to_vec().as_slice())
+            .expect("请求可解码");
+        assert_eq!(decoded.fruit_ids, vec![12, 12]);
+        assert_eq!(CLEAR_NEW_METHOD, "ClearNewUnlockedFruitsV2");
+        let reply = ClearNewUnlockedFruitsV2Reply { cleared_fruit_ids: vec![12, 0, 9] };
+        assert_eq!(cleared_fruit_ids(&reply), vec![12, 9]);
+    }
+
+    #[tokio::test]
+    async fn clear_new_with_no_ids_does_not_ask_the_gateway() {
+        let gateway = Arc::new(Gateway::new(
+            crate::network::gateway::GatewayConfig {
+                server_url: "wss://gate.example.com/ws".into(),
+                platform: "qq".into(),
+                os: "Windows".into(),
+                client_version: "1.15.0.2_20261001".into(),
+                auth_code: "test".into(),
+                headers: std::collections::HashMap::new(),
+            },
+            Arc::new(crate::network::encryptor::NoopEncryptor),
+        ));
+        let cleared =
+            IllustratedService::new(gateway).clear_new(&[0, -1]).await.expect("空名单不发请求");
+        assert!(cleared.is_empty());
     }
 }

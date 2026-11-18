@@ -3912,3 +3912,12 @@ bot 本轮 13 个提交**玩法层零变化**（活动/商城/日常自动化均
 - ACT-02 在这个基准的 `ActivityCenter.vue` 里仍能按 `wish`、`stellar`、`qixi`、`qingmei`、`charity`、`pet` 打开对应页面。不按旧删除叙述排除，本批也不恢复。
 - 新的可达差异记为未实现：便便优先兑有机肥、窝棚幼崽补栏和一键喂养、农场好友先于牧场、成长任务条件 25 与牧场好友面板上报、图鉴全部已读。单次集市兑换的余额拒绝已经有，购买按钮禁用不单列。
 - 没有窗口验收，没有真实接口。`54fda84` 的 1203 项测试不是这个基准的全量回归。
+
+### 2026-11-18 — 图鉴全部已读
+
+本条只做 COLL-02。便便兑换、窝棚补栏、巡查顺序和成长任务上报仍是未实现。不把矩阵写成通过。
+
+- bot `c500e08` 的 `clearIllustratedNew` 丢掉非正数 `fruitId`，空名单直接返回，否则调用 `IllustratedService.ClearNewUnlockedFruitsV2`。面板按钮「全部已读」提交当前图鉴里 `isNew` 的 `fruitId`。
+- Rust `IllustratedService::clear_new` 按同样的过滤发请求，回包里的 0 不返回。NSH 只取当前页新增且果实号为正的条目。没有新增时提示「没有未读图鉴」，不发请求。
+- 离线：`clear_new_keeps_only_positive_ids_and_reads_the_reply`、`clear_new_with_no_ids_does_not_ask_the_gateway`、`read_all_uses_only_positive_fresh_fruit_ids`。`nsh check crates/qq-farm-nsh` 通过。工具链文件仍是 1.98.1，检查用已安装的 1.99.1。
+- 待验：窗口上的「全部已读」，以及真实 `ClearNewUnlockedFruitsV2` 回包。没有启动 worker，没有真实账号。

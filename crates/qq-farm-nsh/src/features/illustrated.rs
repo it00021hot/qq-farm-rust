@@ -71,6 +71,7 @@ struct DetailLine {
 #[derive(Clone, PartialEq, Eq)]
 struct IllItem {
     seed_id: i64,
+    fruit_id: i64,
     name: String,
     unlocked: bool,
     progress: i64,
@@ -231,6 +232,11 @@ fn book_body(
             button(move || text_key("farm.refresh"), ButtonVariant::Secondary)
                 .disabled(move || pending.get().is_some())
                 .on_press(move || books.refetch()),
+        )
+        .child(
+            button(move || text_key("illustrated.readAll"), ButtonVariant::Secondary)
+                .disabled(move || pending.get().is_some())
+                .on_press(move || clear_fresh(account_id, shelf, pending, failure, books)),
         )
         .child(when(
             move || shelf.get() == Shelf::Mutant && !selected_book(books, shelf).current.is_empty(),
@@ -573,6 +579,56 @@ fn set_count(counts: Signal<Vec<(i64, i64)>>, goods_id: i64, count: i64) {
     counts.set(rows);
 }
 
+fn fresh_fruit_ids(book: &BookView) -> Vec<i64> {
+    book.items
+        .iter()
+        .filter(|item| item.fresh && item.fruit_id > 0)
+        .map(|item| item.fruit_id)
+        .collect()
+}
+
+fn clear_fresh(
+    account_id: Signal<Option<String>>,
+    shelf: Signal<Shelf>,
+    pending: Signal<Option<String>>,
+    failure: Signal<Option<String>>,
+    books: Resource<IllustratedView, String>,
+) {
+    if pending.get_untracked().is_some() {
+        return;
+    }
+    let Some(id) = account_id.get_untracked() else { return };
+    let ids = fresh_fruit_ids(&selected_book(books, shelf));
+    if ids.is_empty() {
+        failure.set(Some(text_key("illustrated.noneFresh").to_string()));
+        return;
+    }
+    pending.set(Some("clear-new".to_owned()));
+    failure.set(None);
+    spawn(async move {
+        let context = session::session().context.clone();
+        let result = session::call(async move {
+            qq_farm_app::friend::illustrated_clear_new(&context, &id, &ids).await
+        })
+        .await;
+        match result {
+            Ok(value) => {
+                let cleared = value
+                    .get("cleared")
+                    .and_then(Value::as_array)
+                    .map(|rows| !rows.is_empty())
+                    .unwrap_or(false);
+                if !cleared {
+                    failure.set(Some(text_key("illustrated.noneFresh").to_string()));
+                }
+            }
+            Err(message) => failure.set(Some(message)),
+        }
+        pending.set(None);
+        books.refetch();
+    });
+}
+
 fn claim_book(
     account_id: Signal<Option<String>>,
     shelf: Signal<Shelf>,
@@ -801,8 +857,11 @@ fn item_from(value: &Value) -> Option<IllItem> {
         && max_count > 0;
     let name = value.get("name").and_then(Value::as_str).unwrap_or("").to_owned();
     let status = seed_status(value, purchasable);
+    let fruit_id =
+        value.get("fruitId").and_then(Value::as_i64).filter(|id| *id > 0).unwrap_or(seed_id);
     Some(IllItem {
         seed_id,
+        fruit_id,
         name: if name.is_empty() { format!("#{seed_id}") } else { name },
         unlocked: value.get("unlocked").and_then(Value::as_bool).unwrap_or(false),
         progress: value.get("progress").and_then(Value::as_i64).unwrap_or(0),
@@ -863,8 +922,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        illustrated_view, item_sections, progress_hint, seed_purchase_max, seed_status,
-        visible_items, ProgressHint,
+        fresh_fruit_ids, illustrated_view, item_sections, progress_hint, seed_purchase_max,
+        seed_status, visible_items, ProgressHint,
     };
 
     #[test]
@@ -961,5 +1020,19 @@ mod tests {
         assert_eq!(seed_purchase_max(None), 9999);
         assert_eq!(seed_purchase_max(Some(0)), 0);
         assert_eq!(seed_purchase_max(Some(20_000)), 9999);
+    }
+
+    #[test]
+    fn read_all_uses_only_positive_fresh_fruit_ids() {
+        let view = illustrated_view(&json!({
+            "crop": {
+                "items": [
+                    { "seedId": 8, "fruitId": 18, "name": "新萝卜", "isNew": true },
+                    { "seedId": 9, "fruitId": 19, "name": "旧萝卜", "isNew": false },
+                    { "seedId": 10, "name": "缺果实号", "isNew": true }
+                ]
+            }
+        }));
+        assert_eq!(fresh_fruit_ids(&view.crop), vec![18, 10]);
     }
 }

@@ -99,14 +99,14 @@
 | LOG-01 | 运行日志和今日统计 | 代码已有。bot `/api/logs`、`stats.ts`。NSH `dashboard.rs` | 无 | 未验 | 未验 |
 | REMIND-01 | 下线提醒 | 代码已有。bot `push.ts`。NSH `offline_reminder.rs`、`qq_bot_bind` | 无 | 未验 | 未验 |
 | COLL-01 | 图鉴和藏品 | 代码已有。bot `/api/illustrated`、`/api/collections`。NSH `illustrated.rs`、`collections.rs` | 无 | 未验 | 未验 |
-| COLL-02 | 图鉴全部已读 | 未实现。`c500e08` 的 `clearIllustratedNew` 把正数 `fruitId` 发给 `ClearNewUnlockedFruitsV2`，面板按钮是「全部已读」。Rust 图鉴会显示 `isNew`，没有这条清除 | 无 | 未验 | 未验 |
+| COLL-02 | 图鉴全部已读 | 代码已有。`c500e08` 的 `clearIllustratedNew` 把正数 `fruitId` 发给 `ClearNewUnlockedFruitsV2`。Rust `IllustratedService::clear_new` 同样丢掉非正数，空名单不发请求；NSH 图鉴页有「全部已读」，只提交当前页 `isNew` 且果实号为正的条目 | `clear_new_keeps_only_positive_ids_and_reads_the_reply`、`clear_new_with_no_ids_does_not_ask_the_gateway`、`read_all_uses_only_positive_fresh_fruit_ids`。没有真实回包，没有窗口点击 | 未验 | 未验 |
 | CONF-01 | 游戏配置编辑 | 代码已有。bot `ConfigManage.vue`、`/api/config/seeds`。`qq-farm-app::config`。NSH `game_config.rs` | 无 | 未验 | 未验 |
 
-本组 8 项：代码已有 6，未实现 2。
+本组 8 项：代码已有 7，未实现 1。
 
 ## 基线计数
 
-基线 35 项。代码已有 28，未实现 5（RANCH-03、RANCH-04、TASK-03、SCHED-03、COLL-02），桌面差异 1（AUTH-05），范围待核实 1（ACT-02）。窗口通过 0，真实接口通过 0。没有「验证通过」项。空账号总览曾打开过；导航和其他页面没有窗口证据。`54fda84` 上的 1203 项测试不是本基准的全量回归。
+基线 35 项。代码已有 29，未实现 4（RANCH-03、RANCH-04、TASK-03、SCHED-03），桌面差异 1（AUTH-05），范围待核实 1（ACT-02）。窗口通过 0，真实接口通过 0。没有「验证通过」项。空账号总览曾打开过；导航和其他页面没有窗口证据。`54fda84` 上的 1203 项测试不是本基准的全量回归。
 
 ## 非基线
 
