@@ -3857,3 +3857,14 @@ bot 本轮 13 个提交**玩法层零变化**（活动/商城/日常自动化均
 
 - bot `worker.ts` 的 `nextBusinessTickDeferMs` 在网关不健康时推迟农场和好友巡查。Rust 已有 `is_gateway_healthy_for_business` 和 `next_business_backoff_ms`，`run_farm_tick` 与 `run_friend_tick` 之前没有调用。现在用 `step_business_tick`：健康则执行并清退避，不健康则首次 30 秒、之后翻倍、封顶 60 秒，两种巡查分开记。第一次退避和恢复各写一条面板日志。
 - 验证：`cargo +1.99.1 test -p qq-farm-core --lib business_backoff_first_30s_then_double_capped_60s -- --test-threads=1`。`RUSTUP_TOOLCHAIN=1.99.1 nsh check crates/qq-farm-nsh`。工具链文件仍是 1.98.1。没有假网关跑完整巡查，也没有窗口和真实接口。
+
+### 2026-11-18 — 用离线网关补上巡查退避的调用链
+
+本条只补 SCHED-02 的 mock 证据。不把能力矩阵改成「齐」。窗口没有打开，没有真实网关。旧活动和 NapCat 仍按 ALIGNMENT 保留差异，本批不恢复、不排除。密码门仍待确认，本批不依赖它。
+
+- 测试 `patrol_ticks_wait_out_a_silent_gateway_and_resume_separately` 直接调用 `run_farm_tick` 和 `run_friend_tick`。离线 `Gateway` 先 `mark_online`，再用测试入口把最近入站时间拨到心跳静默之外，于是走生产的 `gateway_load` / `is_gateway_healthy_for_business`，不是再测 `step_business_tick`。
+- 无回包：农场退避 30000，下次时间约 30 秒，不是正常的 20–25 秒；好友退避仍是 0，且没有「巡查异常」。再调用两次后农场封顶 60000，退避日志仍只有第一条。好友随后各自 30000、再 60000，农场保持 60000。好友无回包期间也没有「巡查异常」。
+- 恢复：入站时间拨回当前后，农场退避清零并回到约 20–25 秒，好友退避仍是 60000。好友巡查随后清零自己的退避，并因为没有 websocket 记下「巡查异常」，说明请求已经发出。两种恢复日志各一条，再跑一次不重复。
+- 摘掉两处 `defer_unhealthy_tick` 接线后，同一测试在农场退避断言失败（得到 0，期望 30000）。计算单测 `business_backoff_first_30s_then_double_capped_60s` 不替代这条。
+- 不足：农场 AllLands 没有单独计数，农场「未发请求」由函数在 `NextSlotGuard` 之前返回推出。健康度的另一条件（在途请求年龄至少 5 秒）没有单独拨时钟。时钟仍是 `now_ms()`，断言窗口 ±2 秒，没有注入时钟。好友静默在测试账号内存配置里关掉，避免 01:00–08:30 把恢复后的巡查跳过；`persist=false`，不调用会写回用户配置的删除。
+- 验证命令见本批回报。工具链文件仍是 1.98.1，检查用已安装的 1.99.1。
