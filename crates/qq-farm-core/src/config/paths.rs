@@ -131,12 +131,39 @@ mod test_data {
     }
 }
 
+/// 测试线程当前的数据目录。发布构建没有这个入口。
+#[cfg(test)]
+#[must_use]
+pub fn test_data_dir_override() -> Option<PathBuf> {
+    test_data::current()
+}
+
+/// 未设置环境变量时的数据目录。不读环境变量，也不访问磁盘。
+#[must_use]
+pub fn default_data_dir() -> PathBuf {
+    get_app_root().join("data")
+}
+
+/// 测试里禁止对默认数据目录做读写。已安装测试目录，或路径不在默认目录下时放行。
+#[cfg(test)]
+pub fn refuse_default_data_io(path: &Path) {
+    if test_data::current().is_some() {
+        return;
+    }
+    let default = default_data_dir();
+    if path == default || path.starts_with(&default) {
+        panic!("测试拒绝访问默认数据目录 {}", path.display());
+    }
+}
+
 #[cfg(test)]
 pub use test_data::TestDataDir;
 
 /// 确保数据目录存在，返回目录路径
 pub fn ensure_data_dir() -> std::io::Result<PathBuf> {
     let dir = get_data_dir();
+    #[cfg(test)]
+    refuse_default_data_io(&dir);
     if !dir.exists() {
         fs::create_dir_all(&dir)?;
     }

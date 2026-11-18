@@ -107,6 +107,7 @@ where
     F: Future<Output = ()> + Send + 'static,
 {
     let breaker = global_breaker();
+    let log_dir = crate::utils::logger::ensure_log_dir();
     tokio::spawn(async move {
         match AssertUnwindSafe(fut).catch_unwind().await {
             Ok(()) => {
@@ -117,7 +118,7 @@ where
             Err(payload) => {
                 let msg = format_panic_payload(payload);
                 tracing::error!(label, panic = %msg, "background task panicked");
-                crate::utils::logger::record_panic(label, None, &msg);
+                crate::utils::logger::record_panic_at(&log_dir, label, None, &msg);
                 if let Some(b) = &breaker {
                     b.record_panic(label);
                 }
@@ -138,6 +139,7 @@ where
     C: FnOnce(&str, &str) + Send + 'static,
 {
     let breaker = global_breaker();
+    let log_dir = crate::utils::logger::ensure_log_dir();
     tokio::spawn(async move {
         match AssertUnwindSafe(fut).catch_unwind().await {
             Ok(()) => {
@@ -153,7 +155,7 @@ where
                     panic = %msg,
                     "account task panicked"
                 );
-                crate::utils::logger::record_panic(label, Some(&account_id), &msg);
+                crate::utils::logger::record_panic_at(&log_dir, label, Some(&account_id), &msg);
                 on_panic(&account_id, &msg);
                 if let Some(b) = &breaker {
                     b.record_panic(label);
@@ -180,6 +182,7 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_logged_catches_panic_without_aborting() {
+        let data = crate::config::paths::TestDataDir::enter();
         let flagged = Arc::new(AtomicBool::new(false));
         let f2 = flagged.clone();
         let handle = spawn_logged("test_panic", async move {
@@ -191,6 +194,19 @@ mod tests {
         });
         h2.await.expect("follow-up task");
         assert!(flagged.load(Ordering::SeqCst));
+        let logs = data.path().join("logs");
+        let mut panic_file = false;
+        if let Ok(entries) = std::fs::read_dir(&logs) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with("panic-") && name.ends_with(".log") {
+                    assert!(entry.path().starts_with(data.path()));
+                    assert!(std::fs::metadata(entry.path()).expect("panic file").len() > 0);
+                    panic_file = true;
+                }
+            }
+        }
+        assert!(panic_file, "panic log should stay under the test directory");
     }
 
     #[test]

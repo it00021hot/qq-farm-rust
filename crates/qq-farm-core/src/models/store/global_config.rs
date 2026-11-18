@@ -532,6 +532,9 @@ pub fn store_file() -> PathBuf {
 /// 返回 `Ok(())` 仅表示调度成功；真正的 I/O 错误通过 `tracing::error!` 记录。
 pub fn save_global_config() -> std::io::Result<()> {
     use std::fs;
+    let path = store_file();
+    #[cfg(test)]
+    crate::config::paths::refuse_default_data_io(&path);
     let state = STATE.read().clone();
     let account_state = crate::models::store::account_config::state();
     let account_state = account_state.read().clone();
@@ -551,7 +554,6 @@ pub fn save_global_config() -> std::io::Result<()> {
     });
     let body = serde_json::to_string_pretty(&data).map_err(std::io::Error::other)?;
 
-    let path = store_file();
     let tmp = path.with_extension("json.tmp");
     crate::infra::spawn_blocking(move || -> std::io::Result<()> {
         if let Some(parent) = path.parent() {
@@ -576,6 +578,8 @@ pub fn save_global_config() -> std::io::Result<()> {
 pub fn load_global_config() -> std::io::Result<()> {
     use std::fs;
     let path = store_file();
+    #[cfg(test)]
+    crate::config::paths::refuse_default_data_io(&path);
     if !path.exists() {
         return Ok(());
     }

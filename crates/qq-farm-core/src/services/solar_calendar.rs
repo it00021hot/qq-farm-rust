@@ -351,6 +351,7 @@ mod tests {
 
     #[test]
     fn event_dto_gates_claim_and_answer_like_bot() {
+        let _data = crate::config::paths::TestDataDir::enter();
         crate::config::game_config::global().load();
         let now = 1_792_252_900;
         let event = SolarTermsEventInfo {
@@ -412,6 +413,7 @@ mod tests {
     /// bot 57cddb3：非法 / 缺失的 answer_index 一律 null，且不影响 canAnswer。
     #[test]
     fn event_dto_omits_invalid_answer_index() {
+        let _data = crate::config::paths::TestDataDir::enter();
         crate::config::game_config::global().load();
         let now = 1_792_252_900;
         let event = |id| SolarTermsEventInfo {

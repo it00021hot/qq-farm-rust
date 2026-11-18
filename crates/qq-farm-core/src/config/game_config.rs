@@ -501,8 +501,7 @@ impl GameConfig {
     }
 
     fn merge_overlay_plants(&self) {
-        let path = Self::overlay_dir().join("Plant.json");
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        let Some(text) = Self::read_overlay("Plant.json") else {
             return;
         };
         let Ok(overlay) = serde_json::from_str::<Vec<Plant>>(&text) else {
@@ -520,8 +519,7 @@ impl GameConfig {
     }
 
     fn merge_overlay_items(&self) {
-        let path = Self::overlay_dir().join("ItemInfo.json");
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        let Some(text) = Self::read_overlay("ItemInfo.json") else {
             return;
         };
         let Ok(overlay) = serde_json::from_str::<Vec<Item>>(&text) else {
@@ -539,6 +537,8 @@ impl GameConfig {
     }
 
     fn write_json(path: &std::path::Path, value: &impl Serialize) -> std::io::Result<()> {
+        #[cfg(test)]
+        crate::config::paths::refuse_default_data_io(path);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -549,6 +549,8 @@ impl GameConfig {
     /// 写入植物 overlay 并热更新内存
     pub fn upsert_plant(&self, plant: Plant) -> std::io::Result<()> {
         let path = Self::overlay_dir().join("Plant.json");
+        #[cfg(test)]
+        crate::config::paths::refuse_default_data_io(&path);
         let mut overlay: Vec<Plant> = std::fs::read_to_string(&path)
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
@@ -564,6 +566,8 @@ impl GameConfig {
     /// 删除 overlay 植物并重载
     pub fn delete_plant_overlay(&self, plant_id: i64) -> std::io::Result<bool> {
         let path = Self::overlay_dir().join("Plant.json");
+        #[cfg(test)]
+        crate::config::paths::refuse_default_data_io(&path);
         let mut overlay: Vec<Plant> = std::fs::read_to_string(&path)
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
@@ -579,6 +583,8 @@ impl GameConfig {
     /// 写入物品 overlay 并热更新内存
     pub fn upsert_item(&self, item: Item) -> std::io::Result<()> {
         let path = Self::overlay_dir().join("ItemInfo.json");
+        #[cfg(test)]
+        crate::config::paths::refuse_default_data_io(&path);
         let mut overlay: Vec<Item> = std::fs::read_to_string(&path)
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
@@ -594,6 +600,8 @@ impl GameConfig {
     /// 删除 overlay 物品并重载
     pub fn delete_item_overlay(&self, item_id: i64) -> std::io::Result<bool> {
         let path = Self::overlay_dir().join("ItemInfo.json");
+        #[cfg(test)]
+        crate::config::paths::refuse_default_data_io(&path);
         let mut overlay: Vec<Item> = std::fs::read_to_string(&path)
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
@@ -629,6 +637,8 @@ impl GameConfig {
             ));
         }
         let dir = Self::overlay_dir().join("images");
+        #[cfg(test)]
+        crate::config::paths::refuse_default_data_io(&dir);
         std::fs::create_dir_all(&dir)?;
         std::fs::write(dir.join(&safe), bytes)?;
         Ok(format!("/api/config/images/{safe}"))
@@ -640,7 +650,25 @@ impl GameConfig {
             .chars()
             .filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_' || *c == '-')
             .collect();
-        std::fs::read(Self::overlay_dir().join("images").join(safe)).ok()
+        let path = Self::overlay_dir().join("images").join(safe);
+        #[cfg(test)]
+        if crate::config::paths::test_data_dir_override().is_none() {
+            return None;
+        }
+        #[cfg(test)]
+        crate::config::paths::refuse_default_data_io(&path);
+        std::fs::read(path).ok()
+    }
+
+    fn read_overlay(name: &str) -> Option<String> {
+        #[cfg(test)]
+        if crate::config::paths::test_data_dir_override().is_none() {
+            return None;
+        }
+        let path = Self::overlay_dir().join(name);
+        #[cfg(test)]
+        crate::config::paths::refuse_default_data_io(&path);
+        std::fs::read_to_string(path).ok()
     }
 
     // ===== 查询 API =====
@@ -1307,9 +1335,23 @@ pub fn load_fruits_config() -> Vec<PlantFruit> {
 mod tests {
     use super::*;
 
-    fn isolated_config() -> GameConfig {
-        let _data = crate::config::paths::TestDataDir::enter();
-        reload_for_test()
+    struct IsolatedConfig {
+        _data: crate::config::paths::TestDataDir,
+        config: GameConfig,
+    }
+
+    impl std::ops::Deref for IsolatedConfig {
+        type Target = GameConfig;
+
+        fn deref(&self) -> &Self::Target {
+            &self.config
+        }
+    }
+
+    fn isolated_config() -> IsolatedConfig {
+        let data = crate::config::paths::TestDataDir::enter();
+        let config = reload_for_test();
+        IsolatedConfig { _data: data, config }
     }
 
     #[test]

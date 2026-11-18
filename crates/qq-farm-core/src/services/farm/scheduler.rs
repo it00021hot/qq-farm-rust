@@ -1346,6 +1346,7 @@ mod tests {
             LandInfo { id, unlocked, plant, ..Default::default() }
         }
 
+        let _data = crate::config::paths::TestDataDir::enter();
         crate::config::game_config::global().load();
         let now = crate::utils::time::get_server_time_secs();
         let growing = || {

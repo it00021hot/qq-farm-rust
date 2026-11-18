@@ -155,7 +155,27 @@ fn put_slot(account_id: &str, slot: StatsSlot) {
 
 #[must_use]
 pub fn stats_file(account_id: &str) -> PathBuf {
-    crate::config::paths::get_data_dir().join("stats").join(format!("{account_id}.json"))
+    stats_root().join("stats").join(format!("{account_id}.json"))
+}
+
+fn stats_root() -> PathBuf {
+    #[cfg(test)]
+    if let Some(dir) = crate::config::paths::test_data_dir_override() {
+        return dir;
+    }
+    // 空串、空白和相对路径都按环境变量原样使用。未设置才回到数据目录。
+    match std::env::var("FARM_DATA_DIR") {
+        Ok(value) => PathBuf::from(value),
+        Err(_) => crate::config::paths::get_data_dir(),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn stats_root_from_env(value: Option<&str>, fallback: PathBuf) -> PathBuf {
+    match value {
+        Some(value) => PathBuf::from(value),
+        None => fallback,
+    }
 }
 
 // =====================================================================
@@ -164,6 +184,8 @@ pub fn stats_file(account_id: &str) -> PathBuf {
 
 pub fn load_persisted_stats(account_id: &str) -> Option<PersistedStats> {
     let path = stats_file(account_id);
+    #[cfg(test)]
+    crate::config::paths::refuse_default_data_io(&path);
     let raw = fs::read_to_string(&path).ok()?;
     if raw.trim().is_empty() {
         return None;
@@ -173,6 +195,8 @@ pub fn load_persisted_stats(account_id: &str) -> Option<PersistedStats> {
 
 pub fn save_persisted_stats(account_id: &str, data: &PersistedStats) {
     let path = stats_file(account_id);
+    #[cfg(test)]
+    crate::config::paths::refuse_default_data_io(&path);
     if let Some(parent) = path.parent() {
         if !parent.exists() {
             let _ = fs::create_dir_all(parent);
@@ -586,6 +610,15 @@ pub fn reset_for_test() {
 mod tests {
     use super::*;
     use serial_test::serial;
+
+    #[test]
+    fn stats_root_keeps_empty_whitespace_and_relative_env_values() {
+        let fallback = PathBuf::from("fallback-data");
+        assert_eq!(stats_root_from_env(None, fallback.clone()), fallback);
+        assert_eq!(stats_root_from_env(Some(""), fallback.clone()), PathBuf::from(""));
+        assert_eq!(stats_root_from_env(Some("  "), fallback.clone()), PathBuf::from("  "));
+        assert_eq!(stats_root_from_env(Some("rel/stats"), fallback), PathBuf::from("rel/stats"));
+    }
 
     #[test]
     #[serial(stats)]

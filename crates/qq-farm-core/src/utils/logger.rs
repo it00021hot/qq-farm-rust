@@ -185,6 +185,7 @@ struct LogEntry<'a> {
 }
 
 static INIT: Once = Once::new();
+#[cfg(not(test))]
 static LOG_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 /// 初始化日志（必须先调一次）：stderr + `logs/combined.log`，并安装 panic hook。
@@ -279,19 +280,27 @@ pub fn install_panic_hook() {
 /// 后台任务捕获到的 panic：写独立文件 + error.log。
 /// `record_panic` 内部用 spawn_blocking 异步写盘，调用方（tokio worker）零阻塞。
 pub fn record_panic(label: &str, account_id: Option<&str>, message: &str) {
+    record_panic_at(&ensure_log_dir(), label, account_id, message);
+}
+
+pub fn record_panic_at(dir: &Path, label: &str, account_id: Option<&str>, message: &str) {
     let account = account_id.unwrap_or("-");
     let body = format!(
         "ts={}\nlabel={label}\naccount_id={account}\npanic={message}\n",
         chrono_like_now_iso()
     );
-    record_panic_raw(&body);
+    record_panic_in(dir, &body);
 }
 
 fn record_panic_raw(body: &str) {
-    let dir = ensure_log_dir();
+    record_panic_in(&ensure_log_dir(), body);
+}
+
+pub(crate) fn record_panic_in(dir: &Path, body: &str) {
     let stamp = chrono_like_now_compact();
     write_to_path(&dir.join(format!("panic-{stamp}.log")), body);
-    append_fallback_log(
+    append_fallback_log_in(
+        dir,
         "error",
         &format!("{{\"level\":\"error\",\"message\":{}}}\n", json_escape(body)),
     );
@@ -313,17 +322,31 @@ fn json_escape(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
 }
 
-/// 拿到 log 目录（不存在则创建）
+/// 拿到 log 目录（不存在则创建）。
+///
+/// 发布构建缓存第一次解析出的目录。测试构建不缓存：目录在调用线程上按测试根解析，
+/// 没有测试根就拒绝，避免后台线程回落到真实 `data/logs`。
 pub fn ensure_log_dir() -> PathBuf {
-    let mut guard = LOG_DIR.lock();
-    if let Some(p) = guard.as_ref() {
-        return p.clone();
+    #[cfg(test)]
+    {
+        let data = crate::config::paths::test_data_dir_override()
+            .expect("测试写日志缺少 TestDataDir，拒绝使用默认数据目录");
+        let dir = data.join("logs");
+        let _ = fs::create_dir_all(&dir);
+        return dir;
     }
-    let data_dir = crate::config::paths::ensure_data_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let dir = data_dir.join("logs");
-    let _ = fs::create_dir_all(&dir);
-    *guard = Some(dir.clone());
-    dir
+    #[cfg(not(test))]
+    {
+        let mut guard = LOG_DIR.lock();
+        if let Some(path) = guard.as_ref() {
+            return path.clone();
+        }
+        let data_dir = crate::config::paths::ensure_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let dir = data_dir.join("logs");
+        let _ = fs::create_dir_all(&dir);
+        *guard = Some(dir.clone());
+        dir
+    }
 }
 
 /// 模块 logger
@@ -387,11 +410,15 @@ pub fn create_module_logger(name: &str) -> ModuleLogger {
 
 /// 文件 fallback 写日志（spawn_blocking 跑在 blocking pool，绝不阻塞调用方）
 fn append_fallback_log(level: &str, line: &str) {
+    append_fallback_log_in(&ensure_log_dir(), level, line);
+}
+
+fn append_fallback_log_in(dir: &Path, level: &str, line: &str) {
+    let dir = dir.to_path_buf();
     let level = level.to_string();
     let line = line.to_string();
-    crate::infra::spawn_blocking(move || {
+    let write = move || {
         let _guard = log_append_lock().lock();
-        let dir = ensure_log_dir();
         if let Ok(mut combined) =
             fs::OpenOptions::new().create(true).append(true).open(dir.join("combined.log"))
         {
@@ -404,7 +431,13 @@ fn append_fallback_log(level: &str, line: &str) {
                 let _ = err.write_all(line.as_bytes());
             }
         }
-    });
+    };
+    #[cfg(test)]
+    {
+        write();
+    }
+    #[cfg(not(test))]
+    crate::infra::spawn_blocking(write);
 }
 
 /// 串行化 file append 的全局锁（避免多线程写同一文件时被 fs 锁卡住）
@@ -447,16 +480,24 @@ fn civil_from_days(days_since_epoch: i64) -> (i32, u32, u32) {
 /// 把 log 写到指定路径（spawn_blocking，绝不阻塞 tokio worker；
 /// 测试环境下 fallback 同步执行，保持原有同步语义）
 pub fn write_to_path(path: &Path, line: &str) {
+    #[cfg(test)]
+    crate::config::paths::refuse_default_data_io(path);
     let path = path.to_path_buf();
     let line = line.to_string();
-    crate::infra::spawn_blocking(move || {
+    let write = move || {
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
         if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&path) {
             let _ = f.write_all(line.as_bytes());
         }
-    });
+    };
+    #[cfg(test)]
+    {
+        write();
+    }
+    #[cfg(not(test))]
+    crate::infra::spawn_blocking(write);
 }
 
 #[cfg(test)]
@@ -533,10 +574,17 @@ mod tests {
 
     #[test]
     fn create_module_logger_basic() {
+        let data = crate::config::paths::TestDataDir::enter();
         let l = create_module_logger("test");
         l.info("hello", json!({ "k": "v" }));
         l.warn("warning", json!({ "code": "secret" }));
         l.error("error", json!({ "auth": "x" }));
+        let combined = data.path().join("logs").join("combined.log");
+        let error = data.path().join("logs").join("error.log");
+        assert!(combined.starts_with(data.path()));
+        assert!(error.is_file());
+        assert!(std::fs::metadata(&combined).expect("combined").len() > 0);
+        assert!(std::fs::metadata(&error).expect("error").len() > 0);
     }
 
     #[test]
@@ -547,24 +595,30 @@ mod tests {
 
     #[test]
     fn record_panic_writes_file() {
-        let dir = ensure_log_dir();
+        let data = crate::config::paths::TestDataDir::enter();
+        let sentinel = data.path().join("sentinel.txt");
+        fs::write(&sentinel, b"sentinel").expect("sentinel");
+        let before = fs::metadata(&sentinel).expect("sentinel metadata");
+        let before_len = before.len();
+        let before_modified = before.modified().expect("sentinel time");
         record_panic("unit_test", Some("acc1"), "hello-panic");
+        let dir = data.path().join("logs");
         let mut found = false;
         if let Ok(entries) = fs::read_dir(&dir) {
-            for e in entries.flatten() {
-                let name = e.file_name().to_string_lossy().to_string();
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
                 if name.starts_with("panic-") && name.ends_with(".log") {
-                    if let Ok(body) = fs::read_to_string(e.path()) {
-                        if body.contains("hello-panic") && body.contains("unit_test") {
-                            found = true;
-                            let _ = fs::remove_file(e.path());
-                            break;
-                        }
-                    }
+                    assert!(entry.path().starts_with(data.path()));
+                    assert!(fs::metadata(entry.path()).expect("panic file").len() > 0);
+                    found = true;
+                    break;
                 }
             }
         }
         assert!(found, "expected panic-*.log under {}", dir.display());
+        let after = fs::metadata(&sentinel).expect("sentinel still there");
+        assert_eq!(after.len(), before_len);
+        assert_eq!(after.modified().expect("sentinel time"), before_modified);
     }
 
     /// 关键回归测试：高频并发写日志不会卡死调用线程（验证 non-blocking 改造）。

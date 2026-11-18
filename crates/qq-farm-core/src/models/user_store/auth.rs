@@ -111,6 +111,8 @@ static LOGIN_LOGS: once_cell::sync::Lazy<parking_lot::RwLock<Vec<LoginLogEntry>>
 
 pub fn load_login_attempts() {
     let path = login_attempts_file();
+    #[cfg(test)]
+    crate::config::paths::refuse_default_data_io(&path);
     if !path.exists() {
         return;
     }
@@ -137,6 +139,8 @@ pub fn save_login_attempts() {
 
 pub fn load_login_logs() {
     let path = login_logs_file();
+    #[cfg(test)]
+    crate::config::paths::refuse_default_data_io(&path);
     if !path.exists() {
         return;
     }

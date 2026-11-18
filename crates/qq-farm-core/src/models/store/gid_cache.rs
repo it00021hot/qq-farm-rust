@@ -25,6 +25,8 @@ pub fn cache_file(account_id: &str) -> PathBuf {
 /// 读取缓存
 pub fn read_cache(account_id: &str) -> Option<Vec<i64>> {
     let path = cache_file(account_id);
+    #[cfg(test)]
+    crate::config::paths::refuse_default_data_io(&path);
     let raw = fs::read_to_string(&path).ok()?;
     let v: Vec<i64> = serde_json::from_str(&raw).ok()?;
     if v.is_empty() {
@@ -37,6 +39,8 @@ pub fn read_cache(account_id: &str) -> Option<Vec<i64>> {
 /// 写入缓存（自动创建目录）
 pub fn write_cache(account_id: &str, gids: &[i64]) -> std::io::Result<()> {
     let dir = cache_dir();
+    #[cfg(test)]
+    crate::config::paths::refuse_default_data_io(&dir);
     if !dir.exists() {
         fs::create_dir_all(&dir)?;
     }

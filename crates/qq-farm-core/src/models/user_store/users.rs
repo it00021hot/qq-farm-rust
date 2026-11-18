@@ -119,7 +119,10 @@ fn write_json_atomic<T: serde::Serialize>(path: &Path, value: &T) {
 // =====================================================================
 
 pub fn load_users() {
-    let data: UsersFile = read_json_or_default(&users_file());
+    let path = users_file();
+    #[cfg(test)]
+    crate::config::paths::refuse_default_data_io(&path);
+    let data: UsersFile = read_json_or_default(&path);
     *USERS.write() = data.users;
 }
 
@@ -129,7 +132,10 @@ pub fn save_users() {
 }
 
 pub fn load_cards() {
-    let data: CardsFile = read_json_or_default(&cards_file());
+    let path = cards_file();
+    #[cfg(test)]
+    crate::config::paths::refuse_default_data_io(&path);
+    let data: CardsFile = read_json_or_default(&path);
     *CARDS.write() = data.cards;
 }
 

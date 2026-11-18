@@ -15,12 +15,12 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::paths::{ensure_data_dir, get_data_file};
+use crate::config::paths::get_data_file;
 
 /// 数据文件
 #[must_use]
@@ -274,6 +274,8 @@ pub fn delete_user_config(username: &str) -> usize {
 /// 从文件加载
 pub fn load_from_file() -> std::io::Result<AccountsData> {
     let path = accounts_file();
+    #[cfg(test)]
+    crate::config::paths::refuse_default_data_io(&path);
     if !path.exists() {
         return Ok(AccountsData::default());
     }
@@ -284,12 +286,19 @@ pub fn load_from_file() -> std::io::Result<AccountsData> {
 
 /// 保存到文件（原子写）
 pub fn save_to_file(data: &AccountsData) -> std::io::Result<()> {
-    ensure_data_dir()?;
-    let path = accounts_file();
+    save_to_path(&accounts_file(), data)
+}
+
+fn save_to_path(path: &Path, data: &AccountsData) -> std::io::Result<()> {
+    #[cfg(test)]
+    crate::config::paths::refuse_default_data_io(path);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
     let tmp = path.with_extension("json.tmp");
     let body = serde_json::to_string_pretty(data).map_err(std::io::Error::other)?;
     fs::write(&tmp, body)?;
-    fs::rename(&tmp, &path)?;
+    fs::rename(&tmp, path)?;
     Ok(())
 }
 
@@ -307,8 +316,17 @@ pub fn load_into_global() -> std::io::Result<usize> {
 /// 同步版本 `save_to_file` 保留给初始化 / 显式同步场景。
 pub fn persist_global() {
     let data = accounts_data();
+    let path = accounts_file();
+    #[cfg(test)]
+    {
+        if let Err(e) = save_to_path(&path, &data) {
+            tracing::error!(error = %e, "failed to persist accounts.json");
+        }
+        return;
+    }
+    #[cfg(not(test))]
     crate::infra::spawn_blocking(move || {
-        if let Err(e) = save_to_file(&data) {
+        if let Err(e) = save_to_path(&path, &data) {
             tracing::error!(error = %e, "failed to persist accounts.json");
         }
     });
@@ -488,6 +506,26 @@ mod tests {
         assert_eq!(saved.wx_refresh_token_observed_at, 0);
         assert!(saved.code.is_empty());
         assert!(!saved.wx_buffer_consumed);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[serial(accounts)]
+    async fn persist_global_writes_inside_the_test_directory() {
+        reset();
+        let data = crate::config::paths::TestDataDir::enter();
+        let sentinel = data.path().join("sentinel.txt");
+        std::fs::write(&sentinel, b"sentinel").expect("sentinel");
+        let before = std::fs::metadata(&sentinel).expect("sentinel metadata");
+        let before_len = before.len();
+        let before_modified = before.modified().expect("sentinel time");
+        add_or_update_account(make_account("1", "a1", "u1"));
+        persist_global();
+        let saved = crate::config::paths::get_data_file("accounts.json");
+        assert!(saved.starts_with(data.path()));
+        assert!(std::fs::metadata(&saved).expect("accounts file").len() > 0);
+        let after = std::fs::metadata(&sentinel).expect("sentinel still there");
+        assert_eq!(after.len(), before_len);
+        assert_eq!(after.modified().expect("sentinel time"), before_modified);
     }
 
     #[test]

@@ -298,6 +298,7 @@ mod tests {
 
     #[test]
     fn mutant_group_by_param() {
+        let _data = crate::config::paths::TestDataDir::enter();
         crate::config::game_config::global().load();
         let gc = crate::config::game_config::global();
         // 40002001 是普通果实 → gold
@@ -306,6 +307,7 @@ mod tests {
 
     #[test]
     fn item_dto_maps_fields() {
+        let _data = crate::config::paths::TestDataDir::enter();
         crate::config::game_config::global().load();
         let item = IllustratedInfoV2 {
             fruit_id: 40002001,
