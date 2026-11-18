@@ -375,6 +375,22 @@ fn claim_confirmed(before_score: i64, eligible_last: i64, reply_score: i64, clai
     reply_score >= before_score && claimed >= eligible_last && claimed <= reply_score
 }
 
+fn reward_lines(raw: &str) -> Vec<Value> {
+    raw.split(';')
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| {
+            let (id, count) = part.split_once(':')?;
+            let id = id.parse::<i64>().ok().filter(|id| *id > 0)?;
+            let count = count.parse::<i64>().unwrap_or(0).max(0);
+            let name = global_game_config()
+                .get_item_by_id(id)
+                .map(|item| item.name.clone())
+                .unwrap_or_else(|| format!("物品{id}"));
+            Some(json!({ "itemId": id, "count": count, "name": name }))
+        })
+        .collect()
+}
+
 fn milestone_scores(snapshot: &Value, unclaimed: bool) -> Vec<i64> {
     snapshot
         .get("milestones")
@@ -416,6 +432,7 @@ fn normalize(reply: &GetCollectionsReply) -> Result<Value> {
         "totalCount": total,
         "nextRewardScore": next,
         "canClaim": milestones.iter().any(|row| row.reached && !row.claimed),
+        "currentBuffs": current_buffs(&milestones),
         "milestones": milestones.iter().map(Milestone::json).collect::<Vec<_>>(),
         "series": series.iter().map(SeriesView::json).collect::<Vec<_>>(),
         "display": display.map(|item| json!({ "itemId": item.item_id, "pedestalId": item.pedestal_id })),
@@ -427,6 +444,8 @@ struct SeriesView {
     name: String,
     rarity: i64,
     rarity_name: String,
+    description: String,
+    mutation_rules: Vec<Value>,
     activated: i64,
     total: i64,
     items: Vec<Value>,
@@ -439,6 +458,8 @@ impl SeriesView {
             "name": self.name,
             "rarity": self.rarity,
             "rarityName": self.rarity_name,
+            "description": self.description,
+            "mutationRules": self.mutation_rules,
             "activatedCount": self.activated,
             "totalCount": self.total,
             "items": self.items,
@@ -452,6 +473,7 @@ struct Milestone {
     claimed: bool,
     reached: bool,
     buffs: Vec<Value>,
+    rewards: Vec<Value>,
 }
 
 impl Milestone {
@@ -462,6 +484,7 @@ impl Milestone {
             "claimed": self.claimed,
             "reached": self.reached,
             "buffs": self.buffs,
+            "rewards": self.rewards,
         })
     }
 }
@@ -500,6 +523,8 @@ fn series_rows(detail: &CategoryDetail, displayed: i64) -> Vec<SeriesView> {
                     .copied()
                     .unwrap_or("")
                     .to_owned(),
+                description: field_str(&series, "desc").to_owned(),
+                mutation_rules: mutation_rules(series_id),
                 activated,
                 total: items.len() as i64,
                 items,
@@ -518,18 +543,19 @@ fn item_row(item: &Value, detail: &CategoryDetail, series: &Value, displayed: i6
         && conditions_met(field_str(item, "unlock_condition_ids"), detail);
     let next = next_costs(series_id, star, id);
     let copies = next.iter().find_map(|cost| (cost.id == id).then_some(cost.count));
-    let name = global_game_config()
-        .get_item_by_id(id)
-        .map(|entry| entry.name.clone())
-        .unwrap_or_else(|| format!("藏品{id}"));
+    let entry = global_game_config().get_item_by_id(id);
+    let name = entry.as_ref().map(|item| item.name.clone()).unwrap_or_else(|| format!("藏品{id}"));
+    let description = entry.and_then(|item| item.desc).unwrap_or_default();
     json!({
         "id": id,
         "name": name,
+        "description": description,
         "starLevel": star,
         "ownCount": own,
         "activated": star > 0,
         "unlocked": unlocked,
         "displayed": displayed == id,
+        "isNew": state.is_some_and(|owned| owned.is_new),
         "score": star_score(star, field_i64(series, "series_rarity")),
         "canUpgrade": unlocked && star < 5 && copies.is_some_and(|need| own >= need),
         "nextStarCosts": next.iter().map(|cost| json!({
@@ -605,6 +631,27 @@ fn conditions_met(value: &str, detail: &CategoryDetail) -> bool {
         })
 }
 
+fn current_buffs(milestones: &[Milestone]) -> Vec<Value> {
+    let mut rows = Vec::new();
+    for milestone in milestones.iter().filter(|row| row.claimed) {
+        for buff in &milestone.buffs {
+            let name = buff.get("name").and_then(Value::as_str).unwrap_or("");
+            if name.is_empty() {
+                continue;
+            }
+            if let Some(index) = rows
+                .iter()
+                .position(|row: &Value| row.get("name").and_then(Value::as_str) == Some(name))
+            {
+                rows[index] = buff.clone();
+            } else {
+                rows.push(buff.clone());
+            }
+        }
+    }
+    rows
+}
+
 fn milestone_rows(score: i64, claimed_score: i64) -> Vec<Milestone> {
     let buffs = global_game_config().buffs_by_source("藏品属性");
     let mut rows = table("reward")
@@ -635,6 +682,7 @@ fn milestone_rows(score: i64, claimed_score: i64) -> Vec<Milestone> {
                         json!({ "name": buff.attr_id, "value": value, "description": description })
                     })
                     .collect(),
+                rewards: reward_lines(field_str(&row, "rewards")),
             }
         })
         .collect()
@@ -669,8 +717,172 @@ fn table(name: &str) -> &'static [Value] {
             static SLOT: OnceLock<Vec<Value>> = OnceLock::new();
             load(include_str!("../../assets/collections/CollectionCondition.json"), &SLOT)
         }
+        "group" => {
+            static SLOT: OnceLock<Vec<Value>> = OnceLock::new();
+            load(include_str!("../../assets/collections/CollectionGroup.json"), &SLOT)
+        }
+        "publicity" => {
+            static SLOT: OnceLock<Vec<Value>> = OnceLock::new();
+            load(include_str!("../../assets/collections/MutantPublicity.json"), &SLOT)
+        }
         _ => &[],
     }
+}
+
+/// 变异宝典。配置目录，不访问账号。
+#[must_use]
+pub fn mutation_catalog() -> Value {
+    let mut effects = mutant_rows();
+    effects.retain(|row| !field_bool(row, "hide_ui"));
+    effects.sort_by_key(|row| field_i64(row, "sort"));
+    let effects: Vec<Value> = effects
+        .iter()
+        .map(|row| {
+            let id = field_i64(row, "id");
+            json!({
+                "id": id,
+                "name": field_str(row, "effect_name"),
+                "tag": field_str(row, "tag"),
+                "effect": effect_text(row),
+                "description": field_str(row, "tips"),
+                "probabilities": publicity_rows(id),
+            })
+        })
+        .collect();
+    let normal = effects.iter().filter(|row| row["tag"] == "无").cloned().collect::<Vec<_>>();
+    let decoration = effects.iter().filter(|row| row["tag"] == "装扮").cloned().collect::<Vec<_>>();
+    json!({
+        "normal": normal,
+        "decoration": decoration,
+        "collections": collection_mutation_rows(),
+    })
+}
+
+fn mutant_rows() -> Vec<Value> {
+    static SLOT: OnceLock<Vec<Value>> = OnceLock::new();
+    SLOT.get_or_init(|| {
+        serde_json::from_str(include_str!("../../../../assets/game_config/MutantEffect.json"))
+            .expect("变异效果配置无法读取")
+    })
+    .clone()
+}
+
+fn publicity_rows(mutant_id: i64) -> Vec<Value> {
+    let mut rows = table("publicity")
+        .iter()
+        .filter(|row| field_i64(row, "mutant_id") == mutant_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    rows.sort_by_key(|row| field_i64(row, "order"));
+    rows.into_iter()
+        .map(|row| {
+            let rarity = row.get("rarity").and_then(Value::as_i64).unwrap_or(0);
+            json!({
+                "rarity": if rarity > 0 { Value::from(rarity) } else { Value::Null },
+                "percent": publicity_percent(field_i64(&row, "public_probability")),
+            })
+        })
+        .collect()
+}
+
+fn publicity_percent(raw: i64) -> f64 {
+    (raw as f64 / 10.0).round() / 10.0
+}
+
+fn effect_text(row: &Value) -> String {
+    let mut parts = field_str(row, "actions").split(':');
+    let action = parts.next().unwrap_or("").parse::<i64>().unwrap_or(0);
+    let value = parts.next().unwrap_or("").parse::<i64>().unwrap_or(0);
+    match action {
+        2 => format!("数量 ×{value}"),
+        3 => format!("售价 ×{value}"),
+        4 => {
+            let fruit = field_str(row, "fruit_name");
+            if fruit.is_empty() {
+                String::new()
+            } else {
+                format!("产出 {fruit}")
+            }
+        }
+        _ => String::new(),
+    }
+}
+
+fn collection_mutation_rows() -> Vec<Value> {
+    let mut series = table("series")
+        .iter()
+        .filter(|row| category_of(row) == i64::from(CATEGORY) && catalog_series(row))
+        .cloned()
+        .collect::<Vec<_>>();
+    series.sort_by_key(|row| field_i64(row, "display_order"));
+    series
+        .iter()
+        .map(|row| {
+            let id = field_i64(row, "series_id");
+            let rarity = field_i64(row, "series_rarity");
+            json!({
+                "id": id,
+                "name": field_str(row, "series_name"),
+                "rarityName": RARITY_NAMES.get(usize::try_from(rarity).unwrap_or(0)).copied().unwrap_or(""),
+                "description": field_str(row, "desc"),
+                "mutationRules": mutation_rules(id),
+                "items": collection_items(id),
+            })
+        })
+        .collect()
+}
+
+fn catalog_series(row: &Value) -> bool {
+    match row.get("display") {
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(shown)) => !shown,
+        Some(Value::String(text)) => text.is_empty(),
+        Some(Value::Number(number)) => number.as_i64() == Some(0),
+        _ => false,
+    }
+}
+
+fn mutation_rules(series_id: i64) -> Vec<Value> {
+    let mut rows = table("group")
+        .iter()
+        .filter(|row| field_i64(row, "series_id") == series_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    rows.sort_by_key(|row| field_i64(row, "display_order"));
+    rows.into_iter()
+        .map(|row| {
+            json!({
+                "name": field_str(&row, "group_name"),
+                "probability": publicity_percent(field_i64(&row, "public_probability")),
+                "guarantee": field_i64(&row, "display_guarantee"),
+            })
+        })
+        .collect()
+}
+
+fn collection_items(series_id: i64) -> Vec<Value> {
+    let config = global_game_config();
+    let mut rows = table("item")
+        .iter()
+        .filter(|row| field_i64(row, "series_id") == series_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    rows.sort_by_key(|row| field_i64(row, "display_order"));
+    rows.into_iter()
+        .map(|row| {
+            let id = field_i64(&row, "item_id");
+            let name = config
+                .get_item_by_id(id)
+                .map(|item| item.name)
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| format!("藏品{id}"));
+            json!({ "id": id, "name": name })
+        })
+        .collect()
+}
+
+fn field_bool(row: &Value, key: &str) -> bool {
+    row.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
 fn category_of(row: &Value) -> i64 {
@@ -698,8 +910,8 @@ mod tests {
     use crate::proto::generated::gamepb::collectionpb::CollectionInfo;
 
     use super::{
-        claim_confirmed, cost_signature, display_confirmed, normalize, upgrade_confirmed,
-        CategoryDetail, GetCollectionsReply, Material,
+        claim_confirmed, cost_signature, display_confirmed, mutation_catalog, normalize,
+        upgrade_confirmed, CategoryDetail, GetCollectionsReply, Material,
     };
 
     #[test]
@@ -711,6 +923,7 @@ mod tests {
                     collection_id: 710001,
                     star_level: 1,
                     own_count: 2,
+                    is_new: true,
                     ..Default::default()
                 }],
                 current_score: 400,
@@ -724,12 +937,25 @@ mod tests {
         let oxygen = series.iter().find(|row| row["name"] == "氧气精灵").expect("series");
         assert_eq!(oxygen["activatedCount"], 1);
         assert!(book["canClaim"].as_bool().unwrap_or(false));
+        let milestones = book["milestones"].as_array().expect("milestones");
+        assert!(milestones[0]["reached"].as_bool().unwrap_or(false));
+        assert!(!milestones[0]["claimed"].as_bool().unwrap_or(true));
+        let gifted = milestones.iter().find(|row| row["score"] == 103_100).expect("gift tier");
+        assert_eq!(gifted["rewards"].as_array().expect("rewards").len(), 2);
         assert_eq!(book["score"], 400);
         let item =
             oxygen["items"].as_array().unwrap().iter().find(|item| item["id"] == 710001).unwrap();
         assert!(item["canUpgrade"].as_bool().unwrap_or(false));
+        assert!(item["isNew"].as_bool().unwrap_or(false));
+        assert_eq!(item["name"], "菇菇氧");
+        assert!(item["description"].as_str().unwrap_or("").contains("珍藏室"));
         let costs = item["nextStarCosts"].as_array().expect("costs");
         assert!(costs.iter().any(|cost| cost["itemId"] == 710001 && cost["count"] == 2));
+        assert_eq!(oxygen["rarityName"], "普通");
+        assert_eq!(oxygen["description"], "种植4品及以上普通作物有概率得本系列");
+        let rules = oxygen["mutationRules"].as_array().expect("rules");
+        assert!(rules.iter().any(|row| row["name"] == "4小时·普通"));
+        assert!(book["currentBuffs"].as_array().expect("buffs").is_empty());
     }
 
     #[test]
@@ -747,6 +973,37 @@ mod tests {
             Material { id: 1001, count: 2_000_000, name: String::new() },
         ];
         assert_eq!(cost_signature(&left), cost_signature(&right));
+    }
+
+    #[test]
+    fn mutation_catalog_splits_effects_and_skips_hidden_series() {
+        let catalog = mutation_catalog();
+        let frozen = catalog["normal"]
+            .as_array()
+            .expect("normal")
+            .iter()
+            .find(|row| row["id"] == 1)
+            .expect("冰冻");
+        assert_eq!(frozen["name"], "冰冻");
+        assert_eq!(frozen["effect"], "售价 ×3");
+        let percent = frozen["probabilities"][0]["percent"].as_f64().expect("percent");
+        assert!((percent - 3.2).abs() < 0.05);
+        assert!(catalog["normal"].as_array().unwrap().iter().all(|row| row["id"] != 13));
+        let tata = catalog["decoration"]
+            .as_array()
+            .expect("decoration")
+            .iter()
+            .find(|row| row["id"] == 7)
+            .expect("塔塔");
+        assert_eq!(tata["effect"], "产出 哈哈南瓜塔");
+        let series = catalog["collections"].as_array().expect("collections");
+        assert!(series.iter().any(|row| row["name"] == "氧气精灵"));
+        assert!(series.iter().all(|row| row["name"] != "果冻花园"));
+        let oxygen = series.iter().find(|row| row["name"] == "氧气精灵").expect("氧气");
+        assert_eq!(oxygen["mutationRules"][0]["name"], "4小时·普通");
+        let probability = oxygen["mutationRules"][0]["probability"].as_f64().expect("probability");
+        assert!((probability - 1.2).abs() < 0.05);
+        assert!(oxygen["items"].as_array().unwrap().iter().any(|item| item["name"] != ""));
     }
 
     #[test]

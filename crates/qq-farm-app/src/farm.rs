@@ -438,6 +438,139 @@ pub async fn fertilize_selected(
         .map_err(AppError::from_core)
 }
 
+/// 领取一条已完成、未领取的成长任务。分享翻倍与自动领取相同。
+pub async fn claim_growth_task(
+    ctx: &AppContext,
+    account_id: &str,
+    task_id: i64,
+) -> AppResult<Value> {
+    if task_id <= 0 {
+        return Err(AppError::BadRequest("成长任务还不能领取".to_string()));
+    }
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    let reply = loop_.task().get_task_info().await.map_err(AppError::from_core)?;
+    let info =
+        reply.task_info.ok_or_else(|| AppError::BadRequest("成长任务还不能领取".to_string()))?;
+    let normalized = qq_farm_core::services::task::normalize_task_info(&info);
+    let task = normalized
+        .growth_tasks
+        .into_iter()
+        .find(|task| task.id == task_id)
+        .ok_or_else(|| AppError::BadRequest("成长任务还不能领取".to_string()))?;
+    let total = task.total_progress.max(0);
+    if !(task.is_unlocked && !task.is_claimed && total > 0 && task.progress >= total) {
+        return Err(AppError::BadRequest("成长任务还不能领取".to_string()));
+    }
+    let dto = qq_farm_core::services::task::TaskDto {
+        id: task.id,
+        desc: if task.desc.is_empty() { format!("成长任务#{}", task.id) } else { task.desc },
+        category: "growth",
+        progress: task.progress,
+        total_progress: total,
+        is_claimed: task.is_claimed,
+        is_unlocked: task.is_unlocked,
+        share_multiple: task.share_multiple,
+        rewards: Vec::new(),
+        can_claim: true,
+    };
+    if !loop_.task().do_claim(&dto).await {
+        return Err(AppError::BadRequest("成长任务领取失败".to_string()));
+    }
+    Ok(json!({ "id": task_id }))
+}
+
+/// 领取当前可领的每日任务。不顺带领取成长任务、活跃度和图鉴。
+pub async fn claim_daily_tasks(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    let reply = loop_.task().get_task_info().await.map_err(AppError::from_core)?;
+    let info =
+        reply.task_info.ok_or_else(|| AppError::BadRequest("每日任务还不能领取".to_string()))?;
+    let normalized = qq_farm_core::services::task::normalize_task_info(&info);
+    let daily = qq_farm_core::services::task::analyze_task_list(&normalized.daily_tasks, "daily");
+    if daily.is_empty() {
+        return Err(AppError::BadRequest("每日任务还不能领取".to_string()));
+    }
+    let mut claimed = 0_i64;
+    for task in &daily {
+        if loop_.task().do_claim(task).await {
+            claimed += 1;
+        }
+    }
+    if claimed == 0 {
+        return Err(AppError::BadRequest("每日任务领取失败".to_string()));
+    }
+    Ok(json!({ "claimed": claimed }))
+}
+
+/// 领取商城免费礼包。今天已经领过或没有可领礼包时，刷新后不再显示按钮。
+pub async fn claim_mall_free_gifts(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    let bought = loop_.mall().buy_free_gifts(true).await;
+    let state = loop_.mall().get_free_gift_daily_state();
+    if bought == 0 && !state.done_today {
+        return Err(AppError::BadRequest("商城免费礼包领取失败".to_string()));
+    }
+    Ok(json!({ "claimed": bought }))
+}
+
+/// 立刻检查并领取邮箱奖励，不等到设定钟点。
+pub async fn claim_email_rewards(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    let result = loop_.email().check_and_claim_emails(true).await;
+    let state = loop_.email().get_daily_state();
+    let done = state.get("doneToday").and_then(Value::as_bool).unwrap_or(false);
+    if !done && result.claimed == 0 {
+        let message = state.get("lastError").and_then(Value::as_str).unwrap_or("").trim();
+        let message = if message.is_empty() { "邮箱奖励领取失败" } else { message };
+        return Err(AppError::BadRequest(message.to_string()));
+    }
+    Ok(json!({ "claimed": result.claimed }))
+}
+
+/// 领取会员每日礼包和可领的 SVIP 商城免费礼包。
+pub async fn claim_vip_gift(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    let claimed = loop_.qqvip().perform_daily_vip_gift(true).await;
+    let state = loop_.qqvip().get_vip_daily_state();
+    if matches!(state.result, "error" | "partial") {
+        let message = state.last_error.trim();
+        let message = if message.is_empty() { "会员礼包领取失败" } else { message };
+        return Err(AppError::BadRequest(message.to_string()));
+    }
+    Ok(json!({ "claimed": claimed }))
+}
+
+/// 领取今天可领的月卡礼包。
+pub async fn claim_month_card(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    let claimed = loop_.monthcard().perform_daily_month_card_gift(true).await;
+    let state = loop_.monthcard().get_month_card_daily_state();
+    if state.result == "error" || (!claimed && !state.done_today && state.has_card != Some(false)) {
+        return Err(AppError::BadRequest("月卡礼包领取失败".to_string()));
+    }
+    Ok(json!({ "claimed": claimed }))
+}
+
+/// 上报今日分享并领取分享礼包。入口不可用时不标记为已领取。
+pub async fn claim_daily_share(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    let checked = loop_.share().check_daily_share_status(true).await;
+    let state = loop_.share().get_daily_state();
+    let done = state.get("doneToday").and_then(Value::as_bool).unwrap_or(false);
+    if done {
+        return Ok(json!({ "claimed": true }));
+    }
+    let status = state.get("checkStatus").and_then(Value::as_str).unwrap_or("");
+    let message = if status == "entry_unavailable" {
+        "分享入口暂不可用"
+    } else if checked {
+        "分享礼包还不能领取"
+    } else {
+        "分享礼包领取失败"
+    };
+    Err(AppError::BadRequest(message.to_string()))
+}
+
 /// 每日礼包概览（从 farm 路由提取的聚合逻辑）。
 pub async fn daily_gift_overview(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
@@ -492,6 +625,7 @@ pub async fn daily_gift_overview(ctx: &AppContext, account_id: &str) -> AppResul
                 "lastAt": task_full.last_claim_at,
                 "completedCount": task_full.completed_count,
                 "totalCount": task_full.total_count,
+                "claimableCount": task_full.claimable_count,
             },
             {
                 "key": "email_rewards",

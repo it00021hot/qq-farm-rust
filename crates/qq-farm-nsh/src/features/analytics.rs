@@ -18,8 +18,12 @@ struct RankRow {
     name: String,
     exp_per_hour: String,
     gold_per_hour: String,
+    profit_per_hour: String,
+    fert_exp_per_hour: String,
+    fert_profit_per_hour: String,
     grow: String,
     level: Option<i64>,
+    seasons: i64,
     exp: i64,
     fert_exp: i64,
     profit: i64,
@@ -422,8 +426,12 @@ fn rank_row(value: &Value) -> Option<RankRow> {
         name: name.to_owned(),
         exp_per_hour: one_decimal(value.get("expPerHour").and_then(Value::as_f64).unwrap_or(0.0)),
         gold_per_hour: one_decimal(value.get("goldPerHour").and_then(Value::as_f64).unwrap_or(0.0)),
+        profit_per_hour: one_decimal(rate(value, "profitPerHour")),
+        fert_exp_per_hour: one_decimal(rate(value, "normalFertilizerExpPerHour")),
+        fert_profit_per_hour: one_decimal(rate(value, "normalFertilizerProfitPerHour")),
         grow: value.get("growTimeStr").and_then(Value::as_str).unwrap_or("").to_owned(),
         level: value.get("level").and_then(Value::as_i64),
+        seasons: value.get("seasons").and_then(Value::as_i64).unwrap_or(1).max(0),
         exp: hundredths(value, "expPerHour"),
         fert_exp: hundredths(value, "normalFertilizerExpPerHour"),
         profit: hundredths(value, "profitPerHour"),
@@ -431,17 +439,72 @@ fn rank_row(value: &Value) -> Option<RankRow> {
     })
 }
 
-fn hundredths(value: &Value, key: &str) -> i64 {
-    let number = value
+fn rate(value: &Value, key: &str) -> f64 {
+    value
         .get(key)
         .and_then(|item| item.as_f64().or_else(|| item.as_i64().map(|number| number as f64)))
-        .unwrap_or(0.0);
-    (number * 100.0).round() as i64
+        .unwrap_or(0.0)
+}
+
+fn hundredths(value: &Value, key: &str) -> i64 {
+    (rate(value, key) * 100.0).round() as i64
 }
 
 struct Advice {
     strategy_key: &'static str,
     name: String,
+    level: Option<i64>,
+    seasons: i64,
+    exp_per_hour: String,
+    profit_per_hour: String,
+    fert_exp_per_hour: String,
+    fert_profit_per_hour: String,
+}
+
+fn advice_title(
+    rankings: Resource<Vec<RankRow>, String>,
+    settings: Resource<Value, String>,
+    status: Resource<PanelStatus, String>,
+) -> SharedString {
+    current_advice(rankings, settings, status)
+        .map(|advice| {
+            let mut title = format!(
+                "{} · {} · {}",
+                text_key("analytics.recommend"),
+                text_key(advice.strategy_key),
+                advice.name
+            );
+            if let Some(level) = advice.level {
+                title.push_str(&format!(" · Lv{level}"));
+            }
+            if advice.seasons > 0 {
+                title.push_str(&format!(" · {} {}", advice.seasons, text_key("analytics.seasons")));
+            }
+            SharedString::from(title)
+        })
+        .unwrap_or_default()
+}
+
+fn advice_rates(
+    rankings: Resource<Vec<RankRow>, String>,
+    settings: Resource<Value, String>,
+    status: Resource<PanelStatus, String>,
+) -> SharedString {
+    current_advice(rankings, settings, status)
+        .map(|advice| {
+            SharedString::from(format!(
+                "{} {} · {} {} · {} {} · {} {}",
+                text_key("analytics.exp"),
+                advice.exp_per_hour,
+                text_key("analytics.profit"),
+                advice.profit_per_hour,
+                text_key("analytics.fertExp"),
+                advice.fert_exp_per_hour,
+                text_key("analytics.fertProfit"),
+                advice.fert_profit_per_hour,
+            ))
+        })
+        .unwrap_or_default()
 }
 
 fn advice_line(
@@ -454,19 +517,14 @@ fn advice_line(
         .child(when(
             move || current_advice(rankings, settings, status).is_some(),
             move || {
-                text(move || {
-                    current_advice(rankings, settings, status)
-                        .map(|advice| {
-                            SharedString::from(format!(
-                                "{} · {} · {}",
-                                text_key("analytics.recommend"),
-                                text_key(advice.strategy_key),
-                                advice.name
-                            ))
-                        })
-                        .unwrap_or_default()
-                })
-                .text_sm()
+                view()
+                    .gap_1()
+                    .child(text(move || advice_title(rankings, settings, status)).text_sm())
+                    .child(
+                        text(move || advice_rates(rankings, settings, status))
+                            .text_sm()
+                            .text_color(move || nsh_base::theme().muted_foreground),
+                    )
             },
         ))
         .child(when(
@@ -488,14 +546,18 @@ fn advice_line(
 struct Compared {
     strategy_key: &'static str,
     name: String,
+    metric: String,
 }
 
 fn comparison_text(line: Compared) -> impl IntoElement {
     let key = line.strategy_key;
     let name = SharedString::from(line.name);
+    let metric = SharedString::from(line.metric);
     text(move || {
         let name = name.clone();
-        SharedString::from(format!("{} · {name}", text_key(key)))
+        let metric = metric.clone();
+        let label = format!("{} · {name}", text_key(key));
+        SharedString::from(if metric.is_empty() { label } else { format!("{label} · {metric}") })
     })
     .text_sm()
     .text_color(move || nsh_base::theme().muted_foreground)
@@ -524,7 +586,11 @@ fn compare_strategies(rows: &[RankRow], current: &str, level_cap: Option<i64>) -
         .filter(|strategy| *strategy != current)
         .filter_map(|strategy| {
             let plant = best_plant(rows, strategy, level_cap, 0)?;
-            Some(Compared { strategy_key: strategy_key(strategy)?, name: plant.name.clone() })
+            Some(Compared {
+                strategy_key: strategy_key(strategy)?,
+                name: plant.name.clone(),
+                metric: strategy_metric(plant, strategy),
+            })
         })
         .collect()
 }
@@ -549,7 +615,26 @@ fn advise(rows: &[RankRow], settings: Option<&Value>, level_cap: Option<i64>) ->
         .and_then(Value::as_i64)
         .unwrap_or(0);
     let plant = best_plant(rows, &strategy, level_cap, preferred)?;
-    Some(Advice { strategy_key, name: plant.name.clone() })
+    Some(Advice {
+        strategy_key,
+        name: plant.name.clone(),
+        level: plant.level,
+        seasons: plant.seasons,
+        exp_per_hour: plant.exp_per_hour.clone(),
+        profit_per_hour: plant.profit_per_hour.clone(),
+        fert_exp_per_hour: plant.fert_exp_per_hour.clone(),
+        fert_profit_per_hour: plant.fert_profit_per_hour.clone(),
+    })
+}
+
+fn strategy_metric(row: &RankRow, strategy: &str) -> String {
+    match strategy {
+        "max_profit" => row.profit_per_hour.clone(),
+        "max_fert_exp" => row.fert_exp_per_hour.clone(),
+        "max_fert_profit" => row.fert_profit_per_hour.clone(),
+        "level" => row.level.map(|level| level.to_string()).unwrap_or_default(),
+        _ => row.exp_per_hour.clone(),
+    }
 }
 
 fn strategy_name(value: &Value) -> String {
@@ -684,12 +769,22 @@ mod tests {
             "name": "萝卜",
             "expPerHour": 12.34,
             "goldPerHour": 8,
+            "profitPerHour": 4.26,
+            "normalFertilizerExpPerHour": 9,
+            "normalFertilizerProfitPerHour": 3.2,
+            "seasons": 2,
+            "level": 6,
             "growTimeStr": "2时"
         }]));
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].name, "萝卜");
         assert_eq!(rows[0].exp_per_hour, "12.3");
         assert_eq!(rows[0].gold_per_hour, "8.0");
+        assert_eq!(rows[0].profit_per_hour, "4.3");
+        assert_eq!(rows[0].fert_exp_per_hour, "9.0");
+        assert_eq!(rows[0].fert_profit_per_hour, "3.2");
+        assert_eq!(rows[0].seasons, 2);
+        assert_eq!(rows[0].level, Some(6));
         assert_eq!(rows[0].grow, "2时");
     }
 
@@ -726,8 +821,12 @@ mod tests {
                 name: "萝卜".to_owned(),
                 exp_per_hour: String::new(),
                 gold_per_hour: String::new(),
+                profit_per_hour: String::new(),
+                fert_exp_per_hour: String::new(),
+                fert_profit_per_hour: String::new(),
                 grow: String::new(),
                 level: None,
+                seasons: 1,
                 exp: 0,
                 fert_exp: 0,
                 profit: 0,
@@ -739,8 +838,12 @@ mod tests {
                 name: "白菜".to_owned(),
                 exp_per_hour: String::new(),
                 gold_per_hour: String::new(),
+                profit_per_hour: String::new(),
+                fert_exp_per_hour: String::new(),
+                fert_profit_per_hour: String::new(),
                 grow: String::new(),
                 level: None,
+                seasons: 1,
                 exp: 0,
                 fert_exp: 0,
                 profit: 0,
@@ -762,7 +865,14 @@ mod tests {
             sample(2, "白菜", Some(20), 50, 400, 10, 5),
             sample(3, "南瓜", None, 80, 80, 80, 80),
         ];
-        assert_eq!(super::advise(&rows, None, Some(5)).unwrap().name, "萝卜");
+        let advice = super::advise(&rows, None, Some(5)).unwrap();
+        assert_eq!(advice.name, "萝卜");
+        assert_eq!(advice.level, Some(5));
+        assert_eq!(advice.seasons, 1);
+        assert_eq!(advice.exp_per_hour, "1.0");
+        assert_eq!(advice.profit_per_hour, "0.2");
+        assert_eq!(advice.fert_exp_per_hour, "0.1");
+        assert_eq!(advice.fert_profit_per_hour, "0.3");
         let profit = json!({ "plantingStrategy": "max_profit" });
         assert_eq!(super::advise(&rows, Some(&profit), Some(5)).unwrap().name, "南瓜");
         let preferred = json!({ "plantingStrategy": "preferred", "preferredSeedId": 2 });
@@ -783,6 +893,7 @@ mod tests {
             ]
         );
         assert_eq!(compared[0].name, "萝卜");
+        assert_eq!(compared[0].metric, "1.0");
     }
 
     fn sample(
@@ -798,10 +909,14 @@ mod tests {
             id: seed_id,
             seed_id,
             name: name.to_owned(),
-            exp_per_hour: String::new(),
+            exp_per_hour: format!("{:.1}", exp as f64 / 100.0),
             gold_per_hour: String::new(),
+            profit_per_hour: format!("{:.1}", profit as f64 / 100.0),
+            fert_exp_per_hour: format!("{:.1}", fert_exp as f64 / 100.0),
+            fert_profit_per_hour: format!("{:.1}", fert_profit as f64 / 100.0),
             grow: String::new(),
             level,
+            seasons: 1,
             exp,
             fert_exp,
             profit,

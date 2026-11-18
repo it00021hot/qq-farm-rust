@@ -42,10 +42,19 @@ const SUMMON_BOTTLE_ID: i64 = 5002;
 const COLLECTOR_BOTTLE_ID: i64 = 5001;
 const FROG_BOTTLE_ID: i64 = 5005;
 const CLOUD_BOTTLE_ID: i64 = 5006;
+const LIGHTNING_MUTATION_ID: i64 = 5003;
+const LIGHTNING_ATTRACT_ID: i64 = 5004;
+const SENSE_PRIMARY_ID: i64 = 4002;
+const SENSE_SECONDARY_ID: i64 = 4003;
+const SENSE_PERCENT_EACH: i64 = 2;
 const BOTTLE_ACTIVITY_ID: i64 = 2_026_070_303;
 const COLLECT_OPERATE_TYPE: i64 = 9;
 const COLLECTED_MARKER: i64 = 4;
 const ALREADY_COLLECTED: i64 = 1_034_040;
+const SCAN_BATCH_LIMIT: usize = 5;
+const SCAN_GAP: std::time::Duration = std::time::Duration::from_millis(300);
+const SCAN_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+const SCAN_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 const THUNDERSTORM_TYPE: i64 = 1;
 const STATUS_AVAILABLE: i64 = 2;
 const STATUS_COMPLETED: i64 = 4;
@@ -238,19 +247,51 @@ impl WeatherService {
         Ok(visit_value(host_gid, &read_friend_visit(friends, host_gid).await?))
     }
 
-    pub async fn cloud(&self, friends: &FriendApi, host_gid: i64, self_gid: i64) -> Result<Value> {
+    pub async fn cloud(
+        &self,
+        friends: &FriendApi,
+        host_gid: i64,
+        self_gid: i64,
+        land_id: Option<i64>,
+    ) -> Result<Value> {
         ensure_other_farm(host_gid, self_gid)?;
         let _guard = self.mutation_lock.lock().await;
         let uid = bottle_uid(&self.gateway, CLOUD_BOTTLE_ID, "背包中没有可用的乌云使坏瓶").await?;
         let reply = friends.enter_farm(host_gid).await?;
-        let land_id = cloud_land_ids(&reply.lands).into_iter().next();
-        let sent = match land_id {
-            Some(land_id) => self.use_bottle(CLOUD_BOTTLE_ID, uid, host_gid, vec![land_id]).await,
-            None => Err(Error::Business("好友当前没有可使用乌云使坏瓶的作物".into())),
+        let sent = match choose_cloud_land(&cloud_land_ids(&reply.lands), land_id) {
+            Ok(land_id) => self.use_bottle(CLOUD_BOTTLE_ID, uid, host_gid, vec![land_id]).await,
+            Err(error) => Err(error),
         };
         let _ = friends.leave_farm(host_gid).await;
         sent?;
         Ok(visit_value(host_gid, &read_friend_visit(friends, host_gid).await?))
+    }
+
+    pub async fn scan(
+        &self,
+        friends: &FriendApi,
+        account_id: &str,
+        gids: &[i64],
+        self_gid: i64,
+    ) -> Result<Value> {
+        let chosen = prepare_scan(gids, self_gid)?;
+        let _guard = self.mutation_lock.lock().await;
+        let mut visits = Vec::new();
+        let mut deferred = Vec::new();
+        let mut entered = 0_usize;
+        for (index, gid) in chosen.iter().copied().enumerate() {
+            if !wait_for_friend_idle(account_id).await {
+                deferred.extend(chosen[index..].iter().copied());
+                break;
+            }
+            if entered > 0 {
+                tokio::time::sleep(SCAN_GAP).await;
+            }
+            let visit = read_friend_visit(friends, gid).await?;
+            visits.push(visit_value(gid, &visit));
+            entered += 1;
+        }
+        Ok(json!({ "friends": visits, "deferredGids": deferred }))
     }
 
     async fn collect_ready(&self, host_gid: i64, weather: Option<&WeatherStatus>) -> Result<()> {
@@ -334,14 +375,18 @@ impl WeatherService {
             .and_then(|research| research.track.as_ref())
             .map(|track| track.current_stage)
             .unwrap_or(0);
-        let summon_count = *balances.get(&SUMMON_BOTTLE_ID).unwrap_or(&0);
-        let collector_count = *balances.get(&COLLECTOR_BOTTLE_ID).unwrap_or(&0);
-        let frog_count = *balances.get(&FROG_BOTTLE_ID).unwrap_or(&0);
-        let cloud_count = *balances.get(&CLOUD_BOTTLE_ID).unwrap_or(&0);
+        let summon_count = stock(&balances, SUMMON_BOTTLE_ID);
+        let collector_count = stock(&balances, COLLECTOR_BOTTLE_ID);
+        let frog_count = stock(&balances, FROG_BOTTLE_ID);
+        let cloud_count = stock(&balances, CLOUD_BOTTLE_ID);
+        let lightning_mutation_count = stock(&balances, LIGHTNING_MUTATION_ID);
+        let lightning_attract_count = stock(&balances, LIGHTNING_ATTRACT_ID);
+        let (sense_count, sense_percent) =
+            sense_bonus(stock(&balances, SENSE_PRIMARY_ID), stock(&balances, SENSE_SECONDARY_ID));
         Ok(WeatherBoard {
             active,
             stage,
-            badge: *balances.get(&BADGE_ID).unwrap_or(&0),
+            badge: stock(&balances, BADGE_ID),
             nodes,
             weather,
             shop,
@@ -351,6 +396,10 @@ impl WeatherService {
             collector_count,
             frog_count,
             cloud_count,
+            lightning_mutation_count,
+            lightning_attract_count,
+            sense_count,
+            sense_percent,
         })
     }
 }
@@ -368,6 +417,19 @@ struct WeatherBoard {
     collector_count: i64,
     frog_count: i64,
     cloud_count: i64,
+    lightning_mutation_count: i64,
+    lightning_attract_count: i64,
+    sense_count: i64,
+    sense_percent: i64,
+}
+
+fn stock(balances: &HashMap<i64, i64>, id: i64) -> i64 {
+    balances.get(&id).copied().unwrap_or(0).max(0)
+}
+
+fn sense_bonus(primary: i64, secondary: i64) -> (i64, i64) {
+    let count = primary.max(0).saturating_add(secondary.max(0));
+    (count, count.saturating_mul(SENSE_PERCENT_EACH))
 }
 
 fn research_target(board: &WeatherBoard, node_id: i64) -> Result<&ResearchNode> {
@@ -516,6 +578,37 @@ fn ensure_other_farm(host_gid: i64, self_gid: i64) -> Result<()> {
     Ok(())
 }
 
+pub fn prepare_scan(gids: &[i64], self_gid: i64) -> Result<Vec<i64>> {
+    let mut chosen = Vec::new();
+    for gid in gids {
+        if *gid <= 0 || (self_gid > 0 && *gid == self_gid) || chosen.contains(gid) {
+            continue;
+        }
+        chosen.push(*gid);
+    }
+    if chosen.is_empty() {
+        return Err(Error::Business("请先选择需要检查现场天气的好友".into()));
+    }
+    if chosen.len() > SCAN_BATCH_LIMIT {
+        return Err(Error::Business(format!("单次最多检查 {SCAN_BATCH_LIMIT} 位好友，请分批发起")));
+    }
+    Ok(chosen)
+}
+
+async fn wait_for_friend_idle(account_id: &str) -> bool {
+    if !crate::infra::friend_task_flag::is_friend_checking(account_id) {
+        return true;
+    }
+    let deadline = std::time::Instant::now() + SCAN_WAIT;
+    while crate::infra::friend_task_flag::is_friend_checking(account_id) {
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(SCAN_POLL).await;
+    }
+    true
+}
+
 fn has_item(items: &[BagItemLite], item_id: i64) -> bool {
     items.iter().any(|item| item.id == item_id && item.count > 0)
 }
@@ -539,6 +632,14 @@ fn visit_value(host_gid: i64, visit: &FriendVisit) -> Value {
         "state": visit_state(visit.weather.as_ref(), now),
         "cloudLands": visit.cloud_lands,
     })
+}
+
+pub fn choose_cloud_land(ids: &[i64], requested: Option<i64>) -> Result<i64> {
+    let land_id = requested.filter(|id| *id > 0).or_else(|| ids.first().copied());
+    match land_id {
+        Some(land_id) if ids.contains(&land_id) => Ok(land_id),
+        _ => Err(Error::Business("好友当前没有可使用乌云使坏瓶的作物".into())),
+    }
 }
 
 pub fn cloud_land_ids(lands: &[LandInfo]) -> Vec<i64> {
@@ -617,6 +718,10 @@ fn board_json(board: &WeatherBoard) -> Value {
         "collectorCount": board.collector_count,
         "frogCount": board.frog_count,
         "cloudCount": board.cloud_count,
+        "lightningMutationCount": board.lightning_mutation_count,
+        "lightningAttractCount": board.lightning_attract_count,
+        "senseCount": board.sense_count,
+        "sensePercent": board.sense_percent,
     })
 }
 
@@ -675,6 +780,13 @@ fn find_child(group: &ActivityData, activity_id: i64) -> Option<&ActivityData> {
 mod tests {
     use super::*;
     use crate::proto::generated::gamepb::activitypb::ActivityItem;
+
+    #[test]
+    fn lightning_sense_adds_two_percent_per_copy() {
+        assert_eq!(sense_bonus(0, 0), (0, 0));
+        assert_eq!(sense_bonus(2, 1), (3, 6));
+        assert_eq!(sense_bonus(-1, 4), (4, 8));
+    }
 
     fn node(
         id: i64,
@@ -849,5 +961,17 @@ mod tests {
             land(5, false, 3, 0, false),
         ]);
         assert_eq!(ids, vec![1]);
+        assert_eq!(choose_cloud_land(&ids, None).expect("first"), 1);
+        assert_eq!(choose_cloud_land(&[1, 4], Some(4)).expect("chosen"), 4);
+        assert!(choose_cloud_land(&ids, Some(9)).is_err());
+        assert!(choose_cloud_land(&[], None).is_err());
+    }
+
+    #[test]
+    fn scan_keeps_five_distinct_friends_and_rejects_a_larger_batch() {
+        assert_eq!(prepare_scan(&[0, 7, 7, 8, 9], 7).expect("chosen"), vec![8, 9]);
+        assert!(prepare_scan(&[7], 7).is_err());
+        assert!(prepare_scan(&[1, 2, 3, 4, 5, 6], 0).is_err());
+        assert_eq!(prepare_scan(&[1, 2, 3, 4, 5], 0).expect("five").len(), 5);
     }
 }

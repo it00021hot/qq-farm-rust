@@ -7,7 +7,7 @@ use super::accounts::{account_is_running, failure_line, AccountRow};
 use super::confirm;
 use crate::i18n::text_key;
 use crate::session;
-use crate::ui::{button, notice, ButtonVariant};
+use crate::ui::{button, field, notice, ButtonVariant};
 
 const COMMON_SLOT: i32 = 1;
 const MEMBER_SLOT: i32 = 4;
@@ -57,6 +57,7 @@ impl Shelf {
 struct GoodsLine {
     id: i64,
     name: String,
+    contents: String,
     price: String,
     price_id: i64,
     price_count: i64,
@@ -67,6 +68,13 @@ struct GoodsLine {
     limit_max: i64,
     balance: Option<i64>,
     limit_remaining: Option<i64>,
+    original: i64,
+    discount: String,
+    discount_seconds: i64,
+    free: bool,
+    discounted: bool,
+    haystack: String,
+    short: bool,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -74,6 +82,12 @@ struct MysteryOffer {
     id: i64,
     reward: String,
     price: String,
+    discount_percent: i64,
+    original: i64,
+    balance: Option<i64>,
+    leaves: String,
+    purchasable: bool,
+    block_key: &'static str,
 }
 
 pub(crate) fn page(page: MallPage) -> impl IntoElement {
@@ -92,6 +106,8 @@ pub(crate) fn page(page: MallPage) -> impl IntoElement {
         },
     );
     let counts = signal(Vec::<(i64, i64)>::new());
+    let goods_filter = signal("all".to_owned());
+    let goods_query = signal(String::new());
     let mystery = resource(
         move || (shelf.get() == Shelf::Mystery).then(|| running_account(page)).flatten(),
         |id, _| async move {
@@ -127,7 +143,19 @@ pub(crate) fn page(page: MallPage) -> impl IntoElement {
         ))
         .child(when(
             move || shelf.get() != Shelf::Mystery && running(page) && catalog.get().is_some(),
-            move || goods_body(page, shelf, pending, failure, summary, catalog, counts),
+            move || {
+                goods_body(
+                    page,
+                    shelf,
+                    pending,
+                    failure,
+                    summary,
+                    catalog,
+                    counts,
+                    goods_filter,
+                    goods_query,
+                )
+            },
         ))
         .child(when(
             move || {
@@ -204,6 +232,8 @@ fn goods_body(
     summary: Signal<Option<String>>,
     catalog: Resource<Value, String>,
     counts: Signal<Vec<(i64, i64)>>,
+    filter: Signal<String>,
+    query: Signal<String>,
 ) -> impl IntoElement {
     view()
         .gap_3()
@@ -213,11 +243,65 @@ fn goods_body(
                 .on_press(move || catalog.refetch()),
         )
         .child(when(
+            move || {
+                shelf_note(&catalog.get().unwrap_or(Value::Null), shelf.get() == Shelf::Member)
+                    != ShelfNote::Quiet
+            },
+            move || {
+                text(move || {
+                    shelf_copy(shelf.get() == Shelf::Member, &catalog.get().unwrap_or(Value::Null))
+                })
+                .text_sm()
+                .text_color(move || nsh_base::theme().muted_foreground)
+            },
+        ))
+        .child(
+            view()
+                .flex_row()
+                .flex_wrap()
+                .gap_2()
+                .child(goods_filter_button(filter, "all", "mall.filterAll"))
+                .child(goods_filter_button(filter, "free", "mall.filterFree"))
+                .child(goods_filter_button(filter, "discount", "mall.filterDiscount"))
+                .child(goods_filter_button(filter, "fertilizer", "mall.filterFertilizer"))
+                .child(goods_filter_button(filter, "pet", "mall.filterPet")),
+        )
+        .child(when(
+            move || !currency_line(&catalog.get().unwrap_or(Value::Null)).is_empty(),
+            move || {
+                text(move || {
+                    SharedString::from(currency_line(&catalog.get().unwrap_or(Value::Null)))
+                })
+                .text_sm()
+                .text_color(move || nsh_base::theme().muted_foreground)
+            },
+        ))
+        .child(field(
+            move || query.get(),
+            move || text_key("mall.search").to_string(),
+            move |text| query.set(text.to_owned()),
+        ))
+        .child(when(
             move || goods_lines(&catalog.get().unwrap_or(Value::Null)).is_empty(),
             move || notice(move || text_key("mall.empty")),
         ))
+        .child(when(
+            move || {
+                let rows = goods_lines(&catalog.get().unwrap_or(Value::Null));
+                !rows.is_empty()
+                    && !rows.iter().any(|goods| goods_matches(goods, &filter.get(), &query.get()))
+            },
+            move || notice(move || text_key("mall.noMatch")),
+        ))
         .child(each(
-            move || goods_lines(&catalog.get().unwrap_or(Value::Null)),
+            move || {
+                let selected = filter.get();
+                let keyword = query.get();
+                goods_lines(&catalog.get().unwrap_or(Value::Null))
+                    .into_iter()
+                    .filter(|goods| goods_matches(goods, &selected, &keyword))
+                    .collect::<Vec<_>>()
+            },
             |goods: &GoodsLine| goods.id.to_string(),
             move |goods, _| {
                 goods_line(
@@ -245,19 +329,60 @@ fn goods_line(
     counts: Signal<Vec<(i64, i64)>>,
 ) -> View {
     let name = SharedString::from(goods.name.clone());
+    let contents = SharedString::from(goods.contents.clone());
+    let contents_shown = !contents.is_empty();
     let price = SharedString::from(goods.price.clone());
     let status_key = goods.status_key;
     let purchasable = goods.purchasable;
     let limit_key = goods.limit_key;
     let limit_bought = goods.limit_bought;
     let limit_max = goods.limit_max;
+    let original = goods.original;
+    let discount = SharedString::from(goods.discount.clone());
+    let discount_shown = !discount.is_empty();
+    let discount_seconds = goods.discount_seconds;
+    let short = goods.short;
     view()
         .flex_row()
         .items_center()
         .gap_3()
         .py_2()
         .child(text(name).text_sm().font_weight(FontWeight::MEDIUM).flex_1())
+        .child(when(move || contents_shown, {
+            let contents = contents;
+            move || {
+                text(contents.clone())
+                    .text_sm()
+                    .truncate()
+                    .text_color(move || nsh_base::theme().muted_foreground)
+            }
+        }))
         .child(text(price).text_sm().text_color(move || nsh_base::theme().muted_foreground))
+        .child(when(
+            move || original > 0,
+            move || {
+                text(move || {
+                    SharedString::from(
+                        text_key("mall.original").replace("{count}", &original.to_string()),
+                    )
+                })
+                .text_sm()
+                .text_color(move || nsh_base::theme().muted_foreground)
+            },
+        ))
+        .child(when(move || discount_shown, {
+            let discount = discount;
+            move || text(discount.clone()).text_sm()
+        }))
+        .child(when(
+            move || discount_seconds > 0,
+            move || {
+                text(move || SharedString::from(discount_left(discount_seconds)))
+                    .text_sm()
+                    .text_color(move || nsh_base::theme().muted_foreground)
+            },
+        ))
+        .child(when(move || short, move || text(move || text_key("mall.short")).text_sm()))
         .child(count_stepper(goods.id, goods.max_count(), counts, pending))
         .child(when(
             move || limit_key.is_some(),
@@ -289,8 +414,11 @@ fn goods_line(
                     },
                     ButtonVariant::Primary,
                 )
-                .disabled(move || pending.get().is_some())
+                .disabled(move || pending.get().is_some() || short)
                 .on_press(move || {
+                    if short {
+                        return;
+                    }
                     buy_goods(
                         buying.clone(),
                         slot,
@@ -391,29 +519,110 @@ fn mystery_body(
                 let reward = SharedString::from(offer.reward.clone());
                 let price = SharedString::from(offer.price.clone());
                 let key = offer.id.to_string();
+                let purchasable = offer.purchasable;
+                let discount_percent = offer.discount_percent;
+                let original = offer.original;
+                let balance = offer.balance;
+                let leaves = SharedString::from(offer.leaves.clone());
+                let leaves_shown = !leaves.is_empty();
+                let block_key = offer.block_key;
                 view()
-                    .flex_row()
-                    .items_center()
-                    .gap_3()
+                    .gap_1()
                     .py_2()
-                    .child(text(reward).text_sm().font_weight(FontWeight::MEDIUM).flex_1())
-                    .child(text(price).text_sm())
                     .child(
-                        button(
-                            move || {
-                                if pending.get().as_deref() == Some(key.as_str()) {
-                                    text_key("farm.working")
-                                } else {
-                                    text_key("mall.buy")
-                                }
-                            },
-                            ButtonVariant::Primary,
-                        )
-                        .disabled(move || pending.get().is_some())
-                        .on_press(move || {
-                            buy_mystery(offer.clone(), page, pending, failure, summary, mystery)
-                        }),
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .gap_3()
+                            .child(text(reward).text_sm().font_weight(FontWeight::MEDIUM).flex_1())
+                            .child(text(price).text_sm())
+                            .child(
+                                button(
+                                    move || {
+                                        if pending.get().as_deref() == Some(key.as_str()) {
+                                            text_key("farm.working")
+                                        } else {
+                                            text_key("mall.buy")
+                                        }
+                                    },
+                                    ButtonVariant::Primary,
+                                )
+                                .disabled(move || pending.get().is_some() || !purchasable)
+                                .on_press(move || {
+                                    if purchasable {
+                                        buy_mystery(
+                                            offer.clone(),
+                                            page,
+                                            pending,
+                                            failure,
+                                            summary,
+                                            mystery,
+                                        );
+                                    }
+                                }),
+                            ),
                     )
+                    .child(when(
+                        move || discount_percent > 0,
+                        move || {
+                            text(move || {
+                                SharedString::from(
+                                    text_key("mall.discount")
+                                        .replace("{fold}", &discount_fold(discount_percent))
+                                        .replace("{percent}", &discount_percent.to_string()),
+                                )
+                            })
+                            .text_sm()
+                            .text_color(move || nsh_base::theme().muted_foreground)
+                        },
+                    ))
+                    .child(when(
+                        move || original > 0 && discount_percent > 0,
+                        move || {
+                            text(move || {
+                                SharedString::from(
+                                    text_key("mall.original")
+                                        .replace("{count}", &original.to_string()),
+                                )
+                            })
+                            .text_sm()
+                            .text_color(move || nsh_base::theme().muted_foreground)
+                        },
+                    ))
+                    .child(when(
+                        move || balance.is_some(),
+                        move || {
+                            text(move || {
+                                SharedString::from(
+                                    text_key("mall.balance")
+                                        .replace("{count}", &balance.unwrap_or(0).to_string()),
+                                )
+                            })
+                            .text_sm()
+                            .text_color(move || nsh_base::theme().muted_foreground)
+                        },
+                    ))
+                    .child(when(move || leaves_shown, {
+                        let leaves = leaves;
+                        move || {
+                            let leaves = leaves.clone();
+                            text(move || {
+                                SharedString::from(
+                                    text_key("mall.leaves").replace("{time}", leaves.as_ref()),
+                                )
+                            })
+                            .text_sm()
+                            .text_color(move || nsh_base::theme().muted_foreground)
+                        }
+                    }))
+                    .child(when(
+                        move || !block_key.is_empty(),
+                        move || {
+                            text(move || text_key(block_key))
+                                .text_sm()
+                                .text_color(move || nsh_base::theme().muted_foreground)
+                        },
+                    ))
             },
         ))
 }
@@ -463,32 +672,216 @@ fn buy_mystery(
     );
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShelfNote {
+    Quiet,
+    Refresh(i64),
+    Svip(i64),
+    NotSvip,
+}
+
+fn shelf_note(value: &Value, member: bool) -> ShelfNote {
+    if member {
+        if let Some(membership) = value.get("membership").filter(|item| !item.is_null()) {
+            let days = membership.get("remainingDays").and_then(Value::as_i64).unwrap_or(0).max(0);
+            return if membership.get("isSvip").and_then(Value::as_bool).unwrap_or(false) {
+                ShelfNote::Svip(days)
+            } else {
+                ShelfNote::NotSvip
+            };
+        }
+    }
+    let seconds = value.get("refreshCountdown").and_then(Value::as_i64).unwrap_or(0);
+    if seconds > 0 {
+        ShelfNote::Refresh(seconds)
+    } else {
+        ShelfNote::Quiet
+    }
+}
+
+fn shelf_copy(member: bool, value: &Value) -> String {
+    match shelf_note(value, member) {
+        ShelfNote::Quiet => String::new(),
+        ShelfNote::NotSvip => text_key("mall.notSvip").to_string(),
+        ShelfNote::Svip(days) => text_key("mall.svip").replace("{days}", &days.to_string()),
+        ShelfNote::Refresh(seconds) => {
+            text_key("mall.afterRefresh").replace("{time}", &span_text(seconds))
+        }
+    }
+}
+
+fn span_text(seconds: i64) -> String {
+    let (days, hours, minutes) = discount_parts(seconds);
+    if days > 0 {
+        text_key("mall.spanDays")
+            .replace("{days}", &days.to_string())
+            .replace("{hours}", &hours.to_string())
+    } else if hours > 0 {
+        text_key("mall.spanHours")
+            .replace("{hours}", &hours.to_string())
+            .replace("{minutes}", &minutes.to_string())
+    } else {
+        text_key("mall.spanMinutes").replace("{minutes}", &minutes.max(1).to_string())
+    }
+}
+
 fn goods_lines(value: &Value) -> Vec<GoodsLine> {
+    let now = value.get("serverTime").and_then(Value::as_i64).unwrap_or(0);
     value
         .get("goods")
         .and_then(Value::as_array)
-        .map(|goods| goods.iter().filter_map(goods_from).collect())
+        .map(|goods| goods.iter().filter_map(|row| goods_from(row, now)).collect())
         .unwrap_or_default()
 }
 
-fn goods_from(value: &Value) -> Option<GoodsLine> {
+fn goods_filter_button(
+    filter: Signal<String>,
+    id: &'static str,
+    label: &'static str,
+) -> impl IntoElement {
+    button(move || text_key(label), ButtonVariant::Quiet)
+        .selected(move || filter.get() == id)
+        .on_press(move || filter.set(id.to_owned()))
+}
+
+fn reward_contents(value: &Value) -> String {
+    value
+        .get("rewards")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| {
+                    let name = row.get("name").and_then(Value::as_str).unwrap_or("").trim();
+                    if name.is_empty() {
+                        return None;
+                    }
+                    let count = row.get("count").and_then(Value::as_i64).unwrap_or(0);
+                    Some(format!("{name} ×{count}"))
+                })
+                .collect::<Vec<_>>()
+                .join(" · ")
+        })
+        .unwrap_or_default()
+}
+
+fn reward_names(value: &Value) -> String {
+    let mut names = vec![value.get("name").and_then(Value::as_str).unwrap_or("").to_owned()];
+    if let Some(rows) = value.get("rewards").and_then(Value::as_array) {
+        for row in rows {
+            if let Some(name) = row.get("name").and_then(Value::as_str) {
+                names.push(name.to_owned());
+            }
+        }
+    }
+    names.join(" ")
+}
+
+fn discount_seconds(end: i64, now_ms: i64) -> i64 {
+    if end <= 0 || now_ms <= 0 {
+        return 0;
+    }
+    let end_ms = if end > 1_000_000_000_000 { end } else { end * 1000 };
+    (end_ms - now_ms).max(0) / 1000
+}
+
+fn discount_parts(seconds: i64) -> (i64, i64, i64) {
+    let seconds = seconds.max(0);
+    (seconds / 86_400, (seconds % 86_400) / 3600, (seconds % 3600) / 60)
+}
+
+fn discount_left(seconds: i64) -> String {
+    let (days, hours, minutes) = discount_parts(seconds);
+    if days > 0 {
+        text_key("mall.leftDays")
+            .replace("{days}", &days.to_string())
+            .replace("{hours}", &hours.to_string())
+    } else if hours > 0 {
+        text_key("mall.leftHours")
+            .replace("{hours}", &hours.to_string())
+            .replace("{minutes}", &minutes.to_string())
+    } else {
+        text_key("mall.leftMinutes").replace("{minutes}", &minutes.max(1).to_string())
+    }
+}
+
+fn goods_matches(goods: &GoodsLine, filter: &str, query: &str) -> bool {
+    if !query_matches(goods, query) {
+        return false;
+    }
+    match filter {
+        "free" => goods.free,
+        "discount" => goods.discounted || !goods.discount.is_empty(),
+        "fertilizer" => goods.haystack.contains("化肥"),
+        "pet" => goods.haystack.contains("狗粮"),
+        _ => true,
+    }
+}
+
+fn query_matches(goods: &GoodsLine, query: &str) -> bool {
+    let query = query.trim().to_lowercase();
+    query.is_empty()
+        || goods.haystack.to_lowercase().contains(&query)
+        || goods.id.to_string().contains(&query)
+}
+
+fn currency_line(value: &Value) -> String {
+    let mut rows = value
+        .get("currencies")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| {
+                    if !row.get("balanceKnown").and_then(Value::as_bool).unwrap_or(false) {
+                        return None;
+                    }
+                    let name = row.get("name").and_then(Value::as_str).unwrap_or("").trim();
+                    if name.is_empty() {
+                        return None;
+                    }
+                    let amount = row.get("balance").and_then(Value::as_i64).unwrap_or(0);
+                    let id = row.get("id").and_then(Value::as_i64).unwrap_or(0);
+                    Some((id, format!("{name} {amount}")))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    rows.sort_by_key(|(id, _)| *id);
+    rows.into_iter().map(|(_, text)| text).collect::<Vec<_>>().join(" · ")
+}
+
+fn goods_from(value: &Value, now_ms: i64) -> Option<GoodsLine> {
     let id = value.get("id").and_then(Value::as_i64).filter(|id| *id > 0)?;
     let name = value.get("name").and_then(Value::as_str).unwrap_or("");
     let price = value.get("price");
     let free = value.get("isFree").and_then(Value::as_bool).unwrap_or(false);
     let status = value.get("purchaseStatus").and_then(Value::as_str).unwrap_or("");
+    let price_count = price.and_then(|item| item.get("count")).and_then(Value::as_i64).unwrap_or(0);
     Some(GoodsLine {
         id,
         name: if name.is_empty() { format!("#{id}") } else { name.to_owned() },
+        contents: reward_contents(value),
         price: if free { String::new() } else { price_text(price) },
         price_id: price.and_then(|item| item.get("id")).and_then(Value::as_i64).unwrap_or(0),
-        price_count: price.and_then(|item| item.get("count")).and_then(Value::as_i64).unwrap_or(0),
+        price_count,
         purchasable: value.get("purchasable").and_then(Value::as_bool).unwrap_or(false),
         status_key: status_key(status).or(free.then_some("mall.free")),
         limit_key: value.get("limit").and_then(limit_key),
         limit_bought: value.pointer("/limit/bought").and_then(Value::as_i64).unwrap_or(0),
         limit_max: value.pointer("/limit/max").and_then(Value::as_i64).unwrap_or(0),
         balance: price.and_then(|item| item.get("balance")).and_then(Value::as_i64),
+        original: value.get("originalPrice").and_then(Value::as_i64).unwrap_or(0).max(0),
+        discount: value.get("discountText").and_then(Value::as_str).unwrap_or("").trim().to_owned(),
+        discount_seconds: discount_seconds(
+            value.get("discountEndTime").and_then(Value::as_i64).unwrap_or(0),
+            now_ms,
+        ),
+        free,
+        discounted: value.get("isDiscounted").and_then(Value::as_bool).unwrap_or(false),
+        haystack: reward_names(value),
+        short: price
+            .and_then(|item| item.get("balance"))
+            .and_then(Value::as_i64)
+            .is_some_and(|held| price_count > 0 && held < price_count),
         limit_remaining: value.get("limit").and_then(|limit| {
             limit.get("remaining").and_then(Value::as_i64).or_else(|| {
                 let max = limit.get("max").and_then(Value::as_i64)?;
@@ -610,22 +1003,70 @@ fn mystery_offer(value: &Value) -> Option<MysteryOffer> {
     }
     let npc = value.get("npc")?;
     let id = npc.get("id").and_then(Value::as_i64).filter(|id| *id > 0)?;
+    let reward_count =
+        npc.get("reward").and_then(|item| item.get("count")).and_then(Value::as_i64).unwrap_or(0);
+    let price = npc.get("price");
+    let price_count = price.and_then(|item| item.get("count")).and_then(Value::as_i64).unwrap_or(0);
+    let balance = price.and_then(|item| item.get("balance")).filter(|item| !item.is_null());
+    let balance = balance.and_then(|item| {
+        item.as_i64().or_else(|| item.as_str().and_then(|text| text.trim().parse().ok()))
+    });
+    let discount_percent = npc.get("discountPercent").and_then(Value::as_i64).unwrap_or(0).max(0);
+    let original = npc.get("originalPrice").and_then(Value::as_i64).unwrap_or(0).max(0);
+    let block_key = if reward_count <= 0 {
+        "mall.unavailable"
+    } else if balance.is_some_and(|held| held < price_count) {
+        "mall.mysteryShort"
+    } else {
+        ""
+    };
     Some(MysteryOffer {
         id,
         reward: price_text(npc.get("reward")),
-        price: price_text(npc.get("price")),
+        price: price_text(price),
+        discount_percent,
+        original,
+        balance,
+        leaves: mystery_clock(value.get("expireTime").and_then(Value::as_i64).unwrap_or(0)),
+        purchasable: block_key.is_empty(),
+        block_key,
     })
+}
+
+fn discount_fold(percent: i64) -> String {
+    let fold = percent as f64 / 10.0;
+    if percent % 10 == 0 {
+        format!("{}", fold.round() as i64)
+    } else {
+        format!("{fold:.1}")
+    }
+}
+
+fn mystery_clock(millis: i64) -> String {
+    if millis <= 0 {
+        return String::new();
+    }
+    chrono::FixedOffset::east_opt(8 * 3600)
+        .and_then(|zone| {
+            chrono::DateTime::from_timestamp_millis(millis)
+                .map(|time| time.with_timezone(&zone).format("%m-%d %H:%M").to_string())
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::{goods_lines, mystery_offer};
+    use super::{
+        currency_line, discount_fold, discount_parts, goods_lines, goods_matches, mystery_offer,
+        shelf_note, ShelfNote,
+    };
 
     #[test]
     fn catalog_keeps_price_and_purchase_state() {
         let lines = goods_lines(&json!({
+            "serverTime": 1_000_000,
             "goods": [
                 { "id": 0, "name": "drop" },
                 {
@@ -633,13 +1074,24 @@ mod tests {
                     "name": "化肥",
                     "purchasable": true,
                     "purchaseStatus": "available",
+                    "isDiscounted": true,
+                    "discountText": "5折",
+                    "originalPrice": 20,
+                    "discountEndTime": 2000,
                     "price": { "id": 1001, "count": 10, "name": "金币", "balance": 35 },
                     "limit": { "type": 1, "bought": 1, "max": 10, "remaining": 10 }
                 },
-                { "id": 9, "name": "", "isFree": true, "purchasable": true, "purchaseStatus": "available" }
+                { "id": 9, "name": "", "isFree": true, "purchasable": true, "purchaseStatus": "available" },
+                {
+                    "id": 10,
+                    "name": "礼包",
+                    "rewards": [{ "name": "狗粮", "count": 1 }],
+                    "purchasable": true,
+                    "price": { "id": 1002, "count": 40, "name": "点券", "balance": 10 }
+                }
             ]
         }));
-        assert_eq!(lines.len(), 2);
+        assert_eq!(lines.len(), 3);
         assert_eq!(lines[0].price, "金币 10");
         assert_eq!(lines[0].price_count, 10);
         assert_eq!(lines[0].max_count(), 3);
@@ -650,6 +1102,42 @@ mod tests {
         assert_eq!(lines[1].limit_key, None);
         assert_eq!(lines[1].name, "#9");
         assert_eq!(lines[1].status_key, Some("mall.free"));
+        assert_eq!(lines[0].contents, "");
+        assert_eq!(lines[2].contents, "狗粮 ×1");
+        assert_eq!(lines[0].discount, "5折");
+        assert_eq!(lines[0].discount_seconds, 1000);
+        assert_eq!(discount_parts(1000), (0, 0, 16));
+        assert!(!lines[0].short);
+        assert!(lines[2].short);
+        assert!(goods_matches(&lines[0], "discount", ""));
+        assert!(goods_matches(&lines[0], "fertilizer", "化肥"));
+        assert!(!goods_matches(&lines[0], "fertilizer", "狗粮"));
+        assert!(goods_matches(&lines[1], "free", ""));
+        assert!(!goods_matches(&lines[1], "discount", ""));
+        assert!(goods_matches(&lines[2], "pet", "10"));
+        assert_eq!(
+            currency_line(&json!({
+                "currencies": [
+                    { "id": 1002, "name": "点券", "balanceKnown": true, "balance": 10 },
+                    { "id": 1001, "name": "金币", "balanceKnown": true, "balance": 35 },
+                    { "id": 1003, "name": "钻石", "balanceKnown": false, "count": 9 }
+                ]
+            })),
+            "金币 35 · 点券 10"
+        );
+        assert_eq!(
+            shelf_note(&json!({ "refreshCountdown": 1000 }), false),
+            ShelfNote::Refresh(1000)
+        );
+        assert_eq!(
+            shelf_note(&json!({ "membership": { "isSvip": true, "remainingDays": 3 } }), true),
+            ShelfNote::Svip(3)
+        );
+        assert_eq!(
+            shelf_note(&json!({ "membership": { "isSvip": false }, "refreshCountdown": 9 }), true),
+            ShelfNote::NotSvip
+        );
+        assert_eq!(shelf_note(&json!({}), false), ShelfNote::Quiet);
     }
 
     #[test]
@@ -666,5 +1154,37 @@ mod tests {
         .expect("offer");
         assert_eq!(offer.reward, "种子 2");
         assert_eq!(offer.price, "点券 5");
+        assert!(offer.purchasable);
+        let short = mystery_offer(&json!({
+            "active": true,
+            "expireTime": 1_790_003_600_000_i64,
+            "npc": {
+                "id": 4,
+                "discountPercent": 25,
+                "originalPrice": 40,
+                "reward": { "name": "种子", "count": 2 },
+                "price": { "name": "点券", "count": 30, "balance": 10 }
+            }
+        }))
+        .expect("short");
+        assert!(!short.purchasable);
+        assert_eq!(short.block_key, "mall.mysteryShort");
+        assert_eq!(short.discount_percent, 25);
+        assert_eq!(discount_fold(25), "2.5");
+        assert_eq!(discount_fold(20), "2");
+        assert_eq!(short.original, 40);
+        assert_eq!(short.balance, Some(10));
+        assert!(!short.leaves.is_empty());
+        let empty = mystery_offer(&json!({
+            "active": true,
+            "npc": {
+                "id": 5,
+                "reward": { "name": "种子", "count": 0 },
+                "price": { "name": "点券", "count": 1, "balance": null }
+            }
+        }))
+        .expect("empty");
+        assert!(!empty.purchasable);
+        assert_eq!(empty.block_key, "mall.unavailable");
     }
 }

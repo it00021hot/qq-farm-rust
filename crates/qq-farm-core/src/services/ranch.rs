@@ -2115,7 +2115,9 @@ fn empty_book() -> Value {
         "canClaim": false,
         "score": 0,
         "levels": [],
+        "rewards": [],
         "animals": [],
+        "mutations": mutation_rules(),
     })
 }
 
@@ -2158,7 +2160,9 @@ fn book_json(list: &GetIllustratedListV2Reply, weight: &GetRanchWeightScoreV2Rep
         "canClaim": list.has_claimable_reward,
         "score": weight.total_score,
         "levels": weight.levels.iter().map(weight_level_json).collect::<Vec<_>>(),
+        "rewards": reward_rows(&list.total_rewards),
         "animals": animals.iter().copied().map(animal_json).collect::<Vec<_>>(),
+        "mutations": mutation_rules(),
     })
 }
 
@@ -2166,8 +2170,24 @@ fn weight_level_json(level: &RanchWeightScoreLevelV2) -> Value {
     json!({
         "id": level.id,
         "score": level.score_condition,
+        "claimed": level.claimed,
         "canClaim": level.can_claim && !level.claimed,
+        "rewards": reward_rows(&level.rewards),
     })
+}
+
+fn reward_rows(items: &[RanchItem]) -> Vec<Value> {
+    items
+        .iter()
+        .filter(|item| item.id > 0)
+        .map(|item| {
+            json!({
+                "id": item.id,
+                "count": item.count,
+                "name": item_name(i64::from(item.id)),
+            })
+        })
+        .collect()
 }
 
 fn animal_json(entry: &IllustratedInfoV2) -> Value {
@@ -2176,6 +2196,7 @@ fn animal_json(entry: &IllustratedInfoV2) -> Value {
         "name": item_name(i64::from(entry.fruit_id)),
         "unlocked": entry.unlocked,
         "progress": entry.progress,
+        "isNew": entry.is_new,
         "giant": entry.giant.as_ref().map(giant_json),
     })
 }
@@ -2185,6 +2206,8 @@ fn giant_json(giant: &RanchGiantRecordView) -> Value {
         "unlocked": giant.unlocked,
         "tierName": tier_name(giant.tier),
         "weightKg": weight_kg(giant.best_weight_x10),
+        "harvestCount": giant.harvest_count,
+        "isNew": giant.is_new,
     })
 }
 
@@ -2269,7 +2292,7 @@ fn ranch_task_rows(info: &TaskInfo) -> Vec<RanchTaskRow> {
 fn ranch_task_row(task: &Task) -> RanchTaskRow {
     RanchTaskRow {
         id: task.id,
-        name: if task.desc.is_empty() { format!("任务{}", task.id) } else { task.desc.clone() },
+        name: task_name(task.id, &task.desc),
         category: if task.task_type == RANCH_TASK_DAILY { "daily" } else { "growth" },
         progress: task.progress,
         total: task.total_progress,
@@ -2281,6 +2304,51 @@ fn ranch_task_row(task: &Task) -> RanchTaskRow {
         share_multiple: task.share_multiple,
         rewards: task.rewards.iter().map(|item| (item.id, item.count)).collect(),
     }
+}
+
+fn task_name(id: i64, desc: &str) -> String {
+    let desc = desc.trim();
+    if !desc.is_empty() {
+        return desc.to_owned();
+    }
+    task_config()
+        .iter()
+        .find(|row| row.get("id").and_then(Value::as_i64) == Some(id))
+        .and_then(|row| row.get("desc").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("任务{id}"))
+}
+
+fn task_config() -> &'static [Value] {
+    static SLOT: OnceLock<Vec<Value>> = OnceLock::new();
+    SLOT.get_or_init(|| {
+        serde_json::from_str(include_str!("../../assets/ranch/MCTask.json"))
+            .expect("牧场任务配置无法读取")
+    })
+}
+
+fn mutation_rules() -> Vec<Value> {
+    static SLOT: OnceLock<Vec<Value>> = OnceLock::new();
+    let rows = SLOT.get_or_init(|| {
+        serde_json::from_str(include_str!("../../assets/ranch/MCMutantInfo.json"))
+            .expect("牧场变异配置无法读取")
+    });
+    rows.iter()
+        .filter(|row| row.get("enable_flag").and_then(Value::as_bool).unwrap_or(false))
+        .filter_map(|row| {
+            let name = row.get("name").and_then(Value::as_str).unwrap_or("").trim();
+            if name.is_empty() {
+                return None;
+            }
+            Some(json!({
+                "name": name,
+                "description": row.get("tips").and_then(Value::as_str).unwrap_or("").trim(),
+                "probability": row.get("pro").and_then(Value::as_i64).unwrap_or(0).max(0),
+            }))
+        })
+        .collect()
 }
 
 fn task_json(task: RanchTaskRow) -> Value {
@@ -2359,6 +2427,7 @@ fn market_json(
         "price": offer.unit_price,
         "priceName": item_name(offer.price_id),
         "balance": balance,
+        "maxCount": CAN_MALL_MAX,
         "remaining": offer.remaining,
         "available": offer.available,
     })
@@ -2470,6 +2539,7 @@ fn can_json(offer: &CanOffer, balance: Option<i64>) -> Value {
         "priceName": if offer.free { String::new() } else { item_name(offer.price_id) },
         "free": offer.free,
         "balance": balance,
+        "maxCount": CAN_MALL_MAX,
         "remaining": offer.remaining,
         "available": offer.available,
     })
@@ -3423,6 +3493,8 @@ mod tests {
                         unlocked: true,
                         best_weight_x10: 1124,
                         tier: 4,
+                        harvest_count: 3,
+                        is_new: true,
                         ..RanchGiantRecordView::default()
                     }),
                     ..IllustratedInfoV2::default()
@@ -3460,10 +3532,22 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(ids, vec![9, 2070002, 2060007]);
         assert_eq!(value["animals"][0]["giant"]["weightKg"], "11.24");
+        assert_eq!(value["animals"][0]["giant"]["harvestCount"], 3);
+        assert_eq!(value["animals"][0]["giant"]["isNew"], true);
+        assert_eq!(value["mutations"][0]["name"], "巨大");
+        assert_eq!(value["mutations"][0]["probability"], 10);
+        assert!(value["mutations"][0]["description"].as_str().unwrap_or("").contains("饲养"));
+        assert_eq!(task_name(90001, ""), "完成1次收获");
+        assert_eq!(task_name(90001, "服务器说明"), "服务器说明");
+        assert_eq!(task_name(1, ""), "任务1");
         assert_eq!(value["animals"][0]["giant"]["tierName"], "巨无霸");
         assert_eq!(value["canClaim"], true);
         assert_eq!(value["levels"][0]["canClaim"], true);
+        assert_eq!(value["levels"][0]["claimed"], false);
+        assert_eq!(value["levels"][0]["rewards"][0]["count"], 2);
         assert_eq!(value["levels"][1]["canClaim"], false);
+        assert_eq!(value["levels"][1]["claimed"], true);
+        assert_eq!(value["rewards"][0]["count"], 4);
         let claimable = claimable_weight_levels(&weight);
         assert_eq!(claimable.len(), 1);
         assert_eq!(

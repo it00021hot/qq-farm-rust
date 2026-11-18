@@ -1311,8 +1311,17 @@ mod tests {
     fn loads_all_data() {
         let gc = reload_for_test();
         assert!(!gc.get_all_plants().is_empty());
+        assert_eq!(gc.get_plant_by_id(1020381).expect("plant").name, "鸡蛋花");
         assert!(!gc.get_all_items().is_empty());
+        assert_eq!(gc.get_item_by_id(60002).expect("cub").name, "鸭");
+        assert_eq!(gc.get_item_by_id(710001).expect("collection").name, "菇菇氧");
         assert!(!gc.get_all_land_configs().is_empty());
+        let levels = gc.get_level_exp_table();
+        assert_eq!(levels.len(), 280);
+        assert_eq!(levels[200], 169_925_100);
+        assert!(gc.illustrated.read().as_ref().is_some_and(|rows| {
+            rows.iter().any(|row| row.id == 40_381_001 && row.param == 40_381)
+        }));
         assert!(!gc.get_level_exp_table().is_empty());
     }
 
@@ -1339,6 +1348,7 @@ mod tests {
             !gc.illustrated_buffs().is_empty(),
             "内嵌 BuffCfg.json 必须能整表解析出超变升级 buff"
         );
+        assert!(gc.buffs_by_source("藏品属性").iter().any(|buff| buff.attr_id == "节省10%肥料"));
     }
 
     #[test]
@@ -1415,6 +1425,9 @@ mod tests {
         assert_eq!(gc.get_mutant_effect_by_id(13).unwrap().name, "喜鹊");
         assert_eq!(gc.get_mutant_effect_by_id(12).unwrap().name, "闪电");
         assert_eq!(gc.get_mutant_effect_by_id(14).unwrap().name, "晶辉");
+        assert!(gc.get_mutant_effect_by_id(14).unwrap().description.contains("及以上"));
+        assert_eq!(gc.get_mutant_effect_by_id(18).unwrap().name, "藏品");
+        assert_eq!(gc.get_mutant_effect_by_id(18).unwrap().tag, "藏品");
         // id 13 icon 为 null → 空字符串;id 14 icon 路径末段 crystal
         assert_eq!(gc.get_mutant_effect_by_id(13).unwrap().icon, "");
         assert_eq!(gc.get_mutant_effect_by_id(14).unwrap().icon, "crystal");

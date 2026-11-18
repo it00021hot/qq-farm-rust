@@ -29,6 +29,8 @@ pub(crate) fn loaded(
     friends: Resource<Vec<WeatherFriend>, String>,
     visit: Resource<Value, String>,
     selected: Signal<i64>,
+    picks: Signal<Vec<i64>>,
+    scans: Signal<Option<Value>>,
 ) -> impl IntoElement {
     view()
         .gap_3()
@@ -52,7 +54,9 @@ pub(crate) fn loaded(
         ))
         .child(when(
             move || board.get().is_some(),
-            move || research_body(board, pending, failure, page, friends, visit, selected),
+            move || {
+                research_body(board, pending, failure, page, friends, visit, selected, picks, scans)
+            },
         ))
 }
 
@@ -64,6 +68,8 @@ fn research_body(
     friends: Resource<Vec<WeatherFriend>, String>,
     visit: Resource<Value, String>,
     selected: Signal<i64>,
+    picks: Signal<Vec<i64>>,
+    scans: Signal<Option<Value>>,
 ) -> View {
     view()
         .gap_2()
@@ -133,6 +139,11 @@ fn research_body(
             },
         ))
         .child(
+            text(move || inventory_line(board.get().as_ref()))
+                .text_sm()
+                .text_color(move || nsh_base::theme().muted_foreground),
+        )
+        .child(
             text(move || {
                 let count = board
                     .get()
@@ -153,6 +164,20 @@ fn research_body(
                 .text_sm()
                 .font_weight(FontWeight::MEDIUM),
         )
+        .child(when(
+            move || !picks.get().is_empty(),
+            move || {
+                button(move || text_key("activities.weatherScan"), ButtonVariant::Secondary)
+                    .disabled(move || pending.get().is_some())
+                    .on_press(move || {
+                        let gids = picks.get();
+                        spawn(
+                            async move { finish_scan(page, gids, pending, failure, scans).await },
+                        );
+                    })
+            },
+        ))
+        .child(when(move || scans.get().is_some(), move || scan_result(scans, friends)))
         .child(each(
             move || friends.get().unwrap_or_default(),
             |friend: &WeatherFriend| friend.gid.to_string(),
@@ -166,6 +191,15 @@ fn research_body(
                     .items_center()
                     .gap_2()
                     .child(text(move || SharedString::from(name.clone())).text_sm())
+                    .child(
+                        button(move || text_key("activities.weatherChoose"), ButtonVariant::Quiet)
+                            .selected(move || picks.get().contains(&gid))
+                            .disabled(move || {
+                                let current = picks.get();
+                                current.len() >= 5 && !current.contains(&gid)
+                            })
+                            .on_press(move || toggle_pick(picks, gid)),
+                    )
                     .child(
                         button(move || text_key("activities.weatherLook"), ButtonVariant::Quiet)
                             .selected(move || selected.get() == gid)
@@ -183,6 +217,113 @@ fn research_body(
             move || selected.get() > 0,
             move || visit_panel(board, visit, selected, pending, failure, page),
         ))
+}
+
+fn toggle_pick(picks: Signal<Vec<i64>>, gid: i64) {
+    let mut current = picks.get();
+    if let Some(index) = current.iter().position(|item| *item == gid) {
+        current.remove(index);
+    } else if current.len() < 5 {
+        current.push(gid);
+    }
+    picks.set(current);
+}
+
+async fn finish_scan(
+    page: ActivityPage,
+    gids: Vec<i64>,
+    pending: Signal<Option<String>>,
+    failure: Signal<Option<String>>,
+    scans: Signal<Option<Value>>,
+) {
+    let Some(id) = page.account_id.get_untracked() else {
+        return;
+    };
+    pending.set(Some("scan".to_owned()));
+    failure.set(None);
+    let context = session::session().context.clone();
+    let result =
+        session::call(async move { qq_farm_app::weather::scan(&context, &id, &gids).await }).await;
+    match result {
+        Ok(value) => scans.set(Some(value)),
+        Err(message) => failure.set(Some(message)),
+    }
+    pending.set(None);
+}
+
+fn scan_result(
+    scans: Signal<Option<Value>>,
+    friends: Resource<Vec<WeatherFriend>, String>,
+) -> View {
+    view()
+        .gap_2()
+        .child(each(
+            move || scans.get().map(|value| scan_lines(&value)).unwrap_or_default(),
+            |line: &ScanLine| line.gid.to_string(),
+            move |line, _| {
+                let line = line.get_untracked();
+                let gid = line.gid;
+                let state = line.state;
+                text(move || {
+                    let name = friend_name(friends.get().as_deref(), gid);
+                    SharedString::from(format!("{name} {}", text_key(state)))
+                })
+                .text_sm()
+                .text_color(move || nsh_base::theme().muted_foreground)
+            },
+        ))
+        .child(when(
+            move || scans.get().is_some_and(|value| deferred_count(&value) > 0),
+            move || {
+                notice(move || {
+                    let count = scans.get().map(|value| deferred_count(&value)).unwrap_or(0);
+                    SharedString::from(format!(
+                        "{} {count}",
+                        text_key("activities.weatherDeferred")
+                    ))
+                })
+            },
+        ))
+}
+
+fn friend_name(friends: Option<&[WeatherFriend]>, gid: i64) -> String {
+    friends
+        .and_then(|rows| rows.iter().find(|friend| friend.gid == gid))
+        .map(|friend| friend.name.clone())
+        .unwrap_or_else(|| format!("GID:{gid}"))
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct ScanLine {
+    gid: i64,
+    state: &'static str,
+}
+
+fn scan_lines(value: &Value) -> Vec<ScanLine> {
+    value
+        .get("friends")
+        .and_then(Value::as_array)
+        .map(|rows| rows.iter().filter_map(scan_line).collect())
+        .unwrap_or_default()
+}
+
+fn scan_line(value: &Value) -> Option<ScanLine> {
+    let gid = value.get("gid").and_then(Value::as_i64).filter(|gid| *gid > 0)?;
+    let state = value.get("state").and_then(Value::as_str).unwrap_or("");
+    Some(ScanLine { gid, state: visit_state_key(state) })
+}
+
+fn visit_state_key(state: &str) -> &'static str {
+    match state {
+        "ready" => "activities.weatherCanCollect",
+        "collected" => "activities.weatherCollected",
+        "ended" => "activities.weatherEnded",
+        _ => "activities.weatherFriendDry",
+    }
+}
+
+fn deferred_count(value: &Value) -> usize {
+    value.get("deferredGids").and_then(Value::as_array).map(|rows| rows.len()).unwrap_or(0)
 }
 
 fn visit_panel(
@@ -262,44 +403,37 @@ fn visit_panel(
                     .zip(visit.get().as_ref())
                     .is_some_and(|(board, visit)| cloud_ready(board, visit))
             },
-            move || {
-                mischief_button(board, visit, selected, pending, failure, page, Mischief::Cloud)
-            },
+            move || cloud_actions(board, visit, selected, pending, failure, page),
         ))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mischief {
     Frog,
-    Cloud,
 }
 
 impl Mischief {
     const fn title(self) -> &'static str {
         match self {
             Self::Frog => "activities.confirmFrog.title",
-            Self::Cloud => "activities.confirmCloud.title",
         }
     }
 
     const fn body(self) -> &'static str {
         match self {
             Self::Frog => "activities.confirmFrog.body",
-            Self::Cloud => "activities.confirmCloud.body",
         }
     }
 
     const fn action(self) -> &'static str {
         match self {
             Self::Frog => "frog",
-            Self::Cloud => "cloud",
         }
     }
 
     const fn label(self) -> &'static str {
         match self {
             Self::Frog => "activities.weatherFrog",
-            Self::Cloud => "activities.weatherCloud",
         }
     }
 }
@@ -324,10 +458,7 @@ fn mischief_button(
                 move |accepted| {
                     if accepted {
                         let gid = selected.get();
-                        let call = match kind {
-                            Mischief::Frog => WeatherCall::Frog(gid),
-                            Mischief::Cloud => WeatherCall::Cloud(gid),
-                        };
+                        let call = WeatherCall::Frog(gid);
                         spawn(async move {
                             finish_action(page, kind.action(), failure, pending, board, call).await;
                             visit.refetch();
@@ -339,11 +470,97 @@ fn mischief_button(
 }
 
 fn bottle_count(board: &Value, key: &str) -> i64 {
-    board.get(key).and_then(Value::as_i64).unwrap_or(0)
+    board.get(key).and_then(Value::as_i64).unwrap_or(0).max(0)
+}
+
+fn inventory_counts(board: &Value) -> [i64; 6] {
+    [
+        bottle_count(board, "lightningMutationCount"),
+        bottle_count(board, "lightningAttractCount"),
+        bottle_count(board, "frogCount"),
+        bottle_count(board, "cloudCount"),
+        bottle_count(board, "senseCount"),
+        bottle_count(board, "sensePercent"),
+    ]
+}
+
+fn inventory_line(board: Option<&Value>) -> SharedString {
+    let counts = board.map(inventory_counts).unwrap_or([0; 6]);
+    let sense = if counts[4] > 0 {
+        format!("{} {} +{}%", text_key("activities.weatherSense"), counts[4], counts[5])
+    } else {
+        text_key("activities.weatherSenseNone").to_string()
+    };
+    SharedString::from(format!(
+        "{} {} · {} {} · {} {} · {} {} · {sense}",
+        text_key("activities.weatherMutation"),
+        counts[0],
+        text_key("activities.weatherAttract"),
+        counts[1],
+        text_key("activities.weatherFrog"),
+        counts[2],
+        text_key("activities.weatherCloud"),
+        counts[3],
+    ))
 }
 
 fn cloud_lands(visit: &Value) -> Option<&Vec<Value>> {
     visit.get("cloudLands").and_then(Value::as_array)
+}
+
+fn cloud_land_numbers(visit: &Value) -> Vec<i64> {
+    cloud_lands(visit)
+        .map(|lands| lands.iter().filter_map(Value::as_i64).filter(|id| *id > 0).collect())
+        .unwrap_or_default()
+}
+
+fn cloud_actions(
+    board: Resource<Value, String>,
+    visit: Resource<Value, String>,
+    selected: Signal<i64>,
+    pending: Signal<Option<String>>,
+    failure: Signal<Option<String>>,
+    page: ActivityPage,
+) -> View {
+    view().flex_row().flex_wrap().gap_2().child(each(
+        move || visit.get().as_ref().map(cloud_land_numbers).unwrap_or_default(),
+        |land_id: &i64| land_id.to_string(),
+        move |land_id, _| {
+            let land_id = land_id.get_untracked();
+            button(
+                move || {
+                    SharedString::from(format!("{} {land_id}", text_key("activities.weatherCloud")))
+                },
+                ButtonVariant::Secondary,
+            )
+            .disabled(move || pending.get().is_some())
+            .on_press(move || {
+                confirm::confirm(
+                    "activities.confirmCloud.title",
+                    "activities.confirmCloud.body",
+                    "cloud",
+                    "activities.weatherCloud",
+                    move |accepted| {
+                        if accepted {
+                            let gid = selected.get();
+                            spawn(async move {
+                                finish_action(
+                                    page,
+                                    "cloud",
+                                    failure,
+                                    pending,
+                                    board,
+                                    WeatherCall::Cloud(gid, land_id),
+                                )
+                                .await;
+                                visit.refetch();
+                            });
+                        }
+                    },
+                );
+            })
+        },
+    ))
 }
 
 fn cloud_ready(board: &Value, visit: &Value) -> bool {
@@ -456,7 +673,7 @@ enum WeatherCall {
     Summon,
     Collect(i64),
     Frog(i64),
-    Cloud(i64),
+    Cloud(i64, i64),
 }
 
 async fn finish_action(
@@ -486,8 +703,8 @@ async fn finish_action(
             WeatherCall::Frog(host_gid) => {
                 qq_farm_app::weather::frog(&context, &id, host_gid).await
             }
-            WeatherCall::Cloud(host_gid) => {
-                qq_farm_app::weather::cloud(&context, &id, host_gid).await
+            WeatherCall::Cloud(host_gid, land_id) => {
+                qq_farm_app::weather::cloud(&context, &id, host_gid, land_id).await
             }
         }
     })
@@ -733,7 +950,24 @@ mod tests {
         assert!(!super::collect_ready(&json!({ "collectorCount": 0 }), &ready));
         assert!(!super::collect_ready(&board, &collected));
         assert!(super::bottle_count(&json!({ "frogCount": 1 }), "frogCount") > 0);
-        assert!(super::cloud_ready(&json!({ "cloudCount": 1 }), &json!({ "cloudLands": [4] })));
+        assert_eq!(
+            super::inventory_counts(&json!({
+                "lightningMutationCount": 2,
+                "lightningAttractCount": 1,
+                "frogCount": 0,
+                "cloudCount": 4,
+                "senseCount": 3,
+                "sensePercent": 6
+            })),
+            [2, 1, 0, 4, 3, 6]
+        );
+        assert_eq!(super::cloud_land_numbers(&json!({ "cloudLands": [4, 0, 8] })), vec![4, 8]);
         assert!(!super::cloud_ready(&json!({ "cloudCount": 1 }), &json!({ "cloudLands": [] })));
+        let scanned = json!({
+            "friends": [{ "gid": 8, "state": "ready" }],
+            "deferredGids": [9]
+        });
+        assert_eq!(super::scan_lines(&scanned)[0].state, "activities.weatherCanCollect");
+        assert_eq!(super::deferred_count(&scanned), 1);
     }
 }
