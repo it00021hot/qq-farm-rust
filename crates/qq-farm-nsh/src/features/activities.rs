@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use nsh_core::prelude::*;
 use serde_json::{json, Value};
 
@@ -8,6 +10,7 @@ use crate::session;
 use crate::ui::{button, notice, ButtonVariant};
 
 const SHARE_ACTIVITIES: [&str; 2] = ["2026092501", "2026110104"];
+const WEATHER_VISIT_WATCH: Duration = Duration::from_millis(400);
 
 #[derive(Clone, Copy)]
 pub(crate) struct ActivityPage {
@@ -432,12 +435,35 @@ pub(crate) fn page(page: ActivityPage) -> impl IntoElement {
     let weather_gid = signal(0_i64);
     let weather_picks = signal(Vec::<i64>::new());
     let weather_scans = signal(None::<Value>);
+    let weather_generation = signal(0_u64);
+    let weather_watch = signal(false);
     let weather_account = page.account_id;
     effect(move || {
         let _current = weather_account.get();
         weather_gid.set(0);
         weather_picks.set(Vec::new());
         weather_scans.set(None);
+    });
+    set_interval(WEATHER_VISIT_WATCH, move || {
+        if shelf.get_untracked() != Shelf::Weather || weather_watch.get_untracked() {
+            return;
+        }
+        let Some(id) = running_account(page) else {
+            return;
+        };
+        weather_watch.set(true);
+        let generation = weather_generation;
+        let watch = weather_watch;
+        spawn(async move {
+            let context = session::session().context.clone();
+            if let Ok(next) =
+                session::call(async move { qq_farm_app::weather::visits_generation(&context, &id) })
+                    .await
+            {
+                generation.set(next);
+            }
+            watch.set(false);
+        });
     });
     let weather_friends = resource(
         move || (shelf.get() == Shelf::Weather).then(|| running_account(page)).flatten(),
@@ -533,6 +559,7 @@ pub(crate) fn page(page: ActivityPage) -> impl IntoElement {
                     weather_gid,
                     weather_picks,
                     weather_scans,
+                    weather_generation,
                 )
             },
         ))

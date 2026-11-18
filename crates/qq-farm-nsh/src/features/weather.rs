@@ -31,6 +31,7 @@ pub(crate) fn loaded(
     selected: Signal<i64>,
     picks: Signal<Vec<i64>>,
     scans: Signal<Option<Value>>,
+    live_generation: Signal<u64>,
 ) -> impl IntoElement {
     view()
         .gap_3()
@@ -55,7 +56,18 @@ pub(crate) fn loaded(
         .child(when(
             move || board.get().is_some(),
             move || {
-                research_body(board, pending, failure, page, friends, visit, selected, picks, scans)
+                research_body(
+                    board,
+                    pending,
+                    failure,
+                    page,
+                    friends,
+                    visit,
+                    selected,
+                    picks,
+                    scans,
+                    live_generation,
+                )
             },
         ))
 }
@@ -70,6 +82,7 @@ fn research_body(
     selected: Signal<i64>,
     picks: Signal<Vec<i64>>,
     scans: Signal<Option<Value>>,
+    live_generation: Signal<u64>,
 ) -> View {
     view()
         .gap_2()
@@ -173,9 +186,7 @@ fn research_body(
             },
         ))
         .child(when(
-            move || {
-                friends.error().is_none() && friends.get().is_some_and(|rows| rows.is_empty())
-            },
+            move || friends.error().is_none() && friends.get().is_some_and(|rows| rows.is_empty()),
             move || notice(move || text_key("activities.weatherNoFriends")),
         ))
         .child(when(
@@ -184,8 +195,10 @@ fn research_body(
                 button(move || text_key("activities.weatherScan"), ButtonVariant::Secondary)
                     .disabled(move || pending.get().is_some())
                     .on_press(move || {
-                        if !accept_scan(pending.get_untracked().as_deref(), picks.get_untracked().len())
-                        {
+                        if !accept_scan(
+                            pending.get_untracked().as_deref(),
+                            picks.get_untracked().len(),
+                        ) {
                             return;
                         }
                         let Some(id) = page.account_id.get_untracked() else {
@@ -195,12 +208,16 @@ fn research_body(
                         pending.set(Some("scan".to_owned()));
                         failure.set(None);
                         spawn(async move {
-                            finish_scan(page, id, gids, pending, failure, scans).await
+                            finish_scan(page, id, gids, pending, failure, scans, live_generation)
+                                .await
                         });
                     })
             },
         ))
-        .child(when(move || scans.get().is_some(), move || scan_result(scans, friends)))
+        .child(when(
+            move || visible_scans(scans.get(), live_generation.get()).is_some(),
+            move || scan_result(scans, live_generation, friends),
+        ))
         .child(each(
             move || friends.get().unwrap_or_default(),
             |friend: &WeatherFriend| friend.gid.to_string(),
@@ -267,6 +284,7 @@ async fn finish_scan(
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
     scans: Signal<Option<Value>>,
+    live_generation: Signal<u64>,
 ) {
     let context = session::session().context.clone();
     let account_id = id.clone();
@@ -281,28 +299,47 @@ async fn finish_scan(
         return;
     }
     match result {
-        Ok(value) => scans.set(Some(value)),
+        Ok(value) => {
+            live_generation.set(value.get("visitGeneration").and_then(Value::as_u64).unwrap_or(0));
+            scans.set(Some(value));
+        }
         Err(message) => failure.set(Some(message)),
     }
     pending.set(None);
 }
 
+fn visible_scans(scans: Option<Value>, live_generation: u64) -> Option<Value> {
+    let scans = scans?;
+    let captured = scans.get("visitGeneration").and_then(Value::as_u64).unwrap_or(0);
+    (captured == live_generation).then_some(scans)
+}
+
 fn scan_result(
     scans: Signal<Option<Value>>,
+    live_generation: Signal<u64>,
     friends: Resource<Vec<WeatherFriend>, String>,
 ) -> View {
     view()
         .gap_2()
         .child(each(
-            move || scans.get().map(|value| scan_lines(&value)).unwrap_or_default(),
+            move || {
+                visible_scans(scans.get(), live_generation.get())
+                    .map(|value| scan_lines(&value))
+                    .unwrap_or_default()
+            },
             |line: &ScanLine| line.gid.to_string(),
             move |line, _| scan_line_view(line.get_untracked(), friends),
         ))
         .child(when(
-            move || scans.get().is_some_and(|value| deferred_count(&value) > 0),
+            move || {
+                visible_scans(scans.get(), live_generation.get())
+                    .is_some_and(|value| deferred_count(&value) > 0)
+            },
             move || {
                 notice(move || {
-                    let count = scans.get().map(|value| deferred_count(&value)).unwrap_or(0);
+                    let count = visible_scans(scans.get(), live_generation.get())
+                        .map(|value| deferred_count(&value))
+                        .unwrap_or(0);
                     SharedString::from(format!(
                         "{} {count}",
                         text_key("activities.weatherDeferred")
@@ -1045,5 +1082,19 @@ mod tests {
         assert!(super::scan_still_current("a", Some("a")));
         assert!(!super::scan_still_current("a", Some("b")));
         assert!(!super::scan_still_current("a", None));
+    }
+
+    #[test]
+    fn displayed_scan_hides_when_the_visit_generation_moves() {
+        let shown = json!({
+            "friends": [{ "gid": 8, "state": "ready" }],
+            "deferredGids": [],
+            "visitGeneration": 2
+        });
+        let visible = super::visible_scans(Some(shown.clone()), 2).expect("current");
+        assert_eq!(super::scan_lines(&visible)[0].gid, 8);
+        assert!(super::visible_scans(Some(shown), 3).is_none());
+        let unnamed = json!({ "friends": [{ "gid": 9, "state": "ready" }] });
+        assert!(super::visible_scans(Some(unnamed), 1).is_none());
     }
 }

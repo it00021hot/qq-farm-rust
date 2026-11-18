@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -110,6 +111,7 @@ pub struct WeatherService {
     gateway: Arc<Gateway>,
     mutation_lock: tokio::sync::Mutex<()>,
     visits: std::sync::Mutex<HashMap<i64, CachedVisit>>,
+    visits_generation: AtomicU64,
 }
 
 impl WeatherService {
@@ -119,7 +121,14 @@ impl WeatherService {
             gateway,
             mutation_lock: tokio::sync::Mutex::new(()),
             visits: std::sync::Mutex::new(HashMap::new()),
+            visits_generation: AtomicU64::new(0),
         }
+    }
+
+    /// 扫描缓存被天气通知清掉的次数。扫描写回不增加。
+    #[must_use]
+    pub fn visits_generation(&self) -> u64 {
+        self.visits_generation.load(Ordering::Acquire)
     }
 
     pub async fn snapshot(&self) -> Result<Value> {
@@ -304,7 +313,7 @@ impl WeatherService {
         let _guard = self.mutation_lock.lock().await;
         let mut cache = self.visit_cache();
         let mut reader = LowPriorityVisit { friends };
-        let value = scan_friends(
+        let mut value = scan_friends(
             &chosen,
             &mut cache,
             SCAN_PACE,
@@ -313,6 +322,7 @@ impl WeatherService {
         )
         .await;
         self.replace_visits(cache);
+        stamp_visit_generation(&mut value, self.visits_generation());
         Ok(value)
     }
 
@@ -457,10 +467,11 @@ impl WeatherService {
         self.visits.lock().expect("weather visit cache").remove(&gid);
     }
 
-    pub async fn invalidate_visits(&self, host_gid: i64) {
+    /// `host_gid` 不筛选。任意一座农场的通知都清掉该账号全部好友扫描缓存。
+    pub async fn invalidate_visits(&self, _host_gid: i64) {
         let _guard = self.mutation_lock.lock().await;
-        let mut cache = self.visits.lock().expect("weather visit cache");
-        invalidate_cached_visits(&mut cache, host_gid);
+        self.visits.lock().expect("weather visit cache").clear();
+        self.visits_generation.fetch_add(1, Ordering::AcqRel);
     }
 }
 
@@ -738,12 +749,10 @@ fn visit_error_text(error: &Error) -> String {
     }
 }
 
-fn invalidate_cached_visits(cache: &mut HashMap<i64, CachedVisit>, host_gid: i64) {
-    if host_gid > 0 {
-        cache.remove(&host_gid);
-        return;
+fn stamp_visit_generation(value: &mut Value, generation: u64) {
+    if let Some(object) = value.as_object_mut() {
+        object.insert("visitGeneration".to_string(), json!(generation));
     }
-    cache.clear();
 }
 
 fn fresh_visit(cache: &HashMap<i64, CachedVisit>, gid: i64, now: i64) -> Option<&CachedVisit> {
@@ -1297,19 +1306,58 @@ mod tests {
         )
     }
 
+    fn offline_gateway() -> Arc<Gateway> {
+        let config = crate::network::gateway::GatewayConfig {
+            server_url: "https://example.com".to_string(),
+            platform: "qq".to_string(),
+            os: "linux".to_string(),
+            client_version: "1.0".to_string(),
+            auth_code: "code".to_string(),
+            headers: std::collections::HashMap::new(),
+        };
+        let encryptor: Arc<dyn crate::network::encryptor::Encryptor> =
+            Arc::new(crate::network::encryptor::NoopEncryptor);
+        Arc::new(Gateway::new(config, encryptor))
+    }
+
     #[tokio::test]
-    async fn weather_notify_drops_only_that_farm_and_scan_rereads_it() {
-        let mut account_a = HashMap::from([fresh_cached(8), fresh_cached(9)]);
-        let account_b = account_a.clone();
-        invalidate_cached_visits(&mut account_a, 8);
-        assert!(!account_a.contains_key(&8));
-        assert!(account_a.contains_key(&9));
-        assert!(account_b.contains_key(&8));
-        let mut script = Script { fail: 0, reads: Vec::new() };
-        scan_friends(&[8, 9], &mut account_a, immediate(), || false, &mut script).await;
-        assert_eq!(script.reads, vec![8]);
-        invalidate_cached_visits(&mut account_a, 0);
-        assert!(account_a.is_empty());
-        assert_eq!(account_b.len(), 2);
+    async fn named_farm_notify_clears_the_account_after_the_scan_writes() {
+        let account = Arc::new(WeatherService::new(offline_gateway()));
+        let other = WeatherService::new(offline_gateway());
+        account.save_visit(8, &ready_visit());
+        account.save_visit(9, &ready_visit());
+        other.save_visit(8, &ready_visit());
+        other.save_visit(9, &ready_visit());
+
+        let writing = Arc::clone(&account);
+        let started = Arc::new(tokio::sync::Notify::new());
+        let started_for_scan = Arc::clone(&started);
+        let scan = tokio::spawn(async move {
+            let _guard = writing.mutation_lock.lock().await;
+            started_for_scan.notify_one();
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            writing.replace_visits(HashMap::from([fresh_cached(8), fresh_cached(9)]));
+        });
+        started.notified().await;
+        account.invalidate_visits(8).await;
+        scan.await.expect("scan write");
+        assert!(account.visit_cache().is_empty(), "named notify left another friend cached");
+        assert_eq!(account.visits_generation(), 1);
+        assert!(other.visit_cache().contains_key(&8));
+        assert!(other.visit_cache().contains_key(&9));
+
+        account.save_visit(8, &ready_visit());
+        account.save_visit(9, &ready_visit());
+        account.invalidate_visits(0).await;
+        assert!(account.visit_cache().is_empty());
+        assert_eq!(account.visits_generation(), 2);
+        assert_eq!(other.visit_cache().len(), 2);
+
+        let friends = FriendApi::new(Arc::clone(&account.gateway));
+        let scanned =
+            account.scan(&friends, "weather-notify", &[8], 1).await.expect("offline scan");
+        assert_eq!(scanned.get("visitGeneration").and_then(Value::as_u64), Some(2));
+        assert!(account.visit_cache().contains_key(&8));
+        assert!(!other.visit_cache().is_empty());
     }
 }

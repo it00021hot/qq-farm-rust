@@ -73,6 +73,11 @@ pub async fn cloud(
         .map_err(AppError::from_core)
 }
 
+pub fn visits_generation(ctx: &AppContext, account_id: &str) -> AppResult<u64> {
+    let loop_ = require_worker_loop(ctx, account_id)?;
+    Ok(loop_.weather().visits_generation())
+}
+
 pub async fn scan(ctx: &AppContext, account_id: &str, gids: &[i64]) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
     let self_gid = loop_.own_gid();
