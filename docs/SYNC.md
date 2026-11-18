@@ -3850,3 +3850,10 @@ bot 本轮 13 个提交**玩法层零变化**（活动/商城/日常自动化均
 - 以前 `fertilizer_check_and_buy` 把数量和阈值写成 0，所以即使调用也不会买。现在读取账号已保存的配置。
 - 天气任务领取仍按 ALIGNMENT 记为阻塞：bot 没有这条领取。
 - 验证：`cargo +1.99.1 test -p qq-farm-app --lib fertilizer_check_uses_saved_counts_and_thresholds -- --test-threads=1` 通过；`cargo +1.99.1 test -p qq-farm-nsh --lib settings -- --test-threads=1` 2 项通过；`cargo +1.99.1 test -p qq-farm-nsh --lib planting -- --test-threads=1` 5 项通过；`RUSTUP_TOOLCHAIN=1.99.1 nsh check crates/qq-farm-nsh` 通过。真实商城购买和窗口未验。工具链文件仍是 1.98.1。
+
+### 2026-11-18 — 校正对齐矩阵，并接上巡查的网关退避
+
+矩阵重写在 [ALIGNMENT.md](ALIGNMENT.md)。天气任务领取移出基线。旧活动保留为范围待核实，不按 SYNC 的删除叙述排除。Web 密码登录记为语义待确认。本条不把能力矩阵改成「齐」。
+
+- bot `worker.ts` 的 `nextBusinessTickDeferMs` 在网关不健康时推迟农场和好友巡查。Rust 已有 `is_gateway_healthy_for_business` 和 `next_business_backoff_ms`，`run_farm_tick` 与 `run_friend_tick` 之前没有调用。现在用 `step_business_tick`：健康则执行并清退避，不健康则首次 30 秒、之后翻倍、封顶 60 秒，两种巡查分开记。第一次退避和恢复各写一条面板日志。
+- 验证：`cargo +1.99.1 test -p qq-farm-core --lib business_backoff_first_30s_then_double_capped_60s -- --test-threads=1`。`RUSTUP_TOOLCHAIN=1.99.1 nsh check crates/qq-farm-nsh`。工具链文件仍是 1.98.1。没有假网关跑完整巡查，也没有窗口和真实接口。
