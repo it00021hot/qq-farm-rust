@@ -175,7 +175,7 @@ fn snapshot_value(entry: &ActivityData, now: i64) -> Result<serde_json::Value> {
     let active = wish_window_is_open(head.begin_time, head.end_time, now);
     let pending = state.pending.as_ref().and_then(pending_dto);
     let can_draw = active && pending.is_none() && state.remaining_count > 0;
-    let can_claim = active && pending.as_ref().is_some_and(claim_choice_known);
+    let can_claim = active && pending.is_some();
     let choices = catalog()
         .choices
         .iter()
@@ -200,9 +200,7 @@ fn snapshot_value(entry: &ActivityData, now: i64) -> Result<serde_json::Value> {
     }))
 }
 
-fn claim_choice_known(pending: &serde_json::Value) -> bool {
-    pending.get("chooseId").and_then(serde_json::Value::as_i64).is_some_and(known_choice)
-}
+const SESSION_MOVED: &str = "账号会话已变化，未发送操作";
 
 pub struct AutumnWishService {
     gateway: Arc<Gateway>,
@@ -222,14 +220,33 @@ impl AutumnWishService {
     }
 
     pub async fn operate(&self, action: &str, choose_id: i64) -> Result<serde_json::Value> {
+        self.operate_if_current(action, choose_id, || true).await
+    }
+
+    /// 持有这把锁的调用会重新读取资格。`still_current` 在读取后、发送前再查一次。
+    pub async fn operate_if_current(
+        &self,
+        action: &str,
+        choose_id: i64,
+        still_current: impl Fn() -> bool,
+    ) -> Result<serde_json::Value> {
         let operate_type = match action {
             "draw" => DRAW_OPERATE,
             "claim" => CLAIM_OPERATE,
             _ => return Err(Error::Business(ACTION_INVALID.into())),
         };
         let _guard = self.mutation_lock.lock().await;
+        if !still_current() {
+            return Err(Error::Business(SESSION_MOVED.into()));
+        }
         let state = self.snapshot().await?;
+        if !still_current() {
+            return Err(Error::Business(SESSION_MOVED.into()));
+        }
         let request = self.write_request(action, operate_type, choose_id, &state)?;
+        if !still_current() {
+            return Err(Error::Business(SESSION_MOVED.into()));
+        }
         let reply_bytes = self
             .gateway
             .request(SERVICE, "Operate", &request.encode_to_vec())
@@ -291,7 +308,6 @@ impl AutumnWishService {
                 pending
                     .get("chooseId")
                     .and_then(serde_json::Value::as_i64)
-                    .filter(|id| known_choice(*id))
                     .ok_or_else(|| Error::Business(CLAIM_UNAVAILABLE.into()))?
             }
             _ => return Err(Error::Business(ACTION_INVALID.into())),
@@ -662,19 +678,56 @@ mod tests {
         assert_eq!(value["activity"]["canDraw"], false);
     }
 
-    #[tokio::test]
-    async fn unknown_choice_on_a_slip_is_not_claimed() {
-        let _data = crate::config::paths::TestDataDir::enter();
-        let pending = WishSignPending { choose_id: 0, text_id: 1, day_id: 1, rewards: vec![] };
+    fn claim_reply() -> Vec<u8> {
+        ActivityOperateReply {
+            activity_id: ACTIVITY_ID,
+            operate_type: CLAIM_OPERATE,
+            wish_sign_claim: Some(crate::proto::generated::gamepb::activitypb::WishSignClaimRsp {
+                awards: vec![item(6001, 20)],
+            }),
+            ..ActivityOperateReply::default()
+        }
+        .encode_to_vec()
+    }
+
+    async fn claim_choice(choose_id: i64, caller: i64) -> i64 {
+        let pending =
+            WishSignPending { choose_id, text_id: 1, day_id: 1, rewards: vec![item(6001, 20)] };
+        let open = entry(now() - 10, now() + 100, 0, 1, Some(pending));
         let gateway = gateway();
-        let script =
-            script_with(vec![grouped(entry(now() - 10, now() + 100, 0, 1, Some(pending)))], None);
+        let script = script_with(vec![grouped(open.clone()), grouped(open)], Some(claim_reply()));
         install(&gateway, Arc::clone(&script));
-        let service = AutumnWishService::new(gateway);
-        let value = service.snapshot().await.unwrap();
-        assert_eq!(value["canClaim"], false);
-        let error = service.operate("claim", 1).await.unwrap_err();
+        let value = AutumnWishService::new(gateway).operate("claim", caller).await.unwrap();
+        assert_eq!(value["rewards"][0]["count"], 20);
+        let calls = script.calls.lock().expect("calls");
+        let request = AutumnOperateRequest::decode(calls[1].2.as_slice()).unwrap();
+        request.wish_sign_claim.unwrap().choose_id
+    }
+
+    #[tokio::test]
+    async fn claim_sends_the_server_choice_including_zero_and_unknown_ids() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        assert_eq!(claim_choice(5, 1).await, 5);
+        assert_eq!(claim_choice(0, 1).await, 0);
+        assert_eq!(claim_choice(99, 4).await, 99);
+    }
+
+    #[tokio::test]
+    async fn claim_without_a_slip_or_outside_the_window_does_not_send() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let open_gateway = gateway();
+        let script = script_with(vec![grouped(entry(now() - 10, now() + 100, 1, 1, None))], None);
+        install(&open_gateway, Arc::clone(&script));
+        let error = AutumnWishService::new(open_gateway).operate("claim", 1).await.unwrap_err();
         assert!(error.to_string().contains(CLAIM_UNAVAILABLE), "{error}");
+        assert!(script.calls.lock().expect("calls").iter().all(|call| call.1 != "Operate"));
+
+        let pending = WishSignPending { choose_id: 5, text_id: 1, day_id: 1, rewards: vec![] };
+        let closed_gateway = gateway();
+        let script = script_with(vec![grouped(entry(0, 0, 0, 1, Some(pending)))], None);
+        install(&closed_gateway, Arc::clone(&script));
+        let error = AutumnWishService::new(closed_gateway).operate("claim", 5).await.unwrap_err();
+        assert!(error.to_string().contains(WINDOW_CLOSED), "{error}");
         assert!(script.calls.lock().expect("calls").iter().all(|call| call.1 != "Operate"));
     }
 
@@ -766,6 +819,37 @@ mod tests {
             script.calls.lock().expect("calls").iter().filter(|call| call.1 == "Operate").count(),
             1
         );
+    }
+
+    #[test]
+    fn official_wish_vectors_round_trip_operate_bodies() {
+        let vectors: Vec<serde_json::Value> =
+            serde_json::from_str(include_str!("fixtures/autumn-official-vectors.json")).unwrap();
+        let mut wish = 0;
+        for vector in vectors {
+            if vector["expected"]["activity_id"] != "2026092401" {
+                continue;
+            }
+            wish += 1;
+            let bytes = decode_hex(vector["hex"].as_str().unwrap());
+            if vector["direction"] == "send" {
+                let decoded = AutumnOperateRequest::decode(bytes.as_slice()).unwrap();
+                assert_eq!(decoded.encode_to_vec(), bytes);
+                assert_eq!(decoded.activity_id, ACTIVITY_ID);
+            } else {
+                let decoded = ActivityOperateReply::decode(bytes.as_slice()).unwrap();
+                assert_eq!(decoded.encode_to_vec(), bytes);
+                assert_eq!(decoded.activity_id, ACTIVITY_ID);
+            }
+        }
+        assert_eq!(wish, 4);
+    }
+
+    fn decode_hex(text: &str) -> Vec<u8> {
+        (0..text.len())
+            .step_by(2)
+            .map(|index| u8::from_str_radix(&text[index..index + 2], 16).unwrap())
+            .collect()
     }
 
     #[tokio::test]

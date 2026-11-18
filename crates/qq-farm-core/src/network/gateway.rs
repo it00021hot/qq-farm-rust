@@ -296,7 +296,7 @@ struct Inner {
     /// 登录回包里的已解锁场景。旧登录协议没有该字段，按只解锁农场处理。
     unlocked_scenes: parking_lot::Mutex<Vec<i32>>,
     /// 测试里替代真实连接的回包。正式构建没有这个字段。
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-isolation"))]
     reply_script:
         parking_lot::Mutex<Option<Arc<dyn Fn(&str, &str, &[u8]) -> Result<Vec<u8>> + Send + Sync>>>,
 }
@@ -342,7 +342,7 @@ impl Gateway {
                 own_gid: AtomicI64::new(0),
                 current_scene: AtomicI32::new(1),
                 unlocked_scenes: parking_lot::Mutex::new(vec![1]),
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-isolation"))]
                 reply_script: parking_lot::Mutex::new(None),
             }),
         }
@@ -691,7 +691,7 @@ impl Gateway {
             let phase = *self.inner.phase.read();
             rpc_phase_ok(phase, require_online)?;
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-isolation"))]
         if let Some(script) = self.inner.reply_script.lock().clone() {
             return script(service, method, body);
         }
@@ -894,7 +894,7 @@ impl Gateway {
     }
 
     /// 测试用内存回包。调用前要 `mark_online`，否则阶段检查会先拒绝。
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-isolation"))]
     pub fn install_reply_script<F>(&self, script: F)
     where
         F: Fn(&str, &str, &[u8]) -> std::result::Result<Vec<u8>, NetworkError>

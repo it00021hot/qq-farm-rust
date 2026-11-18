@@ -3514,6 +3514,13 @@ mod tests {
     use super::{ranch_rows, share_from, solar_board, tea_shop};
 
     #[test]
+    fn wish_is_a_directory_shelf() {
+        assert!(super::Shelf::ALL.contains(&super::Shelf::Wish));
+        assert_eq!(super::Shelf::Wish.id(), "wish");
+        assert_eq!(super::Shelf::Wish.label_key(), "activities.wish");
+    }
+
+    #[test]
     fn solar_keeps_claimable_events_and_seasons() {
         let board = solar_board(&json!({
             "events": [

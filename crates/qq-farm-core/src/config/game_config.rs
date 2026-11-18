@@ -651,22 +651,22 @@ impl GameConfig {
             .filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_' || *c == '-')
             .collect();
         let path = Self::overlay_dir().join("images").join(safe);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-isolation"))]
         if crate::config::paths::test_data_dir_override().is_none() {
             return None;
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-isolation"))]
         crate::config::paths::refuse_default_data_io(&path);
         std::fs::read(path).ok()
     }
 
     fn read_overlay(name: &str) -> Option<String> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-isolation"))]
         if crate::config::paths::test_data_dir_override().is_none() {
             return None;
         }
         let path = Self::overlay_dir().join(name);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-isolation"))]
         crate::config::paths::refuse_default_data_io(&path);
         std::fs::read_to_string(path).ok()
     }

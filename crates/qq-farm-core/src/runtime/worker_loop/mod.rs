@@ -106,6 +106,7 @@ pub struct WorkerLoop {
     warehouse: Arc<WarehouseService>,
     mystery_shop: Arc<MysteryShopService>,
     weather: Arc<crate::services::weather::WeatherService>,
+    autumn_wish: Arc<crate::services::autumn_wish::AutumnWishService>,
 
     // —— 内部状态 ——
     /// 登录完成
@@ -349,6 +350,8 @@ impl WorkerLoop {
             move |limits| friend.update_operation_limits(&limits)
         }));
         let weather = Arc::new(crate::services::weather::WeatherService::new(Arc::clone(&gateway)));
+        let autumn_wish =
+            Arc::new(crate::services::autumn_wish::AutumnWishService::new(Arc::clone(&gateway)));
         friend.api().set_bad_gate(
             Arc::new({
                 let friend = friend.clone();
@@ -381,6 +384,7 @@ impl WorkerLoop {
             warehouse,
             mystery_shop,
             weather,
+            autumn_wish,
             login_ready: AtomicBool::new(false),
             shutdown_started: AtomicBool::new(false),
             is_running: AtomicBool::new(false),
@@ -1835,6 +1839,11 @@ impl WorkerLoop {
     #[must_use]
     pub fn weather(&self) -> Arc<crate::services::weather::WeatherService> {
         Arc::clone(&self.weather)
+    }
+
+    #[must_use]
+    pub fn autumn_wish(&self) -> Arc<crate::services::autumn_wish::AutumnWishService> {
+        Arc::clone(&self.autumn_wish)
     }
     /// 自己的角色 GID（登录成功后写入；未登录为 0）
     #[must_use]

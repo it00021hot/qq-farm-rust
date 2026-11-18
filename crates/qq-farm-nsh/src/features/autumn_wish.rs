@@ -168,9 +168,7 @@ pub(crate) fn press(
         WishIntent::Claim => {
             let board = session.board.as_ref()?;
             let pending = board.pending.as_ref()?;
-            if !board.can_claim
-                || !board.choices.iter().any(|choice| choice.id == pending.choose_id)
-            {
+            if !board.can_claim {
                 return None;
             }
             pending.choose_id
@@ -302,28 +300,44 @@ fn fire(session: Signal<WishSession>, page: ActivityPage, intent: WishIntent, ch
     launch(session, command);
 }
 
+pub(crate) async fn dispatch_wish(
+    context: &qq_farm_app::AppContext,
+    command: &WishCommandOwned,
+) -> qq_farm_app::AppResult<Value> {
+    match command.intent {
+        WishIntent::Reload => {
+            qq_farm_app::autumn_wish::snapshot(context, &command.account_id).await
+        }
+        WishIntent::Draw => {
+            qq_farm_app::autumn_wish::operate(
+                context,
+                &command.account_id,
+                "draw",
+                command.choose_id,
+            )
+            .await
+        }
+        WishIntent::Claim => {
+            qq_farm_app::autumn_wish::operate(
+                context,
+                &command.account_id,
+                "claim",
+                command.choose_id,
+            )
+            .await
+        }
+    }
+}
+
 fn launch(session: Signal<WishSession>, command: WishCommandOwned) {
     spawn(async move {
         let context = session::session().context.clone();
-        let account_id = command.account_id.clone();
-        let choose_id = command.choose_id;
         let intent = command.intent;
-        let result = session::call(async move {
-            match intent {
-                WishIntent::Reload => {
-                    qq_farm_app::autumn_wish::snapshot(&context, &account_id).await
-                }
-                WishIntent::Draw => {
-                    qq_farm_app::autumn_wish::operate(&context, &account_id, "draw", choose_id)
-                        .await
-                }
-                WishIntent::Claim => {
-                    qq_farm_app::autumn_wish::operate(&context, &account_id, "claim", choose_id)
-                        .await
-                }
-            }
-        })
-        .await;
+        let result = {
+            let context = context.clone();
+            let command = command.clone();
+            session::call(async move { dispatch_wish(&context, &command).await }).await
+        };
         let mut owned = session.get_untracked();
         let outcome = match intent {
             WishIntent::Reload => WishApply::Loaded(result.and_then(|value| {
@@ -355,7 +369,6 @@ fn body(
         .child(text(move || text_key("activities.wishIntro")).text_sm())
         .child(text(move || text_key(window_key)).text_sm())
         .child(text(remaining).text_sm())
-        .child(text(move || text_key("activities.wishNoCost")).text_sm())
         .child(text(format!(
             "{} {day} · {} {draws}",
             text_key("activities.wishDay"),
@@ -593,9 +606,32 @@ fn empty_board() -> WishBoard {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use prost::Message as _;
+    use qq_farm_core::models::types::AccountConfigSnapshot;
+    use qq_farm_core::proto::generated::corepb::Item;
+    use qq_farm_core::proto::generated::gamepb::activitypb::{
+        ActivityBodyWishSign, ActivityContent, ActivityData, ActivityOperateReply,
+        AutumnOperateRequest, GetGroupReply, WishSignClaimRsp, WishSignPending,
+    };
+    use qq_farm_core::runtime::runtime_state::AccountStoreLike;
     use serde_json::json;
 
     use super::*;
+
+    struct EmptyStore;
+    impl AccountStoreLike for EmptyStore {
+        fn get_config_snapshot(&self, _id: &str) -> AccountConfigSnapshot {
+            AccountConfigSnapshot::default()
+        }
+        fn get_automation(&self, _id: &str) -> serde_json::Value {
+            serde_json::Value::Null
+        }
+        fn get_preferred_seed(&self, _id: &str) -> i64 {
+            0
+        }
+    }
 
     fn session_with(board: WishBoard) -> WishSession {
         WishSession {
@@ -679,6 +715,130 @@ mod tests {
         assert!(session.board.is_none());
         assert_eq!(session.note.as_deref(), None);
         assert_eq!(session.failure.as_deref(), Some("请求超时"));
+    }
+
+    #[test]
+    fn claim_keeps_a_server_choice_that_is_outside_the_catalog() {
+        let mut board = open_board();
+        board.can_draw = false;
+        board.can_claim = true;
+        board.pending = Some(WishSlip { choose_id: 0, text: "签".into(), rewards: Vec::new() });
+        let mut session = session_with(board);
+        let command = press(&mut session, WishIntent::Claim, 1, true).unwrap();
+        assert_eq!(command.choose_id, 0);
+        assert!(matches!(command.intent, WishIntent::Claim));
+    }
+
+    #[tokio::test]
+    async fn dispatch_wish_sends_the_pressed_server_choice() {
+        let _data = qq_farm_core::config::paths::TestDataDir::enter();
+        let runtime = Arc::new(qq_farm_core::runtime::engine::RuntimeEngine::assemble_with(
+            qq_farm_core::runtime::engine::EngineConfig::default(),
+            Arc::new(qq_farm_core::runtime::runtime_state::RuntimeState::new(
+                Arc::new(EmptyStore),
+                Vec::new(),
+            )),
+            None,
+        ));
+        let gateway = Arc::new(qq_farm_core::network::gateway::Gateway::new(
+            qq_farm_core::network::gateway::GatewayConfig {
+                server_url: "wss://gate.example.com/ws".into(),
+                platform: "qq".into(),
+                os: "Windows".into(),
+                client_version: "1".into(),
+                auth_code: "test".into(),
+                headers: std::collections::HashMap::new(),
+            },
+            Arc::new(qq_farm_core::network::encryptor::NoopEncryptor),
+        ));
+        gateway.mark_online();
+        let seen = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
+        let log = Arc::clone(&seen);
+        gateway.install_reply_script(move |_service, method, body| {
+            if method == "Operate" {
+                log.lock().expect("log").push(body.to_vec());
+                return Ok(ActivityOperateReply {
+                    activity_id: 2_026_092_401,
+                    operate_type: 52,
+                    wish_sign_claim: Some(WishSignClaimRsp {
+                        awards: vec![Item { id: 6001, count: 1, ..Item::default() }],
+                    }),
+                    ..ActivityOperateReply::default()
+                }
+                .encode_to_vec());
+            }
+            Ok(GetGroupReply {
+                group: Some(ActivityData {
+                    children: vec![ActivityData {
+                        activity: Some(ActivityContent {
+                            activity_id: 2_026_092_401,
+                            begin_time: qq_farm_core::utils::time::get_server_time_secs() - 10,
+                            end_time: qq_farm_core::utils::time::get_server_time_secs() + 100,
+                            ..ActivityContent::default()
+                        }),
+                        wish_sign: Some(ActivityBodyWishSign {
+                            remaining_count: 0,
+                            activity_day: 1,
+                            pending: Some(WishSignPending {
+                                choose_id: 0,
+                                text_id: 1,
+                                day_id: 1,
+                                rewards: vec![],
+                            }),
+                        }),
+                        ..ActivityData::default()
+                    }],
+                    ..ActivityData::default()
+                }),
+            }
+            .encode_to_vec())
+        });
+        let (tx, _) = tokio::sync::broadcast::channel(4);
+        let gate = Arc::clone(&gateway);
+        runtime.register_worker_loop(
+            "acc",
+            Arc::new(qq_farm_core::runtime::worker_loop::WorkerLoop::new(
+                qq_farm_core::models::account::AccountSession::new("acc", "code", "name"),
+                qq_farm_core::runtime::worker_loop::WorkerLoopConfig::default(),
+                Arc::clone(&gate),
+                tx,
+                Arc::new(qq_farm_core::services::farm::FarmService::new(Arc::clone(&gate))),
+                Arc::new(qq_farm_core::services::friend::scheduler::FriendService::new(
+                    Arc::clone(&gate),
+                    5,
+                )),
+                Arc::new(qq_farm_core::services::email::EmailService::new(
+                    Arc::clone(&gate),
+                    "acc",
+                )),
+                Arc::new(qq_farm_core::services::share::ShareService::new(Arc::clone(&gate))),
+                Arc::new(qq_farm_core::services::monthcard::MonthCardService::new(Arc::clone(
+                    &gate,
+                ))),
+                Arc::new(qq_farm_core::services::qqvip::QQVipService::new(
+                    Arc::clone(&gate),
+                    Arc::new(qq_farm_core::services::mall::MallService::new(Arc::clone(&gate))),
+                )),
+                Arc::new(qq_farm_core::services::mall::MallService::new(Arc::clone(&gate))),
+                Arc::new(qq_farm_core::services::task::TaskService::new(Arc::clone(&gate))),
+                Arc::new(qq_farm_core::services::warehouse::WarehouseService::new(Arc::clone(
+                    &gate,
+                ))),
+                Arc::new(qq_farm_core::services::mystery_shop::MysteryShopService::new(gate)),
+            )),
+        );
+        let context = qq_farm_app::AppContext::new(runtime);
+        let loaded = qq_farm_app::autumn_wish::snapshot(&context, "acc").await.unwrap();
+        let board = board_from(&loaded).unwrap();
+        let mut session =
+            WishSession { account_id: "acc".into(), board: Some(board), ..WishSession::default() };
+        let command = press(&mut session, WishIntent::Claim, 1, true).unwrap();
+        assert_eq!(command.choose_id, 0);
+        dispatch_wish(&context, &command).await.unwrap();
+        let body = &seen.lock().expect("seen")[0];
+        let request = AutumnOperateRequest::decode(body.as_slice()).unwrap();
+        assert_eq!(request.operate_type, 52);
+        assert_eq!(request.wish_sign_claim.unwrap().choose_id, 0);
     }
 
     #[test]

@@ -28,6 +28,10 @@ log = "0.4"
 nsh-core = "=0.5.1"
 nsh-base = "=0.5.1"
 
+[dev-dependencies]
+prost = { workspace = true }
+qq-farm-core = { workspace = true, features = ["test-isolation"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 nsh-platform-linux = "=0.5.1"
 

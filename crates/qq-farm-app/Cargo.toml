@@ -25,3 +25,7 @@ parking_lot = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
+
+[dev-dependencies]
+prost = { workspace = true }
+qq-farm-core = { workspace = true, features = ["test-isolation"] }

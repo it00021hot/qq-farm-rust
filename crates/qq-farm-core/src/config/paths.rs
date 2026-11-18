@@ -69,7 +69,7 @@ pub fn get_app_root() -> PathBuf {
 /// 优先 FARM_DATA_DIR 环境变量；否则 `<app_root>/data`
 #[must_use]
 pub fn get_data_dir() -> PathBuf {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-isolation"))]
     if let Some(dir) = test_data::current() {
         return dir;
     }
@@ -81,7 +81,7 @@ pub fn get_data_dir() -> PathBuf {
     get_app_root().join("data")
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-isolation"))]
 mod test_data {
     use super::*;
     use std::cell::RefCell;
@@ -132,7 +132,7 @@ mod test_data {
 }
 
 /// 测试线程当前的数据目录。发布构建没有这个入口。
-#[cfg(test)]
+#[cfg(any(test, feature = "test-isolation"))]
 #[must_use]
 pub fn test_data_dir_override() -> Option<PathBuf> {
     test_data::current()
@@ -145,7 +145,7 @@ pub fn default_data_dir() -> PathBuf {
 }
 
 /// 测试里禁止对默认数据目录做读写。已安装测试目录，或路径不在默认目录下时放行。
-#[cfg(test)]
+#[cfg(any(test, feature = "test-isolation"))]
 pub fn refuse_default_data_io(path: &Path) {
     if test_data::current().is_some() {
         return;
@@ -156,13 +156,13 @@ pub fn refuse_default_data_io(path: &Path) {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-isolation"))]
 pub use test_data::TestDataDir;
 
 /// 确保数据目录存在，返回目录路径
 pub fn ensure_data_dir() -> std::io::Result<PathBuf> {
     let dir = get_data_dir();
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-isolation"))]
     refuse_default_data_io(&dir);
     if !dir.exists() {
         fs::create_dir_all(&dir)?;

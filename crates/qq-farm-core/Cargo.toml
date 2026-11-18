@@ -16,6 +16,8 @@ workspace = true
 
 [features]
 packaged = []
+# 只给其它 crate 的测试打开与 `cfg(test)` 相同的数据目录隔离。发布构建不启用。
+test-isolation = []
 
 [dependencies]
 # 异步运行时

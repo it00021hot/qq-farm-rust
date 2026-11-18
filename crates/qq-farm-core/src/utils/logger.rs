@@ -185,7 +185,7 @@ struct LogEntry<'a> {
 }
 
 static INIT: Once = Once::new();
-#[cfg(not(test))]
+#[cfg(not(any(test, feature = "test-isolation")))]
 static LOG_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 /// 初始化日志（必须先调一次）：stderr + `logs/combined.log`，并安装 panic hook。
@@ -327,7 +327,7 @@ fn json_escape(s: &str) -> String {
 /// 发布构建缓存第一次解析出的目录。测试构建不缓存：目录在调用线程上按测试根解析，
 /// 没有测试根就拒绝，避免后台线程回落到真实 `data/logs`。
 pub fn ensure_log_dir() -> PathBuf {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-isolation"))]
     {
         let data = crate::config::paths::test_data_dir_override()
             .expect("测试写日志缺少 TestDataDir，拒绝使用默认数据目录");
@@ -335,13 +335,14 @@ pub fn ensure_log_dir() -> PathBuf {
         let _ = fs::create_dir_all(&dir);
         return dir;
     }
-    #[cfg(not(test))]
+    #[cfg(not(any(test, feature = "test-isolation")))]
     {
         let mut guard = LOG_DIR.lock();
         if let Some(path) = guard.as_ref() {
             return path.clone();
         }
-        let data_dir = crate::config::paths::ensure_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let data_dir =
+            crate::config::paths::ensure_data_dir().unwrap_or_else(|_| PathBuf::from("."));
         let dir = data_dir.join("logs");
         let _ = fs::create_dir_all(&dir);
         *guard = Some(dir.clone());
