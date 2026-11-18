@@ -135,6 +135,14 @@ pub struct WorkerLoop {
     friend_tick_running: AtomicBool,
     /// 网关不健康时好友巡查的当前退避。0 表示上一轮没有让路。
     friend_backoff_ms: AtomicU64,
+    /// 农场首轮巡查已经结束。结束前不进入牧场。
+    initial_farm_done: AtomicBool,
+    /// 好友首轮巡查已经结束。好友总开关关闭也算结束。
+    initial_friend_done: AtomicBool,
+    ranch_backoff_ms: AtomicU64,
+    ranch_deferred_until: AtomicI64,
+    #[cfg(test)]
+    patrol_trace: Mutex<Vec<&'static str>>,
     /// 对齐 TS `runUnifiedTick`：farm/help/steal 串行，避免并发打满网关
     unified_tick_running: AtomicBool,
     /// 对齐 TS `unifiedSchedulerRunning`
@@ -387,6 +395,12 @@ impl WorkerLoop {
             farm_backoff_ms: AtomicU64::new(0),
             friend_tick_running: AtomicBool::new(false),
             friend_backoff_ms: AtomicU64::new(0),
+            initial_farm_done: AtomicBool::new(false),
+            initial_friend_done: AtomicBool::new(false),
+            ranch_backoff_ms: AtomicU64::new(0),
+            ranch_deferred_until: AtomicI64::new(0),
+            #[cfg(test)]
+            patrol_trace: Mutex::new(Vec::new()),
             unified_tick_running: AtomicBool::new(false),
             unified_scheduler_running: AtomicBool::new(false),
             last_lands_push_at: AtomicI64::new(0),
@@ -1116,6 +1130,10 @@ impl WorkerLoop {
         self.farm_backoff_ms.store(0, Ordering::Release);
         self.friend_tick_running.store(false, Ordering::Release);
         self.friend_backoff_ms.store(0, Ordering::Release);
+        self.initial_farm_done.store(false, Ordering::Release);
+        self.initial_friend_done.store(false, Ordering::Release);
+        self.ranch_backoff_ms.store(0, Ordering::Release);
+        self.ranch_deferred_until.store(0, Ordering::Release);
         self.unified_tick_running.store(false, Ordering::Release);
         scheduler.clear("unified_next_tick");
     }
@@ -1134,7 +1152,9 @@ impl WorkerLoop {
             let g = self.next_runs.lock();
             let farm = if g.farm_at > 0 { g.farm_at } else { now + 1000 };
             let friend = if g.friend_at > 0 { g.friend_at } else { now + 1000 };
-            farm.min(friend)
+            let ranch_at = self.ranch_deferred_until.load(Ordering::Acquire);
+            let ranch = if ranch_at > now { ranch_at } else { i64::MAX };
+            farm.min(friend).min(ranch)
         };
         let delay_ms = (next_at - now).max(1000) as u64;
         let this = Arc::clone(self);
@@ -1301,20 +1321,6 @@ impl WorkerLoop {
         let _ =
             crate::services::ranch_benefit::claim_benefit_if_due(self.gateway(), &self.account.id)
                 .await;
-        let this = Arc::clone(self);
-        let self_gid = self.own_gid();
-        let deadline = farm_patrol_deadline(self);
-        let _ = crate::services::ranch::patrol_if_due(
-            self.gateway(),
-            &self.account.id,
-            self_gid,
-            deadline,
-            move || {
-                let this = Arc::clone(&this);
-                async move { ranch_friend_rows(this).await }
-            },
-        )
-        .await;
     }
 
     /// 神秘商人监控定时器：登录后 10s 首查，之后每 10min tick（对齐 node `startMysteryShopTimer`）
@@ -1369,9 +1375,61 @@ impl WorkerLoop {
             self.run_friend_tick().await;
             changed = true;
         }
+        self.run_ranch_after_farm_and_friends().await;
         if changed {
             self.mark_status_dirty();
         }
+    }
+
+    /// 牧场排在农场和好友之后。任一还在跑、还没完成首轮，或已经再次到期，就留到下一轮。
+    async fn run_ranch_after_farm_and_friends(self: &Arc<Self>) {
+        if !self.unified_scheduler_running.load(Ordering::Acquire) {
+            return;
+        }
+        if self.farm_tick_running.load(Ordering::Acquire)
+            || self.friend_tick_running.load(Ordering::Acquire)
+        {
+            return;
+        }
+        if !self.initial_farm_done.load(Ordering::Acquire)
+            || !self.initial_friend_done.load(Ordering::Acquire)
+        {
+            return;
+        }
+        let now = now_ms();
+        if now < self.ranch_deferred_until.load(Ordering::Acquire) {
+            return;
+        }
+        {
+            let next = self.next_runs.lock();
+            if (next.farm_at > 0 && now >= next.farm_at)
+                || (next.friend_at > 0 && now >= next.friend_at)
+            {
+                return;
+            }
+        }
+        if self.defer_unhealthy_tick("ranch") {
+            return;
+        }
+        if !self.gateway.is_gateway_idle_for_background() {
+            self.ranch_deferred_until.store(now_ms().saturating_add(1000), Ordering::Release);
+            return;
+        }
+        self.note_patrol("ranch");
+        let this = Arc::clone(self);
+        let self_gid = self.own_gid();
+        let deadline = farm_patrol_deadline(self);
+        let _ = crate::services::ranch::patrol_if_due(
+            self.gateway(),
+            &self.account.id,
+            self_gid,
+            deadline,
+            move || {
+                let this = Arc::clone(&this);
+                async move { ranch_friend_rows(this).await }
+            },
+        )
+        .await;
     }
 
     /// 触发 farm tick（对外暴露给 on_login_success 启动独立 task）
@@ -1438,6 +1496,8 @@ impl WorkerLoop {
             )
             .await;
         }
+        self.initial_farm_done.store(true, Ordering::Release);
+        self.note_patrol("farm");
     }
 
     /// 触发统一好友 tick（帮助 + 偷菜 + 捣乱一次做完，对齐 bot `checkFriends` +
@@ -1453,6 +1513,8 @@ impl WorkerLoop {
         if !self.auto_on("friend") {
             let (min_ms, max_ms) = self.interval_range_ms("friend");
             self.next_runs.lock().friend_at = now_ms() + random_interval_ms(min_ms, max_ms) as i64;
+            self.initial_friend_done.store(true, Ordering::Release);
+            self.note_patrol("friend");
             return;
         }
         if self.friend_tick_running.swap(true, Ordering::AcqRel) {
@@ -1474,6 +1536,8 @@ impl WorkerLoop {
             Some(&self.account.id),
             None,
         ) {
+            self.initial_friend_done.store(true, Ordering::Release);
+            self.note_patrol("friend");
             return;
         }
         // 拜访之间的等待不占自动化锁。列表、每次进好友农场和出售各自进锁。
@@ -1492,13 +1556,28 @@ impl WorkerLoop {
             )
             .await;
         }
+        this.initial_friend_done.store(true, Ordering::Release);
+        this.note_patrol("friend");
         this.sync_status();
+    }
+
+    fn note_patrol(&self, step: &'static str) {
+        #[cfg(test)]
+        self.patrol_trace.lock().push(step);
+        #[cfg(not(test))]
+        let _ = step;
+    }
+
+    #[cfg(test)]
+    fn patrol_trace_snapshot(&self) -> Vec<&'static str> {
+        self.patrol_trace.lock().clone()
     }
 
     fn defer_unhealthy_tick(&self, kind: &str) -> bool {
         let slot = match kind {
             "farm" => &self.farm_backoff_ms,
             "friend" => &self.friend_backoff_ms,
+            "ranch" => &self.ranch_backoff_ms,
             _ => return false,
         };
         let previous = slot.load(Ordering::Acquire);
@@ -1508,6 +1587,9 @@ impl WorkerLoop {
         );
         slot.store(step.stored_ms, Ordering::Release);
         if step.defer_ms == 0 {
+            if kind == "ranch" {
+                self.ranch_deferred_until.store(0, Ordering::Release);
+            }
             if previous > 0 {
                 crate::services::panel_log::log(
                     &self.account.id,
@@ -1530,6 +1612,7 @@ impl WorkerLoop {
             match kind {
                 "farm" => next.farm_at = at,
                 "friend" => next.friend_at = at,
+                "ranch" => self.ranch_deferred_until.store(at, Ordering::Release),
                 _ => {}
             }
         }
@@ -1967,6 +2050,79 @@ mod tests {
             // 只摘日志钩子。删除账号配置会把整份用户配置写回磁盘，测试进程不能这么做。
             crate::infra::panel_log::unregister("gateway-backoff");
         }
+    }
+
+    fn due_now(loop_: &WorkerLoop) {
+        let now = now_ms();
+        let mut next = loop_.next_runs.lock();
+        next.farm_at = now - 1;
+        next.friend_at = now - 1;
+    }
+
+    fn quiet_off(account_id: &str) {
+        let mut config =
+            crate::models::store::account_config::get_account_config_snapshot(Some(account_id));
+        config.friend_quiet_hours.enabled = false;
+        crate::models::store::account_config::set_account_config_snapshot(
+            Some(account_id),
+            config,
+            false,
+        );
+    }
+
+    #[tokio::test]
+    async fn unified_tick_runs_farm_and_friend_before_ranch() {
+        let (loop_, _) = make_loop();
+        loop_.mark_login_ready();
+        loop_.unified_scheduler_running.store(true, Ordering::Release);
+        loop_.gateway.mark_online();
+        loop_.gateway.install_reply_script(|_service, method, _body| {
+            Err(crate::network::error::NetworkError::Phase(format!("离线 {method}")))
+        });
+        quiet_off(&loop_.account.id);
+        due_now(&loop_);
+        loop_.run_unified_tick().await;
+        assert_eq!(loop_.patrol_trace_snapshot(), vec!["farm", "friend", "ranch"]);
+    }
+
+    #[tokio::test]
+    async fn ranch_waits_for_the_first_friend_tick_and_a_healthy_gateway() {
+        let (loop_, _) = make_loop();
+        loop_.mark_login_ready();
+        loop_.unified_scheduler_running.store(true, Ordering::Release);
+        loop_.gateway.mark_online();
+        loop_.gateway.install_reply_script(|_service, method, _body| {
+            Err(crate::network::error::NetworkError::Phase(format!("离线 {method}")))
+        });
+        quiet_off(&loop_.account.id);
+        let now = now_ms();
+        loop_.next_runs.lock().farm_at = now - 1;
+        loop_.next_runs.lock().friend_at = now + 60_000;
+        loop_.run_unified_tick().await;
+        assert_eq!(loop_.patrol_trace_snapshot(), vec!["farm"]);
+        assert!(loop_.initial_farm_done.load(Ordering::Acquire));
+        assert!(!loop_.initial_friend_done.load(Ordering::Acquire));
+
+        crate::infra::automation::set_automation_flag(&loop_.account.id, "friend", false);
+        loop_.next_runs.lock().farm_at = now_ms() + 60_000;
+        loop_.next_runs.lock().friend_at = now_ms() - 1;
+        loop_.run_unified_tick().await;
+        assert_eq!(loop_.patrol_trace_snapshot(), vec!["farm", "friend", "ranch"]);
+
+        let (blocked, _) = make_loop();
+        blocked.mark_login_ready();
+        blocked.unified_scheduler_running.store(true, Ordering::Release);
+        blocked.initial_farm_done.store(true, Ordering::Release);
+        blocked.initial_friend_done.store(true, Ordering::Release);
+        silence_gateway(blocked.gateway());
+        let later = now_ms() + 60_000;
+        blocked.next_runs.lock().farm_at = later;
+        blocked.next_runs.lock().friend_at = later;
+        blocked.run_unified_tick().await;
+        assert!(blocked.patrol_trace_snapshot().is_empty());
+        assert_eq!(blocked.ranch_backoff_ms.load(Ordering::Acquire), 30_000);
+        assert_eq!(blocked.farm_backoff_ms.load(Ordering::Acquire), 0);
+        assert_eq!(blocked.friend_backoff_ms.load(Ordering::Acquire), 0);
     }
 
     #[tokio::test]

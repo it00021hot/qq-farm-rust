@@ -94,7 +94,7 @@
 | ID | 行为 | 代码对照 | mock | 窗口 | 真实接口 |
 | --- | --- | --- | --- | --- | --- |
 | SCHED-01 | 心跳、掉线后不再用旧码重连，微信可走应用宝授权 | 代码已有。bot worker 重连。Rust `worker.rs` 心跳超时 `force_disconnect_with_reason("heartbeat_timeout")`，并区分应用宝授权重连和不再使用旧 Code | 无 | 未验 | 未验 |
-| SCHED-03 | 大量好友时先巡农场和好友，再跑牧场 | 未实现。`c500e08` 的 `worker.ts` 要等农场和好友各完成首轮，并且这两项都不在跑，牧场例程才开始。好友读取遇到网关让路或 `stage=pending` 会停下。Rust 巡查仍按自己的到期时间进入牧场 | 无 | 未验 | 未验 |
+| SCHED-03 | 大量好友时先巡农场和好友，再跑牧场 | 代码已有。`c500e08` 的 `runUnifiedTick` 先等农场巡查，再启动好友巡查；牧场要等这两项都完成过首轮，并且当前都不在跑、也没有再次到期。网关不健康时牧场单独走 30/60 秒退避，不改农场和好友的退避；网关不空闲则牧场再等 1 秒。好友总开关关闭仍算首轮结束，避免牧场一直等。Rust `run_unified_tick` 按这个顺序调用 `run_farm_tick`、`run_friend_tick` 和 `run_ranch_after_farm_and_friends`。分享、任务和每日福利仍走原来的定时器，不再从那里插入牧场巡查 | `unified_tick_runs_farm_and_friend_before_ranch`、`ranch_waits_for_the_first_friend_tick_and_a_healthy_gateway` 走 `run_unified_tick`。`patrol_ticks_wait_out_a_silent_gateway_and_resume_separately` 仍通过。没有真实巡查 | 未验 | 未验 |
 | SCHED-02 | 网关心跳漏拍或在途请求卡住时，推迟农场和好友巡查 | 代码已有。bot `worker.ts` `nextBusinessTickDeferMs`：健康则清退避，否则首次 30 秒、之后翻倍、封顶 60 秒，农场和好友分开记。Rust `run_farm_tick` / `run_friend_tick` 经 `defer_unhealthy_tick` 调用 `step_business_tick`。第一次退避和恢复各写一条面板日志 | `patrol_ticks_wait_out_a_silent_gateway_and_resume_separately` 用离线 Gateway，把最近入站时间拨过心跳静默，再直接调用两次巡查。无回包时农场不进入正常 20–25 秒排期，好友不出现「巡查异常」；两种巡查各自先 30 秒、再封顶 60 秒，状态互不覆盖；恢复后农场回到正常间隔，好友发出巡查并记「巡查异常」，各自退避清零；首条退避和恢复日志不重复。摘掉 `defer_unhealthy_tick` 接线时农场退避停在 0，该测试失败。`business_backoff_first_30s_then_double_capped_60s` 仍只覆盖计算。农场 AllLands 帧没有单独计数，农场「未发请求」由函数在正常排期前返回推出。在途请求卡住满 5 秒的那条健康度条件没有单独拨时钟 | 未验 | 未验 |
 | LOG-01 | 运行日志和今日统计 | 代码已有。bot `/api/logs`、`stats.ts`。NSH `dashboard.rs` | 无 | 未验 | 未验 |
 | REMIND-01 | 下线提醒 | 代码已有。bot `push.ts`。NSH `offline_reminder.rs`、`qq_bot_bind` | 无 | 未验 | 未验 |
@@ -102,11 +102,11 @@
 | COLL-02 | 图鉴全部已读 | 代码已有。`c500e08` 的 `clearIllustratedNew` 把正数 `fruitId` 发给 `ClearNewUnlockedFruitsV2`。Rust `IllustratedService::clear_new` 同样丢掉非正数，空名单不发请求；NSH 图鉴页有「全部已读」，只提交当前页 `isNew` 且果实号为正的条目 | `clear_new_keeps_only_positive_ids_and_reads_the_reply`、`clear_new_with_no_ids_does_not_ask_the_gateway`、`read_all_uses_only_positive_fresh_fruit_ids`。没有真实回包，没有窗口点击 | 未验 | 未验 |
 | CONF-01 | 游戏配置编辑 | 代码已有。bot `ConfigManage.vue`、`/api/config/seeds`。`qq-farm-app::config`。NSH `game_config.rs` | 无 | 未验 | 未验 |
 
-本组 8 项：代码已有 7，未实现 1。
+本组 8 项：代码已有 8。
 
 ## 基线计数
 
-基线 35 项。代码已有 30，未实现 3（RANCH-03、RANCH-04、SCHED-03），桌面差异 1（AUTH-05），范围待核实 1（ACT-02）。窗口通过 0，真实接口通过 0。没有「验证通过」项。空账号总览曾打开过；导航和其他页面没有窗口证据。`54fda84` 上的 1203 项测试不是本基准的全量回归。
+基线 35 项。代码已有 31，未实现 2（RANCH-03、RANCH-04），桌面差异 1（AUTH-05），范围待核实 1（ACT-02）。窗口通过 0，真实接口通过 0。没有「验证通过」项。空账号总览曾打开过；导航和其他页面没有窗口证据。`54fda84` 上的 1203 项测试不是本基准的全量回归。
 
 ## 非基线
 
