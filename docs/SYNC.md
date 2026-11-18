@@ -3878,3 +3878,13 @@ bot 本轮 13 个提交**玩法层零变化**（活动/商城/日常自动化均
 - 扫描结果写入 `visitGeneration`。NSH 活动页在雨落成诗可见时每 400 毫秒读取该账号的代次；与已显示结果的代次不一致就不再显示。土地、活动列表和任务通知仍不产生天气缓存宿主。
 - 把失效改回只删除被点名农场后，`named_farm_notify_clears_the_account_after_the_scan_writes` 失败，断言是另一位好友仍留在缓存里。该改动已恢复。
 - 待验：窗口上的扫描结果在真实通知到达后消失，以及真实网关的 `WeatherChangeNotify`。
+
+### 2026-11-18 — 断线清掉该账号的好友天气扫描，并作废活动窗口
+
+本条补上 WEATHER-02 的断线差异。不把能力矩阵改成「齐」。窗口没有打开，没有真实断线或 `WeatherChangeNotify`。
+
+- bot `weather-activity.ts` 的 `networkEvents.on('disconnected')` 把 `pendingSnapshot` 置空，清掉 `friendWeatherInspections` 和 `friendWeatherCache`。`activity-windows.ts` 的同一事件调用 `invalidateActivityWindows`，只把 `loadedAt` 置 0。Rust 真正的会话结束在 `worker.rs` 里调用 `WorkerLoop::quiesce_bot`，`on_disconnect` 也只是转到它。
+- `quiesce_bot` 现在关掉该账号的天气写入、增加代次，并在拿得到锁时清缓存。在途扫描若正占着锁，写回前发现会话已关，就清掉缓存并返回「连接已断开，这次好友天气结果不再保留」，不会把旧结果盖回去。另一份 `WeatherService` 不动。`resume_bot` 重新允许写入。生产环境重连会 `start_worker` 新建 worker，会话号不复用。
+- 活动窗口仍是全服一份。断线调用 `invalidate_activity_windows`，`loaded` 和 `loaded_at` 都清掉，下次拉取前不再当作已加载。一个账号断线会让这份共享日程变陈旧。Rust 没有 bot 那种进行中的 `pendingSnapshot` 可以丢弃，天气面板每次直接请求。
+- NSH 已显示的扫描要同时对上 `visitSession` 和 `visitGeneration`。代次变化、换了新 worker，或读取代次失败，都不再显示旧结果。
+- 待验：窗口在断线后扫掉旧结果，以及真实网关断线。旧活动、NapCat、密码门未碰。

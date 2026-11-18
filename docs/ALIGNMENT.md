@@ -73,7 +73,7 @@
 | ID | 行为 | 代码对照 | mock | 窗口 | 真实接口 |
 | --- | --- | --- | --- | --- | --- |
 | WEATHER-01 | 扫描、采集、召唤、研究、青蛙和乌云 | 代码已有。bot `weather-activity.ts`、`weather-routes.ts`。`WeatherService` 同名方法。NSH `features/weather.rs` | 先前批次的扫描测试通过；本批未重跑。真实 Enter 未跑 | 未验 | 未验 |
-| WEATHER-02 | 天气通知使扫描缓存失效 | 代码已有。bot `network.ts` 解析 `WeatherChangeNotify` 后发出 `weatherChanged`；`weather-activity.ts` 的监听不看 `hostGid`，`friendWeatherCache.clear()`。Rust `WeatherService::invalidate_visits` 对任意 `host_gid`（含 0）清掉收到通知的那个账号的全部好友扫描缓存，并增加 `visits_generation`。另一账号是另一份 `WeatherService`，不会被清。扫描持有 `mutation_lock` 时，失效等写回后再删。NSH 用扫描结果里的 `visitGeneration` 对比实时代次，不一致就不再显示。土地、活动、任务通知仍不产生天气缓存宿主。断开连接仍不调用 `invalidate_visits`，与本客户端原先一致 | `named_farm_notify_clears_the_account_after_the_scan_writes` 与 `displayed_scan_hides_when_the_visit_generation_moves`。把失效改回只删被点名农场时，前一项失败。窗口未打开 | 未验 | 未验 |
+| WEATHER-02 | 天气通知和断线使扫描缓存失效 | 代码已有。bot `weather-activity.ts` 的 `weatherChanged` 不看 `hostGid`，`friendWeatherCache.clear()`。`disconnected` 再清 `pendingSnapshot`、`friendWeatherInspections` 和 `friendWeatherCache`。`activity-windows.ts` 的 `disconnected` 把 `loadedAt` 置 0。Rust 会话结束走 `worker.rs` 里的 `quiesce_bot`：关掉该账号天气写入，清扫描缓存并增加代次；锁被占用时由在途扫描在写回前丢弃。`resume_bot` 或新建 worker 后可以再扫。活动窗口用同一个 `invalidate_activity_windows`，不再当作已加载。窗口表是全服一份，一个账号断线会让这份日程变陈旧。另一账号的 `WeatherService` 不共用扫描缓存。Rust 没有 bot 的 `pendingSnapshot` 合并请求。NSH 同时比较 `visitSession` 和 `visitGeneration`，代次或会话号不一致就不再显示 | `named_farm_notify_clears_the_account_after_the_scan_writes`、`closed_session_discards_a_scan_that_was_waiting_to_write`、`session_end_drops_that_accounts_weather_and_stales_activity_windows`、`displayed_scan_hides_when_the_visit_generation_moves`。摘掉 `quiesce_bot` 里的清理后，会话结束测试失败。窗口未打开 | 未验 | 未验 |
 
 本组 2 项：代码已有 2。
 
