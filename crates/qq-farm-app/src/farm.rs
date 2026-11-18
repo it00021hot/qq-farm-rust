@@ -374,9 +374,11 @@ pub async fn fertilizer_buy(
     Ok(loop_.mall().auto_buy_fertilizer(true, kind, count).await)
 }
 
-/// 检查并购买双化肥。
+/// 按账号已保存的开关、数量和阈值检查并购买化肥。
 pub async fn fertilizer_check_and_buy(ctx: &AppContext, account_id: &str) -> AppResult<Value> {
     let loop_ = require_worker_loop(ctx, account_id)?;
+    let snap =
+        qq_farm_core::models::store::account_config::get_account_config_snapshot(Some(account_id));
     let mystery =
         qq_farm_core::services::mystery_shop::MysteryShopService::new(loop_.gateway().clone());
     let commerce = qq_farm_core::services::commerce::CommerceService::new(
@@ -385,14 +387,14 @@ pub async fn fertilizer_check_and_buy(ctx: &AppContext, account_id: &str) -> App
         loop_.warehouse().clone(),
         loop_.qqvip().clone(),
     );
-    let opts = qq_farm_core::services::commerce::FertilizerBothOptions {
-        buy_organic: true,
-        buy_normal: true,
-        organic_count: 0,
-        organic_threshold_hours: 0.0,
-        normal_count: 0,
-        normal_threshold_hours: 0.0,
-    };
+    let opts = fertilizer_buy_options(
+        snap.automation.fertilizer_buy_organic,
+        snap.automation.fertilizer_buy_normal,
+        snap.fertilizer_buy_organic_count,
+        snap.fertilizer_buy_organic_threshold_hours,
+        snap.fertilizer_buy_normal_count,
+        snap.fertilizer_buy_normal_threshold_hours,
+    );
     let summary = commerce.check_and_buy_fertilizer_both(opts).await;
     Ok(json!({
         "organicBought": summary.organic_bought,
@@ -401,6 +403,24 @@ pub async fn fertilizer_check_and_buy(ctx: &AppContext, account_id: &str) -> App
         "normalCurrentHours": summary.normal_current_hours,
         "error": summary.error,
     }))
+}
+
+pub(crate) fn fertilizer_buy_options(
+    buy_organic: bool,
+    buy_normal: bool,
+    organic_count: i64,
+    organic_hours: i64,
+    normal_count: i64,
+    normal_hours: i64,
+) -> qq_farm_core::services::commerce::FertilizerBothOptions {
+    qq_farm_core::services::commerce::FertilizerBothOptions {
+        buy_organic,
+        buy_normal,
+        organic_count: i32::try_from(organic_count.max(0)).unwrap_or(i32::MAX),
+        organic_threshold_hours: organic_hours.max(0) as f64,
+        normal_count: i32::try_from(normal_count.max(0)).unwrap_or(i32::MAX),
+        normal_threshold_hours: normal_hours.max(0) as f64,
+    }
 }
 
 /// 一键施肥：为所有生长中的作物施用一次所选化肥（normal / organic）。
@@ -707,5 +727,24 @@ pub fn clear_global_logs(ctx: &AppContext, account_id: Option<&str>) {
         logs.retain(|l| l.account_id.as_deref() != Some(id));
     } else {
         logs.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fertilizer_buy_options;
+
+    #[test]
+    fn fertilizer_check_uses_saved_counts_and_thresholds() {
+        let options = fertilizer_buy_options(true, false, 4, 12, 0, 0);
+        assert!(options.buy_organic);
+        assert!(!options.buy_normal);
+        assert_eq!(options.organic_count, 4);
+        assert_eq!(options.organic_threshold_hours, 12.0);
+        assert_eq!(options.normal_count, 0);
+        let off = fertilizer_buy_options(false, false, 9, 8, 9, 8);
+        assert!(!off.buy_organic);
+        assert!(!off.buy_normal);
+        assert_eq!(off.organic_count, 9);
     }
 }

@@ -43,6 +43,7 @@ pub(crate) fn section(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
 ) -> impl IntoElement {
     let query = signal(String::new());
@@ -61,7 +62,7 @@ pub(crate) fn section(
         .child(
             text(move || text_key("settings.planting")).text_sm().font_weight(FontWeight::SEMIBOLD),
         )
-        .child(strategy_row(page, pending, failure, settings))
+        .child(strategy_row(page, pending, failure, note, settings))
         .child(when(
             move || preview_line(settings, catalog, ranks).is_some(),
             move || {
@@ -73,11 +74,11 @@ pub(crate) fn section(
         ))
         .child(when(
             move || wants_preferred_seed(&settings.get().unwrap_or(Value::Null)),
-            move || preferred_seed(page, pending, failure, settings, query, catalog),
+            move || preferred_seed(page, pending, failure, note, settings, query, catalog),
         ))
         .child(when(
             move || planting_strategy(&settings.get().unwrap_or(Value::Null)) == "bag_priority",
-            move || bag_panel(page, pending, failure, settings, bag, catalog),
+            move || bag_panel(page, pending, failure, note, settings, bag, catalog),
         ))
 }
 
@@ -85,6 +86,7 @@ fn strategy_row(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
 ) -> View {
     view().flex_row().flex_wrap().gap_2().child(each(
@@ -96,7 +98,7 @@ fn strategy_row(
                 .selected(move || planting_strategy(&settings.get().unwrap_or(Value::Null)) == id)
                 .disabled(move || pending.get().is_some())
                 .on_press(move || {
-                    save(page, pending, failure, settings, json!({ "plantingStrategy": id }))
+                    save(page, pending, failure, note, settings, json!({ "plantingStrategy": id }))
                 })
         },
     ))
@@ -106,6 +108,7 @@ fn preferred_seed(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
     query: Signal<String>,
     catalog: Resource<Vec<SeedLine>, String>,
@@ -138,7 +141,14 @@ fn preferred_seed(
                     .selected(move || preferred_id(&settings.get().unwrap_or(Value::Null)) == id)
                     .disabled(move || pending.get().is_some())
                     .on_press(move || {
-                        save(page, pending, failure, settings, json!({ "preferredSeedId": id }))
+                        save(
+                            page,
+                            pending,
+                            failure,
+                            note,
+                            settings,
+                            json!({ "preferredSeedId": id }),
+                        )
                     })
             },
         )))
@@ -148,6 +158,7 @@ fn bag_panel(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
     bag: Resource<Vec<SeedLine>, String>,
     catalog: Resource<Vec<SeedLine>, String>,
@@ -164,6 +175,7 @@ fn bag_panel(
                         page,
                         pending,
                         failure,
+                        note,
                         settings,
                         json!({ "bagSeedMultiLandReservationEnabled": next }),
                     )
@@ -180,7 +192,9 @@ fn bag_panel(
                         fallback_strategy(&settings.get().unwrap_or(Value::Null)) == id
                     })
                     .disabled(move || pending.get().is_some())
-                    .on_press(move || save_fallback(page, pending, failure, settings, bag, id))
+                    .on_press(move || {
+                        save_fallback(page, pending, failure, note, settings, bag, id)
+                    })
             },
         )))
         .child(text(move || text_key("settings.bagHint")).text_sm())
@@ -188,7 +202,7 @@ fn bag_panel(
         .child(
             button(move || text_key("settings.bagReset"), ButtonVariant::Secondary)
                 .disabled(move || pending.get().is_some() || bag.get().is_none())
-                .on_press(move || save_reset(page, pending, failure, settings, bag)),
+                .on_press(move || save_reset(page, pending, failure, note, settings, bag)),
         )
         .child(when(
             move || bag.loading() && bag.get().is_none(),
@@ -208,12 +222,12 @@ fn bag_panel(
             move || display_lines(bag, settings),
             |seed: &SeedLine| seed.id.to_string(),
             move |seed, index| {
-                seed_row(seed.get_untracked(), index, page, pending, failure, settings, bag)
+                seed_row(seed.get_untracked(), index, page, pending, failure, note, settings, bag)
             },
         ))
         .child(when(
             move || !orphan_lines(settings, bag, catalog).is_empty(),
-            move || orphan_panel(page, pending, failure, settings, bag, catalog),
+            move || orphan_panel(page, pending, failure, note, settings, bag, catalog),
         ))
 }
 
@@ -223,6 +237,7 @@ fn seed_row(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
     bag: Resource<Vec<SeedLine>, String>,
 ) -> View {
@@ -246,7 +261,7 @@ fn seed_row(
                     button(move || SharedString::from("↑"), ButtonVariant::Quiet)
                         .disabled(move || pending.get().is_some() || index.get() == 0)
                         .on_press(move || {
-                            nudge_saved(page, pending, failure, settings, bag, id, -1)
+                            nudge_saved(page, pending, failure, note, settings, bag, id, -1)
                         }),
                 )
                 .child(
@@ -256,7 +271,7 @@ fn seed_row(
                                 || bag.get().is_some_and(|rows| index.get() + 1 >= rows.len())
                         })
                         .on_press(move || {
-                            nudge_saved(page, pending, failure, settings, bag, id, 1)
+                            nudge_saved(page, pending, failure, note, settings, bag, id, 1)
                         }),
                 ),
         )
@@ -269,7 +284,7 @@ fn seed_row(
             })
             .text_sm(),
         )
-        .child(land_buttons(id, page, pending, failure, settings))
+        .child(land_buttons(id, page, pending, failure, note, settings))
 }
 
 fn land_buttons(
@@ -277,6 +292,7 @@ fn land_buttons(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
 ) -> View {
     view().flex_row().flex_wrap().gap_2().child(each(
@@ -296,6 +312,7 @@ fn land_buttons(
                         page,
                         pending,
                         failure,
+                        note,
                         settings,
                         toggle_land(
                             &land_map(&settings.get().unwrap_or(Value::Null)),
@@ -312,6 +329,7 @@ fn orphan_panel(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
     bag: Resource<Vec<SeedLine>, String>,
     catalog: Resource<Vec<SeedLine>, String>,
@@ -345,6 +363,7 @@ fn orphan_panel(
                                 page,
                                 pending,
                                 failure,
+                                note,
                                 settings,
                                 clear_land(&land_map(&settings.get().unwrap_or(Value::Null)), id),
                             )
@@ -358,6 +377,7 @@ fn save_fallback(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
     bag: Resource<Vec<SeedLine>, String>,
     strategy: &'static str,
@@ -370,13 +390,14 @@ fn save_fallback(
         }),
         None => json!({ "bagSeedFallbackStrategy": strategy }),
     };
-    save(page, pending, failure, settings, patch);
+    save(page, pending, failure, note, settings, patch);
 }
 
 fn save_reset(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
     bag: Resource<Vec<SeedLine>, String>,
 ) {
@@ -387,6 +408,7 @@ fn save_reset(
         page,
         pending,
         failure,
+        note,
         settings,
         json!({ "bagSeedPriority": reset_priority(&current, &seeds, &strategy) }),
     );
@@ -396,6 +418,7 @@ fn nudge_saved(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
     bag: Resource<Vec<SeedLine>, String>,
     seed_id: i64,
@@ -407,7 +430,7 @@ fn nudge_saved(
     else {
         return;
     };
-    save(page, pending, failure, settings, json!({ "bagSeedPriority": next }));
+    save(page, pending, failure, note, settings, json!({ "bagSeedPriority": next }));
 }
 
 fn reset_priority(settings: &Value, seeds: &[SeedLine], strategy: &str) -> Vec<i64> {
@@ -813,10 +836,11 @@ fn save_lands(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
     map: HashMap<i64, Vec<String>>,
 ) {
-    save(page, pending, failure, settings, land_patch(&map));
+    save(page, pending, failure, note, settings, land_patch(&map));
 }
 
 fn seed_lands(value: &Value, seed_id: i64) -> Vec<String> {

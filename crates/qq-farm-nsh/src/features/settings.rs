@@ -93,6 +93,7 @@ pub(crate) struct SettingsPage {
 pub(crate) fn page(page: SettingsPage) -> impl IntoElement {
     let pending = signal(None::<String>);
     let failure = signal(None::<String>);
+    let note = signal(None::<String>);
     let settings = resource(
         move || page.account_id.get().filter(|id| !id.is_empty()),
         |id, _| async move {
@@ -112,6 +113,10 @@ pub(crate) fn page(page: SettingsPage) -> impl IntoElement {
         .child(crate::ui::failure(move || {
             failure.get().map(SharedString::from).unwrap_or_default()
         }))
+        .child(when(
+            move || note.get().is_some(),
+            move || notice(move || note.get().map(SharedString::from).unwrap_or_default()),
+        ))
         .child(when(
             move || page.account_id.get().is_none(),
             move || notice(move || text_key("dashboard.empty")),
@@ -138,7 +143,7 @@ pub(crate) fn page(page: SettingsPage) -> impl IntoElement {
         ))
         .child(when(
             move || settings.get().is_some(),
-            move || settings_body(page, pending, failure, settings),
+            move || settings_body(page, pending, failure, note, settings),
         ))
         .child(super::system_runtime::section())
         .child(super::offline_reminder::section())
@@ -148,12 +153,13 @@ fn settings_body(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
 ) -> impl IntoElement {
     view()
         .gap_3()
-        .child(super::planting::section(page, pending, failure, settings))
-        .child(timing(page, pending, failure, settings))
+        .child(super::planting::section(page, pending, failure, note, settings))
+        .child(timing(page, pending, failure, note, settings))
         .child(
             text(move || text_key("settings.fertilizer"))
                 .text_sm()
@@ -174,31 +180,33 @@ fn settings_body(
                             page,
                             pending,
                             failure,
+                            note,
                             settings,
                             json!({ "automation": { "fertilizer": mode } }),
                         )
                     })
             },
         )))
-        .child(fertilizer_extra(page, pending, failure, settings))
+        .child(fertilizer_extra(page, pending, failure, note, settings))
         .child(each(
             || TOGGLES.to_vec(),
             |toggle: &(&str, &str)| toggle.0.to_owned(),
             move |toggle, _| {
                 let (key, label) = toggle.get_untracked();
-                toggle_row(key, label, page, pending, failure, settings)
+                toggle_row(key, label, page, pending, failure, note, settings)
             },
         ))
-        .child(accept_filters(page, pending, failure, settings))
-        .child(email_hour(page, pending, failure, settings))
-        .child(ranch_tuning(page, pending, failure, settings))
-        .child(toggle_quiet(page, pending, failure, settings))
+        .child(accept_filters(page, pending, failure, note, settings))
+        .child(email_hour(page, pending, failure, note, settings))
+        .child(ranch_tuning(page, pending, failure, note, settings))
+        .child(toggle_quiet(page, pending, failure, note, settings))
 }
 
 fn fertilizer_extra(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
 ) -> View {
     view()
@@ -216,6 +224,7 @@ fn fertilizer_extra(
                     page,
                     pending,
                     failure,
+                    note,
                     settings,
                 )
             },
@@ -237,6 +246,7 @@ fn fertilizer_extra(
                         page,
                         pending,
                         failure,
+                        note,
                         settings,
                     ))
                     .child(root_stepper(
@@ -248,6 +258,7 @@ fn fertilizer_extra(
                         page,
                         pending,
                         failure,
+                        note,
                         settings,
                     ))
             },
@@ -269,6 +280,7 @@ fn fertilizer_extra(
                         page,
                         pending,
                         failure,
+                        note,
                         settings,
                     ))
                     .child(root_stepper(
@@ -280,6 +292,7 @@ fn fertilizer_extra(
                         page,
                         pending,
                         failure,
+                        note,
                         settings,
                     ))
             },
@@ -300,18 +313,20 @@ fn fertilizer_extra(
                     page,
                     pending,
                     failure,
+                    note,
                     settings,
                 )
             },
         ))
         .child(text(move || text_key("settings.landScope")).text_sm())
-        .child(land_type_row(page, pending, failure, settings))
+        .child(land_type_row(page, pending, failure, note, settings))
 }
 
 fn land_type_row(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
 ) -> View {
     view().flex_row().flex_wrap().gap_2().child(each(
@@ -333,6 +348,7 @@ fn land_type_row(
                         page,
                         pending,
                         failure,
+                        note,
                         settings,
                         json!({ "automation": { "fertilizer_land_types": next } }),
                     )
@@ -347,6 +363,7 @@ fn toggle_row(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
 ) -> View {
     view()
@@ -378,7 +395,7 @@ fn toggle_row(
                     return;
                 }
                 let next = !automation_flag(&current, key);
-                save(page, pending, failure, settings, json!({ "automation": { key: next } }))
+                save(page, pending, failure, note, settings, json!({ "automation": { key: next } }))
             }),
         )
 }
@@ -387,6 +404,7 @@ fn timing(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
 ) -> View {
     view()
@@ -405,6 +423,7 @@ fn timing(
             page,
             pending,
             failure,
+            note,
             settings,
         ))
         .child(interval_stepper(
@@ -416,6 +435,7 @@ fn timing(
             page,
             pending,
             failure,
+            note,
             settings,
         ))
         .child(interval_stepper(
@@ -427,6 +447,7 @@ fn timing(
             page,
             pending,
             failure,
+            note,
             settings,
         ))
         .child(interval_stepper(
@@ -438,6 +459,7 @@ fn timing(
             page,
             pending,
             failure,
+            note,
             settings,
         ))
         .child(interval_stepper(
@@ -449,6 +471,7 @@ fn timing(
             page,
             pending,
             failure,
+            note,
             settings,
         ))
         .child(interval_stepper(
@@ -460,6 +483,7 @@ fn timing(
             page,
             pending,
             failure,
+            note,
             settings,
         ))
         .child(interval_stepper(
@@ -471,6 +495,7 @@ fn timing(
             page,
             pending,
             failure,
+            note,
             settings,
         ))
         .child(root_stepper(
@@ -482,6 +507,7 @@ fn timing(
             page,
             pending,
             failure,
+            note,
             settings,
         ))
         .child(root_stepper(
@@ -493,9 +519,10 @@ fn timing(
             page,
             pending,
             failure,
+            note,
             settings,
         ))
-        .child(order_row(page, pending, failure, settings))
+        .child(order_row(page, pending, failure, note, settings))
 }
 
 fn interval_stepper(
@@ -507,6 +534,7 @@ fn interval_stepper(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
 ) -> View {
     let current = move || {
@@ -522,7 +550,14 @@ fn interval_stepper(
                 .disabled(move || pending.get().is_some() || current() <= min)
                 .on_press(move || {
                     let next = (current() - 1).clamp(min, max);
-                    save(page, pending, failure, settings, json!({ "intervals": { key: next } }));
+                    save(
+                        page,
+                        pending,
+                        failure,
+                        note,
+                        settings,
+                        json!({ "intervals": { key: next } }),
+                    );
                 }),
         )
         .child(text(move || SharedString::from(current().to_string())).text_sm())
@@ -531,7 +566,14 @@ fn interval_stepper(
                 .disabled(move || pending.get().is_some() || current() >= max)
                 .on_press(move || {
                     let next = (current() + 1).clamp(min, max);
-                    save(page, pending, failure, settings, json!({ "intervals": { key: next } }));
+                    save(
+                        page,
+                        pending,
+                        failure,
+                        note,
+                        settings,
+                        json!({ "intervals": { key: next } }),
+                    );
                 }),
         )
 }
@@ -540,6 +582,7 @@ fn order_row(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
 ) -> View {
     view()
@@ -564,7 +607,7 @@ fn order_row(
             .disabled(move || pending.get().is_some())
             .on_press(move || {
                 let next = !order_random(&settings.get().unwrap_or(Value::Null));
-                save(page, pending, failure, settings, json!({ "plantOrderRandom": next }));
+                save(page, pending, failure, note, settings, json!({ "plantOrderRandom": next }));
             }),
         )
 }
@@ -573,6 +616,7 @@ fn accept_filters(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
 ) -> impl IntoElement {
     view().gap_2().child(when(
@@ -590,6 +634,7 @@ fn accept_filters(
                     page,
                     pending,
                     failure,
+                    note,
                     settings,
                 ))
                 .child(text(move || text_key("settings.acceptUnlimited")).text_sm())
@@ -600,6 +645,7 @@ fn accept_filters(
                     page,
                     pending,
                     failure,
+                    note,
                     settings,
                 ))
                 .child(root_switch(
@@ -609,6 +655,7 @@ fn accept_filters(
                     page,
                     pending,
                     failure,
+                    note,
                     settings,
                 ))
                 .child(when(
@@ -631,6 +678,7 @@ fn accept_filters(
                                 page,
                                 pending,
                                 failure,
+                                note,
                                 settings,
                             ))
                             .child(root_stepper(
@@ -642,6 +690,7 @@ fn accept_filters(
                                 page,
                                 pending,
                                 failure,
+                                note,
                                 settings,
                             ))
                     },
@@ -657,6 +706,7 @@ fn root_switch(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
 ) -> View {
     view()
@@ -678,7 +728,7 @@ fn root_switch(
             .disabled(move || pending.get().is_some())
             .on_press(move || {
                 let next = !root_flag(&settings.get().unwrap_or(Value::Null), key, default);
-                save(page, pending, failure, settings, json!({ key: next }));
+                save(page, pending, failure, note, settings, json!({ key: next }));
             }),
         )
 }
@@ -687,6 +737,7 @@ fn email_hour(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
 ) -> View {
     view()
@@ -705,6 +756,7 @@ fn email_hour(
             page,
             pending,
             failure,
+            note,
             settings,
         ))
 }
@@ -718,6 +770,7 @@ fn root_stepper(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
 ) -> View {
     let current = move || {
@@ -733,7 +786,7 @@ fn root_stepper(
                 .disabled(move || pending.get().is_some() || current() <= min)
                 .on_press(move || {
                     let next = (current() - 1).clamp(min, max);
-                    save(page, pending, failure, settings, json!({ key: next }));
+                    save(page, pending, failure, note, settings, json!({ key: next }));
                 }),
         )
         .child(text(move || SharedString::from(current().to_string())).text_sm())
@@ -742,7 +795,7 @@ fn root_stepper(
                 .disabled(move || pending.get().is_some() || current() >= max)
                 .on_press(move || {
                     let next = (current() + 1).clamp(min, max);
-                    save(page, pending, failure, settings, json!({ key: next }));
+                    save(page, pending, failure, note, settings, json!({ key: next }));
                 }),
         )
 }
@@ -751,6 +804,7 @@ fn ranch_tuning(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
 ) -> View {
     view()
@@ -770,6 +824,7 @@ fn ranch_tuning(
             page,
             pending,
             failure,
+            note,
             settings,
         ))
         .child(stepper(
@@ -782,10 +837,20 @@ fn ranch_tuning(
             page,
             pending,
             failure,
+            note,
             settings,
         ))
         .child(text(move || text_key("settings.ranchStrategy")).text_sm())
-        .child(choice_row(STRATEGIES, "ranch_strategy", "level", page, pending, failure, settings))
+        .child(choice_row(
+            STRATEGIES,
+            "ranch_strategy",
+            "level",
+            page,
+            pending,
+            failure,
+            note,
+            settings,
+        ))
         .child(when(
             move || strategy_of(&settings.get().unwrap_or(Value::Null)) == "bag_priority",
             move || {
@@ -799,17 +864,18 @@ fn ranch_tuning(
                         page,
                         pending,
                         failure,
+                        note,
                         settings,
                     ))
             },
         ))
         .child(when(
             move || wants_named_animal(&settings.get().unwrap_or(Value::Null)),
-            move || animal_picker(true, page, pending, failure, settings),
+            move || animal_picker(true, page, pending, failure, note, settings),
         ))
         .child(when(
             move || wants_named_animal(&settings.get().unwrap_or(Value::Null)),
-            move || animal_picker(false, page, pending, failure, settings),
+            move || animal_picker(false, page, pending, failure, note, settings),
         ))
 }
 
@@ -823,6 +889,7 @@ fn stepper(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
 ) -> View {
     view()
@@ -846,6 +913,7 @@ fn stepper(
                         page,
                         pending,
                         failure,
+                        note,
                         settings,
                         key,
                         stepped(current, -step, min, max),
@@ -876,6 +944,7 @@ fn stepper(
                         page,
                         pending,
                         failure,
+                        note,
                         settings,
                         key,
                         stepped(current, step, min, max),
@@ -891,6 +960,7 @@ fn choice_row(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
 ) -> View {
     view().flex_row().flex_wrap().gap_2().child(each(
@@ -904,7 +974,14 @@ fn choice_row(
                 })
                 .disabled(move || pending.get().is_some())
                 .on_press(move || {
-                    save(page, pending, failure, settings, json!({ "automation": { key: value } }))
+                    save(
+                        page,
+                        pending,
+                        failure,
+                        note,
+                        settings,
+                        json!({ "automation": { key: value } }),
+                    )
                 })
         },
     ))
@@ -915,6 +992,7 @@ fn animal_picker(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
 ) -> View {
     let key = if nest { "ranch_coop_animal" } else { "ranch_shed_animal" };
@@ -930,7 +1008,14 @@ fn animal_picker(
                     })
                     .disabled(move || pending.get().is_some())
                     .on_press(move || {
-                        save(page, pending, failure, settings, json!({ "automation": { key: 0 } }))
+                        save(
+                            page,
+                            pending,
+                            failure,
+                            note,
+                            settings,
+                            json!({ "automation": { key: 0 } }),
+                        )
                     }),
             ),
         )
@@ -947,7 +1032,14 @@ fn animal_picker(
                     })
                     .disabled(move || pending.get().is_some())
                     .on_press(move || {
-                        save(page, pending, failure, settings, json!({ "automation": { key: id } }))
+                        save(
+                            page,
+                            pending,
+                            failure,
+                            note,
+                            settings,
+                            json!({ "automation": { key: id } }),
+                        )
                     })
             },
         )))
@@ -957,17 +1049,19 @@ fn save_number(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
     key: &'static str,
     value: i64,
 ) {
-    save(page, pending, failure, settings, json!({ "automation": { key: value } }));
+    save(page, pending, failure, note, settings, json!({ "automation": { key: value } }));
 }
 
 fn toggle_quiet(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
 ) -> View {
     view()
@@ -986,11 +1080,32 @@ fn toggle_quiet(
                     page,
                     pending,
                     failure,
+                    note,
                     settings,
                 )),
         )
-        .child(quiet_clock("settings.quietStart", "start", 1, 0, page, pending, failure, settings))
-        .child(quiet_clock("settings.quietEnd", "end", 8, 30, page, pending, failure, settings))
+        .child(quiet_clock(
+            "settings.quietStart",
+            "start",
+            1,
+            0,
+            page,
+            pending,
+            failure,
+            note,
+            settings,
+        ))
+        .child(quiet_clock(
+            "settings.quietEnd",
+            "end",
+            8,
+            30,
+            page,
+            pending,
+            failure,
+            note,
+            settings,
+        ))
         .child(
             view()
                 .flex_row()
@@ -1005,6 +1120,7 @@ fn toggle_quiet(
                     page,
                     pending,
                     failure,
+                    note,
                     settings,
                 )),
         )
@@ -1016,6 +1132,7 @@ fn quiet_switch(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
 ) -> nsh_base::ButtonElement {
     let current_label = current.clone();
@@ -1028,7 +1145,7 @@ fn quiet_switch(
     .disabled(move || pending.get().is_some())
     .on_press(move || {
         let next = !current();
-        save(page, pending, failure, settings, json!({ "friendQuietHours": { key: next } }));
+        save(page, pending, failure, note, settings, json!({ "friendQuietHours": { key: next } }));
     })
 }
 
@@ -1040,6 +1157,7 @@ fn quiet_clock(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
 ) -> View {
     view()
@@ -1057,6 +1175,7 @@ fn quiet_clock(
             page,
             pending,
             failure,
+            note,
             settings,
         ))
         .child(text(move || SharedString::from(":")).text_sm())
@@ -1070,6 +1189,7 @@ fn quiet_clock(
             page,
             pending,
             failure,
+            note,
             settings,
         ))
 }
@@ -1084,6 +1204,7 @@ fn clock_step(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
 ) -> View {
     let current = move || {
@@ -1125,6 +1246,7 @@ fn clock_step(
                         page,
                         pending,
                         failure,
+                        note,
                         settings,
                         json!({ "friendQuietHours": { field: text } }),
                     );
@@ -1154,6 +1276,7 @@ fn clock_step(
                         page,
                         pending,
                         failure,
+                        note,
                         settings,
                         json!({ "friendQuietHours": { field: text } }),
                     );
@@ -1165,6 +1288,7 @@ pub(crate) fn save(
     page: SettingsPage,
     pending: Signal<Option<String>>,
     failure: Signal<Option<String>>,
+    note: Signal<Option<String>>,
     settings: Resource<Value, String>,
     patch: Value,
 ) {
@@ -1174,22 +1298,110 @@ pub(crate) fn save(
     let Some(id) = page.account_id.get_untracked() else {
         return;
     };
+    let check_fertilizer = fertilizer_patch(&patch);
     pending.set(Some(id.clone()));
     failure.set(None);
+    note.set(None);
     let context = session::session().context.clone();
+    let account_id = id.clone();
     spawn(async move {
-        let result = session::session()
+        let saved = session::session()
             .runtime
-            .spawn_blocking(move || qq_farm_app::settings::save_settings(&context, &id, patch))
+            .spawn_blocking(move || {
+                qq_farm_app::settings::save_settings(&context, &account_id, patch)
+            })
             .await
             .map_err(|error| error.to_string())
             .and_then(|saved| saved.map_err(|error| error.to_string()));
-        if let Err(message) = result {
-            failure.set(Some(message));
+        let saved = match saved {
+            Ok(saved) => saved,
+            Err(message) => {
+                failure.set(Some(message));
+                pending.set(None);
+                settings.refetch();
+                return;
+            }
+        };
+        if page.account_id.get_untracked().as_deref() != Some(id.as_str()) {
+            pending.set(None);
+            return;
+        }
+        if check_fertilizer && fertilizer_buy_enabled(&saved) && account_is_confirmed(&saved) {
+            let context = session::session().context.clone();
+            let account_id = id.clone();
+            let checked = session::call(async move {
+                qq_farm_app::farm::fertilizer_check_and_buy(&context, &account_id).await
+            })
+            .await;
+            if page.account_id.get_untracked().as_deref() == Some(id.as_str()) {
+                match fertilizer_feedback(&checked) {
+                    FertilizerFeedback::Failed(message) => failure.set(Some(message)),
+                    FertilizerFeedback::Bought(count) => {
+                        note.set(Some(format!("{} {count}", text_key("settings.fertilizerBought"))))
+                    }
+                    FertilizerFeedback::Quiet => {}
+                }
+            }
         }
         pending.set(None);
         settings.refetch();
     });
+}
+
+fn fertilizer_patch(patch: &Value) -> bool {
+    const COUNTS: [&str; 5] = [
+        "fertilizerBuyOrganicCount",
+        "fertilizerBuyOrganicThresholdHours",
+        "fertilizerBuyNormalCount",
+        "fertilizerBuyNormalThresholdHours",
+        "fertilizerBuyCheckIntervalMinutes",
+    ];
+    if COUNTS.iter().any(|key| patch.get(*key).is_some()) {
+        return true;
+    }
+    let automation = patch.get("automation");
+    automation.is_some_and(|value| {
+        value.get("fertilizer_buy_organic").is_some()
+            || value.get("fertilizer_buy_normal").is_some()
+    })
+}
+
+fn fertilizer_buy_enabled(saved: &Value) -> bool {
+    flag_at(saved, "/data/automation/fertilizer_buy_organic")
+        || flag_at(saved, "/data/automation/fertilizer_buy_normal")
+}
+
+fn account_is_confirmed(saved: &Value) -> bool {
+    saved.get("confirmed").and_then(Value::as_bool).unwrap_or(false)
+}
+
+fn flag_at(value: &Value, pointer: &str) -> bool {
+    value.pointer(pointer).and_then(Value::as_bool).unwrap_or(false)
+}
+
+enum FertilizerFeedback {
+    Quiet,
+    Bought(i64),
+    Failed(String),
+}
+
+fn fertilizer_feedback(result: &Result<Value, String>) -> FertilizerFeedback {
+    let value = match result {
+        Ok(value) => value,
+        Err(message) => return FertilizerFeedback::Failed(message.clone()),
+    };
+    if let Some(message) =
+        value.get("error").and_then(Value::as_str).filter(|text| !text.is_empty())
+    {
+        return FertilizerFeedback::Failed(message.to_owned());
+    }
+    let bought = value.get("organicBought").and_then(Value::as_i64).unwrap_or(0)
+        + value.get("normalBought").and_then(Value::as_i64).unwrap_or(0);
+    if bought > 0 {
+        FertilizerFeedback::Bought(bought)
+    } else {
+        FertilizerFeedback::Quiet
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -1416,5 +1628,46 @@ mod tests {
         assert_eq!(stepped(60, 1, 1, 60), 60);
         assert_eq!(stepped(1, -1, 1, 60), 1);
         assert_eq!(stepped(5, 1, 1, 60), 6);
+    }
+
+    #[test]
+    fn fertilizer_purchase_edits_check_only_when_a_buy_switch_stays_on() {
+        assert!(!super::fertilizer_patch(&json!({ "automation": { "farm": true } })));
+        assert!(super::fertilizer_patch(&json!({
+            "automation": { "fertilizer_buy_normal": false }
+        })));
+        assert!(super::fertilizer_patch(&json!({ "fertilizerBuyNormalCount": 4 })));
+        let saved = json!({
+            "confirmed": true,
+            "data": {
+                "automation": {
+                    "fertilizer_buy_normal": true,
+                    "fertilizer_buy_organic": false
+                }
+            }
+        });
+        assert!(super::fertilizer_buy_enabled(&saved));
+        assert!(super::account_is_confirmed(&saved));
+        assert!(!super::fertilizer_buy_enabled(&json!({ "data": { "automation": {} } })));
+        assert!(!super::account_is_confirmed(&json!({ "confirmed": false })));
+        assert!(matches!(
+            super::fertilizer_feedback(&Ok(json!({ "organicBought": 0, "normalBought": 0 }))),
+            super::FertilizerFeedback::Quiet
+        ));
+        assert!(matches!(
+            super::fertilizer_feedback(&Ok(json!({
+                "organicBought": 2,
+                "normalBought": 1
+            }))),
+            super::FertilizerFeedback::Bought(3)
+        ));
+        assert!(matches!(
+            super::fertilizer_feedback(&Ok(json!({ "error": "余额不足" }))),
+            super::FertilizerFeedback::Failed(_)
+        ));
+        assert!(matches!(
+            super::fertilizer_feedback(&Err("账号未运行".to_owned())),
+            super::FertilizerFeedback::Failed(_)
+        ));
     }
 }
