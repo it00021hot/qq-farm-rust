@@ -51,49 +51,63 @@ pub async fn claim_tasks_if_due(gateway: &Arc<Gateway>, account_id: &str) -> Res
             write_routine(account_id, &today, true, 0);
             Ok(())
         }
-        TaskAction::Claim => match super::ranch::claim_ready_tasks(gateway, account_id).await {
-            Ok(claimed) => {
-                write_routine(
-                    account_id,
-                    &today,
-                    false,
-                    now.saturating_add(check_delay_ms(automation.ranch_check_minutes)),
-                );
-                if claimed {
-                    tracing::info!(account_id, "牧场任务奖励已领取");
-                    crate::services::panel_log::log(
-                        account_id,
-                        "牧场",
-                        "牧场任务奖励已领取",
-                        crate::constants::PanelEvent::RanchTaskClaim,
-                        Some(serde_json::json!({ "module": "ranch" })),
-                    );
-                }
-                Ok(())
-            }
-            Err(error) => {
-                let unknown = matches!(error, Error::Protocol(_) | Error::Protobuf(_));
-                write_routine(
-                    account_id,
-                    &today,
-                    unknown,
-                    if unknown { 0 } else { now.saturating_add(TASK_RETRY_MS) },
-                );
-                if unknown {
-                    tracing::error!(account_id, error = %error, "牧场任务奖励领取结果未能确认");
-                } else {
-                    tracing::warn!(account_id, error = %error, "牧场任务奖励领取失败，稍后重试");
-                }
+        TaskAction::Claim => {
+            if let Err(error) =
+                super::ranch::report_client_progress_tasks(gateway, account_id).await
+            {
+                tracing::warn!(account_id, error = %error, "牧场成长任务进度上报失败");
                 crate::services::panel_log::log_warn(
                     account_id,
                     "牧场",
-                    format!("牧场任务奖励领取失败：{error}"),
+                    format!("牧场成长任务进度上报失败：{error}"),
                     crate::constants::PanelEvent::RanchTaskClaim,
                     Some(serde_json::json!({ "module": "ranch" })),
                 );
-                Err(error)
             }
-        },
+            match super::ranch::claim_ready_tasks(gateway, account_id).await {
+                Ok(claimed) => {
+                    write_routine(
+                        account_id,
+                        &today,
+                        false,
+                        now.saturating_add(check_delay_ms(automation.ranch_check_minutes)),
+                    );
+                    if claimed {
+                        tracing::info!(account_id, "牧场任务奖励已领取");
+                        crate::services::panel_log::log(
+                            account_id,
+                            "牧场",
+                            "牧场任务奖励已领取",
+                            crate::constants::PanelEvent::RanchTaskClaim,
+                            Some(serde_json::json!({ "module": "ranch" })),
+                        );
+                    }
+                    Ok(())
+                }
+                Err(error) => {
+                    let unknown = matches!(error, Error::Protocol(_) | Error::Protobuf(_));
+                    write_routine(
+                        account_id,
+                        &today,
+                        unknown,
+                        if unknown { 0 } else { now.saturating_add(TASK_RETRY_MS) },
+                    );
+                    if unknown {
+                        tracing::error!(account_id, error = %error, "牧场任务奖励领取结果未能确认");
+                    } else {
+                        tracing::warn!(account_id, error = %error, "牧场任务奖励领取失败，稍后重试");
+                    }
+                    crate::services::panel_log::log_warn(
+                        account_id,
+                        "牧场",
+                        format!("牧场任务奖励领取失败：{error}"),
+                        crate::constants::PanelEvent::RanchTaskClaim,
+                        Some(serde_json::json!({ "module": "ranch" })),
+                    );
+                    Err(error)
+                }
+            }
+        }
     }
 }
 
@@ -160,5 +174,79 @@ mod tests {
         assert_eq!(stored_routine(account, "2026-11-18"), (false, 0));
         write_routine(account, today, true, 0);
         assert_eq!(stored_routine(account, today), (true, 0));
+    }
+
+    #[tokio::test]
+    async fn claim_schedule_reports_the_friend_panel_task_before_claiming() {
+        use prost::Message;
+
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let seen = std::sync::Arc::clone(&calls);
+        let gateway = Arc::new(crate::network::gateway::Gateway::new(
+            crate::network::gateway::GatewayConfig {
+                server_url: "wss://gate.example.com/ws".into(),
+                platform: "qq".into(),
+                os: "Windows".into(),
+                client_version: "1.15.0.2_20261001".into(),
+                auth_code: "test".into(),
+                headers: std::collections::HashMap::new(),
+            },
+            Arc::new(crate::network::encryptor::NoopEncryptor),
+        ));
+        gateway.mark_online();
+        gateway.set_unlocked_scenes(vec![1, RANCH_SCENE]);
+        gateway.install_reply_script(move |_service, method, body| {
+            seen.lock().expect("calls").push(method.to_owned());
+            if method == "TaskInfo" {
+                let reply = crate::proto::generated::gamepb::taskpb::TaskInfoReply {
+                    task_info: Some(crate::proto::generated::gamepb::taskpb::TaskInfo {
+                        growth_tasks: vec![
+                            crate::proto::generated::gamepb::taskpb::Task {
+                                id: 300008,
+                                task_type: 4,
+                                progress: 0,
+                                total_progress: 1,
+                                is_unlocked: true,
+                                ..Default::default()
+                            },
+                            crate::proto::generated::gamepb::taskpb::Task {
+                                id: 300009,
+                                task_type: 4,
+                                progress: 0,
+                                total_progress: 1,
+                                is_unlocked: true,
+                                ..Default::default()
+                            },
+                        ],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                };
+                return Ok(reply.encode_to_vec());
+            }
+            if method == "ClientReportProgress" {
+                let request =
+                    crate::proto::generated::gamepb::taskpb::ClientReportProgressRequest::decode(
+                        body,
+                    )
+                    .expect("上报请求");
+                assert_eq!(request.task_id, 300008);
+                assert_eq!(request.progress, 1);
+                return Err(crate::network::error::NetworkError::Phase("上报失败".into()));
+            }
+            Err(crate::network::error::NetworkError::Phase(format!("未安排的请求 {method}")))
+        });
+        let account = "ranch-report-friend-panel";
+        let error = claim_tasks_if_due(&gateway, account).await.expect_err("领取阶段没有场景");
+        assert!(
+            error.to_string().contains("未安排的请求") || error.to_string().contains("上报失败")
+        );
+        let names = calls.lock().expect("calls").clone();
+        let report_at = names.iter().position(|name| name == "ClientReportProgress").expect("上报");
+        assert!(names[..report_at].iter().any(|name| name == "TaskInfo"));
+        let scene_at = names.iter().position(|name| name == "PlayerSceneLogin").expect("继续领取");
+        assert!(report_at < scene_at);
+        assert_eq!(names.iter().filter(|name| name.as_str() == "ClientReportProgress").count(), 1);
+        assert!(!names.iter().any(|name| name == "ClaimTaskReward"));
     }
 }

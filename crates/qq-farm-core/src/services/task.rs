@@ -51,7 +51,7 @@ use super::automation::{category, is_automation_on_for};
 use super::stats::record_operation_for;
 use super::warehouse::{get_bag_items, WarehouseService};
 
-const CLIENT_REPORT_COND_TYPE: i64 = 15;
+const CLIENT_REPORT_COND_TYPES: [i64; 2] = [15, 25];
 const TASK_SERVICE: &str = "gamepb.taskpb.TaskService";
 const ILLUSTRATED_SERVICE: &str = "gamepb.illustratedpb.IllustratedService";
 
@@ -748,7 +748,7 @@ fn client_reported_tasks(tasks: &[Task]) -> Vec<Task> {
         .iter()
         .filter(|task| {
             task.id > 0
-                && task.cond_type == CLIENT_REPORT_COND_TYPE
+                && CLIENT_REPORT_COND_TYPES.contains(&task.cond_type)
                 && task.is_unlocked
                 && !task.is_claimed
                 && task.total_progress > 0
@@ -958,7 +958,7 @@ mod tests {
     #[test]
     fn client_report_picks_unfinished_invite_tasks() {
         let mut invite = make_task(15, 1, 0, 1, false);
-        invite.cond_type = CLIENT_REPORT_COND_TYPE;
+        invite.cond_type = CLIENT_REPORT_COND_TYPES[0];
         let mut finished = invite.clone();
         finished.id = 16;
         finished.progress = 1;
@@ -971,9 +971,53 @@ mod tests {
         let mut locked = invite.clone();
         locked.id = 19;
         locked.is_unlocked = false;
-        let picked = client_reported_tasks(&[invite, finished, other, claimed, locked]);
+        let picked = client_reported_tasks(&[invite.clone(), finished, other, claimed, locked]);
         assert_eq!(picked.len(), 1);
         assert_eq!(picked[0].id, 15);
+        let mut status = invite.clone();
+        status.id = 880025;
+        status.cond_type = CLIENT_REPORT_COND_TYPES[1];
+        let mut unrelated = status.clone();
+        unrelated.id = 880026;
+        unrelated.cond_type = 26;
+        let mut finished_status = status.clone();
+        finished_status.id = 880027;
+        finished_status.progress = 1;
+        let picked = client_reported_tasks(&[status, unrelated, finished_status]);
+        assert_eq!(picked.iter().map(|task| task.id).collect::<Vec<_>>(), vec![880025]);
+    }
+
+    #[tokio::test]
+    async fn check_and_claim_reports_condition_25_and_does_not_claim_a_failed_report() {
+        let account = "task-report-cond-25";
+        let blocked = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let gateway = scripted_task_gateway(std::sync::Arc::clone(&blocked), true);
+        let service = TaskService::new(gateway);
+        service.set_account_id(account);
+        crate::infra::automation::set_automation_flag(account, "task", false);
+        service.check_and_claim_tasks().await;
+        assert!(blocked.lock().expect("calls").is_empty());
+
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let gateway = scripted_task_gateway(std::sync::Arc::clone(&calls), true);
+        let service = TaskService::new(gateway);
+        service.set_account_id(account);
+        crate::infra::automation::set_automation_flag(account, "task", true);
+        service.check_and_claim_tasks().await;
+        let names = calls.lock().expect("calls").clone();
+        let report_at = names.iter().position(|name| name == "ClientReportProgress").expect("上报");
+        let claim_at = names.iter().position(|name| name == "ClaimTaskReward").expect("领取");
+        assert!(report_at < claim_at);
+        assert_eq!(names.iter().filter(|name| name.as_str() == "ClientReportProgress").count(), 1);
+
+        let failed = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let gateway = scripted_task_gateway(std::sync::Arc::clone(&failed), false);
+        let service = TaskService::new(gateway);
+        service.set_account_id(account);
+        service.check_and_claim_tasks().await;
+        let names = failed.lock().expect("calls").clone();
+        assert!(names.iter().any(|name| name == "ClientReportProgress"));
+        assert!(!names.iter().any(|name| name == "ClaimTaskReward"));
     }
 
     #[test]
@@ -1066,6 +1110,89 @@ mod tests {
         assert_eq!(dto.rewards.len(), 1);
         assert_eq!(dto.rewards[0].id, 1);
         assert_eq!(dto.rewards[0].count, 100);
+    }
+
+    fn scripted_task_gateway(
+        calls: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        confirm: bool,
+    ) -> Arc<Gateway> {
+        let gateway = Arc::new(Gateway::new(
+            crate::network::gateway::GatewayConfig {
+                server_url: "wss://gate.example.com/ws".into(),
+                platform: "qq".into(),
+                os: "Windows".into(),
+                client_version: "1.15.0.2_20261001".into(),
+                auth_code: "test".into(),
+                headers: std::collections::HashMap::new(),
+            },
+            Arc::new(crate::network::encryptor::NoopEncryptor),
+        ));
+        gateway.mark_online();
+        gateway.install_reply_script(move |_service, method, body| {
+            calls.lock().expect("calls").push(method.to_owned());
+            if method == "TaskInfo" {
+                let reported =
+                    calls.lock().expect("calls").iter().any(|name| name == "ClientReportProgress");
+                let task = Task {
+                    id: 880025,
+                    task_type: 1,
+                    progress: if reported && confirm { 1 } else { 0 },
+                    total_progress: 1,
+                    is_unlocked: true,
+                    is_claimed: false,
+                    cond_type: 25,
+                    desc: "设置QQ状态".to_owned(),
+                    ..Task::default()
+                };
+                let reply = TaskInfoReply {
+                    task_info: Some(TaskInfo { growth_tasks: vec![task], ..TaskInfo::default() }),
+                    ..TaskInfoReply::default()
+                };
+                return Ok(reply.encode_to_vec());
+            }
+            if method == "ClientReportProgress" {
+                let request = ClientReportProgressRequest::decode(body).expect("上报请求");
+                assert_eq!(request.task_id, 880025);
+                assert_eq!(request.progress, 1);
+                let progress = if confirm { 1 } else { 0 };
+                let reply = ClientReportProgressReply {
+                    task_info: Some(TaskInfo {
+                        growth_tasks: vec![Task {
+                            id: 880025,
+                            task_type: 1,
+                            progress,
+                            total_progress: 1,
+                            is_unlocked: true,
+                            cond_type: 25,
+                            ..Task::default()
+                        }],
+                        ..TaskInfo::default()
+                    }),
+                };
+                return Ok(reply.encode_to_vec());
+            }
+            if method == "ClaimTaskReward" {
+                let reply = ClaimTaskRewardReply {
+                    task_info: Some(TaskInfo {
+                        growth_tasks: vec![Task {
+                            id: 880025,
+                            task_type: 1,
+                            progress: 1,
+                            total_progress: 1,
+                            is_unlocked: true,
+                            is_claimed: true,
+                            cond_type: 25,
+                            ..Task::default()
+                        }],
+                        ..TaskInfo::default()
+                    }),
+                    ..ClaimTaskRewardReply::default()
+                };
+                return Ok(reply.encode_to_vec());
+            }
+            Err(crate::network::error::NetworkError::Phase(format!("未安排的请求 {method}")))
+        });
+        gateway
     }
 
     #[test]

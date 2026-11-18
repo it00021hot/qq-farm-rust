@@ -43,7 +43,8 @@ use crate::proto::generated::gamepb::shoppb::{
 };
 use crate::proto::generated::gamepb::taskpb::{
     BatchClaimTaskRewardReply, BatchClaimTaskRewardRequest, ClaimTaskRewardReply,
-    ClaimTaskRewardRequest, Task, TaskInfo, TaskInfoReply, TaskInfoRequest,
+    ClaimTaskRewardRequest, ClientReportProgressReply, ClientReportProgressRequest, Task, TaskInfo,
+    TaskInfoReply, TaskInfoRequest,
 };
 
 #[path = "ranch_patrol.rs"]
@@ -71,6 +72,7 @@ const RANCH_SERVICE: &str = "gamepb.animalpb.RanchService";
 const FEED_MACHINE_SERVICE: &str = "gamepb.homesteadpb.FeedMachineService";
 const SHOP_SERVICE: &str = "gamepb.shoppb.ShopService";
 const TASK_SERVICE: &str = "gamepb.taskpb.TaskService";
+const CLIENT_PROGRESS_CONDITION: &str = "客户端上报进度";
 const SHARE_SERVICE: &str = "gamepb.sharepb.ShareService";
 const ILLUSTRATED_SERVICE: &str = "gamepb.illustratedpb.IllustratedService";
 const MALL_SERVICE: &str = "gamepb.mallpb.MallService";
@@ -726,6 +728,57 @@ pub async fn claim_task(gateway: &Arc<Gateway>, account_id: &str, task_id: i64) 
         .await
     })
     .await
+}
+
+/// 上报牧场里仍未完成、且配置条件是「客户端上报进度」的任务。
+/// 回包没有把进度补齐时停止后续上报，不把任务记成已完成。
+pub(crate) async fn report_client_progress_tasks(
+    gateway: &Gateway,
+    account_id: &str,
+) -> Result<()> {
+    let info = ranch_task_info(gateway).await?;
+    for task in info.growth_tasks.iter().chain(info.daily_tasks.iter()).chain(info.tasks.iter()) {
+        if !reports_client_progress(task) {
+            continue;
+        }
+        let total = task.total_progress;
+        let request = ClientReportProgressRequest { task_id: task.id, progress: total };
+        let bytes =
+            gateway.request(TASK_SERVICE, "ClientReportProgress", &request.encode_to_vec()).await?;
+        let reply = ClientReportProgressReply::decode(bytes.as_slice())?;
+        let confirmed = reply.task_info.as_ref().is_some_and(|updated| {
+            updated
+                .growth_tasks
+                .iter()
+                .chain(updated.daily_tasks.iter())
+                .chain(updated.tasks.iter())
+                .any(|row| row.id == task.id && row.progress >= total)
+        });
+        if !confirmed {
+            tracing::warn!(account_id, task_id = task.id, "牧场成长任务进度上报未生效");
+            return Ok(());
+        }
+        tracing::info!(account_id, task_id = task.id, "牧场成长任务进度已上报");
+    }
+    Ok(())
+}
+
+fn reports_client_progress(task: &Task) -> bool {
+    task.id > 0
+        && task.is_unlocked
+        && !task.is_claimed
+        && task.total_progress > 0
+        && task.progress < task.total_progress
+        && (task.task_type == RANCH_TASK_GROWTH || task.task_type == RANCH_TASK_DAILY)
+        && task_condition(task.id).as_deref() == Some(CLIENT_PROGRESS_CONDITION)
+}
+
+fn task_condition(id: i64) -> Option<String> {
+    task_config()
+        .iter()
+        .find(|row| row.get("id").and_then(Value::as_i64) == Some(id))
+        .and_then(|row| row.get("condition").and_then(Value::as_str))
+        .map(str::to_owned)
 }
 
 /// 领取当前全部可领的牧场任务。没有可领任务时返回 `false`。
@@ -2863,6 +2916,34 @@ mod tests {
     use super::*;
     use crate::proto::generated::gamepb::animalpb::{RanchDetail, ShelfDetail};
     use crate::proto::generated::gamepb::mallpb::MallShareInfo;
+
+    #[test]
+    fn client_progress_report_follows_the_config_condition() {
+        let open = Task {
+            id: 300008,
+            task_type: RANCH_TASK_GROWTH,
+            progress: 0,
+            total_progress: 1,
+            is_unlocked: true,
+            ..Task::default()
+        };
+        assert!(reports_client_progress(&open));
+        let locked = Task { is_unlocked: false, ..open.clone() };
+        assert!(!reports_client_progress(&locked));
+        let finished = Task { progress: 1, ..open.clone() };
+        assert!(!reports_client_progress(&finished));
+        let buy = Task {
+            id: 300009,
+            task_type: RANCH_TASK_GROWTH,
+            progress: 0,
+            total_progress: 1,
+            is_unlocked: true,
+            ..Task::default()
+        };
+        assert!(!reports_client_progress(&buy));
+        let unknown = Task { id: 880001, ..open };
+        assert!(!reports_client_progress(&unknown));
+    }
 
     #[test]
     fn purchase_record_names_the_goods() {

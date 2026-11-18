@@ -67,9 +67,9 @@
 | --- | --- | --- | --- | --- | --- |
 | TASK-01 | 邮箱、会员、月卡、分享、成长任务 | 代码已有。bot `email.ts`、`task.ts`、`qqvip.ts`、`monthcard.ts`、`share.ts`。NSH `gifts.rs` 的 `email`、`vip`、`month`、`share` 和 `claim_growth_task` | 仓库有礼物状态测试，本批未跑 | 未验 | 未验 |
 | TASK-02 | 邀请类成长任务先上报再领 | 代码已有。bot `task.ts` `reportClientProgress`（`ae71408`）。Rust `task.rs` `complete_client_reported_tasks` | 仓库有 `client_report_picks_unfinished_invite_tasks`，本批未跑 | 未验 | 未验 |
-| TASK-03 | 设置 QQ 状态和牧场打开好友面板后自动完成成长任务 | 未实现。`c500e08` 把客户端上报条件从只有 15 扩到 15 和 25。牧场每日任务另调用 `reportEntry`，入口是 `friends`。Rust 仍只上报条件 15，牧场巡查没有这条上报 | 无 | 未验 | 未验 |
+| TASK-03 | 设置 QQ 状态和牧场打开好友面板后自动完成成长任务 | 代码已有。`c500e08` 的 `task.ts` 在 `task` 开关打开时，对未完成、已解锁、未领取且 `cond_type` 为 15 或 25 的成长任务调用 `TaskService.ClientReportProgress`，进度补齐后才按原领取流程处理；上报失败或回包未达标不领取。不写死任务号。牧场 `claim_tasks_if_due` 在领取前，对场景 2 任务里配置条件为「客户端上报进度」的未完成项走同一 RPC；`MCTask.json` 里 90005、91003、300008 都是这条条件，其中 300008 的描述是打开好友面板。回包没补齐进度就停止后续上报，请求失败仍继续原领取，不把任务记成已完成 | `check_and_claim_reports_condition_25_and_does_not_claim_a_failed_report` 走 `TaskService::check_and_claim_tasks`。`claim_schedule_reports_the_friend_panel_task_before_claiming` 走 `claim_tasks_if_due`。开关关闭不发包。没有真实上报 | 未验 | 未验 |
 
-本组 3 项：代码已有 2，未实现 1。
+本组 3 项：代码已有 3。
 
 ## 天气
 
@@ -106,7 +106,7 @@
 
 ## 基线计数
 
-基线 35 项。代码已有 29，未实现 4（RANCH-03、RANCH-04、TASK-03、SCHED-03），桌面差异 1（AUTH-05），范围待核实 1（ACT-02）。窗口通过 0，真实接口通过 0。没有「验证通过」项。空账号总览曾打开过；导航和其他页面没有窗口证据。`54fda84` 上的 1203 项测试不是本基准的全量回归。
+基线 35 项。代码已有 30，未实现 3（RANCH-03、RANCH-04、SCHED-03），桌面差异 1（AUTH-05），范围待核实 1（ACT-02）。窗口通过 0，真实接口通过 0。没有「验证通过」项。空账号总览曾打开过；导航和其他页面没有窗口证据。`54fda84` 上的 1203 项测试不是本基准的全量回归。
 
 ## 非基线
 

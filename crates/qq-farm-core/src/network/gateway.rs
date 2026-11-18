@@ -295,6 +295,10 @@ struct Inner {
     current_scene: AtomicI32,
     /// 登录回包里的已解锁场景。旧登录协议没有该字段，按只解锁农场处理。
     unlocked_scenes: parking_lot::Mutex<Vec<i32>>,
+    /// 测试里替代真实连接的回包。正式构建没有这个字段。
+    #[cfg(test)]
+    reply_script:
+        parking_lot::Mutex<Option<Arc<dyn Fn(&str, &str, &[u8]) -> Result<Vec<u8>> + Send + Sync>>>,
 }
 
 impl Inner {
@@ -338,6 +342,8 @@ impl Gateway {
                 own_gid: AtomicI64::new(0),
                 current_scene: AtomicI32::new(1),
                 unlocked_scenes: parking_lot::Mutex::new(vec![1]),
+                #[cfg(test)]
+                reply_script: parking_lot::Mutex::new(None),
             }),
         }
     }
@@ -685,6 +691,10 @@ impl Gateway {
             let phase = *self.inner.phase.read();
             rpc_phase_ok(phase, require_online)?;
         }
+        #[cfg(test)]
+        if let Some(script) = self.inner.reply_script.lock().clone() {
+            return script(service, method, body);
+        }
         // 五班次调度（对齐 bot request-priority.ts）：心跳 / ACE 按方法名走
         // critical 的两条保留通道；面板 / 登录链路默认 foreground；定时任务由
         // scheduler 注入 farm / friend；补数据任务注入 background。业务高峰时
@@ -879,6 +889,22 @@ impl Gateway {
         Some(snapshot.lands.clone())
     }
 
+    pub(crate) fn set_unlocked_scenes(&self, scenes: Vec<i32>) {
+        *self.inner.unlocked_scenes.lock() = scenes;
+    }
+
+    /// 测试用内存回包。调用前要 `mark_online`，否则阶段检查会先拒绝。
+    #[cfg(test)]
+    pub fn install_reply_script<F>(&self, script: F)
+    where
+        F: Fn(&str, &str, &[u8]) -> std::result::Result<Vec<u8>, NetworkError>
+            + Send
+            + Sync
+            + 'static,
+    {
+        *self.inner.reply_script.lock() = Some(Arc::new(script));
+    }
+
     /// 标记登录完成（阶段 1A 外部调用；阶段 1B 由业务模块在收到登录响应后调用）
     pub fn mark_online(&self) {
         self.inner.online_at_ms.store(crate::utils::time::now_ms(), Ordering::Release);
@@ -947,12 +973,12 @@ impl Gateway {
         let reply = if player_scene_login {
             let decoded = PlayerLoginReply::decode(reply_bytes.as_slice())
                 .map_err(|e| NetworkError::Frame(format!("decode PlayerLoginReply: {e}")))?;
-            *self.inner.unlocked_scenes.lock() = decoded.unlocked_scene_ids;
+            self.set_unlocked_scenes(decoded.unlocked_scene_ids);
             LoginOutcome { basic: decoded.basic, time_now_millis: decoded.time_now_millis }
         } else {
             let decoded = LoginReply::decode(reply_bytes.as_slice())
                 .map_err(|e| NetworkError::Frame(format!("decode LoginReply: {e}")))?;
-            *self.inner.unlocked_scenes.lock() = vec![1];
+            self.set_unlocked_scenes(vec![1]);
             LoginOutcome { basic: decoded.basic, time_now_millis: decoded.time_now_millis }
         };
 

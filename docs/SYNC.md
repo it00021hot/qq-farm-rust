@@ -3921,3 +3921,12 @@ bot 本轮 13 个提交**玩法层零变化**（活动/商城/日常自动化均
 - Rust `IllustratedService::clear_new` 按同样的过滤发请求，回包里的 0 不返回。NSH 只取当前页新增且果实号为正的条目。没有新增时提示「没有未读图鉴」，不发请求。
 - 离线：`clear_new_keeps_only_positive_ids_and_reads_the_reply`、`clear_new_with_no_ids_does_not_ask_the_gateway`、`read_all_uses_only_positive_fresh_fruit_ids`。`nsh check crates/qq-farm-nsh` 通过。工具链文件仍是 1.98.1，检查用已安装的 1.99.1。
 - 待验：窗口上的「全部已读」，以及真实 `ClearNewUnlockedFruitsV2` 回包。没有启动 worker，没有真实账号。
+
+### 2026-11-18 — 成长任务自动上报
+
+本条只做 TASK-03。基准仍是 bot `c500e085c5e3be790d3b723965fecc6193dfb176`。不改 RANCH-03、RANCH-04、SCHED-03，不加密码门，不恢复旧活动。窗口和真实接口未验。
+
+- `task.ts` 的 `checkAndClaimTasks` 在 `task` 开关打开时，挑选 `cond_type` 为 15 或 25、已解锁、未领取、进度未满的成长任务，调用 `TaskService.ClientReportProgress`，进度参数是 `total_progress`。回包里的进度达到总量才算补齐，然后按原逻辑刷新并领取。失败只记警告，不领取这条。`f9dd757` 把 25 加进这组；静态配置里任务 100057 的描述是设置 QQ 状态，运行时不按这个编号挑选。
+- 牧场 `daily.ts` 在领取前调用 `reportEntry`，入口只接受 `friends`。`c500e08` 的 `actions.ts` 从场景 2 的任务里挑配置条件为「客户端上报进度」、已解锁且未完成的项，同样调用 `ClientReportProgress`。`MCTask.json` 里 90005、91003、300008 符合，300008 的描述是打开好友面板。回包没有把进度补齐就停止后面的上报。请求失败不阻止原有领取，也不把任务记成已完成。
+- Rust 分别接在 `TaskService::check_and_claim_tasks` 和 `ranch_task::claim_tasks_if_due`。离线内存网关覆盖开关关闭、条件 25 上报后领取、上报未达标不领取、牧场只上报 300008 而不上报 300009。
+- 待验：真实任务回包，以及窗口上的任务状态。没有改用户的 QQ 状态，没有连接真实网关。现有 debug 可执行文件仍是更早的构建，本批没有重新打包客户端。
