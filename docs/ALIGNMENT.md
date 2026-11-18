@@ -1,6 +1,6 @@
 # 功能对齐矩阵
 
-对照 qq-farm-bot `6765449723270e3e1b8b4e83d6f545f10fa92eba`（2026-11-17）。`docs/SYNC.md` 文首的 bot `28a9614` 只是 2026-10-25 的历史评分。
+对照 qq-farm-bot `c500e085c5e3be790d3b723965fecc6193dfb176`（2026-11-18 15:40 +0800，`git fetch` 后的 `origin/master`；本地 bot 工作区仍停在 `6765449723270e3e1b8b4e83d6f545f10fa92eba`，没有 checkout）。`docs/SYNC.md` 文首的 bot `28a9614` 只是 2026-10-25 的历史评分。
 
 四层证据分开记。代码对照是读过的源码符号。mock 只表示自动测试，窗口和真实接口在本文件里全部是未验。代码已有不等于验收通过。
 
@@ -14,9 +14,9 @@
 | AUTH-02 | 微信扫码登录 | 代码已有。bot `wx-login/service.ts`、`/api/wx-login/tasks`；`qq-farm-app::wx_login`；NSH `accounts.rs` 二维码 | 无 | 未验 | 未验 |
 | AUTH-03 | QQ NapCat 扫码 | 代码已有，可选。bot `qq-login/service.ts` 在 `qqQrLogin` 开启且地址和签名都有时，向 NapCat 发 `/api/qq/login/qrcode`、`/status`、`/miniapp/code`、`/logout`，头是 `X-API-Signature`。默认关闭，登录码和微信扫码不改道。NSH 账号页可保存这三项并走扫码状态；确认后的 code 交给现有 `upsert_account`，平台仍是 qq。取消或换代后的迟到结果不入库 | `services::napcat_login` 与 `stale_napcat_code_is_not_stored`：代次不一致时 `store_code` 不调用入库。Debug 不打印 code 和回包体。没有真实 NapCat | 未验 | 未验 |
 | AUTH-04 | 启停和删除账号 | 代码已有。bot `/api/accounts/:id/start`、`stop`；`accounts::start_account`、`stop_account`、`delete_account`；NSH 账号页 | 无 | 未验 | 未验 |
-| AUTH-05 | Web 面板密码登录 | 语义待确认。bot `auth-routes.ts` 的 `POST /api/login`。桌面 `auth::local_owner_session` 不设密码门。这不是已对齐，本批也不加密码门 | 无 | 未验 | 未验 |
+| AUTH-05 | Web 面板密码登录 | 桌面差异。产品决定桌面保留本机直接进入，不照搬 bot `auth-routes.ts` 的 `POST /api/login` 密码门。`auth::local_owner_session` 继续不设密码。这不是缺口 | 无 | 未验 | 未验 |
 
-本组 5 项：代码已有 4，语义待确认 1。
+本组 5 项：代码已有 4，桌面差异 1。
 
 ## 农场
 
@@ -39,7 +39,7 @@
 | FRIEND-04 | 好友黑名单 | 代码已有。bot `/api/friend-blacklist/toggle`。`friend::toggle_friend_blacklist`。NSH `next_blacklist` | 仓库有切换测试，本批未跑 | 未验 | 未验 |
 | FRIEND-05 | 已知好友 GID | 代码已有。bot `/api/friend-known-gids`。NSH `known_friends.rs` | 无 | 未验 | 未验 |
 
-本组 5 项：代码已有 5。
+本组 5 项：代码已有 5。大量好友时的巡查顺序记在 SCHED-03，不在本组重列。
 
 ## 牧场
 
@@ -47,8 +47,10 @@
 | --- | --- | --- | --- | --- | --- |
 | RANCH-01 | 牧场手动操作和巡查 | 代码已有。bot `services/ranch/*`、`/api/ranch/:action`。`qq-farm-app::ranch`。NSH `ranch.rs` | 无 | 未验 | 未验 |
 | RANCH-02 | 牧草低于阈值才补，自动出售留下 7001 | 代码已有。bot `ranch/automation.ts` 用 `ranch_grass_threshold_percent`；`warehouse.ts` `id === 7001` 跳过。Rust `ranch_patrol::grass_top_up`、`warehouse::included_in_auto_sell` | 仓库有对应测试，本批未跑 | 未验 | 未验 |
+| RANCH-03 | 便便优先兑换有机化肥 | 未实现。`c500e08` 的 `ranch/automation.ts` 在 `ranch_market_organic` 打开时，只用来源 7002 的便便，按商品 80012、80011 的顺序兑到付不起为止。便便增加或到点会再跑。Rust `ranch::exchange` 能按当前标价兑一件并拒绝余额不足，巡查没有这条自动兑换 | 无 | 未验 | 未验 |
+| RANCH-04 | 窝棚分组、幼崽补栏和一键喂养 | 未实现。`c500e08` 增加窝棚幼崽优先级、先放背包再购买，以及一键喂养。Rust 巡查仍按原有放养和分桶喂养，没有这组入口 | 无 | 未验 | 未验 |
 
-本组 2 项：代码已有 2。
+本组 4 项：代码已有 2，未实现 2。单次集市兑换拒绝余额不足已在 `ranch::exchange`。新提交里禁用购买按钮和收紧数量上限是界面，不单列、不重做。
 
 ## 背包与商店
 
@@ -65,8 +67,9 @@
 | --- | --- | --- | --- | --- | --- |
 | TASK-01 | 邮箱、会员、月卡、分享、成长任务 | 代码已有。bot `email.ts`、`task.ts`、`qqvip.ts`、`monthcard.ts`、`share.ts`。NSH `gifts.rs` 的 `email`、`vip`、`month`、`share` 和 `claim_growth_task` | 仓库有礼物状态测试，本批未跑 | 未验 | 未验 |
 | TASK-02 | 邀请类成长任务先上报再领 | 代码已有。bot `task.ts` `reportClientProgress`（`ae71408`）。Rust `task.rs` `complete_client_reported_tasks` | 仓库有 `client_report_picks_unfinished_invite_tasks`，本批未跑 | 未验 | 未验 |
+| TASK-03 | 设置 QQ 状态和牧场打开好友面板后自动完成成长任务 | 未实现。`c500e08` 把客户端上报条件从只有 15 扩到 15 和 25。牧场每日任务另调用 `reportEntry`，入口是 `friends`。Rust 仍只上报条件 15，牧场巡查没有这条上报 | 无 | 未验 | 未验 |
 
-本组 2 项：代码已有 2。
+本组 3 项：代码已有 2，未实现 1。
 
 ## 天气
 
@@ -82,7 +85,7 @@
 | ID | 行为 | 代码对照 | mock | 窗口 | 真实接口 |
 | --- | --- | --- | --- | --- | --- |
 | ACT-01 | 节令、快乐不独享、奶茶、牧歌、牧场活动目录 | 代码已有。bot `solar-calendar.ts`、`share-reward-activity.ts`、`milk-tea.ts`、`muge-activity.ts`。NSH `activities.rs` 的 `Shelf::Solar`、`Share`、`Tea`、`Muge`、`Ranch` | 无 | 未验 | 未验 |
-| ACT-02 | 千星、七夕、青梅、公益、萌宠日记、秋日 | 范围待核实。bot `activity-center/` 与 `StellarActivityPage.vue`、`QixiActivityPage.vue`、`QingMeiActivityPage.vue`、`CharityActivityPage.vue`、`PetDiaryPage.vue`、`AutumnActivityPage.vue` 仍在。SYNC 2026-10-16 写了删除，但没有可核对的原始指令；名单还和现况冲突：鹊桥/七夕被写进删除，天气雨落成诗也曾被写进删除，而 WEATHER-01 现在有实现。本聊天的目标是对齐 bot 全部功能，所以这项保留为上游差异，不恢复，也不从目标里删掉 | 无 | 未验 | 未验 |
+| ACT-02 | 千星、七夕、青梅、公益、萌宠日记、秋日 | 范围待核实，页面仍挂着。`c500e08` 的 `ActivityCenter.vue` 在目录打开 `wish`、`stellar`、`qixi`、`qingmei`、`charity`、`pet` 时分别挂秋日、千星、七夕、青梅、公益、萌宠日记。这次 13 个提交没有删除它们。旧 SYNC 的删除叙述仍没有可核对的原始指令，不能据此排除，本批也不恢复 | 无 | 未验 | 未验 |
 
 本组 2 项：代码已有 1，范围待核实 1。
 
@@ -91,17 +94,19 @@
 | ID | 行为 | 代码对照 | mock | 窗口 | 真实接口 |
 | --- | --- | --- | --- | --- | --- |
 | SCHED-01 | 心跳、掉线后不再用旧码重连，微信可走应用宝授权 | 代码已有。bot worker 重连。Rust `worker.rs` 心跳超时 `force_disconnect_with_reason("heartbeat_timeout")`，并区分应用宝授权重连和不再使用旧 Code | 无 | 未验 | 未验 |
+| SCHED-03 | 大量好友时先巡农场和好友，再跑牧场 | 未实现。`c500e08` 的 `worker.ts` 要等农场和好友各完成首轮，并且这两项都不在跑，牧场例程才开始。好友读取遇到网关让路或 `stage=pending` 会停下。Rust 巡查仍按自己的到期时间进入牧场 | 无 | 未验 | 未验 |
 | SCHED-02 | 网关心跳漏拍或在途请求卡住时，推迟农场和好友巡查 | 代码已有。bot `worker.ts` `nextBusinessTickDeferMs`：健康则清退避，否则首次 30 秒、之后翻倍、封顶 60 秒，农场和好友分开记。Rust `run_farm_tick` / `run_friend_tick` 经 `defer_unhealthy_tick` 调用 `step_business_tick`。第一次退避和恢复各写一条面板日志 | `patrol_ticks_wait_out_a_silent_gateway_and_resume_separately` 用离线 Gateway，把最近入站时间拨过心跳静默，再直接调用两次巡查。无回包时农场不进入正常 20–25 秒排期，好友不出现「巡查异常」；两种巡查各自先 30 秒、再封顶 60 秒，状态互不覆盖；恢复后农场回到正常间隔，好友发出巡查并记「巡查异常」，各自退避清零；首条退避和恢复日志不重复。摘掉 `defer_unhealthy_tick` 接线时农场退避停在 0，该测试失败。`business_backoff_first_30s_then_double_capped_60s` 仍只覆盖计算。农场 AllLands 帧没有单独计数，农场「未发请求」由函数在正常排期前返回推出。在途请求卡住满 5 秒的那条健康度条件没有单独拨时钟 | 未验 | 未验 |
 | LOG-01 | 运行日志和今日统计 | 代码已有。bot `/api/logs`、`stats.ts`。NSH `dashboard.rs` | 无 | 未验 | 未验 |
 | REMIND-01 | 下线提醒 | 代码已有。bot `push.ts`。NSH `offline_reminder.rs`、`qq_bot_bind` | 无 | 未验 | 未验 |
 | COLL-01 | 图鉴和藏品 | 代码已有。bot `/api/illustrated`、`/api/collections`。NSH `illustrated.rs`、`collections.rs` | 无 | 未验 | 未验 |
+| COLL-02 | 图鉴全部已读 | 未实现。`c500e08` 的 `clearIllustratedNew` 把正数 `fruitId` 发给 `ClearNewUnlockedFruitsV2`，面板按钮是「全部已读」。Rust 图鉴会显示 `isNew`，没有这条清除 | 无 | 未验 | 未验 |
 | CONF-01 | 游戏配置编辑 | 代码已有。bot `ConfigManage.vue`、`/api/config/seeds`。`qq-farm-app::config`。NSH `game_config.rs` | 无 | 未验 | 未验 |
 
-本组 6 项：代码已有 6。
+本组 8 项：代码已有 6，未实现 2。
 
 ## 基线计数
 
-基线 30 项。代码已有 28，语义待确认 1（AUTH-05），范围待核实 1（ACT-02）。窗口通过 0，真实接口通过 0。没有「验证通过」项。
+基线 35 项。代码已有 28，未实现 5（RANCH-03、RANCH-04、TASK-03、SCHED-03、COLL-02），桌面差异 1（AUTH-05），范围待核实 1（ACT-02）。窗口通过 0，真实接口通过 0。没有「验证通过」项。空账号总览曾打开过；导航和其他页面没有窗口证据。`54fda84` 上的 1203 项测试不是本基准的全量回归。
 
 ## 非基线
 
