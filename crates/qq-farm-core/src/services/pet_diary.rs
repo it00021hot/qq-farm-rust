@@ -649,15 +649,14 @@ impl PetDiaryService {
         &self,
         still_current: impl Fn() -> bool,
     ) -> Result<serde_json::Value> {
-        self.mutate(still_current, |_group, _bag| {
-            Ok((
-                PET_ID,
-                INTERACT_LOG,
-                with_field(PET_ID, INTERACT_LOG, |request| {
-                    request.pet_treasure_hunt_get_log = Some(PetTreasureHuntGetLogReq {});
-                }),
-            ))
-        })
+        self.inquire(
+            still_current,
+            PET_ID,
+            INTERACT_LOG,
+            with_field(PET_ID, INTERACT_LOG, |request| {
+                request.pet_treasure_hunt_get_log = Some(PetTreasureHuntGetLogReq {});
+            }),
+        )
         .await
     }
 
@@ -665,16 +664,15 @@ impl PetDiaryService {
         &self,
         still_current: impl Fn() -> bool,
     ) -> Result<serde_json::Value> {
-        self.mutate(still_current, |_group, _bag| {
-            Ok((
-                PET_ID,
-                PLUNDER_LOG,
-                with_field(PET_ID, PLUNDER_LOG, |request| {
-                    request.pet_treasure_hunt_get_plundered_log =
-                        Some(PetTreasureHuntGetPlunderedLogReq {});
-                }),
-            ))
-        })
+        self.inquire(
+            still_current,
+            PET_ID,
+            PLUNDER_LOG,
+            with_field(PET_ID, PLUNDER_LOG, |request| {
+                request.pet_treasure_hunt_get_plundered_log =
+                    Some(PetTreasureHuntGetPlunderedLogReq {});
+            }),
+        )
         .await
     }
 
@@ -686,16 +684,27 @@ impl PetDiaryService {
         if gid <= 0 {
             return Err(Error::Business("好友 GID 必须是正整数".into()));
         }
-        self.mutate(still_current, |_group, _bag| {
-            let mut request = empty_operate(PET_ID, FRIEND_INFO);
-            request.pet_treasure_hunt_get_friend_activity_info = Some(
-                crate::proto::generated::gamepb::activitypb::PetTreasureHuntGetFriendActivityInfoReq {
-                    friend_gid: gid,
-                },
-            );
-            Ok((PET_ID, FRIEND_INFO, request))
-        })
-        .await
+        let payload = self
+            .inquire(
+                still_current,
+                PET_ID,
+                FRIEND_INFO,
+                with_field(PET_ID, FRIEND_INFO, |request| {
+                    request.pet_treasure_hunt_get_friend_activity_info = Some(
+                        crate::proto::generated::gamepb::activitypb::PetTreasureHuntGetFriendActivityInfoReq {
+                            friend_gid: gid,
+                        },
+                    );
+                }),
+            )
+            .await?;
+        let expected = gid.to_string();
+        if payload.pointer("/friend/gid").and_then(serde_json::Value::as_str)
+            != Some(expected.as_str())
+        {
+            return Err(Error::Business("好友响应不匹配".into()));
+        }
+        Ok(payload)
     }
 
     pub async fn claim_solar_if(
@@ -770,6 +779,20 @@ impl PetDiaryService {
         }
         let bag = self.bag().await.ok();
         let (activity, operate, request) = prepare(&group, bag.as_ref())?;
+        if !still_current() {
+            return Err(Error::Business(SESSION_MOVED.into()));
+        }
+        self.finish(activity, operate, request, "操作成功").await
+    }
+
+    async fn inquire(
+        &self,
+        still_current: impl Fn() -> bool,
+        activity: i64,
+        operate: i64,
+        request: PetDiaryOperateRequest,
+    ) -> Result<serde_json::Value> {
+        let _guard = self.mutation_lock.lock().await;
         if !still_current() {
             return Err(Error::Business(SESSION_MOVED.into()));
         }
@@ -1037,6 +1060,8 @@ fn attach_operation(payload: &mut serde_json::Value, reply: &PetDiaryOperateRepl
                     "type": entry.r#type,
                     "costs": entry.costs.iter().map(reward_value).collect::<Vec<_>>(),
                     "rewards": entry.rewards.iter().map(reward_value).collect::<Vec<_>>(),
+                    "dogId": if entry.dog_id == 0 { serde_json::Value::Null } else { serde_json::json!(entry.dog_id.to_string()) },
+                    "skins": entry.dog_skin_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>(),
                 }))
                 .collect::<Vec<_>>());
         }
@@ -1053,6 +1078,9 @@ fn attach_operation(payload: &mut serde_json::Value, reply: &PetDiaryOperateRepl
                 "challengeName": item_name(entry.challenge_item_id),
                 "lost": entry.lost_items.iter().map(reward_value).collect::<Vec<_>>(),
                 "injected": entry.injected_items.iter().map(reward_value).collect::<Vec<_>>(),
+                "treasureId": entry.treasure_id,
+                "attackerCharms": entry.attacker_charm,
+                "defenderCharms": entry.defender_charm,
                 "level": entry.attacker_level,
                 "fake": entry.is_fake,
             })).collect::<Vec<_>>());
@@ -1248,9 +1276,9 @@ fn charm_rows(
     let ticket_ok = costs_ok(&[refresh_cost()], bag, 1);
     serde_json::json!({
         "pool": battle.charm_daily_pool.iter().map(|id| charm_line(*id, battle)).collect::<Vec<_>>(),
-        "equipped": battle.charm_equipped.iter().map(|id| charm_line(*id, battle)).collect::<Vec<_>>(),
         "poolIds": battle.charm_daily_pool,
-        "equipped": battle.charm_equipped,
+        "equipped": battle.charm_equipped.iter().map(|id| charm_line(*id, battle)).collect::<Vec<_>>(),
+        "equippedIds": battle.charm_equipped,
         "picked": battle.charm_pick_used,
         "canChoose": active && adult && !battle.charm_pick_used && !battle.charm_daily_pool.is_empty(),
         "freeRefreshRemaining": free_remaining,
@@ -1937,14 +1965,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn initialize_accepts_an_empty_message_and_rejects_a_missing_selector() {
+    async fn an_empty_selector_message_is_present_and_the_result_text_is_separate() {
         let _data = crate::config::paths::TestDataDir::enter();
         let (service, log, _stage, _paid) = operate_log();
         let adopted = service.initialize_if(|| true).await.unwrap();
         assert_eq!(adopted["message"], "操作成功");
+        assert_ne!(adopted["message"], "");
         let request = log.lock().expect("log")[0].clone();
         assert_eq!(hex::encode(request.encode_to_vec()), "08f5dc8ec607101bf20700");
         assert!(request.pet_treasure_hunt_finish_cg.is_some());
+    }
+
+    #[tokio::test]
+    async fn a_matching_reply_without_the_selector_field_is_rejected() {
+        let _data = crate::config::paths::TestDataDir::enter();
         let gate = gateway();
         gate.install_reply_script(move |_service, method, body| {
             if method == "Bag" {
@@ -2302,5 +2336,141 @@ mod tests {
         }
         assert!(bad.is_empty(), "坏向量:\n{}", bad.join("\n"));
         assert!(synthetic.is_empty(), "合成编码参考（不是实机抓包）:\n{}", synthetic.join("\n"));
+    }
+
+    #[tokio::test]
+    async fn equipped_charms_keep_their_own_name_description_and_remaining_uses() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let gate = gateway();
+        gate.install_reply_script(move |_service, method, body| {
+            if method == "Bag" {
+                return Ok(bag_bytes());
+            }
+            if method == "GetSolarTerms" {
+                return Ok(GetSolarTermsReply::default().encode_to_vec());
+            }
+            if method == "Operate" {
+                let request = PetDiaryOperateRequest::decode(body).unwrap();
+                return Ok(scripted_reply(&request).encode_to_vec());
+            }
+            let mut reply =
+                PetDiaryGetGroupReply::decode(group(BABY_STAGE, 0, 1).as_slice()).unwrap();
+            let battle = reply.group.as_mut().unwrap().children[0]
+                .pet_treasure_hunt
+                .as_mut()
+                .unwrap()
+                .battle
+                .as_mut()
+                .unwrap();
+            battle.charm_daily_pool = vec![104];
+            battle.charm_equipped = vec![101, 102];
+            battle.charm_effect_remaining_count = vec![
+                crate::proto::generated::gamepb::activitypb::PetTreasureHuntCharmEffectRemaining {
+                    charm_id: 101,
+                    remaining_count: 2,
+                    ..Default::default()
+                },
+                crate::proto::generated::gamepb::activitypb::PetTreasureHuntCharmEffectRemaining {
+                    charm_id: 102,
+                    remaining_count: 9,
+                    ..Default::default()
+                },
+            ];
+            Ok(reply.encode_to_vec())
+        });
+        let snapshot = PetDiaryService::new(gate).snapshot().await.unwrap();
+        let equipped = snapshot["charms"]["equipped"].as_array().unwrap();
+        let ids = snapshot["charms"]["equippedIds"].as_array().unwrap();
+        assert_eq!(equipped.len(), 2);
+        assert_eq!(ids, &vec![serde_json::json!(101), serde_json::json!(102)]);
+        assert_eq!(equipped[0]["name"], "惜糕探宝");
+        assert_eq!(equipped[0]["description"], "寻宝时元气糕消耗 -10%。");
+        assert_eq!(equipped[0]["remaining"][0], 2);
+        assert_eq!(equipped[1]["name"], "奖池上限");
+        assert!(equipped[1]["description"].as_str().unwrap().contains("不可被掠夺"));
+        assert_eq!(equipped[1]["remaining"][0], 9);
+        assert_ne!(equipped[0]["name"], snapshot["charms"]["pool"][0]["name"]);
+        assert!(equipped[0].get("name").is_some());
+        assert!(ids[0].as_i64().is_some());
+    }
+
+    #[tokio::test]
+    async fn closed_window_queries_send_once_and_writes_stay_unsent() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<i64>::new()));
+        let log = std::sync::Arc::clone(&seen);
+        let gate = gateway();
+        gate.install_reply_script(move |_service, method, body| {
+            if method == "Bag" {
+                return Ok(bag_bytes());
+            }
+            if method == "GetSolarTerms" {
+                return Ok(GetSolarTermsReply::default().encode_to_vec());
+            }
+            if method == "Operate" {
+                let request = PetDiaryOperateRequest::decode(body).unwrap();
+                log.lock().expect("log").push(request.operate_type);
+                return Ok(scripted_reply(&request).encode_to_vec());
+            }
+            Ok(group(BABY_STAGE, 0, 0))
+        });
+        let service = PetDiaryService::new(gate);
+        let interact = service.interact_log_if(|| true).await.unwrap();
+        assert_eq!(interact["logs"][0]["type"], 3);
+        let plunder = service.plunder_log_if(|| true).await.unwrap();
+        assert_eq!(plunder["plunderLogs"][0]["challengeId"], "80102");
+        let friend = service.friend_if(9, || true).await.unwrap();
+        assert_eq!(friend["friend"]["gid"], "9");
+        assert!(service.feed_if(|| true).await.is_err());
+        assert!(service.battle_if(9, "box", 80101, || true).await.is_err());
+        let kinds = seen.lock().expect("log").clone();
+        assert_eq!(kinds.iter().filter(|kind| **kind == INTERACT_LOG).count(), 1);
+        assert_eq!(kinds.iter().filter(|kind| **kind == PLUNDER_LOG).count(), 1);
+        assert_eq!(kinds.iter().filter(|kind| **kind == FRIEND_INFO).count(), 1);
+        assert_eq!(
+            kinds.iter().filter(|kind| **kind == FEED || **kind == BATTLE).count(),
+            0,
+            "{kinds:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_friend_reply_with_the_wrong_gid_is_rejected_and_an_unknown_bag_sends_no_battle() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let gate = gateway();
+        gate.install_reply_script(move |_service, method, body| {
+            if method == "Bag" {
+                return Ok(bag_bytes());
+            }
+            if method == "Operate" {
+                let request = PetDiaryOperateRequest::decode(body).unwrap();
+                let mut reply = scripted_reply(&request);
+                if request.operate_type == FRIEND_INFO {
+                    reply.pet_treasure_hunt_get_friend_activity_info.as_mut().unwrap().gid = 8;
+                }
+                return Ok(reply.encode_to_vec());
+            }
+            Ok(group(BABY_STAGE, 0, 1))
+        });
+        let error = PetDiaryService::new(gate).friend_if(9, || true).await.unwrap_err();
+        assert!(error.to_string().contains("好友响应不匹配"), "{error}");
+        let writes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = std::sync::Arc::clone(&writes);
+        let gate = gateway();
+        gate.install_reply_script(move |_service, method, body| {
+            if method == "Bag" {
+                return Err(crate::network::error::NetworkError::Phase("bag".into()));
+            }
+            if method == "Operate" {
+                let request = PetDiaryOperateRequest::decode(body).unwrap_or_default();
+                if request.operate_type == BATTLE {
+                    count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+                return Ok(scripted_reply(&request).encode_to_vec());
+            }
+            Ok(group(BABY_STAGE, 0, 1))
+        });
+        assert!(PetDiaryService::new(gate).battle_if(9, "box", 80101, || true).await.is_err());
+        assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 }

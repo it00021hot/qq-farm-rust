@@ -44,7 +44,7 @@ pub(crate) struct PetSession {
     pub friend_gid: Option<i64>,
     pub selected_treasure: String,
     pub selected_challenge: i64,
-    pub friend_treasures: Vec<String>,
+    pub friend_treasures: Vec<PetFriendTreasure>,
     pub logs: Vec<String>,
 }
 
@@ -70,6 +70,8 @@ pub(crate) struct PetBoard {
     stories: Vec<(i64, String, bool)>,
     charms: String,
     charm_lines: Vec<String>,
+    equipped_lines: Vec<String>,
+    can_plunder: bool,
     plants: Vec<String>,
     can_refresh_free: bool,
     can_refresh_paid: bool,
@@ -87,6 +89,40 @@ pub(crate) struct PetCommand {
     pub account_id: String,
     pub generation: u64,
     pub intent: PetIntent,
+}
+
+fn charm_text(value: Option<&Value>, label: &str) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .map(|row| {
+                    let remaining = row
+                        .get("remaining")
+                        .and_then(Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(|item| item.as_i64())
+                                .map(|count| count.to_string())
+                                .collect::<Vec<_>>()
+                                .join(" / ")
+                        })
+                        .filter(|text| !text.is_empty())
+                        .unwrap_or_else(|| "无".into());
+                    format!(
+                        "{label} {} {} 剩余 {remaining}",
+                        row.get("name").and_then(Value::as_str).unwrap_or("锦囊"),
+                        row.get("description")
+                            .and_then(Value::as_str)
+                            .filter(|text| !text.is_empty())
+                            .or_else(|| row.get("shortDescription").and_then(Value::as_str))
+                            .unwrap_or("")
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn text_lines(value: Option<&Value>) -> Vec<String> {
@@ -266,22 +302,9 @@ fn board_from(value: &Value) -> Option<PetBoard> {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_owned(),
-        charm_lines: value
-            .pointer("/charms/pool")
-            .and_then(Value::as_array)
-            .map(|rows| {
-                rows.iter()
-                    .map(|row| {
-                        format!(
-                            "{} {} 剩余 {:?}",
-                            row.get("name").and_then(Value::as_str).unwrap_or("锦囊"),
-                            row.get("shortDescription").and_then(Value::as_str).unwrap_or(""),
-                            row.get("remaining")
-                        )
-                    })
-                    .collect()
-            })
-            .unwrap_or_default(),
+        charm_lines: charm_text(value.pointer("/charms/pool"), "候选"),
+        equipped_lines: charm_text(value.pointer("/charms/equipped"), "已装备"),
+        can_plunder: value.pointer("/hunt/canPlunder").and_then(Value::as_bool) == Some(true),
         plants: value
             .get("plants")
             .and_then(Value::as_array)
@@ -399,7 +422,15 @@ pub(crate) fn press(
     if !running || session.account_id.trim().is_empty() || session.busy {
         return None;
     }
-    if session.needs_refresh && intent != PetIntent::Reload {
+    if session.needs_refresh
+        && !matches!(
+            intent,
+            PetIntent::Reload
+                | PetIntent::InteractLog
+                | PetIntent::PlunderLog
+                | PetIntent::Friend(_)
+        )
+    {
         return None;
     }
     let board = session.board.as_ref();
@@ -429,12 +460,24 @@ pub(crate) fn press(
         PetIntent::Solar(id) => {
             board.is_some_and(|board| board.solar.iter().any(|term| term.0 == *id && term.2))
         }
-        PetIntent::Friend(gid) => *gid > 0,
+        PetIntent::Friend(gid) => *gid > 0 && board.is_some_and(|board| board.can_plunder),
         PetIntent::InteractLog | PetIntent::PlunderLog => board.is_some(),
         PetIntent::Battle { gid, treasure_id, challenge_id } => {
+            let preview_allows = session
+                .friend_treasures
+                .iter()
+                .find(|treasure| &treasure.id == treasure_id)
+                .is_none_or(|treasure| {
+                    treasure.previews.is_empty()
+                        || treasure
+                            .previews
+                            .iter()
+                            .any(|preview| preview.id == *challenge_id && preview.can_start)
+                });
             *gid > 0
                 && !treasure_id.is_empty()
                 && [80101, 80102, 80103].contains(challenge_id)
+                && preview_allows
                 && board.is_some_and(|board| board.bag_known)
         }
     };
@@ -543,22 +586,30 @@ pub(crate) fn apply(
             if let Some(rows) = value.get("plunderLogs").and_then(Value::as_array) {
                 session.logs = rows.iter().map(plunder_line).collect();
             }
-            if let Some(friend) = value.get("friend") {
-                session.friend_gid =
-                    friend.get("gid").and_then(Value::as_str).and_then(|gid| gid.parse().ok());
-                session.friend_treasures = friend
-                    .get("treasures")
-                    .and_then(Value::as_array)
-                    .map(|rows| {
-                        rows.iter()
-                            .map(|row| {
-                                row.get("id").and_then(Value::as_str).unwrap_or("").to_owned()
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
+            if let PetIntent::Friend(expected) = command.intent {
+                let gid = value
+                    .pointer("/friend/gid")
+                    .and_then(Value::as_str)
+                    .and_then(|gid| gid.parse::<i64>().ok());
+                if gid != Some(expected) {
+                    session.failure = Some("好友响应不匹配".into());
+                    session.friend_treasures.clear();
+                    session.selected_treasure.clear();
+                    session.selected_challenge = 0;
+                } else {
+                    session.friend_gid = gid;
+                    session.friend_treasures = value
+                        .pointer("/friend/treasures")
+                        .and_then(Value::as_array)
+                        .map(|rows| rows.iter().map(friend_treasure).collect())
+                        .unwrap_or_default();
+                    session.selected_treasure.clear();
+                    session.selected_challenge = 0;
+                    session.failure = None;
+                }
+            } else {
+                session.failure = None;
             }
-            session.failure = None;
         }
         Err(message) => {
             if command.intent != PetIntent::Reload {
@@ -624,6 +675,21 @@ pub(crate) fn watch(account: impl Fn() -> Option<String> + 'static, session: Sig
             launch(session, command);
         }
     });
+}
+
+#[derive(Clone, PartialEq, Eq, Default)]
+pub(crate) struct PetChallengePreview {
+    pub id: i64,
+    pub name: String,
+    pub can_start: bool,
+    pub reason_key: &'static str,
+}
+
+#[derive(Clone, PartialEq, Eq, Default)]
+pub(crate) struct PetFriendTreasure {
+    pub id: String,
+    pub detail: String,
+    pub previews: Vec<PetChallengePreview>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -916,6 +982,13 @@ pub(crate) fn panel(
             move |line, _| text(line.get_untracked().clone()).text_sm(),
         ))
         .child(each(
+            move || {
+                session.get().board.map(|board| board.equipped_lines.clone()).unwrap_or_default()
+            },
+            |line: &String| line.clone(),
+            move |line, _| text(line.get_untracked().clone()).text_sm(),
+        ))
+        .child(each(
             move || session.get().board.map(|board| board.charm_lines).unwrap_or_default(),
             |line: &String| line.clone(),
             move |line, _| text(line.get_untracked().clone()).text_sm(),
@@ -962,36 +1035,54 @@ pub(crate) fn panel(
                                 ButtonVariant::Quiet,
                             )
                             .selected(move || session.get().friend_gid == Some(gid))
-                            .on_press(move || fire(session, page, PetIntent::Friend(gid)))
+                            .on_press(move || begin_friend(session, page, gid))
                         },
                     ))
                     .child(each(
                         move || session.get().friend_treasures,
-                        |id: &String| id.clone(),
-                        move |id, _| {
-                            let treasure = id.get_untracked();
-                            let label = treasure.clone();
-                            let picked = treasure;
-                            button(move || SharedString::from(label.clone()), ButtonVariant::Quiet)
-                                .on_press(move || pick_treasure(session, picked.clone()))
+                        |treasure: &PetFriendTreasure| treasure.id.clone(),
+                        move |treasure, _| {
+                            let treasure = treasure.get_untracked();
+                            let detail = treasure.detail.clone();
+                            let id_label = treasure.id.clone();
+                            let id_selected = treasure.id.clone();
+                            let id_press = treasure.id;
+                            view().gap_1().child(text(detail)).child(
+                                button(
+                                    move || SharedString::from(id_label.clone()),
+                                    ButtonVariant::Quiet,
+                                )
+                                .selected(move || session.get().selected_treasure == id_selected)
+                                .on_press(move || pick_treasure(session, id_press.clone())),
+                            )
                         },
                     ))
                     .child(each(
-                        move || [80101_i64, 80102, 80103],
-                        |id: &i64| *id,
-                        move |id, _| {
-                            let id = id.get_untracked();
+                        move || selected_previews(&session.get()),
+                        |preview: &PetChallengePreview| preview.id,
+                        move |preview, _| {
+                            let preview = preview.get_untracked();
+                            let id = preview.id;
+                            let name = preview.name.clone();
+                            let reason_key = preview.reason_key;
+                            let can_start = preview.can_start;
                             button(
                                 move || {
                                     SharedString::from(format!(
-                                        "{} {id}",
-                                        text_key("activities.petChallenge")
+                                        "{} {}",
+                                        name.clone(),
+                                        text_key(reason_key)
                                     ))
                                 },
                                 ButtonVariant::Quiet,
                             )
-                            .selected(move || session.get().selected_challenge == id)
-                            .on_press(move || pick_challenge(session, id))
+                            .disabled(move || !can_start)
+                            .selected(move || can_start && session.get().selected_challenge == id)
+                            .on_press(move || {
+                                if can_start {
+                                    pick_challenge(session, id);
+                                }
+                            })
                         },
                     ))
                     .child(
@@ -1059,10 +1150,82 @@ fn prepare_exchange(session: Signal<PetSession>, goods_id: i64) {
     session.set(owned);
 }
 
+fn begin_friend(session: Signal<PetSession>, page: ActivityPage, gid: i64) {
+    let mut owned = session.get_untracked();
+    owned.friend_gid = Some(gid);
+    owned.friend_treasures.clear();
+    owned.selected_treasure.clear();
+    owned.selected_challenge = 0;
+    session.set(owned);
+    fire(session, page, PetIntent::Friend(gid));
+}
+
 fn pick_treasure(session: Signal<PetSession>, id: String) {
     let mut owned = session.get_untracked();
+    if owned.selected_treasure != id {
+        owned.selected_challenge = 0;
+    }
     owned.selected_treasure = id;
     session.set(owned);
+}
+
+fn selected_previews(session: &PetSession) -> Vec<PetChallengePreview> {
+    session
+        .friend_treasures
+        .iter()
+        .find(|treasure| treasure.id == session.selected_treasure)
+        .map(|treasure| treasure.previews.clone())
+        .unwrap_or_default()
+}
+
+fn friend_treasure(row: &Value) -> PetFriendTreasure {
+    let status_code = row.get("statusCode").and_then(Value::as_i64).unwrap_or(0);
+    let previews = row
+        .get("previews")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .map(|preview| {
+                    let can_start = status_code == 2
+                        && preview.get("canStart").and_then(Value::as_bool) == Some(true);
+                    PetChallengePreview {
+                        id: preview
+                            .get("challengeId")
+                            .and_then(Value::as_str)
+                            .and_then(|id| id.parse().ok())
+                            .unwrap_or(0),
+                        name: preview
+                            .get("challengeName")
+                            .and_then(Value::as_str)
+                            .unwrap_or("挑战书")
+                            .to_owned(),
+                        can_start,
+                        reason_key: if status_code != 2 {
+                            "activities.petPreviewStatus"
+                        } else if can_start {
+                            "activities.petPreviewReady"
+                        } else {
+                            "activities.petPreviewClosed"
+                        },
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    PetFriendTreasure {
+        id: row.get("id").and_then(Value::as_str).unwrap_or("").to_owned(),
+        detail: format!(
+            "{} {} ×{} {}–{} 被夺 {}/{}",
+            row.get("id").and_then(Value::as_str).unwrap_or(""),
+            row.pointer("/item/name").and_then(Value::as_str).unwrap_or(""),
+            row.get("count").and_then(Value::as_i64).unwrap_or(0),
+            row.get("startTimeText").and_then(Value::as_str).unwrap_or(""),
+            row.get("endTimeText").and_then(Value::as_str).unwrap_or(""),
+            row.get("plunderCount").and_then(Value::as_i64).unwrap_or(0),
+            row.get("maxPlunderCount").and_then(Value::as_i64).unwrap_or(0)
+        ),
+        previews,
+    }
 }
 
 fn pick_challenge(session: Signal<PetSession>, id: i64) {
@@ -1073,33 +1236,77 @@ fn pick_challenge(session: Signal<PetSession>, id: i64) {
 
 fn cancel_exchange(session: Signal<PetSession>) {
     let mut owned = session.get_untracked();
-    owned.confirming_goods = None;
+    clear_pending_exchange(&mut owned);
     session.set(owned);
 }
 
+fn clear_pending_exchange(session: &mut PetSession) {
+    session.confirming_goods = None;
+}
+
+fn item_phrase(row: &Value) -> String {
+    let id = row.get("id").and_then(Value::as_str).unwrap_or("");
+    let count = row.get("count").and_then(Value::as_i64).unwrap_or(0);
+    let name = row.get("name").and_then(Value::as_str).filter(|name| {
+        !name.is_empty() && !name.starts_with("物品 #") && !name.starts_with("锦囊 ")
+    });
+    match name {
+        Some(name) => format!("{name} {id} ×{count}"),
+        None => format!("{id} ×{count}"),
+    }
+}
+
+fn item_list(value: Option<&Value>, empty: &str) -> String {
+    let Some(rows) = value.and_then(Value::as_array).filter(|rows| !rows.is_empty()) else {
+        return empty.to_owned();
+    };
+    rows.iter().map(item_phrase).collect::<Vec<_>>().join("、")
+}
+
+fn id_list(value: Option<&Value>) -> String {
+    let Some(rows) = value.and_then(Value::as_array).filter(|rows| !rows.is_empty()) else {
+        return "无".to_owned();
+    };
+    rows.iter()
+        .filter_map(|item| {
+            item.as_i64().map(|id| id.to_string()).or_else(|| item.as_str().map(str::to_owned))
+        })
+        .collect::<Vec<_>>()
+        .join("、")
+}
+
 fn interact_line(row: &Value) -> String {
+    let dog = row.get("dogId").and_then(Value::as_str).filter(|id| !id.is_empty()).unwrap_or("无");
     format!(
-        "{} 类型 {} 消耗 {} 奖励 {}",
-        row.get("timeText").and_then(Value::as_str).unwrap_or(""),
+        "{} 类型 {} 消耗：{} 获得：{} 狗 {dog} 皮肤 {}",
+        row.get("timeText").and_then(Value::as_str).unwrap_or("时间未知"),
         row.get("type").and_then(Value::as_i64).unwrap_or(0),
-        row.get("costs").and_then(Value::as_array).map(|rows| rows.len()).unwrap_or(0),
-        row.get("rewards").and_then(Value::as_array).map(|rows| rows.len()).unwrap_or(0)
+        item_list(row.get("costs"), "无"),
+        item_list(row.get("rewards"), "无道具奖励"),
+        id_list(row.get("skins"))
     )
 }
 
 fn plunder_line(row: &Value) -> String {
+    let treasure =
+        row.get("treasureId").and_then(Value::as_str).filter(|id| !id.is_empty()).unwrap_or("无");
     format!(
-        "{} {} {} 挑战书 {} 损失 {} 注入 {}",
-        row.get("timeText").and_then(Value::as_str).unwrap_or(""),
+        "{} {} {} 挑战书 {} 宝藏 {treasure} 损失 {} 注入 {} 进攻锦囊 {} 防守锦囊 {}",
+        row.get("timeText").and_then(Value::as_str).unwrap_or("时间未知"),
         row.get("name").and_then(Value::as_str).unwrap_or(""),
         if row.get("won").and_then(Value::as_bool) == Some(true) {
             "对方获胜"
         } else {
             "对方未获胜"
         },
-        row.get("challengeName").and_then(Value::as_str).unwrap_or(""),
-        row.get("lost").and_then(Value::as_array).map(|rows| rows.len()).unwrap_or(0),
-        row.get("injected").and_then(Value::as_array).map(|rows| rows.len()).unwrap_or(0)
+        row.get("challengeName")
+            .and_then(Value::as_str)
+            .filter(|name| !name.is_empty())
+            .unwrap_or("挑战书"),
+        item_list(row.get("lost"), "无"),
+        item_list(row.get("injected"), "无"),
+        id_list(row.get("attackerCharms")),
+        id_list(row.get("defenderCharms"))
     )
 }
 
@@ -1152,7 +1359,7 @@ mod tests {
             "rules": ["投喂"],
             "balances": [{ "name": "元气糕", "count": "800", "known": true }],
             "nurture": { "growth": 10, "adultGrowth": 7000, "feedCount": 0, "feedLimit": 16, "canFeed": true, "initialized": false, "adult": false, "dogGranted": false },
-            "hunt": { "canDraw": false },
+            "hunt": { "canDraw": false, "canPlunder": true },
             "seeds": { "canClaim": true },
             "stories": [{ "order": 2, "unlocked": true, "claimed": false }],
             "charms": { "refreshNote": "每日免费 1 次", "canRefreshFree": false, "pool": [] },
@@ -1248,7 +1455,9 @@ mod tests {
             }))
         ));
         assert_eq!(session.friend_gid, Some(9));
-        assert_eq!(session.friend_treasures, vec!["box".to_string()]);
+        assert_eq!(session.friend_treasures[0].id, "box");
+        assert!(session.friend_treasures[0].detail.contains("被夺"));
+        assert!(session.selected_challenge == 0 && session.selected_treasure.is_empty());
         let logs = press(&mut session, PetIntent::InteractLog, true).unwrap();
         assert!(apply(
             &mut session,
@@ -1268,6 +1477,127 @@ mod tests {
             battle.intent,
             PetIntent::Battle { gid: 9, treasure_id: "box".into(), challenge_id: 80102 }
         );
+    }
+
+    #[test]
+    fn equipped_charms_previews_and_cancel_are_visible_without_sending() {
+        let board = board_from(&json!({
+            "available": true,
+            "nurture": { "growth": 1, "adultGrowth": 7000, "feedCount": 0, "feedLimit": 16 },
+            "hunt": { "canPlunder": false },
+            "charms": {
+                "pool": [{ "name": "池中", "description": "池说明", "remaining": [1] }],
+                "equipped": [
+                    { "name": "惜糕", "description": "少消耗", "remaining": [2] },
+                    { "name": "奖池", "description": "上限更高", "remaining": [9] }
+                ]
+            }
+        }))
+        .unwrap();
+        assert!(
+            board.equipped_lines[0].contains("已装备 惜糕 少消耗")
+                && board.equipped_lines[0].contains("2"),
+            "{:?}",
+            board.equipped_lines
+        );
+        assert!(
+            board.equipped_lines[1].contains("奖池")
+                && board.equipped_lines[1].contains("上限更高")
+                && board.equipped_lines[1].contains("9")
+        );
+        assert!(
+            board.charm_lines[0].contains("池中")
+                && !board.equipped_lines.iter().any(|line| line.contains("池中"))
+        );
+        let mut session = loaded();
+        session.board = Some(board);
+        session.generation = 4;
+        session.confirming_goods = Some(8);
+        clear_pending_exchange(&mut session);
+        assert!(session.confirming_goods.is_none());
+        assert_eq!(session.generation, 4);
+        assert!(press(&mut session, PetIntent::Friend(9), true).is_none());
+        session.busy = false;
+        assert!(press(&mut session, PetIntent::InteractLog, true).is_some());
+        session.busy = false;
+        session.board.as_mut().unwrap().can_plunder = true;
+        let friend = press(&mut session, PetIntent::Friend(9), true).unwrap();
+        let generation = session.generation;
+        assert!(apply(
+            &mut session,
+            &friend,
+            Ok(json!({
+                "friend": {
+                    "gid": "8",
+                    "treasures": [{ "id": "stale", "statusCode": 2, "previews": [] }]
+                }
+            }))
+        ));
+        assert!(session.friend_treasures.is_empty(), "{:?}", session.failure);
+        assert_eq!(session.generation, generation);
+        session.busy = false;
+        let friend = press(&mut session, PetIntent::Friend(9), true).unwrap();
+        assert!(apply(
+            &mut session,
+            &friend,
+            Ok(json!({
+                "friend": {
+                    "gid": "9",
+                    "treasures": [{
+                        "id": "box",
+                        "status": "护送中",
+                        "statusCode": 2,
+                        "count": 3,
+                        "startTimeText": "08:00",
+                        "endTimeText": "12:00",
+                        "plunderCount": 1,
+                        "maxPlunderCount": 3,
+                        "item": { "name": "幸运星" },
+                        "previews": [
+                            { "challengeId": "80101", "challengeName": "初级挑战书", "canStart": false },
+                            { "challengeId": "80102", "challengeName": "中级挑战书", "canStart": true }
+                        ]
+                    }]
+                }
+            }))
+        ));
+        assert!(session.selected_treasure.is_empty() && session.selected_challenge == 0);
+        let treasure = &session.friend_treasures[0];
+        assert!(
+            treasure.detail.contains("幸运星")
+                && treasure.detail.contains("08:00")
+                && treasure.detail.contains("被夺 1/3")
+        );
+        assert!(
+            !treasure.previews[0].can_start
+                && treasure.previews[0].reason_key == "activities.petPreviewClosed"
+        );
+        assert!(
+            treasure.previews[1].can_start
+                && treasure.previews[1].reason_key == "activities.petPreviewReady"
+        );
+        session.busy = false;
+        let mut blocked = session.clone();
+        assert!(press(
+            &mut blocked,
+            PetIntent::Battle { gid: 9, treasure_id: "box".into(), challenge_id: 80101 },
+            true
+        )
+        .is_none());
+        let mut open = session.clone();
+        assert!(press(
+            &mut open,
+            PetIntent::Battle { gid: 9, treasure_id: "box".into(), challenge_id: 80102 },
+            true
+        )
+        .is_some());
+        session.generation += 1;
+        assert!(!apply(
+            &mut session,
+            &friend,
+            Ok(json!({"friend": {"gid": "9", "treasures": [{"id": "late"}]}}))
+        ));
+        assert_eq!(session.friend_treasures[0].id, "box");
     }
 
     #[tokio::test]
@@ -1404,22 +1734,49 @@ mod tests {
                     1 => reply.shop_buy = Some(PetDiaryShopBuyRsp::default()),
                     31 => {
                         reply.pet_treasure_hunt_get_log = Some(PetTreasureHuntGetLogRsp {
-                            logs: vec![PetTreasureHuntLogEntry {
-                                ts: 10,
-                                r#type: 3,
-                                ..PetTreasureHuntLogEntry::default()
-                            }],
+                            logs: vec![
+                                PetTreasureHuntLogEntry {
+                                    ts: 10,
+                                    r#type: 3,
+                                    costs: vec![CoreItem { id: 1028, count: 2, ..CoreItem::default() }],
+                                    rewards: vec![CoreItem { id: 9, count: 3, ..CoreItem::default() }],
+                                    dog_id: 15,
+                                    dog_skin_ids: vec![4, 5],
+                                    ..PetTreasureHuntLogEntry::default()
+                                },
+                                PetTreasureHuntLogEntry {
+                                    ts: 20,
+                                    r#type: 4,
+                                    costs: vec![CoreItem { id: 1002, count: 7, ..CoreItem::default() }],
+                                    ..PetTreasureHuntLogEntry::default()
+                                },
+                            ],
                         })
                     }
                     44 => {
                         reply.pet_treasure_hunt_get_plundered_log =
                             Some(PetTreasureHuntGetPlunderedLogRsp {
-                                logs: vec![PetTreasureHuntPlunderedLogEntry {
-                                    ts: 11,
-                                    attacker_won: false,
-                                    challenge_item_id: 80103,
-                                    ..PetTreasureHuntPlunderedLogEntry::default()
-                                }],
+                                logs: vec![
+                                    PetTreasureHuntPlunderedLogEntry {
+                                        ts: 11,
+                                        attacker_won: true,
+                                        attacker_name: "甲".into(),
+                                        challenge_item_id: 80102,
+                                        treasure_id: "box-a".into(),
+                                        lost_items: vec![CoreItem { id: 9, count: 4, ..CoreItem::default() }],
+                                        injected_items: vec![CoreItem { id: 8, count: 6, ..CoreItem::default() }],
+                                        attacker_charm: vec![101],
+                                        defender_charm: vec![102],
+                                        ..PetTreasureHuntPlunderedLogEntry::default()
+                                    },
+                                    PetTreasureHuntPlunderedLogEntry {
+                                        ts: 12,
+                                        attacker_won: false,
+                                        challenge_item_id: 80103,
+                                        injected_items: vec![CoreItem { id: 9, count: 1, ..CoreItem::default() }],
+                                        ..PetTreasureHuntPlunderedLogEntry::default()
+                                    },
+                                ],
                             })
                     }
                     _ => {}
@@ -1517,10 +1874,50 @@ mod tests {
         let interact = press(&mut session, PetIntent::InteractLog, true).unwrap();
         let interact_result = dispatch_pet(&context, &interact).await.unwrap();
         assert_eq!(interact_result["logs"][0]["type"], 3);
+        assert_eq!(interact_result["logs"][1]["costs"][0]["count"], 7);
+        assert!(apply(&mut session, &interact, Ok(interact_result)));
+        assert!(
+            session.logs[0].contains("1028") && session.logs[0].contains("×2"),
+            "{}",
+            session.logs[0]
+        );
+        assert!(
+            session.logs[0].contains("×3")
+                && session.logs[0].contains("狗 15")
+                && session.logs[0].contains("4、5"),
+            "{}",
+            session.logs[0]
+        );
+        assert!(
+            session.logs[1].contains("1002")
+                && session.logs[1].contains("×7")
+                && session.logs[1].contains("狗 无")
+                && session.logs[1].contains("皮肤 无"),
+            "{}",
+            session.logs[1]
+        );
         session.busy = false;
         let plunder = press(&mut session, PetIntent::PlunderLog, true).unwrap();
         let plunder_result = dispatch_pet(&context, &plunder).await.unwrap();
-        assert_eq!(plunder_result["plunderLogs"][0]["challengeId"], "80103");
+        assert_eq!(plunder_result["plunderLogs"][1]["challengeId"], "80103");
+        assert!(apply(&mut session, &plunder, Ok(plunder_result)));
+        assert!(
+            session.logs[0].contains("box-a")
+                && session.logs[0].contains("×4")
+                && session.logs[0].contains("×6")
+                && session.logs[0].contains("101")
+                && session.logs[0].contains("102"),
+            "{}",
+            session.logs[0]
+        );
+        assert!(
+            session.logs[1].contains("宝藏 无")
+                && session.logs[1].contains("损失 无")
+                && session.logs[1].contains("×1")
+                && session.logs[1].contains("进攻锦囊 无"),
+            "{}",
+            session.logs[1]
+        );
         let requests = seen
             .lock()
             .expect("seen")
