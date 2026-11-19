@@ -93,6 +93,9 @@ pub mod warehouse;
 pub mod weather;
 pub mod wx_login;
 
+#[cfg(test)]
+mod manual_actions;
+
 // --- infra 向后兼容 re-export（已迁至 [`crate::infra`]) ---
 pub use crate::infra::automation;
 pub use crate::infra::json_db;

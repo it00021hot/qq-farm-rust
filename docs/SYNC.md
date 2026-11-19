@@ -4212,6 +4212,18 @@ ACT-02 母项仍未实现。公益 026A 与萌宠 027B 已独立离线接受。�
 
 `a_pending_request_stalls_business_ticks_at_five_seconds` 保留，它只证明调度槽年龄和巡查闸门。它关闭了农场自动化，放槽不是回包，断线槽没有进入 `requests.call`。
 
-`a_send_rpc_pending_reply_and_disconnect_release_the_real_slot` 使用 `Gateway::request`。请求经 `send_rpc` 授权槽并 `requests.call`，帧进入内存通道，不连接 WebSocket。4999 毫秒 pending 和槽都是 1，巡查不退避；5000 毫秒农场和好友各退避 30 秒。回包帧交给 `dispatch_frame`，和连接读循环同一解析，pending 清零、槽归还、农场退避恢复。断线调用 `force_disconnect_with_reason`，`reject_all` 之后、future 结束之前 pending 已是 0，槽仍是 1；future 返回 connection closed 后槽为 0，下一轮农场退避恢复。固定源在 `finalizeConnection` 里先保留诊断，再由 `clearNetworkRuntime` 先清排队、后 `rejectAllPendingRequests`。Rust 先清 pending 再清排队。本批不改生产顺序。
+`a_send_rpc_pending_reply_and_disconnect_release_the_real_slot` 使用 `Gateway::request`。请求经 `send_rpc` 授权槽并 `requests.call`，帧进入内存通道，不连接 WebSocket。4999 毫秒 pending 和槽都是 1，巡查不退避；5000 毫秒农场和好友各退避 30 秒。回包帧交给 `dispatch_frame`，和连接读循环同一解析，pending 清零、槽归还、农场退避恢复。断线调用 `force_disconnect_with_reason`，`reject_all` 之后、future 结束之前 pending 已是 0，槽仍是 1；future 返回 connection closed 后槽为 0，下一轮农场退避恢复。这条测试关掉了会再发请求的农场自动化，所以它不是一次巡查业务 RPC 成功。固定源在 `finalizeConnection` 里先保留诊断，再由 `clearNetworkRuntime` 先清排队、后 `rejectAllPendingRequests`。Rust 先把阶段设为断开并清掉发送端，再清 pending，然后清排队。这个顺序差已知，本批不改。
 
 028A 复跑并写明唯一名字：背包三则 warehouse 测试，商城两个免费礼包谓词、限购 DTO 和 NSH `catalog_keeps_price_and_purchase_state`，节令 `event_dto_gates_claim_and_answer_like_bot`，礼物 `known_gifts_keep_progress_and_skip_unknown_keys`，图鉴 `claim_rejects_invalid_type_before_network` 与 `book_keeps_claim_and_seed_purchase_gate`，藏品 `book_reads_score_claim_and_series`。这些仍不是整行通过。FRIEND-01 和 FRIEND-02 本批仍不实跑；项目里有别的好友测试，不能因此说项目没有测试。029 预定强制刷新、四项好友 RPC、施肥 RPC、背包和购买成功回包，以及可注入的提醒传输。SCHED-01 的心跳超时和旧码不重连也留到后面。
+
+### 2026-11-19 — 029 五组手动操作的生产请求
+
+35 项母项分母不变。六项活动仍是离线接受。窗口和真实接口仍是 0。本批不实现提醒传输、心跳重连或配置编辑。其余 12 行证据仍是部分层，不能整行通过。FRIEND-01 和 FRIEND-02 现在有假网关测试，不再写成项目没有测试。
+
+- FRIEND-01：`FriendService::get_friends_list(true)` 先作废缓存再拉列表。`force_refresh_invalidates_the_cached_friend_list_and_returns_the_new_reply` 与 app `friend_page_force_refresh_returns_the_new_list`。先得到旧列表，缓存期内不再请求，强制刷新再发 `GetGameFriends` 并回贴新名字。QQ 空 GID 的 `SyncAll` 和微信 `GetAll` 未跑。
+- FRIEND-02：`friend_help_steal_trouble_and_delete_send_source_parameters` 调用 `help_farm`、`steal_farm`、`put_weeds`、`put_insects`、`delete_friend`，解码 GID 和地块；空地和无效 GID 不发。app `friend_page_delete_sends_del_friend_and_invalid_gid_does_not` 接删除和无效偷菜。进农场后的可偷、可帮筛选未重跑。
+- FARM-02：`fertilize_all_sends_only_growing_lands_and_keeps_the_reply_count` 与 app `fertilize_page_sends_the_growing_land_once`。生产入口只给生长地发一次普通肥 1011，成功数取回包，选中未解锁地不发。有机肥未单列。旧过滤测试仍只是过滤。
+- BAG-01：`bag_use_lock_and_sell_apply_reply_counts_and_reject_before_sending` 断言使用奖励、锁定 UID 和出售所得，锁定堆不足不发 Use。app `bag_page_use_returns_reply_rewards_and_a_locked_stack_does_not_send` 接使用。批量使用和 app 的出售、锁定未单列。
+- BAG-02：`mall_purchase_sends_goods_and_count_and_keeps_only_reply_rewards` 与 app `mall_page_purchase_keeps_reply_rewards`。购买请求带商品和数量，奖励只取成功回包；数量 0、未知价格、已达限购不发，目录刷新失败不重买。神秘商店和付费扣余额未跑。
+
+这些入口没有单独的确认 RPC。取消不发请求由数量 0、无效 GID 和排除地覆盖。命令是 `cargo +1.99.1 test -p qq-farm-core --lib manual_actions -- --test-threads=1`（5 通过）和 `cargo +1.99.1 test -p qq-farm-app --lib manual_actions -- --test-threads=1`（5 通过）。这是开发自测，不是独立验收。下一单元仍是提醒传输，然后是心跳与旧码重连，再是配置编辑。

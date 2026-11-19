@@ -42,5 +42,8 @@ pub mod stellar;
 pub mod weather;
 pub mod wx_login;
 
+#[cfg(test)]
+mod manual_actions;
+
 pub use error::{AppError, AppResult};
 pub use session::AppContext;
