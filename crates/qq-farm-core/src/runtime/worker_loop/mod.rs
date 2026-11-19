@@ -2254,6 +2254,81 @@ mod tests {
         assert!(log_messages(&mut rx).iter().all(|message| !message.contains("回到正常间隔")));
     }
 
+    #[tokio::test]
+    async fn a_pending_request_stalls_business_ticks_at_five_seconds() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let _cleanup = BackoffCleanup;
+        struct ClockGuard;
+        impl Drop for ClockGuard {
+            fn drop(&mut self) {
+                crate::network::priority::set_monotonic_ms_for_test(None);
+                crate::infra::automation::clear_automation_flags_for("gateway-backoff");
+            }
+        }
+        let _clock = ClockGuard;
+        let (loop_, mut rx) = backoff_loop();
+        loop_.gateway.mark_online();
+        loop_.gateway.set_last_rx_ms_for_test(crate::utils::time::now_ms());
+        loop_.gateway.install_reply_script(|_service, method, _body| {
+            Err(crate::network::error::NetworkError::Phase(format!("脚本未回包 {method}")))
+        });
+        crate::infra::automation::set_automation_flag("gateway-backoff", "farm", false);
+        let started = 1_000_000;
+        crate::network::priority::set_monotonic_ms_for_test(Some(started));
+        let pending = loop_.gateway.hold_farm_request_for_test().await;
+        crate::network::priority::set_monotonic_ms_for_test(Some(started + 4_999));
+        let below = loop_.gateway.gateway_load();
+        assert_eq!(below.oldest_pending_age_ms, 4_999);
+        assert_eq!(below.heartbeat_misses, 0);
+        assert!(loop_.gateway.is_gateway_healthy_for_business());
+        loop_.run_farm_tick().await;
+        assert_eq!(loop_.farm_backoff_ms.load(Ordering::Acquire), 0);
+        assert!(loop_.patrol_trace_snapshot().contains(&"farm"));
+
+        crate::network::priority::set_monotonic_ms_for_test(Some(started + 5_000));
+        let stalled = loop_.gateway.gateway_load();
+        assert_eq!(stalled.oldest_pending_age_ms, 5_000);
+        assert_eq!(stalled.heartbeat_misses, 0);
+        assert!(!loop_.gateway.is_gateway_healthy_for_business());
+        let farm_started = now_ms();
+        let traced = loop_.patrol_trace_snapshot();
+        loop_.run_farm_tick().await;
+        assert_eq!(loop_.farm_backoff_ms.load(Ordering::Acquire), 30_000);
+        assert_eq!(loop_.patrol_trace_snapshot(), traced);
+        assert_defer_window(loop_.next_runs.lock().farm_at, farm_started, 30_000);
+        let friend_started = now_ms();
+        loop_.run_friend_tick().await;
+        assert_eq!(loop_.friend_backoff_ms.load(Ordering::Acquire), 30_000);
+        assert_eq!(loop_.farm_backoff_ms.load(Ordering::Acquire), 30_000);
+        assert_defer_window(loop_.next_runs.lock().friend_at, friend_started, 30_000);
+        let deferred = log_messages(&mut rx);
+        assert_eq!(deferred.iter().filter(|message| message.contains("farm巡查退避")).count(), 1);
+        assert_eq!(deferred.iter().filter(|message| message.contains("friend巡查退避")).count(), 1);
+
+        drop(pending);
+        assert_eq!(loop_.gateway.gateway_load().oldest_pending_age_ms, 0);
+        assert!(loop_.gateway.is_gateway_healthy_for_business());
+        loop_.run_farm_tick().await;
+        assert_eq!(loop_.farm_backoff_ms.load(Ordering::Acquire), 0);
+        loop_.run_friend_tick().await;
+        assert_eq!(loop_.friend_backoff_ms.load(Ordering::Acquire), 0);
+        let resumed = log_messages(&mut rx);
+        assert!(resumed.iter().any(|message| message.contains("farm巡查回到正常间隔")));
+        assert!(resumed.iter().any(|message| message.contains("friend巡查回到正常间隔")));
+
+        crate::network::priority::set_monotonic_ms_for_test(Some(2_000_000));
+        let again = loop_.gateway.hold_farm_request_for_test().await;
+        crate::network::priority::set_monotonic_ms_for_test(Some(2_005_000));
+        loop_.run_farm_tick().await;
+        assert_eq!(loop_.farm_backoff_ms.load(Ordering::Acquire), 30_000);
+        loop_.gateway.force_disconnect_with_reason("ws_close");
+        assert!(!loop_.gateway.is_gateway_healthy_for_business());
+        drop(again);
+        assert!(loop_.gateway.is_gateway_healthy_for_business());
+        loop_.run_farm_tick().await;
+        assert_eq!(loop_.farm_backoff_ms.load(Ordering::Acquire), 0);
+    }
+
     #[test]
     fn weather_service_is_reused_for_the_account() {
         let (loop_, _) = make_loop();

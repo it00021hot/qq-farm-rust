@@ -25,6 +25,8 @@
 //! 模块结构仿照 go priority.go：[`select_dispatch_index`] 等调度决策是纯函数
 //! （可单测、时钟注入），[`RpcScheduler`] 负责容量记账（队列 / 在途台账 + 授权唤醒）。
 
+#[cfg(test)]
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Weak;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
@@ -412,9 +414,24 @@ pub fn step_business_tick(previous_ms: u64, healthy: bool) -> BusinessTickStep {
 
 /// 进程级单调毫秒时钟（不受 utils::time 服务器时间同步跳变影响；
 /// 排队顺序 / 饥饿提升 / 在途年龄只关心相对时长）。
+#[cfg(test)]
+static MONOTONIC_OVERRIDE_MS: AtomicI64 = AtomicI64::new(i64::MIN);
+
 fn monotonic_ms() -> i64 {
+    #[cfg(test)]
+    {
+        let pinned = MONOTONIC_OVERRIDE_MS.load(Ordering::Relaxed);
+        if pinned != i64::MIN {
+            return pinned;
+        }
+    }
     static START: OnceLock<Instant> = OnceLock::new();
     START.get_or_init(Instant::now).elapsed().as_millis() as i64
+}
+
+#[cfg(test)]
+pub fn set_monotonic_ms_for_test(ms: Option<i64>) {
+    MONOTONIC_OVERRIDE_MS.store(ms.unwrap_or(i64::MIN), Ordering::Relaxed);
 }
 
 /// 排队条目：持有授权发送端，被选中时把在途额度 guard 递给排队的调用方。

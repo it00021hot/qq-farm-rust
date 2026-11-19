@@ -4178,3 +4178,30 @@ bot 本轮 13 个提交**玩法层零变化**（活动/商城/日常自动化均
 - 31、44、47 不再走写操作的活动窗。关窗仍各发一次并可以呈现。27、29、43 等写在关窗时仍不发。源页面里互动记录只看是否正在请求，不看活动是否开放；查看好友宝藏在 `canPlunder` 为假时禁用，关窗时这项为假。刷新失败不再挡住已可达的记录查询。
 - 空的选择器消息和结果文案分开判定。空选择器可以成功，结果文案仍是「操作成功」。缺选择器失败。取消兑换不增加代次，也不发写。未知背包不发 43。
 - 离线待本条命令复核。窗口未打开，真实接口未发。分母仍是 35。母项仍未实现。
+
+### 2026-11-19 — 17 行证据和在途 5 秒
+
+本条不改 35 项分母，不把六项活动重开，也不构建或启动客户端。窗口和真实接口仍是 0。千星对坏 JSON 或错误 version 的旧写语义、萌宠好友按钮没有视觉禁用和缺少不可夺宝说明，记为尾项，本批不改。
+
+在途阈值来自固定源 `isGatewayHealthyForBusiness`：`oldestPendingAgeMs >= 5000` 才不健康，心跳漏拍是另一条。Rust 生产路径是网关调度器的在途槽位年龄，再由 `WorkerLoop::defer_unhealthy_tick` 决定农场和好友巡查。测试把这只单调时钟钉在指定毫秒，不改系统时间，也不用真实 sleep。`a_pending_request_stalls_business_ticks_at_five_seconds`：请求已占槽且未回包时，4999 毫秒农场巡查仍执行且退避为 0；5000 毫秒农场和好友各退避 30 秒且互不覆盖；放下槽位当作回包后两边恢复；断线时只要槽位还被请求 future 握着就继续退避，future 结束后下一轮恢复。既有静默心跳测试 `patrol_ticks_wait_out_a_silent_gateway_and_resume_separately` 本批重跑通过。
+
+17 行里本批实跑过的只覆盖下面这些，不能写成整行通过：
+
+- AUTH-01：`add_new_account_assigns_id`。登录码生产写入未测。
+- AUTH-02：`has_wx_auth_requires_login_buffer`、`wechat_status_and_qr_use_stable_keys`。扫码轮询和 NapCat 未测。
+- AUTH-04：`test_delete_account`、`running_matches_only_the_selected_id`。start/stop 未启动 worker。
+- FARM-02：`fertilize_all_targets_match_bot_filters`。施肥 RPC 未测。
+- FARM-04：`fertilizer_check_uses_saved_counts_and_thresholds`。间隔触发未测。
+- FRIEND-01、FRIEND-02：没有找到可直接实跑的强制刷新或四项操作网关测试，保持待补。
+- FRIEND-05：`write_and_read_cache`、`gid_text_accepts_separators_and_skips_invalid_values`。保存接口未测。
+- RANCH-01：`an_unconfirmed_purchase_blocks_the_same_target`。巡查循环未在本批实跑。
+- BAG-01：使用编码、锁定过滤、出售前拒绝。成功回包未测。
+- BAG-02：免费礼包谓词、限购 DTO、`catalog_keeps_price_and_purchase_state`。购买 RPC 未测。
+- ACT-01：节令领取门、礼物进度、商城展示。奶茶、牧歌、牧场目录本批未重跑。
+- SCHED-01：只实跑断开原因中文标签。心跳超时和生产重连未测。
+- LOG-01：今日计数、查询脱敏、面板概览。日志文件滚动未测。
+- REMIND-01：配置不完整不推送。成功推送需要外网，未测。
+- COLL-01：非法图鉴类型不发请求、图鉴页和藏品页的领取门。完整领取回包未测。
+- CONF-01：`prepare_rejects_blank_name_bad_numbers_and_missing_links`。落盘编辑未测。
+
+AUTH-05 的桌面直入和 EXTRA-01 的天气协议排除保持原结论。上述命令均使用 `cargo +1.99.1 test --lib <唯一测试名> -- --test-threads=1`，exit 0。`nsh check crates/qq-farm-nsh` exit 0。这是开发自测，不是独立验收。

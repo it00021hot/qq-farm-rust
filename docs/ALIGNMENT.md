@@ -10,10 +10,10 @@
 
 | ID | 行为 | 代码对照 | mock | 窗口 | 真实接口 |
 | --- | --- | --- | --- | --- | --- |
-| AUTH-01 | 用登录码添加账号 | 代码已有。bot 账号路由；`qq-farm-app::accounts::upsert_account`；NSH `accounts.rs` 登录码输入 | 无 | 未验 | 未验 |
-| AUTH-02 | 微信扫码登录 | 代码已有。bot `wx-login/service.ts`、`/api/wx-login/tasks`；`qq-farm-app::wx_login`；NSH `accounts.rs` 二维码 | 无 | 未验 | 未验 |
+| AUTH-01 | 用登录码添加账号 | 代码已有。bot 账号路由；`qq-farm-app::accounts::upsert_account`；NSH `accounts.rs` 登录码输入 | 本批实跑 `add_new_account_assigns_id`：存储层新账号分配编号。`upsert_account` 的登录码写入和启停没有测到 | 未验 | 未验 |
+| AUTH-02 | 微信扫码登录 | 代码已有。bot `wx-login/service.ts`、`/api/wx-login/tasks`；`qq-farm-app::wx_login`；NSH `accounts.rs` 二维码 | 本批实跑 `has_wx_auth_requires_login_buffer`、`wechat_status_and_qr_use_stable_keys`。二维码轮询和 NapCat 仍未测 | 未验 | 未验 |
 | AUTH-03 | QQ NapCat 扫码 | 代码已有，可选。bot `qq-login/service.ts` 在 `qqQrLogin` 开启且地址和签名都有时，向 NapCat 发 `/api/qq/login/qrcode`、`/status`、`/miniapp/code`、`/logout`，头是 `X-API-Signature`。默认关闭，登录码和微信扫码不改道。NSH 账号页可保存这三项并走扫码状态；确认后的 code 交给现有 `upsert_account`，平台仍是 qq。取消或换代后的迟到结果不入库 | `services::napcat_login` 与 `stale_napcat_code_is_not_stored`：代次不一致时 `store_code` 不调用入库。Debug 不打印 code 和回包体。没有真实 NapCat | 未验 | 未验 |
-| AUTH-04 | 启停和删除账号 | 代码已有。bot `/api/accounts/:id/start`、`stop`；`accounts::start_account`、`stop_account`、`delete_account`；NSH 账号页 | 无 | 未验 | 未验 |
+| AUTH-04 | 启停和删除账号 | 代码已有。bot `/api/accounts/:id/start`、`stop`；`accounts::start_account`、`stop_account`、`delete_account`；NSH 账号页 | 本批实跑 `test_delete_account`、`running_matches_only_the_selected_id`。start/stop 没有启动 worker | 未验 | 未验 |
 | AUTH-05 | Web 面板密码登录 | 桌面差异。产品决定桌面保留本机直接进入，不照搬 bot `auth-routes.ts` 的 `POST /api/login` 密码门。`auth::local_owner_session` 继续不设密码。这不是缺口 | 无 | 未验 | 未验 |
 
 本组 5 项：代码已有 4，桌面差异 1。
@@ -23,9 +23,9 @@
 | ID | 行为 | 代码对照 | mock | 窗口 | 真实接口 |
 | --- | --- | --- | --- | --- | --- |
 | FARM-01 | 巡查，以及收获、浇水、除草、除虫、施肥、种植、照料、铲除、升级、解锁、一轮 | 代码已有。bot `services/farm/*`、`/api/farm/operate`。NSH `farm.rs` `FarmOp` | 仓库有操作可见性测试，本批未跑 | 未验 | 未验 |
-| FARM-02 | 一键施肥 | 代码已有。bot `/api/farm/fertilize-all`；`farm::fertilize_all`；NSH 农场施肥入口 | 无 | 未验 | 未验 |
+| FARM-02 | 一键施肥 | 代码已有。bot `/api/farm/fertilize-all`；`farm::fertilize_all`；NSH 农场施肥入口 | 本批实跑 `fertilize_all_targets_match_bot_filters`：只断言选地过滤，没有发施肥 RPC | 未验 | 未验 |
 | FARM-03 | 保存化肥购买设置后按已存数量和阈值检查 | 代码已有。bot `Settings.vue` 的 `saveAutomationSettings` 调用 `/api/fertilizer/check-and-buy`。`farm::fertilizer_check_and_buy` 读 `get_account_config_snapshot`。NSH `settings.rs` `fertilizer_patch` | 本批 `fertilizer_check_uses_saved_counts_and_thresholds`、`fertilizer_purchase_edits_check_only_when_a_buy_switch_stays_on` 通过。真实下单未跑 | 未验 | 未验 |
-| FARM-04 | 运行中按间隔自动买化肥 | 代码已有。`worker_loop::check_fertilizer_buy_once` 组装 `FertilizerBothOptions` | 无 | 未验 | 未验 |
+| FARM-04 | 运行中按间隔自动买化肥 | 代码已有。`worker_loop::check_fertilizer_buy_once` 组装 `FertilizerBothOptions` | 本批实跑 `fertilizer_check_uses_saved_counts_and_thresholds`：只覆盖购买开关和数量组装。worker 间隔触发未测 | 未验 | 未验 |
 
 本组 4 项：代码已有 4。
 
@@ -33,11 +33,11 @@
 
 | ID | 行为 | 代码对照 | mock | 窗口 | 真实接口 |
 | --- | --- | --- | --- | --- | --- |
-| FRIEND-01 | 好友列表和刷新 | 代码已有。bot `Friends.vue` 调 `POST /api/friends/clear-cache`。Rust `FriendService::get_friends_list` 在 `force` 时 `invalidate_list_cache` 并跳过 TTL。NSH `friends.rs` 刷新把 generation 加一后 `list_friends(..., generation > 0)` | 无 | 未验 | 未验 |
-| FRIEND-02 | 帮助、偷菜、捣乱、删除 | 代码已有。bot `POST /api/friend/:gid/op`、`delete`。`friend::friend_op`、`delete_friend`。NSH 好友行操作 | 无 | 未验 | 未验 |
+| FRIEND-01 | 好友列表和刷新 | 代码已有。bot `Friends.vue` 调 `POST /api/friends/clear-cache`。Rust `FriendService::get_friends_list` 在 `force` 时 `invalidate_list_cache` 并跳过 TTL。NSH `friends.rs` 刷新把 generation 加一后 `list_friends(..., generation > 0)` | 未在本批找到并实跑强制刷新的生产测试。待补 | 未验 | 未验 |
+| FRIEND-02 | 帮助、偷菜、捣乱、删除 | 代码已有。bot `POST /api/friend/:gid/op`、`delete`。`friend::friend_op`、`delete_friend`。NSH 好友行操作 | 未在本批实跑帮助、偷菜、捣乱或删除的网关请求。待补 | 未验 | 未验 |
 | FRIEND-03 | 偷菜黑名单 | 代码已有。bot `/api/plant-blacklist`。`farm::plant_blacklist`。NSH `analytics.rs` | 仓库有编辑测试，本批未跑 | 未验 | 未验 |
 | FRIEND-04 | 好友黑名单 | 代码已有。bot `/api/friend-blacklist/toggle`。`friend::toggle_friend_blacklist`。NSH `next_blacklist` | 仓库有切换测试，本批未跑 | 未验 | 未验 |
-| FRIEND-05 | 已知好友 GID | 代码已有。bot `/api/friend-known-gids`。NSH `known_friends.rs` | 无 | 未验 | 未验 |
+| FRIEND-05 | 已知好友 GID | 代码已有。bot `/api/friend-known-gids`。NSH `known_friends.rs` | 本批实跑 `write_and_read_cache`、`gid_text_accepts_separators_and_skips_invalid_values`。接口保存路径未测 | 未验 | 未验 |
 
 本组 5 项：代码已有 5。大量好友时的巡查顺序记在 SCHED-03，不在本组重列。
 
@@ -45,7 +45,7 @@
 
 | ID | 行为 | 代码对照 | mock | 窗口 | 真实接口 |
 | --- | --- | --- | --- | --- | --- |
-| RANCH-01 | 牧场手动操作和巡查 | 代码已有。bot `services/ranch/*`、`/api/ranch/:action`。`qq-farm-app::ranch`。NSH `ranch.rs` | 无 | 未验 | 未验 |
+| RANCH-01 | 牧场手动操作和巡查 | 代码已有。bot `services/ranch/*`、`/api/ranch/:action`。`qq-farm-app::ranch`。NSH `ranch.rs` | 本批实跑 `an_unconfirmed_purchase_blocks_the_same_target`。巡查循环和其余牧场动作未在本批实跑 | 未验 | 未验 |
 | RANCH-02 | 牧草低于阈值才补，自动出售留下 7001 | 代码已有。bot `ranch/automation.ts` 用 `ranch_grass_threshold_percent`；`warehouse.ts` `id === 7001` 跳过。Rust `ranch_patrol::grass_top_up`、`warehouse::included_in_auto_sell` | 仓库有对应测试，本批未跑 | 未验 | 未验 |
 | RANCH-03 | 便便优先兑换有机化肥 | 代码已有。`6d7aebe` 起、`c500e08` 的 `ranch/automation.ts`：`ranch_market_organic` 默认开，旧配置缺这个字段时也按开。只使用物品 7002 的便便，先兑商品 80012（4 小时有机肥），再兑 80011（1 小时）。限购和余额决定数量，付不起就停，不使用其它货币的同名商品。集市没开仍记下一轮；接口失败不把这轮记成完成，也不立刻重试。便便增加会把下一轮巡查提前到约 20 秒。Rust 巡查在出售之后调用 `exchange_poop_organic`，设置页开关走原来的保存 | `patrol_exchanges_four_hour_organic_before_one_hour_and_stops_cleanly`、`missing_market_switch_stays_on_and_the_save_path_can_change_it`。没有真实兑换 | 未验 | 未验 |
 | RANCH-04 | 窝棚分组、幼崽补栏和一键喂养 | 代码已有，分三块。分组：设施按模块 6 窝、7 棚、8 牧草机排列，同组合计只数和容量，组内动物按栏位再按编号。幼崽：`ranch_coop_cub_priority` / `ranch_shed_cub_priority` 默认空；旧配置缺字段仍是空。背包优先时先按这份顺序放养背包幼崽，放满或失败后才打开商店；指定动物时只放该动物再买。数量仍受空位、余额、单次上限和限购约束，取消确认不发购买。一键喂养：普通罐头要求桶里有时长且有不受限的可喂动物，有机罐头要求桶里有时长且有可喂动物；不满足时按钮不可用，不发请求 | `patrol_places_saved_cubs_before_opening_the_shop`、`bag_cubs_place_the_saved_order_ahead_of_the_default_order`、`missing_cub_priority_stays_empty_and_a_mismatched_id_is_kept_out`、`pens_are_grouped_coop_then_shed_and_animals_follow_slot`、`feed_all_stays_off_without_time_or_a_feedable_animal`、`moving_a_cub_earlier_keeps_cubs_that_are_not_on_screen`。没有真实放养、购买或喂养 | 未验 | 未验 |
@@ -56,8 +56,8 @@
 
 | ID | 行为 | 代码对照 | mock | 窗口 | 真实接口 |
 | --- | --- | --- | --- | --- | --- |
-| BAG-01 | 使用、出售、锁定 | 代码已有。bot `/api/bag/use`、`sell`、`lock`。`qq-farm-app::farm` 同名函数。NSH `bag.rs` | 无 | 未验 | 未验 |
-| BAG-02 | 普通商城、神秘商店、免费礼包 | 代码已有。bot `commerce-routes.ts`。`qq-farm-app::commerce`。NSH `mall.rs`；免费礼包在 `gifts.rs` 的 `mall` | 无 | 未验 | 未验 |
+| BAG-01 | 使用、出售、锁定 | 代码已有。bot `/api/bag/use`、`sell`、`lock`。`qq-farm-app::farm` 同名函数。NSH `bag.rs` | 本批实跑使用请求编码、锁定过滤和出售前拒绝。成功回包路径未测 | 未验 | 未验 |
+| BAG-02 | 普通商城、神秘商店、免费礼包 | 代码已有。bot `commerce-routes.ts`。`qq-farm-app::commerce`。NSH `mall.rs`；免费礼包在 `gifts.rs` 的 `mall` | 本批实跑免费礼包谓词、商城限购 DTO 和 `catalog_keeps_price_and_purchase_state`。购买 RPC 未测 | 未验 | 未验 |
 
 本组 2 项：代码已有 2。
 
@@ -84,8 +84,8 @@
 
 | ID | 行为 | 代码对照 | mock | 窗口 | 真实接口 |
 | --- | --- | --- | --- | --- | --- |
-| ACT-01 | 节令、快乐不独享、奶茶、牧歌、牧场活动目录 | 代码已有。bot `solar-calendar.ts`、`share-reward-activity.ts`、`milk-tea.ts`、`muge-activity.ts`。NSH `activities.rs` 的 `Shelf::Solar`、`Share`、`Tea`、`Muge`、`Ranch` | 无 | 未验 | 未验 |
-| ACT-02 | 秋祈良愿、千星、七夕、青梅、公益、萌宠日记 | 未实现。`c500e08` 的 `ActivityCenter.vue` 仍能打开这六页。调用都在 worker 的页面 case 里，`worker.ts` 的定时器没有这些方法。时间取服务端回包的开始和结束；活动号里的日期、以及开始或结束为 0，都不能当成已经过期或当前可用。秋祈良愿和千星已独立离线通过，窗口和真实接口未验。`ec905c8` 的定向测试过了，但审计不接受那一版缩水界面；023A、023B 之后千星才算独立离线通过。七夕 024 定向离线通过，024A 独立离线通过，外观不阻塞；窗口、真实接口、消耗和是否开放仍未知。青梅 025A 已独立离线通过。公益已接到目录和 core，待独立复验。萌宠日记 027 整页未验收；027A 补了好友夺宝、日志、兑换数量、两套规则和固定抓包，仍待独立复验。母项因此仍是未实现。快乐不独享仍是 ACT-01。当前是否仍在服务端开放未知 | 秋祈、千星、七夕、青梅、公益、萌宠见子表 | 未验 | 未验 |
+| ACT-01 | 节令、快乐不独享、奶茶、牧歌、牧场活动目录 | 代码已有。bot `solar-calendar.ts`、`share-reward-activity.ts`、`milk-tea.ts`、`muge-activity.ts`。NSH `activities.rs` 的 `Shelf::Solar`、`Share`、`Tea`、`Muge`、`Ranch` | 本批实跑节令领取门、礼物进度和商城展示。奶茶、牧歌、牧场目录本批未重跑 | 未验 | 未验 |
+| ACT-02 | 秋祈良愿、千星、七夕、青梅、公益、萌宠日记 | 母项仍未实现：窗口和真实接口是 0。六个子项到 `8b1ca70` 已各自独立离线接受，不在本批重开。`c500e08` 的 `ActivityCenter.vue` 仍能打开这六页。调用都在 worker 的页面 case 里，`worker.ts` 的定时器没有这些方法。时间取服务端回包的开始和结束；活动号里的日期、以及开始或结束为 0，都不能当成已经过期或当前可用。秋祈良愿和千星已独立离线通过，窗口和真实接口未验。`ec905c8` 的定向测试过了，但审计不接受那一版缩水界面；023A、023B 之后千星才算独立离线通过。七夕 024 定向离线通过，024A 独立离线通过，外观不阻塞；窗口、真实接口、消耗和是否开放仍未知。青梅 025A 已独立离线通过。公益已接到目录和 core，待独立复验。萌宠日记 027 整页未验收；027A 补了好友夺宝、日志、兑换数量、两套规则和固定抓包，仍待独立复验。母项因此仍是未实现。快乐不独享仍是 ACT-01。当前是否仍在服务端开放未知 | 秋祈、千星、七夕、青梅、公益、萌宠见子表 | 未验 | 未验 |
 
 本组 2 项：代码已有 1，未实现 1。ACT-02 仍是一个母项。下面六条是组内行为，不另占 35 项分母。
 
@@ -102,14 +102,14 @@
 
 | ID | 行为 | 代码对照 | mock | 窗口 | 真实接口 |
 | --- | --- | --- | --- | --- | --- |
-| SCHED-01 | 心跳、掉线后不再用旧码重连，微信可走应用宝授权 | 代码已有。bot worker 重连。Rust `worker.rs` 心跳超时 `force_disconnect_with_reason("heartbeat_timeout")`，并区分应用宝授权重连和不再使用旧 Code | 无 | 未验 | 未验 |
+| SCHED-01 | 心跳、掉线后不再用旧码重连，微信可走应用宝授权 | 代码已有。bot worker 重连。Rust `worker.rs` 心跳超时 `force_disconnect_with_reason("heartbeat_timeout")`，并区分应用宝授权重连和不再使用旧 Code | 本批只实跑 `disconnect_reason_uses_chinese_labels`。心跳超时断线和不再用旧码重连没有集成测试 | 未验 | 未验 |
 | SCHED-03 | 大量好友时先巡农场和好友，再跑牧场 | 代码已有。`c500e08` 的 `runUnifiedTick` 先等农场巡查，再启动好友巡查；牧场要等这两项都完成过首轮，并且当前都不在跑、也没有再次到期。网关不健康时牧场单独走 30/60 秒退避，不改农场和好友的退避；网关不空闲则牧场再等 1 秒。好友总开关关闭仍算首轮结束，避免牧场一直等。Rust `run_unified_tick` 按这个顺序调用 `run_farm_tick`、`run_friend_tick` 和 `run_ranch_after_farm_and_friends`。分享、任务和每日福利仍走原来的定时器，不再从那里插入牧场巡查 | `unified_tick_runs_farm_and_friend_before_ranch`、`ranch_waits_for_the_first_friend_tick_and_a_healthy_gateway` 走 `run_unified_tick`。`patrol_ticks_wait_out_a_silent_gateway_and_resume_separately` 仍通过。没有真实巡查 | 未验 | 未验 |
-| SCHED-02 | 网关心跳漏拍或在途请求卡住时，推迟农场和好友巡查 | 代码已有。bot `worker.ts` `nextBusinessTickDeferMs`：健康则清退避，否则首次 30 秒、之后翻倍、封顶 60 秒，农场和好友分开记。Rust `run_farm_tick` / `run_friend_tick` 经 `defer_unhealthy_tick` 调用 `step_business_tick`。第一次退避和恢复各写一条面板日志 | `patrol_ticks_wait_out_a_silent_gateway_and_resume_separately` 用离线 Gateway，把最近入站时间拨过心跳静默，再直接调用两次巡查。无回包时农场不进入正常 20–25 秒排期，好友不出现「巡查异常」；两种巡查各自先 30 秒、再封顶 60 秒，状态互不覆盖；恢复后农场回到正常间隔，好友发出巡查并记「巡查异常」，各自退避清零；首条退避和恢复日志不重复。摘掉 `defer_unhealthy_tick` 接线时农场退避停在 0，该测试失败。`business_backoff_first_30s_then_double_capped_60s` 仍只覆盖计算。农场 AllLands 帧没有单独计数，农场「未发请求」由函数在正常排期前返回推出。在途请求卡住满 5 秒的那条健康度条件没有单独拨时钟 | 未验 | 未验 |
-| LOG-01 | 运行日志和今日统计 | 代码已有。bot `/api/logs`、`stats.ts`。NSH `dashboard.rs` | 无 | 未验 | 未验 |
-| REMIND-01 | 下线提醒 | 代码已有。bot `push.ts`。NSH `offline_reminder.rs`、`qq_bot_bind` | 无 | 未验 | 未验 |
-| COLL-01 | 图鉴和藏品 | 代码已有。bot `/api/illustrated`、`/api/collections`。NSH `illustrated.rs`、`collections.rs` | 无 | 未验 | 未验 |
+| SCHED-02 | 网关心跳漏拍或在途请求卡住时，推迟农场和好友巡查 | 代码已有。bot `worker.ts` `nextBusinessTickDeferMs`：健康则清退避，否则首次 30 秒、之后翻倍、封顶 60 秒，农场和好友分开记。Rust `run_farm_tick` / `run_friend_tick` 经 `defer_unhealthy_tick` 调用 `step_business_tick`。第一次退避和恢复各写一条面板日志 | `patrol_ticks_wait_out_a_silent_gateway_and_resume_separately` 用离线 Gateway，把最近入站时间拨过心跳静默，再直接调用两次巡查。无回包时农场不进入正常 20–25 秒排期，好友不出现「巡查异常」；两种巡查各自先 30 秒、再封顶 60 秒，状态互不覆盖；恢复后农场回到正常间隔，好友发出巡查并记「巡查异常」，各自退避清零；首条退避和恢复日志不重复。摘掉 `defer_unhealthy_tick` 接线时农场退避停在 0，该测试失败。`business_backoff_first_30s_then_double_capped_60s` 仍只覆盖计算。农场 AllLands 帧没有单独计数，农场「未发请求」由函数在正常排期前返回推出。在途请求卡住满 5 秒已由 `a_pending_request_stalls_business_ticks_at_five_seconds` 补上：真实网关槽位加 worker 巡查，4.999 秒仍健康，5 秒起农场和好友各退避 30 秒；回包后恢复；断线后请求 future 结束才恢复。阈值是 `oldest_pending_age_ms >= GATEWAY_STALL_PENDING_MS`（5000） | 未验 | 未验 |
+| LOG-01 | 运行日志和今日统计 | 代码已有。bot `/api/logs`、`stats.ts`。NSH `dashboard.rs` | 本批实跑 `record_operation_increments`、`redact_query_string`、`overview_keeps_next_checks_and_todays_counts`。日志文件滚动未测 | 未验 | 未验 |
+| REMIND-01 | 下线提醒 | 代码已有。bot `push.ts`。NSH `offline_reminder.rs`、`qq_bot_bind` | 本批实跑 `offline_reminder_incomplete_config_no_push`。成功推送需要外网，仍未测 | 未验 | 未验 |
+| COLL-01 | 图鉴和藏品 | 代码已有。bot `/api/illustrated`、`/api/collections`。NSH `illustrated.rs`、`collections.rs` | 本批实跑图鉴非法类型不发请求、图鉴页领取门、藏品页分数和领取。完整领取回包未测 | 未验 | 未验 |
 | COLL-02 | 图鉴全部已读 | 代码已有。`c500e08` 的 `clearIllustratedNew` 把正数 `fruitId` 发给 `ClearNewUnlockedFruitsV2`。Rust `IllustratedService::clear_new` 同样丢掉非正数，空名单不发请求；NSH 图鉴页有「全部已读」，只提交当前页 `isNew` 且果实号为正的条目 | `clear_new_keeps_only_positive_ids_and_reads_the_reply`、`clear_new_with_no_ids_does_not_ask_the_gateway`、`read_all_uses_only_positive_fresh_fruit_ids`。没有真实回包，没有窗口点击 | 未验 | 未验 |
-| CONF-01 | 游戏配置编辑 | 代码已有。bot `ConfigManage.vue`、`/api/config/seeds`。`qq-farm-app::config`。NSH `game_config.rs` | 无 | 未验 | 未验 |
+| CONF-01 | 游戏配置编辑 | 代码已有。bot `ConfigManage.vue`、`/api/config/seeds`。`qq-farm-app::config`。NSH `game_config.rs` | 本批实跑 `prepare_rejects_blank_name_bad_numbers_and_missing_links`。保存到磁盘的配置编辑未测 | 未验 | 未验 |
 
 本组 8 项：代码已有 8。
 
@@ -121,7 +121,7 @@ SCHED-03 是农场和好友巡查先于牧场。TASK-03 是成长任务和牧场
 
 其余 34 项这次对照矩阵里已写的入口、服务和保存路径，没有新跑测试，也没有补功能。没有发现新的用户入口缺口。AUTH-05 继续是桌面本机直接进入。EXTRA-01 继续不占基线。
 
-接受层级停在这里：33 项是代码已有，0 项窗口通过，0 项真实接口通过。mock 列点了测试名的，只说明那次离线测试曾经写过或跑过，不是本批重跑，也不是窗口验收。mock 为「无」的代码项是 AUTH-01、AUTH-02、AUTH-04、FARM-02、FARM-04、FRIEND-01、FRIEND-02、FRIEND-05、RANCH-01、BAG-01、BAG-02、ACT-01、SCHED-01、LOG-01、REMIND-01、COLL-01、CONF-01。这 17 行是证据欠账，矩阵没有列出测试名；不表示项目里完全没有相关测试，也不表示本批重新验收过。SCHED-02 在途请求卡住满 5 秒那条仍没有单独拨时钟，留到后面补。
+接受层级停在这里：33 项是代码已有，1 项母项未实现（ACT-02），1 项桌面差异（AUTH-05）。窗口通过 0，真实接口通过 0。六项活动子项已独立离线接受，不把母项改成验收。QQF-028 给原先 17 行补了已实跑的测试名和未覆盖缺口，不是整行通过。SCHED-02 的 5 秒在途边界已在生产网关和 worker 巡查上实跑。千星坏 JSON 或错误 version 的旧写语义、萌宠好友按钮没有视觉禁用和缺少不可夺宝说明，仍是尾项，不在本批改。现有 debug 客户端没有按后面的提交重做。
 
 ## 非基线
 

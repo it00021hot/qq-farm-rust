@@ -811,6 +811,20 @@ impl Gateway {
         self.inner.last_rx_ms.load(Ordering::Acquire)
     }
 
+    /// 测试用：占住一个已授权、尚未回包的农场班次槽位。
+    /// 年龄由调度器的单调时钟计算，不经过真实 WebSocket。
+    #[cfg(test)]
+    pub async fn hold_farm_request_for_test(&self) -> crate::network::priority::InFlightGuard {
+        self.acquire_dispatch(
+            crate::network::priority::RequestClass::Farm,
+            None,
+            "gamepb.plantpb.PlantService",
+            "AllLands",
+        )
+        .await
+        .expect("farm dispatch slot")
+    }
+
     /// 测试用：把最近入站时间设成指定毫秒，让健康度闸门看到静默或恢复。
     #[cfg(test)]
     pub fn set_last_rx_ms_for_test(&self, at_ms: i64) {
