@@ -152,30 +152,32 @@ impl WarehouseService {
         BagReply::decode(&body[..])
     }
 
-    /// 出售物品。对齐 bot `sellItems`：不可售物品在发 RPC 前拒绝。
+    /// 出售物品。对齐 bot `sellItems`：先匹配请求对应的背包堆，锁定、缺失或不可售都在发 RPC 前拒绝。
     pub async fn sell_items(&self, items: &[(i64, i64, i64)]) -> Result<SellReply> {
         if items.is_empty() {
             return Err(crate::error::Error::Business("没有可出售的物品".to_string()));
         }
         let gc = crate::config::game_config::global();
-        let bag_items =
-            self.get_bag().await.ok().map(|bag| get_bag_items(&bag)).unwrap_or_default();
+        let bag_items = get_bag_items(&self.get_bag().await?);
         for &(id, count, uid) in items {
             if id <= 0 || count <= 0 {
                 return Err(crate::error::Error::Business("出售物品参数无效".to_string()));
             }
-            let expire = bag_items
-                .iter()
-                .find(|it| it.id == id && (uid <= 0 || it.uid == uid))
-                .map(|it| it.expire_time)
-                .unwrap_or(0);
-            let sell_info = gc.get_effective_sell_info_by_id_at(id, expire);
+            let name = gc
+                .get_item_by_id(id)
+                .map(|item| item.name.clone())
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| format!("物品{id}"));
+            let Some(bag_item) =
+                bag_items.iter().find(|item| item.id == id && (uid <= 0 || item.uid == uid))
+            else {
+                return Err(crate::error::Error::Business(format!("背包中未找到{name}")));
+            };
+            if bag_item.locked {
+                return Err(crate::error::Error::Business(format!("{name}已锁定，不能出售")));
+            }
+            let sell_info = gc.get_effective_sell_info_by_id_at(id, bag_item.expire_time);
             if !sell_info.sellable {
-                let name = gc
-                    .get_item_by_id(id)
-                    .map(|i| i.name.clone())
-                    .filter(|n| !n.is_empty())
-                    .unwrap_or_else(|| format!("物品{id}"));
                 return Err(crate::error::Error::Business(format!("{name}当前不可出售")));
             }
         }

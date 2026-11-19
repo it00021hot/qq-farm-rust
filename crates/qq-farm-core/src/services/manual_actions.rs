@@ -374,3 +374,82 @@ async fn mall_purchase_sends_goods_and_count_and_keeps_only_reply_rewards() {
     assert!(over_limit.is_err(), "已达限购不购买");
     assert_eq!(purchases.load(Ordering::SeqCst), 1);
 }
+
+#[tokio::test]
+async fn sell_items_rejects_locked_stack_and_sells_only_the_unlocked_match() {
+    let _data = TestDataDir::enter();
+    let config = crate::config::game_config::global();
+    config.load();
+    let fruit = config
+        .get_items_by_type(6)
+        .into_iter()
+        .find(|item| config.get_effective_sell_info_by_id_at(item.id, 0).sellable)
+        .expect("配置里应有可售果实");
+    let fruit_id = fruit.id;
+    let locked = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let locked_script = Arc::clone(&locked);
+    let sells = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
+    let sells_script = Arc::clone(&sells);
+    let gate = gateway();
+    gate.install_reply_script(move |_service, method, body| match method {
+        "Bag" => {
+            let first_locked = locked_script.load(Ordering::SeqCst);
+            Ok(BagReply {
+                item_bag: Some(ItemBag {
+                    items: vec![
+                        CoreItem {
+                            id: fruit_id,
+                            count: 3,
+                            uid: 21,
+                            locked: first_locked,
+                            ..Default::default()
+                        },
+                        CoreItem { id: fruit_id, count: 4, uid: 22, ..Default::default() },
+                    ],
+                    ..Default::default()
+                }),
+            }
+            .encode_to_vec())
+        }
+        "Sell" => {
+            sells_script.lock().expect("sells").push(body.to_vec());
+            Ok(SellReply {
+                get_items: vec![CoreItem { id: 1001, count: 40, ..Default::default() }],
+                ..Default::default()
+            }
+            .encode_to_vec())
+        }
+        "UnlockItems" => {
+            locked_script.store(false, Ordering::SeqCst);
+            Ok(crate::proto::generated::gamepb::itempb::UnlockItemsReply { item_uids: vec![21] }
+                .encode_to_vec())
+        }
+        other => Err(reject(other)),
+    });
+    let bag = WarehouseService::new(gate);
+    let locked_uid = bag.sell_items(&[(fruit_id, 3, 21)]).await;
+    let locked_message = locked_uid.expect_err("锁定堆不能出售").to_string();
+    assert!(locked_message.contains("已锁定，不能出售"), "{locked_message}");
+    let first_match = bag.sell_items(&[(fruit_id, 4, 0)]).await;
+    let first_message = first_match.expect_err("未指定堆时先遇到锁定堆").to_string();
+    assert!(first_message.contains("已锁定，不能出售"), "{first_message}");
+    assert!(sells.lock().expect("sells").is_empty(), "拒绝时不发 Sell，也不回报收益");
+
+    let sold = bag.sell_items(&[(fruit_id, 4, 22)]).await.expect("未锁堆可出售");
+    assert_eq!(sold.get_items.iter().map(|item| item.count).collect::<Vec<_>>(), vec![40]);
+    bag.set_items_locked(&[21], false).await.expect("解锁");
+    let after_unlock = bag.sell_items(&[(fruit_id, 3, 21)]).await.expect("解锁后可出售");
+    assert_eq!(after_unlock.get_items[0].count, 40);
+    let sent = sells.lock().expect("sells");
+    assert_eq!(sent.len(), 2);
+    let unlocked = SellRequest::decode(sent[0].as_slice()).expect("未锁请求");
+    assert_eq!(
+        (unlocked.items[0].id, unlocked.items[0].count, unlocked.items[0].uid),
+        (fruit_id, 4, 22)
+    );
+    let released = SellRequest::decode(sent[1].as_slice()).expect("解锁后请求");
+    assert_eq!(
+        (released.items[0].id, released.items[0].count, released.items[0].uid),
+        (fruit_id, 3, 21)
+    );
+}

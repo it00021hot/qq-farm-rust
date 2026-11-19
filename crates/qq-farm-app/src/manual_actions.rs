@@ -1,7 +1,7 @@
 //! 手动操作从 app 门面进入当前 worker 的生产调用。
 #![cfg(test)]
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use prost::Message as _;
@@ -15,13 +15,18 @@ use qq_farm_core::proto::generated::corepb::{Item as CoreItem, ItemBag};
 use qq_farm_core::proto::generated::gamepb::friendpb::{
     GameFriend, GetGameFriendsReply, GetGameFriendsRequest,
 };
-use qq_farm_core::proto::generated::gamepb::itempb::{BagReply, UseReply};
+use qq_farm_core::proto::generated::gamepb::itempb::{
+    BagReply, SellReply, SellRequest, UnlockItemsReply, UseReply,
+};
 use qq_farm_core::proto::generated::gamepb::mallpb::{
     GetMallListBySlotTypeResponse, MallGoods, PurchaseRequest, PurchaseResponse,
 };
 use qq_farm_core::proto::generated::gamepb::plantpb::{
-    AllLandsReply, FertilizeReply, FertilizeRequest, LandInfo, PlantInfo, PlantPhaseInfo,
+    AllLandsReply, FarmingReply, FarmingRequest, FarmingResult, FertilizeReply, FertilizeRequest,
+    HarvestRequest, LandInfo, PlantInfo, PlantPhaseInfo, PutInsectsReply, PutInsectsRequest,
+    PutWeedsReply, PutWeedsRequest,
 };
+use qq_farm_core::proto::generated::gamepb::visitpb::{EnterReply, EnterRequest};
 use qq_farm_core::runtime::engine::{EngineConfig, RuntimeEngine};
 use qq_farm_core::runtime::runtime_state::{AccountStoreLike, RuntimeState};
 use qq_farm_core::runtime::worker_loop::{WorkerLoop, WorkerLoopConfig};
@@ -278,4 +283,195 @@ async fn mall_page_purchase_keeps_reply_rewards() {
         .expect("购买");
     assert_eq!(purchases.load(Ordering::SeqCst), 1);
     assert_eq!(bought["purchase"]["rewards"][0]["count"], 2);
+}
+
+#[tokio::test]
+async fn bag_page_sell_rejects_locked_stack_and_reports_unlocked_proceeds() {
+    let _data = TestDataDir::enter();
+    let config = qq_farm_core::config::game_config::global();
+    config.load();
+    let fruit = config
+        .get_items_by_type(6)
+        .into_iter()
+        .find(|item| config.get_effective_sell_info_by_id_at(item.id, 0).sellable)
+        .expect("配置里应有可售果实");
+    let fruit_id = fruit.id;
+    let locked = Arc::new(AtomicBool::new(true));
+    let locked_script = Arc::clone(&locked);
+    let sells = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
+    let sells_script = Arc::clone(&sells);
+    let gate = gateway();
+    gate.install_reply_script(move |_service, method, body| match method {
+        "Bag" => {
+            let first_locked = locked_script.load(Ordering::SeqCst);
+            Ok(BagReply {
+                item_bag: Some(ItemBag {
+                    items: vec![
+                        CoreItem {
+                            id: fruit_id,
+                            count: 3,
+                            uid: 21,
+                            locked: first_locked,
+                            ..Default::default()
+                        },
+                        CoreItem { id: fruit_id, count: 4, uid: 22, ..Default::default() },
+                    ],
+                    ..Default::default()
+                }),
+            }
+            .encode_to_vec())
+        }
+        "Sell" => {
+            sells_script.lock().expect("sells").push(body.to_vec());
+            Ok(SellReply {
+                get_items: vec![CoreItem { id: 1001, count: 40, ..Default::default() }],
+                ..Default::default()
+            }
+            .encode_to_vec())
+        }
+        "UnlockItems" => {
+            locked_script.store(false, Ordering::SeqCst);
+            Ok(UnlockItemsReply { item_uids: vec![21] }.encode_to_vec())
+        }
+        other => Err(NetworkError::WebSocket(format!("未准备 {other}"))),
+    });
+    let ctx = context("bag-sell", gate);
+    let denied = crate::farm::bag_sell(&ctx, "bag-sell", &[(fruit_id, 3, 21)]).await;
+    let denied_message = denied.expect_err("锁定堆").to_string();
+    assert!(denied_message.contains("已锁定，不能出售"), "{denied_message}");
+    let first = crate::farm::bag_sell(&ctx, "bag-sell", &[(fruit_id, 4, 0)]).await;
+    assert!(first.expect_err("先遇到锁定堆").to_string().contains("已锁定，不能出售"));
+    assert!(sells.lock().expect("sells").is_empty());
+
+    let sold = crate::farm::bag_sell(&ctx, "bag-sell", &[(fruit_id, 4, 22)]).await.expect("未锁堆");
+    assert_eq!(sold["gained"][0]["count"], 40);
+    crate::farm::bag_set_locked(&ctx, "bag-sell", &[21], false).await.expect("解锁");
+    let released =
+        crate::farm::bag_sell(&ctx, "bag-sell", &[(fruit_id, 3, 21)]).await.expect("解锁后");
+    assert_eq!(released["gained"][0]["count"], 40);
+    let sent = sells.lock().expect("sells");
+    assert_eq!(sent.len(), 2);
+    let unlocked = SellRequest::decode(sent[0].as_slice()).expect("未锁请求");
+    assert_eq!(
+        (unlocked.items[0].id, unlocked.items[0].count, unlocked.items[0].uid),
+        (fruit_id, 4, 22)
+    );
+}
+
+#[tokio::test]
+async fn friend_page_steal_help_and_trouble_use_eligible_lands() {
+    let _data = TestDataDir::enter();
+    qq_farm_core::config::game_config::global().load();
+    let enters = Arc::new(AtomicUsize::new(0));
+    let enters_script = Arc::clone(&enters);
+    let sent = Arc::new(Mutex::new(Vec::<(String, Vec<u8>)>::new()));
+    let sent_script = Arc::clone(&sent);
+    let gate = gateway();
+    gate.install_reply_script(move |_service, method, body| {
+        let now = qq_farm_core::utils::time::get_server_time_secs();
+        let ripe = |id, stealable| LandInfo {
+            id,
+            unlocked: true,
+            plant: Some(PlantInfo {
+                id: 102_0002,
+                stealable,
+                phases: vec![PlantPhaseInfo {
+                    phase: 6,
+                    begin_time: now - 60,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let growing = |id, dry, owners: Vec<i64>| LandInfo {
+            id,
+            unlocked: true,
+            plant: Some(PlantInfo {
+                id: 102_0002,
+                dry_num: dry,
+                weed_owners: owners.clone(),
+                insect_owners: owners,
+                phases: vec![
+                    PlantPhaseInfo { phase: 3, begin_time: now - 600, ..Default::default() },
+                    PlantPhaseInfo { phase: 6, begin_time: now + 3600, ..Default::default() },
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        match method {
+            "Enter" => {
+                let request = EnterRequest::decode(body).expect("进场");
+                assert_eq!(request.host_gid, 9);
+                let nth = enters_script.fetch_add(1, Ordering::SeqCst);
+                let lands = match nth {
+                    0 => vec![ripe(4, true), ripe(8, false)],
+                    1 => vec![ripe(8, false)],
+                    2 => vec![growing(3, 1, Vec::new()), ripe(4, true)],
+                    3 => vec![ripe(4, false)],
+                    4 => vec![growing(5, 0, Vec::new()), growing(6, 0, vec![1, 2])],
+                    _ => vec![growing(6, 0, vec![1, 2])],
+                };
+                Ok(EnterReply { lands, ..Default::default() }.encode_to_vec())
+            }
+            "Harvest" | "Farming" | "PutWeeds" | "PutInsects" => {
+                sent_script.lock().expect("sent").push((method.to_string(), body.to_vec()));
+                match method {
+                    "Farming" => Ok(FarmingReply {
+                        results: vec![FarmingResult { land_id: 3, ..Default::default() }],
+                        ..Default::default()
+                    }
+                    .encode_to_vec()),
+                    "PutWeeds" => {
+                        let request = PutWeedsRequest::decode(body).expect("放草");
+                        Ok(PutWeedsReply {
+                            land: vec![LandInfo { id: request.land_ids[0], ..Default::default() }],
+                            ..Default::default()
+                        }
+                        .encode_to_vec())
+                    }
+                    "PutInsects" => {
+                        let request = PutInsectsRequest::decode(body).expect("放虫");
+                        Ok(PutInsectsReply {
+                            land: vec![LandInfo { id: request.land_ids[0], ..Default::default() }],
+                            ..Default::default()
+                        }
+                        .encode_to_vec())
+                    }
+                    _ => Ok(Vec::new()),
+                }
+            }
+            "Leave" | "Bag" => Ok(Vec::new()),
+            other => Err(NetworkError::WebSocket(format!("未准备 {other}"))),
+        }
+    });
+    let ctx = context("friend-op", gate);
+    let stolen = crate::friend::friend_op(&ctx, "friend-op", 9, "steal").await.expect("可偷");
+    assert_eq!(stolen["count"], 1);
+    let missed = crate::friend::friend_op(&ctx, "friend-op", 9, "steal").await.expect("不可偷");
+    assert_eq!(missed["count"], 0);
+    assert_eq!(missed["message"], "没有可偷取土地");
+    let helped = crate::friend::friend_op(&ctx, "friend-op", 9, "water").await.expect("可帮");
+    assert_eq!(helped["count"], 1);
+    let no_help = crate::friend::friend_op(&ctx, "friend-op", 9, "water").await.expect("无需帮助");
+    assert_eq!(no_help["count"], 0);
+    let troubled = crate::friend::friend_op(&ctx, "friend-op", 9, "bad").await.expect("可捣乱");
+    assert_eq!(troubled["count"], 2);
+    let no_trouble = crate::friend::friend_op(&ctx, "friend-op", 9, "bad").await.expect("不可捣乱");
+    assert_eq!(no_trouble["count"], 0);
+
+    let sent = sent.lock().expect("sent");
+    assert_eq!(
+        sent.iter().map(|(method, _)| method.as_str()).collect::<Vec<_>>(),
+        vec!["Harvest", "Farming", "PutWeeds", "PutInsects"]
+    );
+    let harvest = HarvestRequest::decode(sent[0].1.as_slice()).expect("偷菜请求");
+    assert_eq!((harvest.host_gid, harvest.land_ids, harvest.is_all), (9, vec![4], true));
+    let farming = FarmingRequest::decode(sent[1].1.as_slice()).expect("帮助请求");
+    assert_eq!((farming.host_gid, farming.land_ids, farming.field_4), (9, vec![3], 2));
+    let weeds = PutWeedsRequest::decode(sent[2].1.as_slice()).expect("放草请求");
+    assert_eq!((weeds.host_gid, weeds.land_ids), (9, vec![5]));
+    let insects = PutInsectsRequest::decode(sent[3].1.as_slice()).expect("放虫请求");
+    assert_eq!((insects.host_gid, insects.land_ids), (9, vec![5]));
 }

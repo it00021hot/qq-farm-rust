@@ -4227,3 +4227,13 @@ ACT-02 母项仍未实现。公益 026A 与萌宠 027B 已独立离线接受。�
 - BAG-02：`mall_purchase_sends_goods_and_count_and_keeps_only_reply_rewards` 与 app `mall_page_purchase_keeps_reply_rewards`。购买请求带商品和数量，奖励只取成功回包；数量 0、未知价格、已达限购不发，目录刷新失败不重买。神秘商店和付费扣余额未跑。
 
 这些入口没有单独的确认 RPC。取消不发请求由数量 0、无效 GID 和排除地覆盖。命令是 `cargo +1.99.1 test -p qq-farm-core --lib manual_actions -- --test-threads=1`（5 通过）和 `cargo +1.99.1 test -p qq-farm-app --lib manual_actions -- --test-threads=1`（5 通过）。这是开发自测，不是独立验收。下一单元仍是提醒传输，然后是心跳与旧码重连，再是配置编辑。
+
+### 2026-11-19 — 029A 锁定出售和手动偷菜合同
+
+029 独立验收接受限定场景：core 5、app 5，`nsh check` 909 毫秒。五组都不整行通过。帮助、偷菜和删除那条底层测试的空回包只证明调用返回 Ok，不代表有内容结算。它把偷菜写成 `steal_farm(..., false)`，这只是底层参数转发。
+
+锁定出售属实。源 `sellItems` 在发 RPC 前按请求找到背包堆，锁定则抛「已锁定，不能出售」。同物品混合堆时，指定 UID 只看该堆；UID 小于等于 0 看第一堆。Rust `WarehouseService::sell_items` 原先没有这道检查，复现测试里锁定堆被卖掉并带回收益。现已按这个顺序拒绝：参数、找不到堆、锁定、不可售，然后才发 Sell。`sell_items_rejects_locked_stack_and_sells_only_the_unlocked_match` 和 app `bag_page_sell_rejects_locked_stack_and_reports_unlocked_proceeds` 覆盖锁定拒绝、混合堆、未锁成功回包和获得、解锁后再卖。
+
+手动偷菜生产路径已经是 `is_all=true`。`friend_op` 进入 `do_friend_operation`，进场后 `analyze_friend_lands` 只留成熟且 `stealable` 的地，再由 `steal_lands_with_reward_log` 调用 `stealHarvest` 同款的 `is_all=true`。底层函数仍接受调用方传入的布尔值，签名不改。app `friend_page_steal_help_and_trouble_use_eligible_lands` 走这个门面：可偷地的 Harvest 请求是好友 9、地块 4、`is_all=true`，不可偷地不发；缺水地发 Farming 且 `field_4=2`，成熟地不发；可捣乱地发 PutWeeds 和 PutInsects，已经放过的地不发。偷菜成功数是这批地块数，Harvest 回包本身没有物品清单。帮助成功数来自 `FarmingResult`，捣乱成功数来自放草放虫回包里的土地。文案仍是「一键偷取完成」，源是「偷取完成」，本批不改。
+
+35 项分母不变。六项活动仍是离线接受。窗口和真实接口仍是 0。提醒传输、重连和配置编辑仍留在后面。

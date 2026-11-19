@@ -612,7 +612,7 @@ impl FriendApi {
         Ok(())
     }
 
-    /// 偷好友菜。`is_all=true` 为一键；多格占地失败后应对 **主地** 再调 `is_all=false`。
+    /// 偷好友菜。手动操作和巡查都传 `is_all=true`，和 bot `stealHarvest` 一致。本函数按调用方给出的值编码。
     pub async fn steal_farm(&self, host_gid: i64, land_ids: Vec<i64>, is_all: bool) -> Result<()> {
         use crate::proto::generated::gamepb::plantpb::{HarvestReply, HarvestRequest};
         let body = HarvestRequest { land_ids, host_gid, is_all }.encode_to_vec();

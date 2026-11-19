@@ -34,7 +34,7 @@
 | ID | 行为 | 代码对照 | mock | 窗口 | 真实接口 |
 | --- | --- | --- | --- | --- | --- |
 | FRIEND-01 | 好友列表和刷新 | 代码已有。bot `Friends.vue` 调 `POST /api/friends/clear-cache`。Rust `FriendService::get_friends_list` 在 `force` 时 `invalidate_list_cache` 并跳过 TTL。NSH `friends.rs` 刷新把 generation 加一后 `list_friends(..., generation > 0)` | 029 实跑 `force_refresh_invalidates_the_cached_friend_list_and_returns_the_new_reply` 与 app `friend_page_force_refresh_returns_the_new_list`：先缓存旧列表，强制刷新再发 `GetGameFriends` 并回贴新名字。QQ 空已知 GID 走 `SyncAll`、微信 `GetAll`、清除缓存按钮本身未在本批实跑 | 未验 | 未验 |
-| FRIEND-02 | 帮助、偷菜、捣乱、删除 | 代码已有。bot `POST /api/friend/:gid/op`、`delete`。`friend::friend_op`、`delete_friend`。NSH 好友行操作 | 029 实跑 `friend_help_steal_trouble_and_delete_send_source_parameters`：帮助、偷菜、放草、放虫、删除按 GID 和地块发请求，空地和无效 GID 不发。app `friend_page_delete_sends_del_friend_and_invalid_gid_does_not` 接删除和无效偷菜。进好友农场后的可偷、可帮资格筛选未在本批重跑 | 未验 | 未验 |
+| FRIEND-02 | 帮助、偷菜、捣乱、删除 | 代码已有。bot `POST /api/friend/:gid/op`、`delete`。`friend::friend_op`、`delete_friend`。NSH 好友行操作 | 029 的 `friend_help_steal_trouble_and_delete_send_source_parameters` 直接调底层，偷菜写成 `is_all=false`，空回包只证明调用返回 Ok。029A 核对手动链：`friend_op` → `do_friend_operation` → 进场筛选 → `steal_lands_with_reward_log`，生产已传 `is_all=true`，与源 `stealHarvest` 一致，未改底层签名。新增 app `friend_page_steal_help_and_trouble_use_eligible_lands`：可偷地发 Harvest 且 `is_all=true`，不可偷不发；缺水地发 Farming，成熟地不发；可捣乱地发放草放虫，已放过的地不发。成功数分别来自批量地块数、FarmingResult 和放草放虫回包土地。文案仍是「一键偷取完成」，源是「偷取完成」 | 未验 | 未验 |
 | FRIEND-03 | 偷菜黑名单 | 代码已有。bot `/api/plant-blacklist`。`farm::plant_blacklist`。NSH `analytics.rs` | 仓库有编辑测试，本批未跑 | 未验 | 未验 |
 | FRIEND-04 | 好友黑名单 | 代码已有。bot `/api/friend-blacklist/toggle`。`friend::toggle_friend_blacklist`。NSH `next_blacklist` | 仓库有切换测试，本批未跑 | 未验 | 未验 |
 | FRIEND-05 | 已知好友 GID | 代码已有。bot `/api/friend-known-gids`。NSH `known_friends.rs` | 本批实跑 `write_and_read_cache`、`gid_text_accepts_separators_and_skips_invalid_values`。接口保存路径未测 | 未验 | 未验 |
@@ -56,7 +56,7 @@
 
 | ID | 行为 | 代码对照 | mock | 窗口 | 真实接口 |
 | --- | --- | --- | --- | --- | --- |
-| BAG-01 | 使用、出售、锁定 | 代码已有。bot `/api/bag/use`、`sell`、`lock`。`qq-farm-app::farm` 同名函数。NSH `bag.rs` | 旧三则仍是编码、过滤和出售前拒绝。029 实跑 `bag_use_lock_and_sell_apply_reply_counts_and_reject_before_sending`：使用、锁定、出售成功回包的数量、锁态和所得，锁定堆不足不发 Use。app `bag_page_use_returns_reply_rewards_and_a_locked_stack_does_not_send` 接使用。批量使用和 app 出售、锁定按钮未单列 | 未验 | 未验 |
+| BAG-01 | 使用、出售、锁定 | 代码已有。bot `/api/bag/use`、`sell`、`lock`。`qq-farm-app::farm` 同名函数。NSH `bag.rs` | 029 使用、锁定和未锁出售仍在。029A 补上源 `sellItems` 的锁定堆拒绝：`sell_items_rejects_locked_stack_and_sells_only_the_unlocked_match` 与 app `bag_page_sell_rejects_locked_stack_and_reports_unlocked_proceeds`。指定锁定堆、以及未指定堆时先遇到锁定堆，都不发 Sell，错误含「已锁定，不能出售」。同物品的未锁堆按请求 UID 出售，所得只取回包。解锁后再卖该堆。背包读取失败或找不到堆也不发。批量使用未单列 | 未验 | 未验 |
 | BAG-02 | 普通商城、神秘商店、免费礼包 | 代码已有。bot `commerce-routes.ts`。`qq-farm-app::commerce`。NSH `mall.rs`；免费礼包在 `gifts.rs` 的 `mall` | 旧谓词、限购 DTO 和目录展示仍在。029 实跑 `mall_purchase_sends_goods_and_count_and_keeps_only_reply_rewards` 与 app `mall_page_purchase_keeps_reply_rewards`：免费商品购买请求带商品和数量，奖励只取回包；数量 0、未知价格、已达限购不发，目录刷新失败不重买。神秘商店购买和付费扣费余额未在本批实跑 | 未验 | 未验 |
 
 本组 2 项：代码已有 2。
