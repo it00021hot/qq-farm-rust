@@ -2329,6 +2329,102 @@ mod tests {
         assert_eq!(loop_.farm_backoff_ms.load(Ordering::Acquire), 0);
     }
 
+    #[tokio::test]
+    async fn a_send_rpc_pending_reply_and_disconnect_release_the_real_slot() {
+        let _data = crate::config::paths::TestDataDir::enter();
+        let _cleanup = BackoffCleanup;
+        struct ClockGuard;
+        impl Drop for ClockGuard {
+            fn drop(&mut self) {
+                crate::network::priority::set_monotonic_ms_for_test(None);
+                crate::infra::automation::clear_automation_flags_for("gateway-backoff");
+            }
+        }
+        let _clock = ClockGuard;
+        let (loop_, mut rx) = backoff_loop();
+        let gateway = loop_.gateway.clone();
+        gateway.mark_online();
+        gateway.set_last_rx_ms_for_test(crate::utils::time::now_ms());
+        for category in
+            ["farm", "task", "fertilizer_gift", "fertilizer_buy_organic", "fertilizer_buy_normal"]
+        {
+            crate::infra::automation::set_automation_flag("gateway-backoff", category, false);
+        }
+        let mut outbound = gateway.attach_memory_transport_for_test();
+        let started = 3_000_000_i64;
+        crate::network::priority::set_monotonic_ms_for_test(Some(started));
+        let sender = gateway.clone();
+        let call = tokio::spawn(async move {
+            sender.request("gamepb.plantpb.PlantService", "AllLands", &[]).await
+        });
+        let frame = outbound.recv().await.expect("内存传输应收到已编码请求");
+        let sent = crate::network::frame::FrameParser::parse(&frame).expect("请求帧");
+        assert_eq!(sent.method_name(), "AllLands");
+        assert_eq!(gateway.pending_count(), 1);
+        assert_eq!(gateway.in_flight_slot_count_for_test(), 1);
+        crate::network::priority::set_monotonic_ms_for_test(Some(started + 4_999));
+        let below = gateway.gateway_load();
+        assert_eq!(below.oldest_pending_age_ms, 4_999);
+        assert_eq!(below.heartbeat_misses, 0);
+        assert!(gateway.is_gateway_healthy_for_business());
+        loop_.run_farm_tick().await;
+        assert_eq!(loop_.farm_backoff_ms.load(Ordering::Acquire), 0);
+        assert_eq!(gateway.pending_count(), 1);
+        crate::network::priority::set_monotonic_ms_for_test(Some(started + 5_000));
+        assert_eq!(gateway.gateway_load().oldest_pending_age_ms, 5_000);
+        assert!(!gateway.is_gateway_healthy_for_business());
+        let traced = loop_.patrol_trace_snapshot();
+        loop_.run_farm_tick().await;
+        loop_.run_friend_tick().await;
+        assert_eq!(loop_.farm_backoff_ms.load(Ordering::Acquire), 30_000);
+        assert_eq!(loop_.friend_backoff_ms.load(Ordering::Acquire), 30_000);
+        assert_eq!(loop_.patrol_trace_snapshot(), traced);
+        assert_eq!(gateway.pending_count(), 1);
+        let reply = crate::network::frame::FrameBuilder::new(
+            sent.service_name(),
+            sent.method_name(),
+            crate::proto::generated::gatepb::MessageType::Response,
+        )
+        .with_client_seq(sent.client_seq())
+        .with_server_seq(1)
+        .encode()
+        .expect("回包帧");
+        gateway.dispatch_inbound_frame_for_test(&reply);
+        let body = call.await.expect("请求任务").expect("回包应完成请求");
+        assert!(body.is_empty());
+        assert_eq!(gateway.pending_count(), 0);
+        assert_eq!(gateway.in_flight_slot_count_for_test(), 0);
+        assert!(gateway.is_gateway_healthy_for_business());
+        loop_.run_farm_tick().await;
+        assert_eq!(loop_.farm_backoff_ms.load(Ordering::Acquire), 0);
+        assert_eq!(loop_.friend_backoff_ms.load(Ordering::Acquire), 30_000);
+        assert!(log_messages(&mut rx)
+            .iter()
+            .any(|message| message.contains("farm巡查回到正常间隔")));
+
+        let restarted = 4_000_000_i64;
+        crate::network::priority::set_monotonic_ms_for_test(Some(restarted));
+        let sender = gateway.clone();
+        let disconnected = tokio::spawn(async move {
+            sender.request("gamepb.plantpb.PlantService", "AllLands", &[]).await
+        });
+        let _again = outbound.recv().await.expect("第二条请求");
+        assert_eq!(gateway.pending_count(), 1);
+        assert_eq!(gateway.in_flight_slot_count_for_test(), 1);
+        crate::network::priority::set_monotonic_ms_for_test(Some(restarted + 5_000));
+        loop_.run_farm_tick().await;
+        assert_eq!(loop_.farm_backoff_ms.load(Ordering::Acquire), 30_000);
+        gateway.force_disconnect_with_reason("ws_close");
+        assert_eq!(gateway.pending_count(), 0, "reject_all 应在 future 结束前清掉 pending");
+        assert_eq!(gateway.in_flight_slot_count_for_test(), 1);
+        let error = disconnected.await.expect("断线任务").expect_err("断线应失败");
+        assert!(error.to_string().contains("connection closed"), "{error}");
+        assert_eq!(gateway.in_flight_slot_count_for_test(), 0);
+        assert!(gateway.is_gateway_healthy_for_business());
+        loop_.run_farm_tick().await;
+        assert_eq!(loop_.farm_backoff_ms.load(Ordering::Acquire), 0);
+    }
+
     #[test]
     fn weather_service_is_reused_for_the_account() {
         let (loop_, _) = make_loop();

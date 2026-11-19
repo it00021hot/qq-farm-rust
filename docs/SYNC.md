@@ -4205,3 +4205,13 @@ bot 本轮 13 个提交**玩法层零变化**（活动/商城/日常自动化均
 - CONF-01：`prepare_rejects_blank_name_bad_numbers_and_missing_links`。落盘编辑未测。
 
 AUTH-05 的桌面直入和 EXTRA-01 的天气协议排除保持原结论。上述命令均使用 `cargo +1.99.1 test --lib <唯一测试名> -- --test-threads=1`，exit 0。`nsh check crates/qq-farm-nsh` exit 0。这是开发自测，不是独立验收。
+
+### 2026-11-19 — 028A 补测试名和真实 pending 断线
+
+ACT-02 母项仍未实现。公益 026A 与萌宠 027B 已独立离线接受。完整窗口和真实接口仍是 0。
+
+`a_pending_request_stalls_business_ticks_at_five_seconds` 保留，它只证明调度槽年龄和巡查闸门。它关闭了农场自动化，放槽不是回包，断线槽没有进入 `requests.call`。
+
+`a_send_rpc_pending_reply_and_disconnect_release_the_real_slot` 使用 `Gateway::request`。请求经 `send_rpc` 授权槽并 `requests.call`，帧进入内存通道，不连接 WebSocket。4999 毫秒 pending 和槽都是 1，巡查不退避；5000 毫秒农场和好友各退避 30 秒。回包帧交给 `dispatch_frame`，和连接读循环同一解析，pending 清零、槽归还、农场退避恢复。断线调用 `force_disconnect_with_reason`，`reject_all` 之后、future 结束之前 pending 已是 0，槽仍是 1；future 返回 connection closed 后槽为 0，下一轮农场退避恢复。固定源在 `finalizeConnection` 里先保留诊断，再由 `clearNetworkRuntime` 先清排队、后 `rejectAllPendingRequests`。Rust 先清 pending 再清排队。本批不改生产顺序。
+
+028A 复跑并写明唯一名字：背包三则 warehouse 测试，商城两个免费礼包谓词、限购 DTO 和 NSH `catalog_keeps_price_and_purchase_state`，节令 `event_dto_gates_claim_and_answer_like_bot`，礼物 `known_gifts_keep_progress_and_skip_unknown_keys`，图鉴 `claim_rejects_invalid_type_before_network` 与 `book_keeps_claim_and_seed_purchase_gate`，藏品 `book_reads_score_claim_and_series`。这些仍不是整行通过。FRIEND-01 和 FRIEND-02 本批仍不实跑；项目里有别的好友测试，不能因此说项目没有测试。029 预定强制刷新、四项好友 RPC、施肥 RPC、背包和购买成功回包，以及可注入的提醒传输。SCHED-01 的心跳超时和旧码不重连也留到后面。

@@ -825,6 +825,26 @@ impl Gateway {
         .expect("farm dispatch slot")
     }
 
+    /// 测试用：用内存通道代替 WebSocket 发送端。字节留在进程内，不拨号。
+    #[cfg(test)]
+    pub fn attach_memory_transport_for_test(&self) -> mpsc::Receiver<Vec<u8>> {
+        let (tx, rx) = mpsc::channel(4);
+        *self.inner.ws_sender.lock() = Some(tx);
+        rx
+    }
+
+    /// 测试用：把一帧交给和连接读循环相同的解析与回包分发。
+    #[cfg(test)]
+    pub fn dispatch_inbound_frame_for_test(&self, bytes: &[u8]) {
+        dispatch_frame(&self.inner, bytes);
+    }
+
+    /// 测试用：当前已授权、尚未归还的调度槽数量。
+    #[cfg(test)]
+    pub fn in_flight_slot_count_for_test(&self) -> usize {
+        self.inner.rpc_scheduler.in_flight_count()
+    }
+
     /// 测试用：把最近入站时间设成指定毫秒，让健康度闸门看到静默或恢复。
     #[cfg(test)]
     pub fn set_last_rx_ms_for_test(&self, at_ms: i64) {
@@ -1248,56 +1268,60 @@ async fn dispatch_loop(
     inner: Arc<Inner>,
 ) {
     while let Some(frame) = rx.recv().await {
-        // 1. 解析外层 GateMessage（对齐 bot：decode 成功才计入入站活跃时间）
-        let parsed = match FrameParser::parse(&frame.bytes) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!(error = %e, bytes = frame.bytes.len(), "frame decode failed");
-                continue;
-            }
-        };
-        inner.last_rx_ms.store(crate::utils::time::now_ms(), Ordering::Release);
-
-        // 2. 更新 server_seq
-        let server_seq = parsed.server_seq();
-        if server_seq > inner.server_seq.load(Ordering::SeqCst) {
-            inner.server_seq.store(server_seq, Ordering::SeqCst);
-        }
-
-        // 3. 分发（对齐 bot network.ts:396-424：严格按 type 分发）。
-        // 显式 Notify 一律走 handle_notify，绝不当回包消费（曾把推送吞成 pending 回复）。
-        // 仅当类型缺失/未知且 client_seq 命中 pending 时按回包容错完成
-        // （部分大包如 FriendService.GetAll 不带标准 Response type）。
-        let client_seq = parsed.client_seq();
-        let pending_method = inner.requests.peek(client_seq);
-        let is_pending_reply = client_seq != 0
-            && pending_method.as_ref().is_some_and(|(_, method)| {
-                parsed.method_name().is_empty() || parsed.method_name() == method
-            });
-        match parsed.message_type() {
-            Some(MessageType::Response) => {
-                handle_response(&inner, &parsed);
-            }
-            Some(MessageType::Notify) => {
-                handle_notify(&inner, &parsed);
-            }
-            _ if is_pending_reply => {
-                handle_response(&inner, &parsed);
-            }
-            _ => {
-                tracing::debug!(
-                    service = parsed.service_name(),
-                    method = parsed.method_name(),
-                    client_seq,
-                    msg_type = parsed.message_type().map(|t| t as i32),
-                    bytes = frame.bytes.len(),
-                    "received non-response/notify message"
-                );
-            }
-        }
+        dispatch_frame(&inner, &frame.bytes);
     }
     end_session(&inner, Some("ws_close"));
     tracing::debug!("dispatch loop exited");
+}
+
+fn dispatch_frame(inner: &Arc<Inner>, bytes: &[u8]) {
+    // 1. 解析外层 GateMessage（对齐 bot：decode 成功才计入入站活跃时间）
+    let parsed = match FrameParser::parse(bytes) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, bytes = bytes.len(), "frame decode failed");
+            return;
+        }
+    };
+    inner.last_rx_ms.store(crate::utils::time::now_ms(), Ordering::Release);
+
+    // 2. 更新 server_seq
+    let server_seq = parsed.server_seq();
+    if server_seq > inner.server_seq.load(Ordering::SeqCst) {
+        inner.server_seq.store(server_seq, Ordering::SeqCst);
+    }
+
+    // 3. 分发（对齐 bot network.ts:396-424：严格按 type 分发）。
+    // 显式 Notify 一律走 handle_notify，绝不当回包消费（曾把推送吞成 pending 回复）。
+    // 仅当类型缺失/未知且 client_seq 命中 pending 时按回包容错完成
+    // （部分大包如 FriendService.GetAll 不带标准 Response type）。
+    let client_seq = parsed.client_seq();
+    let pending_method = inner.requests.peek(client_seq);
+    let is_pending_reply = client_seq != 0
+        && pending_method.as_ref().is_some_and(|(_, method)| {
+            parsed.method_name().is_empty() || parsed.method_name() == method
+        });
+    match parsed.message_type() {
+        Some(MessageType::Response) => {
+            handle_response(&inner, &parsed);
+        }
+        Some(MessageType::Notify) => {
+            handle_notify(&inner, &parsed);
+        }
+        _ if is_pending_reply => {
+            handle_response(&inner, &parsed);
+        }
+        _ => {
+            tracing::debug!(
+                service = parsed.service_name(),
+                method = parsed.method_name(),
+                client_seq,
+                msg_type = parsed.message_type().map(|t| t as i32),
+                bytes = bytes.len(),
+                "received non-response/notify message"
+            );
+        }
+    }
 }
 
 fn handle_response(inner: &Arc<Inner>, parsed: &FrameParser) {
